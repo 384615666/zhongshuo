@@ -11,6 +11,7 @@ import {runtimeCatalog} from './runtimeCatalog.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
+import {snapshotRedispatchExecution} from './redispatchExecution.ts';
 import { coordinationRoomMembers, freezeCoordinationScope, seedExplicitRecipientCoordination } from './coordination.ts';
 import {readThreadMembers,persistThreadMember,readThreadProgress,readDmProgress} from './threadMembers.ts';
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
@@ -2132,8 +2133,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const pending = deps.db.prepare(`SELECT dispatch_key FROM outbox WHERE status = 'pending'`).all() as Array<{ dispatch_key: string }>;
         const interrupted = deps.db.prepare(`SELECT id, task_id, status FROM workflow_runs WHERE status IN ('INTERRUPTED')`).all() as Array<{ id: string; task_id: string; status: string }>;
         const unknownTurns = deps.db.prepare(
-          `SELECT t.id, t.run_id AS runId, t.stage_key AS stageKey, r.task_id AS taskId, t.status FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.status = 'UNKNOWN'`,
-        ).all();
+          `SELECT t.id, t.run_id AS runId, t.stage_key AS stageKey, r.task_id AS taskId, t.status,
+             (t.protection_state='released' AND NOT EXISTS(SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id=t.id AND l.status!='released')
+              AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=t.id AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1)) AS protectionReleased
+           FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.status = 'UNKNOWN'`,
+        ).all().map(row=>{const item=row as Record<string,unknown>;return {...item,protectionReleased:item.protectionReleased===1};});
         const processRegistry = unknownTurns.length > 0
           ? (deps.db.prepare(
             `SELECT r.turn_id AS turnId, r.process_model AS processModel, r.pid, r.started_at_ms AS startedAtMs,
@@ -5358,7 +5362,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             taskId: params.taskId,
             kind: 'task.redispatchEnqueued',
             createdAt: Date.now(),
-            payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true, sourceRunId, dispatchKey },
+            payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true, sourceRunId, dispatchKey,
+              ...(params.formatRepair!==true?{execution:snapshotRedispatchExecution(deps.db,params.taskId)}:{}) },
           });
           return { enqueued: true as const, dispatchKey, formatRepair: params.formatRepair === true, sourceRunId };
         });

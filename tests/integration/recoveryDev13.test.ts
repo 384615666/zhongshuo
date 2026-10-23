@@ -131,6 +131,11 @@ describe('DEV-13：崩溃恢复面与 recovery.reconcile（服务端取证语义
     db2.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, 'c1', 'vth1', 'mA', 'direct.work', 'UNKNOWN', 'task:vtk1:crashprobe3', 4, 4)`).run(seedTurn3, runId);
     await cmd(db2, 'recovery.reconcile', { turnId: seedTurn3, verdict: 'keepUnknown', note: '证据不足，保持观察' });
     expect((db2.prepare('SELECT status FROM agent_turns WHERE id = ?').get(seedTurn3) as { status: string }).status).toBe('UNKNOWN');
+    const state=()=>cmd<{unknownTurns:Array<{id:string;protectionReleased:boolean}>}>(db2,'recovery.status',{});
+    expect((await state()).unknownTurns.find(t=>t.id===seedTurn3)?.protectionReleased).toBe(false);
+    // A raw released flag without its formal event is not a proven release.
+    db2.prepare("UPDATE agent_turns SET protection_state='released' WHERE id=?").run(seedTurn3);
+    expect((await state()).unknownTurns.find(t=>t.id===seedTurn3)?.protectionReleased).toBe(false);
     // 对账后不重放：outbox 无 pending 派发残留、审计有 recovery.reconciled×3。
     const pending = (db2.prepare(`SELECT count(*) c FROM outbox WHERE status = 'pending'`).get() as { c: number }).c;
     expect(pending).toBe(0);

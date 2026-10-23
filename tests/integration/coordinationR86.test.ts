@@ -86,6 +86,69 @@ async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) 
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('explicitly continues with current member configurations without editing old scopes or adding members',async()=>{
+    const f=await fixture(true);try{
+      const root=await f.send([f.a,f.b]);await f.worker.runOnce();
+      const previous=f.db.prepare('SELECT id FROM workflow_runs WHERE task_id=?').get(root.taskId) as {id:string};
+      const oldScope=f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(root.taskId);
+      const oldTask=f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(root.taskId);
+      f.db.prepare("UPDATE workflow_runs SET status='INTERRUPTED' WHERE id=?").run(previous.id);
+      f.db.prepare("UPDATE outbox SET status='done'").run();
+      await f.cmd('member.setRuntime',{memberId:f.b,kind:'fake',permissionMode:'bypassPermissions',effort:'high'});
+      await f.cmd('member.create',{projectId:f.projectId,displayName:'不在原名单'});
+      await f.cmd('task.redispatch',{taskId:root.taskId,sourceRunId:previous.id});
+      await f.worker.runOnce();
+      const current=f.db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(root.taskId) as {id:string};
+      expect(current.id).not.toBe(previous.id);
+      const frozen=f.db.prepare("SELECT json_extract(e.payload_json,'$.execution.roster') roster_json FROM domain_events e JOIN workflow_runs r ON json_extract(e.payload_json,'$.dispatchKey')=r.dispatch_identity WHERE r.id=? AND e.kind='task.redispatchEnqueued'").get(current.id) as {roster_json:string};
+      expect(JSON.parse(frozen.roster_json).map((m:{memberId:string})=>m.memberId).sort()).toEqual([f.a,f.b].sort());
+      for(let i=0;i<2;i++)await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:'有效独立结果',claims:[{claimId:'c1',statement:'方案可行',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]})}}]);
+      expect(f.db.prepare('SELECT count(*) n FROM agent_turns WHERE run_id=? AND status=\'SUCCEEDED\'').get(current.id)).toEqual({n:2});
+      expect(f.db.prepare('SELECT count(*) n FROM agent_turns WHERE run_id=?').get(previous.id)).toEqual({n:0});
+      expect(f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(root.taskId)).toEqual(oldScope);
+      expect(f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(root.taskId)).toEqual(oldTask);
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('keeps the explicit continue snapshot frozen when member settings change again before dispatch',async()=>{
+    const f=await fixture(true);try{
+      const root=await f.send([f.a,f.b]);await f.worker.runOnce();
+      const previous=f.db.prepare('SELECT id FROM workflow_runs WHERE task_id=?').get(root.taskId) as {id:string};
+      f.db.prepare("UPDATE workflow_runs SET status='INTERRUPTED' WHERE id=?").run(previous.id);f.db.prepare("UPDATE outbox SET status='done'").run();
+      await f.cmd('task.redispatch',{taskId:root.taskId,sourceRunId:previous.id});
+      await f.cmd('member.setRuntime',{memberId:f.b,kind:'fake',permissionMode:'bypassPermissions',effort:'high'});
+      await f.worker.runOnce();
+      for(let i=0;i<2;i++)await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:'独立结果',claims:[],recommendations:[],openQuestions:[]})}}]);
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE member_id=?").get(f.b)).toEqual({n:0});
+      expect(f.db.prepare("SELECT payload_json FROM domain_events WHERE kind='run.stepFailed' ORDER BY seq DESC LIMIT 1").get()).toMatchObject({payload_json:expect.stringContaining('成员执行配置已变化')});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('carries refreshed AUTO owner scope through planning, children and final integration',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();
+      f.db.prepare("UPDATE outbox SET status='done'").run();
+      await f.cmd('member.setRuntime',{memberId:f.a,kind:'fake',permissionMode:'bypassPermissions',effort:'high'});
+      await f.cmd('task.redispatch',{taskId:root.taskId});
+      await f.run(output('当前配置新规划',f.plan));
+      await f.run(output('新分析',undefined,{responseKind:'work'}));await f.run(output('新复核',undefined,{responseKind:'work'}));await f.run(output('整合成功',undefined,{responseKind:'work'}));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId),JSON.stringify(f.db.prepare("SELECT kind,payload_json FROM domain_events WHERE kind LIKE '%Failed' OR kind LIKE '%Blocked' OR kind LIKE '%Invalid'").all())).toEqual({status:'DONE'});
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE (r.task_id=? OR r.task_id IN(SELECT id FROM tasks WHERE parent_task_id=?)) AND a.status='SUCCEEDED'").get(root.taskId,root.taskId)).toEqual({n:4});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('uses the explicit current owner configuration for a DIRECT continuation',async()=>{
+    const f=await fixture();try{
+      const root=await f.send([f.a]);f.db.prepare("UPDATE outbox SET status='done'").run();
+      const before=f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(root.taskId);
+      await f.cmd('member.setRuntime',{memberId:f.a,kind:'fake',permissionMode:'bypassPermissions',effort:'high'});
+      await f.cmd('task.redispatch',{taskId:root.taskId});await f.run(output('正常回复'));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
+      expect(f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(root.taskId)).toEqual(before);
+      expect(f.adapter.startTurnLog).toHaveLength(1);
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
   it('captures a DELIB project document from actual changes without a files contract or duplicate document.markdown',async()=>{
     const f=await fixture(true);try{
       const root=await f.send([f.a,f.b]);await f.worker.runOnce();

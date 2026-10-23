@@ -1,7 +1,40 @@
 import {describe, expect, it, vi} from 'vitest';
-import {createPreviousReplyCheck} from '../../src/ui/hifi/lib/checkPreviousReply';
+import {createPreviousReplyCheck, previousReplyStillHeld, previousReplySummary} from '../../src/ui/hifi/lib/checkPreviousReply';
 
 describe('one-click previous reply check', () => {
+  it('keeps an unknown historical outcome visible after release without claiming new messages are blocked', () => {
+    const status = {unknownTurns: [{id: 'old-turn', protectionState: 'released', protectionReleased: true}], pendingRelease: [], heldLeases: []};
+    expect(previousReplyStillHeld(status, 'old-turn')).toBe(false);
+    const summary = previousReplySummary(status);
+    expect(summary).toContain('原回复结果仍未确认');
+    expect(summary).toContain('不阻挡新消息');
+    expect(summary).not.toContain('正在等待');
+    expect(summary).not.toContain('尚未确认结束');
+    // Same read after reopening the panel: no local success marker is needed.
+    expect(previousReplySummary(JSON.parse(JSON.stringify(status)))).toBe(summary);
+  });
+
+  it('still reports retained protection even with no workspace lease, and handles mixed released/held turns', () => {
+    const status = {unknownTurns: [{id: 'retained'}, {id: 'released', protectionReleased: true}], pendingRelease: [{turnId: 'retained'}], heldLeases: []};
+    expect(previousReplyStillHeld(status, 'retained')).toBe(true);
+    expect(previousReplyStillHeld(status, 'released')).toBe(false);
+    const summary = previousReplySummary(status);
+    expect(summary).toContain('有 1 次上次回复需要检查');
+    expect(summary).toContain('有 1 次原回复结果仍未确认');
+    expect(previousReplyStillHeld({...status, pendingRelease: [], heldLeases: [{owner_turn_id: 'retained'}]}, 'retained')).toBe(true);
+  });
+
+  it.each([
+    {id: 'old-turn'},
+    {id: 'old-turn', protectionState: null, protectionReleased: false},
+    {id: 'old-turn', protectionState: 'released', protectionReleased: false},
+  ])('does not treat an unknown execution with no leases or no formal release as released: %j', turn => {
+    const status = {unknownTurns: [turn], pendingRelease: [], heldLeases: []};
+    expect(previousReplyStillHeld(status, turn.id)).toBe(true);
+    expect(previousReplySummary(status)).toContain('需要检查');
+    expect(previousReplySummary(status)).not.toContain('不阻挡新消息');
+  });
+
   it('uses one stable turn, confirms unknown work, proves release, then resumes without redispatch', async () => {
     const send = vi.fn().mockResolvedValue({});
     await createPreviousReplyCheck(send)('old-turn');

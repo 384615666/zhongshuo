@@ -356,6 +356,13 @@ describe.skipIf(process.platform !== 'win32')('R103 previous managed owner recov
       expect(h.releasedTurns).toEqual([h.turnId]);
       expect(await h.cmd('recovery.releaseProtection', { turnId: h.turnId, note: '幂等', endPreviousExecution: true })).toMatchObject({ stateChanged: false });
       expect(h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId)).toEqual(before);
+      const status=()=>h.cmd<{unknownTurns:Array<{id:string;protectionReleased:boolean}>}>('recovery.status',{});
+      expect((await status()).unknownTurns.find(turn=>turn.id===h.turnId)?.protectionReleased).toBe(true);
+      h.db.prepare("UPDATE agent_turns SET protection_state='retained' WHERE id=?").run(h.turnId);
+      expect((await status()).unknownTurns.find(turn=>turn.id===h.turnId)?.protectionReleased).toBe(false);
+      h.db.prepare("UPDATE agent_turns SET protection_state='released' WHERE id=?").run(h.turnId);
+      h.db.prepare("UPDATE workspace_leases SET status='active' WHERE owner_turn_id=?").run(h.turnId);
+      expect((await status()).unknownTurns.find(turn=>turn.id===h.turnId)?.protectionReleased).toBe(false);
     } finally { h.db.close(); }
   });
 

@@ -62,6 +62,10 @@ function memberBrief(member:ScopeMember) {
 export function coordinationRoster(db: ZhongshuoDatabase, taskId: string,runId?:string): ScopeMember[] {
   if(runId){const request=db.prepare('SELECT roster_json FROM thread_reply_requests WHERE task_id=? AND run_id=?').get(taskId,runId) as {roster_json:string}|undefined;if(request)return JSON.parse(request.roster_json) as ScopeMember[];}
   if(runId){const explicit=db.prepare('SELECT roster_json FROM coordination_run_rosters WHERE run_id=?').get(runId) as {roster_json:string}|undefined;if(explicit)return JSON.parse(explicit.roster_json) as ScopeMember[];}
+  if(runId){const continued=db.prepare(`SELECT json_extract(e.payload_json,'$.execution.roster') roster_json FROM workflow_runs r JOIN domain_events e
+    ON e.task_id=r.task_id AND e.kind='task.redispatchEnqueued' AND json_extract(e.payload_json,'$.dispatchKey')=r.dispatch_identity
+    WHERE r.id=? AND r.task_id=? ORDER BY e.seq DESC LIMIT 1`).get(runId,taskId) as {roster_json:string|null}|undefined;
+    if(continued?.roster_json)return JSON.parse(continued.roster_json) as ScopeMember[];}
   const row=db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(taskId) as {roster_json:string}|undefined;
   return row ? JSON.parse(row.roster_json) as ScopeMember[] : [];
 }
@@ -151,7 +155,7 @@ function promptHandoff(json:string|null):unknown {
   return handoff;
 }
 
-export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: string, dispatchKey: string) {
+export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: string, dispatchKey: string, rosterOverride?: ScopeMember[]) {
   type Request={messageId:string;memberId:string;text:string;seq:number;writeScopeJson:string};
   const requestRow=(where:string,key:string)=>db.prepare(`SELECT q.message_id messageId,q.member_id memberId,json_extract(m.body_json,'$.text') text,q.input_thread_seq seq,q.write_scope_json writeScopeJson
     FROM thread_reply_requests q JOIN messages m ON m.id=q.message_id WHERE q.task_id=? AND ${where}=?`).get(taskId,key) as Request|undefined;
@@ -177,7 +181,8 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
     return {kind:'integration' as const,run:integration,request:requestRow('q.run_id',integration.run_id),repair:Boolean(repair),note:`整合已完成的真实成员工作。核对成果与评审，主动读取实际文件并完成用户请求所需的整合、修改与验证；保留其他成员作者身份。不再生成新计划，按本轮有效权限执行。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}\n同伴交回的真实消息（保留作者、消息hash和来源版本）：${JSON.stringify(incoming)}`};
   }
   const task=db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as {route_json:string|null};
-  const queued=db.prepare('SELECT route_json,roster_json FROM thread_reply_requests WHERE dispatch_key=? AND task_id=?').get(dispatchKey,taskId) as {route_json:string;roster_json:string}|undefined;
+  const queued=(db.prepare('SELECT route_json,roster_json FROM thread_reply_requests WHERE dispatch_key=? AND task_id=?').get(dispatchKey,taskId) as {route_json:string;roster_json:string}|undefined)
+    ??(rosterOverride?{route_json:task.route_json??'null',roster_json:JSON.stringify(rosterOverride)}:undefined);
   const routeJson=queued?.route_json??task.route_json;
   if(routeJson && JSON.parse(routeJson).mode==='AUTO' && !dispatchKey.includes(':conversation:')) {
     return {kind:'planning' as const,run:null,request,note:`你是协调成员。先读取完成任务所需的上下文，再在已授权名单内分派实施与独立评审；实施修改交给合适的实施步骤。你的职责是分工、审核和最终整合，不是 runtime 降权理由；本轮实际工具/文件权限以程序输入为准。已授权分工无需用户逐步确认，不使用 request_participant；名单外成员不得派发。所有步骤连同本次规划共用信封预算，预留2次整合，不重新扩充总预算。简单问候、普通提问直接自然回答，responseKind=conversation，coordinationPlan=null。需要同伴接手时可在 handoffs 提交具体消息（toMemberId、message、purpose）；复杂依赖也可提交 coordinationPlan，两者二选一。coordinationPlan 字段为（summary 与 steps，最多8步；每步 key/memberId/title/objective/role/dependsOn）。role 为 analysis/implementation/review；权限由成员快照和本轮有效授权决定，不由角色标签降级。按需安排不同成员，评审须依赖实施并读取实际文件。依赖只能引用本计划key且无环。只有程序接受计划才算已派发。最终整合由你完成。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};

@@ -1,4 +1,5 @@
 import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
+import {redispatchExecution} from './redispatchExecution.ts';
 import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations, settleIntegrationLaunchFailure } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
@@ -413,11 +414,15 @@ export class DispatchWorker {
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
     const generalRequest=threadReplyForDispatch(this.db,claimed.dispatch_key);
     const conversationRequest=conversationReplyForDispatch(this.db,claimed.dispatch_key)??generalRequest;
+    const continuedExecution=task?redispatchExecution(this.db,task.id,claimed.dispatch_key):undefined;
     // Per-message execution view only. Do not mutate the task's original owner,
     // route, write scope, anchor or any already queued envelope in the database.
     if(task&&generalRequest){task.owner_member_id=generalRequest.memberId;task.route_json=generalRequest.routeJson;}
-    const coordination=task?coordinationDispatchContext(this.db,task.id,claimed.dispatch_key):null;
+    const coordination=task?coordinationDispatchContext(this.db,task.id,claimed.dispatch_key,continuedExecution?.roster):null;
     if(task&&coordination?.request){task.owner_member_id=coordination.request.memberId;}
+    const dispatchWriteScope=conversationRequest?.writeScopeJson??continuedExecution?.writeScope
+      ??(task&&coordination?.kind==='integration'&&coordination.run
+        ?coordinationRoster(this.db,task.id,coordination.run.run_id).find(member=>member.memberId===task.owner_member_id)?.writeScope??undefined:undefined);
     let dispatchCallBudgetPolicy:FrozenCallBudgetPolicy|null=null;
     if(task){
       try{
@@ -540,6 +545,7 @@ export class DispatchWorker {
           ...(requestBudget!=null?{runMaxTurns:requestBudget}:{}),
           callBudget:requestCallBudget ?? null,
           ...(generalRequest?{dispatchIdentity:generalRequest.dispatchIdentity}:{}),
+          ...(continuedExecution?{dispatchIdentity:claimed.dispatch_key}:{}),
         },
       );
       if (!prepared.ok) {
@@ -706,7 +712,7 @@ export class DispatchWorker {
         }
       : undefined;
     let writeAccess: ReturnType<typeof effectiveTaskWriteAccess>;
-    try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)); }
+    try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(dispatchWriteScope??coordination?.request?.writeScopeJson)); }
     catch(e) {
       const reason=String(e);
       if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',reason);
@@ -831,6 +837,7 @@ export class DispatchWorker {
            VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', ?)`,
         ).run(runId, task.id, task.conversation_id, task.conversation_thread_id, coordination&&coordination.kind!=='child'?'AUTO':'DIRECT', conversationRequest?task.revision:0, JSON.stringify(budget));
         if(coordination?.kind==='planning'||coordination?.kind==='integration')beginCoordination(this.db,task.id,runId,coordination.kind,coordination.run?.run_id);
+        if(continuedExecution?.roster.length)this.db.prepare('INSERT INTO coordination_run_rosters(run_id,roster_json,created_at) VALUES(?,?,?)').run(runId,JSON.stringify(continuedExecution.roster),Date.now());
         this.db.prepare(
           `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
         ).run(runId, member.id);
@@ -1065,7 +1072,7 @@ export class DispatchWorker {
         startupPhase = 'session-record'; // No turn request has been made; close the opened session normally.
         throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '图片输入认证或成员运行时在派发前已变化；原消息与原件保留，未发送图片');
       }
-      if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
+      if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(dispatchWriteScope??coordination?.request?.writeScopeJson)).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
       assertCoordinationDispatch(this.db,task.id,claimed.dispatch_key,turnId);
       const liveThreadRequest=generalRequest??(coordination?.request?threadReplyForDispatch(this.db,`task:${task.id}:thread-reply:${coordination.request.messageId}`):undefined);
       if(liveThreadRequest){const blocked=threadReplyBlock(this.db,liveThreadRequest,this.defaultKindOf());if(blocked)throw new AdapterCallError(blocked.code as ConstructorParameters<typeof AdapterCallError>[0],blocked.message,true);}
@@ -1573,7 +1580,7 @@ export class DispatchWorker {
       return;
     }
     const turnId = `turn_${randomUUID()}`;
-    const frozen=coordinationRoster(this.db,task.id);
+    const frozen=coordinationRoster(this.db,task.id,run.id);
     const memberScope=frozen.find(m=>m.memberId===step.memberId);
     let writeAccess:ReturnType<typeof effectiveTaskWriteAccess>;
     let materials:ReturnType<typeof assembleDirectTurn>;

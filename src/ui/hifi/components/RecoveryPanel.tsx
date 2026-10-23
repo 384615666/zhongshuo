@@ -19,14 +19,14 @@ import { openExternalDeepLink } from '../loader';
 import { recordWrite } from '../data/store';
 import {getState} from '../data/store';
 import {refreshDms, refreshRooms, loadRoomPool, loadThread, loadDmHistory} from '../loader';
-import {createPreviousReplyCheck} from '../lib/checkPreviousReply';
+import {createPreviousReplyCheck, previousReplyStillHeld, previousReplySummary} from '../lib/checkPreviousReply';
 
 interface RecoveryStatus {
   gateHeld: boolean;
   pendingDispatchCount: number;
   pendingDispatchKeys: string[];
   interruptedRuns: Array<{ id: string; task_id: string; status: string }>;
-  unknownTurns: Array<{ id: string; runId: string; stageKey: string; taskId: string; status: string }>;
+  unknownTurns: Array<{ id: string; runId: string; stageKey: string; taskId: string; status: string; protectionState?: string | null; protectionReleased?: boolean }>;
   pendingRelease: Array<{ turnId: string; budgetMark: string | null; turnStatus: string; protectionState: string | null; leaseCount: number; lastProbeResult: string | null }>;
   stopRecord: { at?: number; phase?: string; reason?: string; drainPending?: boolean } | null;
   activeUndos: Array<{ id: string; changeSetId: string; status: string }>;
@@ -160,10 +160,10 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           {data != null && !attention ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}
           {data != null && realAttention ? (
             <div className="panel info" data-zs-recovery-summary="1">
-              <div className="row tight"><Icon name="info" size={14} /><strong>上次处理尚有待确认事项</strong></div>
+              <div className="row tight"><Icon name="info" size={14} /><strong>{data.gateHeld || data.pendingRelease.length > 0 || data.heldLeases.length > 0 || data.activeUndos.length > 0 || data.unknownTurns.some(turn => previousReplyStillHeld(data, turn.id)) ? '上次处理尚有待检查事项' : '上次回复记录'}</strong></div>
               <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
                 {data.gateHeld ? <div>上次关闭时还有未完成的事项；新消息会先等待。</div> : null}
-                {data.unknownTurns.length > 0 ? <div>有 {data.unknownTurns.length} 次回复尚未确认结束，新的请求可能在等待这些回复。先查看原任务，再核对处理结果。</div> : null}
+                {data.unknownTurns.length > 0 ? <div>{previousReplySummary(data)}</div> : null}
                 {data.interruptedRuns.length > 0 ? <div>有 {data.interruptedRuns.length} 个任务上次中断了。任务和文件都还在，可打开原任务继续处理。</div> : null}
                 {data.pendingRelease.length > 0 ? <div>上次文件操作还未确认结束，相关请求会继续等待。检查后仍在等待时，可打开诊断详情核对。</div> : null}
                 {data.activeUndos.length > 0 ? <div>还有未完成的撤销操作，请回到原任务查看。</div> : null}
@@ -176,9 +176,9 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               </div>
               {data.unknownTurns.map(turn => <div key={turn.id} style={{marginTop: 8}} data-zs-previous-reply={turn.id}>
                 <strong>{taskTitles[turn.id] ?? '上次回复'}</strong>
-                <div className="small">{checkResult[turn.id]?.ok ? '已确认这次占用结束；原回复结果仍未确认。排队消息已获准继续，其它等待原因以最新状态为准。' : '检查上次处理是否已结束；确认后继续排队消息，保留原请求结果。'}</div>
-                <button type="button" className="btn sm" style={{marginTop: 5}} disabled={busy != null || checkResult[turn.id]?.ok === true} onClick={() => void checkAndContinue(turn.id)}>{busy === `check:${turn.id}` ? '正在检查…' : checkResult[turn.id]?.ok ? '已核查此项' : '检查并继续排队消息'}</button>
-                {checkResult[turn.id]?.detail ? <><div className="small">检查尚未完成，相关消息可能仍在等待；可再次点击重试检查。</div><details className="small faint"><summary>诊断详情</summary>{checkResult[turn.id].detail}</details></> : null}
+                <div className="small">{previousReplyStillHeld(data, turn.id) ? '检查上次处理是否已结束；确认后继续排队消息，保留原请求结果。' : '原回复结果仍未确认，但这次占用已不再保留，不阻挡新消息。原请求不会重发。'}</div>
+                <button type="button" className="btn sm" style={{marginTop: 5}} disabled={busy != null || !previousReplyStillHeld(data, turn.id)} onClick={() => void checkAndContinue(turn.id)}>{busy === `check:${turn.id}` ? '正在检查…' : previousReplyStillHeld(data, turn.id) ? '检查并继续排队消息' : '此项已不再占用'}</button>
+                {checkResult[turn.id]?.detail ? <><div className="small">{previousReplyStillHeld(data, turn.id) ? '检查尚未完成，相关消息可能仍在等待；可再次点击重试检查。' : '这次占用已不再保留；上次操作未全部完成，可查看诊断并重新检查整体状态。'}</div><details className="small faint"><summary>诊断详情</summary>{checkResult[turn.id].detail}</details></> : null}
               </div>)}
             </div>
           ) : null}
