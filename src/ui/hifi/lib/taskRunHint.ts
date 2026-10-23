@@ -8,6 +8,15 @@ export interface TaskRunHint {
   icon: string;
 }
 
+/** Explicit null is a completed read, not permission to revive an older blocker. */
+export function taskExecutionBlocker(
+  threadSnapshot: {executionBlocker?: TaskExecutionBlocker | null} | undefined,
+  poolSnapshot: {executionBlocker?: TaskExecutionBlocker | null} | undefined,
+): TaskExecutionBlocker | null {
+  return threadSnapshot?.executionBlocker !== undefined
+    ? threadSnapshot.executionBlocker : poolSnapshot?.executionBlocker ?? null;
+}
+
 /** Queued work without an executing turn must never read as an active model. */
 export function executionBlockerHint(blocker: TaskExecutionBlocker): TaskRunHint {
   switch (blocker.reason) {

@@ -17,7 +17,7 @@ import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
-import { taskRunHint } from '../lib/taskRunHint';
+import { taskExecutionBlocker, taskRunHint } from '../lib/taskRunHint';
 import { coordinationProgressHint } from '../lib/coordinationProgressHint';
 import { requestRecoveryOpen } from '../lib/recovery';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
@@ -946,9 +946,7 @@ function RootCard({
   const task = thread ? taskOfThread(s, thread) : undefined;
   const run = task ? s.runs.find((r) => r.taskId === task.id) ?? task.latestRun ?? undefined : undefined;
   const executionBlocker = thread
-    ? s.threadTasks[thread.id]?.executionBlocker
-      ?? s.roomPool[message.roomId]?.find((card) => card.threadId === thread.id)?.executionBlocker
-      ?? null
+    ? taskExecutionBlocker(s.threadTasks[thread.id],s.roomPool[message.roomId]?.find((card) => card.threadId === thread.id))
     : null;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;

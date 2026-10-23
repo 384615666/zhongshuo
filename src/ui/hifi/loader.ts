@@ -1013,6 +1013,7 @@ const rootTickets = new Map<string, number>();
 const poolTickets = new Map<string, number>();
 const threadTickets = new Map<string, number>();
 const progressTickets = new Map<string, number>();
+const taskProjectionTickets = new Map<string, number>();
 
 export async function loadRoomPool(roomId: string): Promise<void> {
   const ticket = ++rootReadTicket;
@@ -1045,12 +1046,20 @@ export async function loadRoomPool(roomId: string): Promise<void> {
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[roomId];
       const threadProgress = { ...prev.threadProgress };
+      const threadTasks = { ...prev.threadTasks };
       for (const item of data.items ?? []) {
+        if (item.taskId != null && (taskProjectionTickets.get(item.threadId) ?? 0) <= ticket) {
+          taskProjectionTickets.set(item.threadId,ticket);
+          const cached=threadTasks[item.threadId];
+          if(cached)threadTasks[item.threadId]={...cached,status:item.taskStatus??cached.status,
+            revision:item.taskRevision??cached.revision,activeRun:item.latestRun??null,
+            delivery:item.delivery??null,executionBlocker:item.executionBlocker??null};
+        }
         if (item.progress == null || (progressTickets.get(item.threadId) ?? 0) > ticket) continue;
         progressTickets.set(item.threadId, ticket);
         threadProgress[item.threadId] = { items: item.progress, readAt: Date.now() };
       }
-      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, threadProgress, readErrors: errors };
+      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, threadTasks, threadProgress, readErrors: errors };
     });
     hydrateRoomFromPool(getState(), projectId, roomId, cards, ticket);
   } catch (e) {
@@ -1095,7 +1104,8 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
     const root = stableRoots.find((m) => m.id === c.anchorMessageId);
     if (root != null && anchors[c.threadId] != null) anchors[c.threadId] = root;
   }
-  const tasks = cards.filter((c) => c.taskId != null).map((c) => ({
+  const tasks = cards.filter((c) => c.taskId != null).map((c) => (taskProjectionTickets.get(c.threadId)??0)>ticket&&prev.tasks.some(task=>task.id===c.taskId)
+    ?prev.tasks.find(task=>task.id===c.taskId)!:({
     id: c.taskId as string, projectId, roomId, conversationThreadId: c.threadId,
     roomTaskNumber: c.roomTaskNumber ?? 0, title: c.taskTitle ?? '',
     responseKind:c.taskResponseKind, objective: c.taskObjective ?? null, status: (c.taskStatus ?? 'OPEN') as Task['status'], revision: c.taskRevision ?? 0,
@@ -1142,7 +1152,7 @@ function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket)
       formalAttachments: (anchor as Message & { formalAttachments?: unknown }).formalAttachments,
     }];
     const nextTasks = [...prev.tasks];
-    if (detail != null) {
+    if (detail != null && (taskProjectionTickets.get(threadId)??0)<=ticket) {
       const idx = nextTasks.findIndex((t) => t.id === detail.id);
       const taskView = {
         id: detail.id, projectId: thread.projectId, roomId: thread.roomId,
@@ -1297,7 +1307,10 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
         reworkPending: tg.reworkPending ?? null,
         lastStartupFailureMessage: tg.lastStartupFailureMessage ?? null,
       };
-      setState((prev) => ({ ...prev, threadTasks: { ...prev.threadTasks, [threadId]: detail } }));
+      if((taskProjectionTickets.get(threadId)??0)<=ticket){
+        taskProjectionTickets.set(threadId,ticket);
+        setState((prev) => ({ ...prev, threadTasks: { ...prev.threadTasks, [threadId]: detail } }));
+      }
     } else {
       setState((prev) => { const next = { ...prev.threadTasks }; delete next[threadId]; return { ...prev, threadTasks: next }; });
     }
@@ -1437,12 +1450,14 @@ export async function loadThreadOlder(threadId: string, beforeSeq: number): Prom
 }
 
 export async function refreshThreadTask(threadId: string): Promise<void> {
+  const ticket=++rootReadTicket;
   const s = getState();
   const thread = s.threadEntities[threadId];
   if (thread?.rootTaskId == null) return;
   const tg = await command<TaskGetData>('task.get', { taskId: thread.rootTaskId });
   const projectId = s.activeProjectId;
   if (!stillCurrent(s.loadGen, projectId)) return;
+  if((taskProjectionTickets.get(threadId)??0)>ticket)return;
   const detail: ThreadTaskDetail = {
     id: tg.task.id, responseKind:tg.task.response_kind, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
     threadId: tg.task.conversation_thread_id, roomTaskNumber: tg.task.room_task_number,
@@ -1456,6 +1471,7 @@ export async function refreshThreadTask(threadId: string): Promise<void> {
     reworkPending: tg.reworkPending ?? null,
     lastStartupFailureMessage: tg.lastStartupFailureMessage ?? null,
   };
+  taskProjectionTickets.set(threadId,ticket);
   setState((prev) => ({ ...prev, threadTasks: { ...prev.threadTasks, [threadId]: detail } }));
 }
 
