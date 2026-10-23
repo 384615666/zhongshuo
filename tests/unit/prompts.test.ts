@@ -169,6 +169,27 @@ describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
     expect(member.value).not.toContain('你的 summary 是最终用户总览');
   });
 
+  it.each([
+    ['INDEPENDENT','member'],['CROSS_REVIEW','member'],['ISSUE_DISCUSSION','member'],['SYNTHESIS','host'],['RATIFY','host'],['RATIFY','member'],
+  ])('R102 %s/%s preserves given-case facts and makes document errors actionable',(stage,role)=>{
+    const result=selectStageInstruction({mode:'DELIBERATE',role,stage,turnPurpose:'stage_work'});
+    expect(result.ok).toBe(true);if(!result.ok)return;
+    expect(result.value).toContain('案例外泛化分支不得替换本案例前提');
+    expect(result.value).toContain('用户未给的业务例外或审批不得混入已确定的业务规则');
+    expect(result.value).toContain('发现文档错误须实际修订或按正式流程返工');
+    if(stage==='INDEPENDENT'){
+      expect(result.value).toContain('先判断相关性，不读取无关文件');
+      expect(result.value).toContain('真正影响处理结果或安全边界、需要同伴评议的关键命题');
+      expect(result.value).toContain('背景、材料检查、复算中间值和同一规则的重复表述放证据');
+      expect(result.value).toContain('按有效权限');
+    }
+    if(stage==='SYNTHESIS'||stage==='RATIFY'){
+      expect(result.value).toContain('先让目标读者按给定案例直接执行');
+      expect(result.value).toContain('新增公式或模型须逐个用给定案例作反例核验');
+    }
+    if(stage==='RATIFY')expect(result.value).toContain('deliveryFeedback.status=needs_revision');
+  });
+
   it('R101 业务沟通用成员自然名，一致否定不写成同意或直接 resolved', () => {
     const crossReview = selectStageInstruction({ mode: 'DELIBERATE', role: 'member', stage: 'CROSS_REVIEW', turnPurpose: 'stage_work' });
     const synthesis = selectStageInstruction({ mode: 'DELIBERATE', role: 'host', stage: 'SYNTHESIS', turnPurpose: 'stage_work' });
@@ -255,6 +276,8 @@ describe('R97 permission header', () => {
     expect(text).toContain('无需修改则简短确认');
     expect(text).toContain('answer 只说本轮核验结论、实质纠正和影响交付的问题');
     expect(text).toContain('仅内容不一致或用户明确要求时在正文提');
+    expect(text).toContain('案例外泛化分支不得替换本案例前提');
+    expect(text).toContain('用户未给的业务例外或审批不得混入已确定的业务规则');
     const handoffText = renderTurnBundle({ ...envelope, communicationContract: {
       mentionEnabled: true, submitVia: 'final-result', maxHandoffs: 1,
       members: [{ memberId: 'm_b', displayName: '数据复核', description: null }],

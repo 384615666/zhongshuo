@@ -404,7 +404,7 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
     `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"最短有用、符合任务的自然回复","document":null,"changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"],"handoffs":[]}`,
   );
   lines.push('严格 schema：上述字段与 document 均须出现。已把完整业务文档写入项目文件时，files 引用真实路径，document=null 即可，不要在 document.markdown 重抄同名第二副本；未写项目文件而需要可读文档时，自主提供 {filename,purpose,markdown}。用户明确要求两个独立版本时按要求交付。filename 必须是安全的 .md basename，purpose 说明用途，markdown 原样保留。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
-  lines.push('用户已明确的条件与规则优先；新增假设只作建议，不缩小适用范围或降级为待确认。answer 只说本轮核验结论、实质纠正和影响交付的问题；详细复算留在已有文档。hash、字节数通常由程序保留，仅内容不一致或用户明确要求时在正文提。返工时 answer 先说本轮实际修改；核对后无需修改则简短确认，不重述整份旧方案。');
+  lines.push(`${USER_CASE_FACT_RULE}answer 只说本轮核验结论、实质纠正和影响交付的问题；详细复算留在已有文档。hash、字节数通常由程序保留，仅内容不一致或用户明确要求时在正文提。返工时 answer 先说本轮实际修改；核对后无需修改则简短确认，不重述整份旧方案。`);
   lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 始终面向用户并使用最短有用表达：按任务需要组织结论，不固定 3–5 点；关键分歧、条件、待确认不可省略。需要完整细节时才提供 document，否则不要造文件。短问候、孤立数字或“测试”直接简短回应，document=null，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
@@ -475,7 +475,9 @@ export function selectStageInstruction(input: {
 
 // ---------- DELIBERATE 阶段指令（§6；DEV-21-M1） ----------
 
-const DELIBERATE_USER_VIEW_RULE = '- 用户已明确的条件与规则优先；新增假设只作建议，不缩小适用范围或降级为待确认。面向用户先写短 summary，只陈述本轮新增结论、纠正或下一步；未变化的既有结论不重复抄写。已将完整业务材料写入项目文件时，summary 指出真实文件名，document=null，无需在 document.markdown 复制；未写项目文件且本次材料有独立、可复用价值时，自主提供 document={filename,purpose,markdown}；短答、确认、状态说明或没有新增材料时 document=null，不按字数或数量强行造文件。修订已有方案时沿用合适的同名文件。互评、分歧与确认只写新增意见、问题或变化，不重抄整份方案。filename 使用有业务含义的安全 .md basename，purpose 说明用途。始终由你按任务需要自主判断是否生成文件以及必要详细程度；应用只展示和托管原文，不再二次总结。面向业务用户提到同伴时，使用输入中的角色/displayName 和具体问题描述（如“费用复核的备用采购建议”），不要让 UUID 代替自然说明；artifactId/revision/claimId 等精确定位只在结构化引用字段中保留，除非用户任务本身需要协议/代码标识。';
+const USER_CASE_FACT_RULE = '用户已明确的条件与规则优先，不缩小适用范围或降级为待确认。遵从给定案例事实，案例外泛化分支不得替换本案例前提；用户未给的业务例外或审批不得混入已确定的业务规则，新增假设仅作建议。发现文档错误须实际修订或按正式流程返工，不能只在聊天解释就声称通过。';
+const DELIBERATE_DELIVERY_SCOPE_RULE = '- 先让目标读者按给定案例直接执行；新增公式或模型须逐个用给定案例作反例核验，不必为简单场景设计通用系统。';
+const DELIBERATE_USER_VIEW_RULE = `- ${USER_CASE_FACT_RULE}面向用户先写短 summary，只陈述本轮新增结论、纠正或下一步；未变化的既有结论不重复抄写。已将完整业务材料写入项目文件时，summary 指出真实文件名，document=null，无需在 document.markdown 复制；未写项目文件且本次材料有独立、可复用价值时，自主提供 document={filename,purpose,markdown}；短答、确认、状态说明或没有新增材料时 document=null，不按字数或数量强行造文件。修订已有方案时沿用合适的同名文件。互评、分歧与确认只写新增意见、问题或变化，不重抄整份方案。filename 使用有业务含义的安全 .md basename，purpose 说明用途。始终由你按任务需要自主判断是否生成文件以及必要详细程度；应用只展示和托管原文，不再二次总结。面向业务用户提到同伴时，使用输入中的角色/displayName 和具体问题描述（如“费用复核的备用采购建议”），不要让 UUID 代替自然说明；artifactId/revision/claimId 等精确定位只在结构化引用字段中保留，除非用户任务本身需要协议/代码标识。`;
 
 function deliberateRatifyInstruction(role: string): string {
   const summaryRule = role === 'host'
@@ -486,6 +488,8 @@ function deliberateRatifyInstruction(role: string): string {
 - 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
 ${summaryRule}
 - 主动核对整合稿、冻结来源和实际可验证内容；能确认的直接确认，有问题写出证据与可执行修改。
+${DELIBERATE_DELIVERY_SCOPE_RULE}
+- 文档仍有错误时用 deliveryFeedback.status=needs_revision 明确返工，不能只在聊天纠正后仍报 ready。
 - 填写 deliveryFeedback：判断整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体修改请求，needs_user 写清需要谁补充什么。不要把业务待确认写成全员同意，也不要因任意分歧无限重做。
 - issueResponses 只针对输入中列出的冻结 issue；逐项写明 resolved 或 still_open 及理由。它确认的是当前冻结 synthesis artifact+revision，不得用 summary、claim 矩阵或 deliveryFeedback=ready 代替；原有 resolution 为 needs_user 的业务决定仍保持 needs_user，不能由你越权关闭。
 ${DELIBERATE_USER_VIEW_RULE}
@@ -495,8 +499,9 @@ ${DELIBERATE_USER_VIEW_RULE}
 const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
   'INDEPENDENT|stage_work': `你是本任务的独立分析成员。本轮先独立完成，再提交结论：
 - 先提交关键原子判断、必要证据与建议，不提前编写整份统一定稿；统一可交付文件由 SYNTHESIS 形成。用户明确要求各人独立文件时遵从；有独立价值的材料仍可自主提供，不固定篇幅或条数。
-- 依据任务目标、获准材料和实际文件主动查证；可按有效权限运行只读命令、检查代码或验证假设。本轮不读取其他成员的独立结论。
+- 先判断相关性，不读取无关文件；围绕任务目标和相关获准材料，按有效权限查证实际文件与验证假设。本轮不读取其他成员的独立结论。
 - 每条 claim 只表达一个可独立核验的判断，区分事实（observed）、推断（inferred）与建议（proposal），附证据编号和必要的不确定性；不要把数量、完整性与可排期性合成一个命题。
+- claims 只列真正影响处理结果或安全边界、需要同伴评议的关键命题；背景、材料检查、复算中间值和同一规则的重复表述放证据，不逐条建 claim。
 - 能自行解决的问题自行查证；真正需要用户决定、外部权限或缺失材料时明确写出，不用“需要更多信息”代替调查。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
@@ -521,6 +526,7 @@ ${DELIBERATE_USER_VIEW_RULE}
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'SYNTHESIS|stage_work': `你是主持者，负责整合稿。基于各成员报告、互评与最终意见：
+${DELIBERATE_DELIVERY_SCOPE_RULE}
 - 汇总可用结果：能形成一套可执行交付的差异收敛成清晰方案；主动读取实际文件/验证材料，必要时补齐可验证细节。外部未知写清待谁、问什么。
 - 汇总共识为 claims（逐条陈述+来源引用）；未解决的分歧如实列入 disputedClaims（含分歧摘要），不要用一句总结覆盖反对意见。
 - 基于当前冻结议题与立场填写 issueResolutions：每项必须是 resolved / needs_user / insufficient_evidence；resolved 必须有本轮完整一致立场依据（agree 或 disagree），一致否定时明确记录否定/更正依据，不能覆盖混合立场或缺席；needs_user/insufficient_evidence 写清理由及必要问题/责任方。
