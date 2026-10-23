@@ -1699,8 +1699,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode !== 'DELIBERATE';routedMode=route.value.mode; }
         }
         if(env.method==='message.writeCapability') {
-          if(routedMode==='DELIBERATE')return withCommandId({ok:true,data:{willDispatch,fullAccess:false,modificationAuthorized:false,reason:'多人研讨：分析、互评与整合角色均只读；成员原权限配置不改变'}});
-          if(routedMode==='AUTO')return withCommandId({ok:true,data:{willDispatch,fullAccess:false,modificationAuthorized:false,reason:'自动协作：协调规划和评审只读，实施和最终整合按成员本次已授权权限执行，共享目录保持单写'}});
+          if(routedMode==='DELIBERATE')return withCommandId({ok:true,data:{willDispatch,fullAccess:false,modificationAuthorized:false,reason:'多人研讨：每位成员按配置的权限完成分析、互评与整合；角色名称不会降低执行权限'}});
+          if(routedMode==='AUTO')return withCommandId({ok:true,data:{willDispatch,fullAccess:false,modificationAuthorized:false,reason:'自动协作：各步骤按成员配置的权限执行，由协调者分工并整合结果'}});
           const full=members.length>0&&members.every(id=>{const runtime=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return runtime.permissionMode==null||runtime.permissionMode==='bypassPermissions';});
           if(willDispatch&&direct&&full)return withCommandId({ok:true,data:{willDispatch,fullAccess:true,modificationAuthorized:true,reason:'CLI 完整权限：可读写电脑并执行命令；仅按本次用户目标操作'}});
           const grant=projectWriteAccess(deps.db,target.projectId);

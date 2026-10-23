@@ -2462,7 +2462,7 @@ export function Composer({
                   title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 分步骤权限':'多人研讨 · 只读' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'仅保存草稿':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
+                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 成员权限':'多人研讨 · 成员权限' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'仅保存草稿':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 
