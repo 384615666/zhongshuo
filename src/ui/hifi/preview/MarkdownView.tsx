@@ -228,7 +228,7 @@ export function outlineOf(text: string): OutlineItem[] {
  * 顺序很重要：先切代码段，避免代码里的 `**` 被当成粗体
  * （这正是原型里曾经出现过的"字面星号被渲染"那类缺陷）。
  */
-function renderInline(text: string): React.ReactNode[] {
+function renderInline(text: string, tableCell = false): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   // 用捕获组切分，奇数下标是代码内容
   const parts = text.split(/(`[^`]*`)/g);
@@ -241,7 +241,7 @@ function renderInline(text: string): React.ReactNode[] {
     const boldSplit = part.split(/(\*\*[^*]+\*\*)/g);
     boldSplit.forEach((seg, si) => {
       if (seg.startsWith('**') && seg.endsWith('**') && seg.length > 4) {
-        out.push(<strong key={`b${pi}-${si}`}>{seg.slice(2, -2)}</strong>);
+        out.push(<strong key={`b${pi}-${si}`}>{tableCell ? renderInline(seg.slice(2, -2), true) : seg.slice(2, -2)}</strong>);
         return;
       }
       // 链接：只显示文本 + 外链标记，不自动打开
@@ -251,11 +251,18 @@ function renderInline(text: string): React.ReactNode[] {
         if (m) {
           out.push(
             <span className="md-link" key={`l${pi}-${si}-${li}`} title={`外部链接（原型不自动打开）：${m[2]}`}>
-              {m[1]}<span className="md-link-mark">↗</span>
+              {tableCell ? renderInline(m[1], true) : m[1]}<span className="md-link-mark">↗</span>
             </span>,
           );
         } else if (piece) {
-          out.push(<Fragment key={`t${pi}-${si}-${li}`}>{piece}</Fragment>);
+          // Table-only whitelist; code spans were handled first and all other
+          // HTML (including attributed <br>) remains ordinary escaped text.
+          const fragments = tableCell ? piece.split(/(<br\s*\/?\s*>)/gi) : [piece];
+          fragments.forEach((fragment, fi) => {
+            out.push(tableCell && /^<br\s*\/?\s*>$/i.test(fragment)
+              ? <br key={`br${pi}-${si}-${li}-${fi}`} />
+              : <Fragment key={`t${pi}-${si}-${li}-${fi}`}>{fragment}</Fragment>);
+          });
         }
       });
     });
@@ -567,11 +574,11 @@ export function MarkdownView({ text, specTables = false, headingAnchors = false 
               <div className="md-table-wrap" key={i}>
                 <table className="md-table">
                   <thead>
-                    <tr>{(b.header ?? []).map((h, j) => <th key={j}>{renderInline(h)}</th>)}</tr>
+                    <tr>{(b.header ?? []).map((h, j) => <th key={j}>{renderInline(h, true)}</th>)}</tr>
                   </thead>
                   <tbody>
                     {(b.rows ?? []).map((r, ri) => (
-                      <tr key={ri}>{r.map((c, ci) => <td key={ci}>{renderInline(c)}</td>)}</tr>
+                      <tr key={ri}>{r.map((c, ci) => <td key={ci}>{renderInline(c, true)}</td>)}</tr>
                     ))}
                   </tbody>
                 </table>

@@ -639,8 +639,11 @@ body.zs-frameless .preview-pane.maximized {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-sm);
 }
-.md-table { border-collapse: collapse; font-size: var(--fs-12); width: max-content; min-width: 100%; }
-.md-table th, .md-table td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+/* Natural column sizing: prose wraps within the pane instead of demanding its
+   max-content width. Unbreakable identifiers can still scroll inside the wrapper. */
+.md-table { border-collapse: collapse; font-size: var(--fs-12); width: 100%; min-width: 100%; table-layout: auto; }
+.md-table th, .md-table td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; white-space: normal; word-break: normal; overflow-wrap: normal; }
+.md-table .md-code { white-space: pre; }
 .md-table th:last-child, .md-table td:last-child { border-right: 0; }
 .md-table tbody tr:last-child td { border-bottom: 0; }
 .md-table th { background: var(--bg-surface-2); font-weight: 600; }
