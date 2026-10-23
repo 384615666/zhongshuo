@@ -106,8 +106,8 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   if(latest.status==='WAITING'&&latest.mode==='AUTO'&&latest.stage==='分工执行')return '协作正在等待分工步骤完成；查看分工与活动进展。无需重新发送或重复派发。';
   if (latest.status === 'WAITING') return '本次运行正在等待输入或批准；到回复串查看明确的待处理请求。';
   if (latest.status === 'STOPPING') return '停止请求正在收敛；先等待状态刷新，避免重复派发。';
-  if (latest.status === 'INTERRUPTED') return '本次运行已中断，结果可能尚未确认。先到恢复入口核对退出与保护状态，再决定是否继续。';
-  if (latest.status === 'FAILED' && detail.failedRetry.pending) return '最近一次运行失败；继续请求已入队，等待正式 worker 派发。请勿重复提交。';
+  if (latest.status === 'INTERRUPTED') return '本次回复中断，尚未确认结束。先检查上次回复状态，再决定是否继续。';
+  if (latest.status === 'FAILED' && detail.failedRetry.pending) return '上次回复失败；继续请求已排队，等待成员接续处理。请勿重复提交。';
   if (latest.status === 'FAILED' && detail.failedRetry.blockReason) return `最近一次运行失败，任务仍未完成。当前不能继续：${detail.failedRetry.blockReason}`;
   if (latest.status === 'FAILED') return `最近一次运行失败；任务仍是${detail.task.status === 'ACTIVE' ? '待继续处理' : detail.task.status}。查看诊断、修复原因后，在「运行详情」点“${detail.failedRetry.formatRepair ? '修复输出格式' : '继续最近失败运行'}”。`;
   if (latest.status === 'PARTIAL') return '最近一次运行只完成一部分；查看诊断与已有成果，再从原回复串明确补充需要处理的部分。';
@@ -238,17 +238,22 @@ export function ExecutionBlockerFacts({ detail }: { detail: TaskDetailsResult })
   return <div className={`panel ${blocker.reason === 'unknown-turn' ? 'warning' : 'info'}`} data-zs-execution-blocker={blocker.reason}>
     <div className="panel-title"><Icon name={hint.icon} size={13}/> {hint.label}</div>
     <div>{hint.detail}</div>
-    <div className="small faint" style={{marginTop:6}}>
+    {blocker.blockingRootTaskId || blocker.blockingTaskId ? <div className="small" style={{marginTop:6}}>正在等待：<a href={`#task=${blocker.blockingRootTaskId ?? blocker.blockingTaskId}`}>
+      {blocker.blockingRootTaskTitle ?? blocker.blockingTaskTitle ?? '上次请求'}
+      {blocker.blockingRootTaskNumber != null ? ` · #${blocker.blockingRootTaskNumber}` : ''}
+    </a></div> : null}
+    {blocker.reason === 'unknown-turn' ? <div className="small">
+      <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={() => requestRecoveryOpen()}>检查上次回复</button>
+    </div> : null}
+    <details className="small faint" style={{marginTop:6}}><summary>诊断详情</summary>
+      <div>{blocker.note}</div>
       待派发 {blocker.pendingOutboxCount} 项
       {blocker.stage != null ? ` · 阶段 ${stageLabel(blocker.stage as Parameters<typeof stageLabel>[0])}` : ''}
       {blocker.memberName != null ? ` · 目标成员 ${blocker.memberName}` : ''}
       {blocker.blockingRootTaskNumber != null || blocker.blockingRootTaskId != null ? <> · <a href={`#task=${blocker.blockingRootTaskId ?? blocker.blockingTaskId ?? ''}`} title={blocker.blockingRootTaskTitle ?? blocker.blockingTaskTitle ?? ''}>占用任务 #{blocker.blockingRootTaskNumber ?? '?'}</a></> : ''}
       {blocker.writeRootKey != null ? ` · 写入目录 ${blocker.writeRootKey}` : ''}
-    </div>
     {blocker.protectionState != null ? <div className="small danger">保护状态：{blocker.protectionState}；不会自动释放或重放。</div> : null}
-    {blocker.reason === 'unknown-turn' ? <div className="small">
-      <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={() => requestRecoveryOpen()}>打开恢复中心核对退出与保护状态</button>
-    </div> : null}
+    </details>
   </div>;
 }
 

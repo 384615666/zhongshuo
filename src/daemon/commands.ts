@@ -114,6 +114,8 @@ export interface DaemonCommandDeps {
   };
   /** 应用数据目录（changeset.* 的受管理内容存储位置；entry 注入）。 */
   appDataDir?: string;
+  /** Supplied only after startDaemon acquired this instance's singleton lock. */
+  recoveryInstance?: { pid: number; startedAt: number };
   /**
    * 同 daemon 内存联动钩子（DEV-13）：对账事务成功且 turn 已终态时释放 worker 准入账本中
    * 该 turn 的 UNKNOWN 保留占位（entry 接线 worker.reconcileRelease）。缺省（测试直连）不调用——
@@ -213,6 +215,7 @@ function managedJobObservation(jobId: string | null): ManagedJobObservation | nu
 // REC-LIFE-1（第十四轮二）：受管证据按稳定身份（jobId）取用——PID 可复用，仅辅助核对。
 import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
+import { verifyPreviousManagedOwnerExit } from './managed/previousOwnerExit.ts';
 import { stripSingleJsonFence } from './dispatchWorker.ts';
 
 const localScope = (userId: string): string => `user:${userId}`;
@@ -2335,6 +2338,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           turnId: z.string().min(1),
           note: z.string().min(1).max(500),
           probeId: z.string().min(1).optional(),
+          /** Explicitly end a previous daemon's managed carrier; never replay its request. */
+          endPreviousExecution: z.literal(true).optional(),
         }).parse(env.params);
         const result = run(() => {
           const turn = deps.db.prepare('SELECT id, run_id, status, budget_mark, protection_state FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; budget_mark: string | null; protection_state: string | null } | undefined;
@@ -2370,6 +2375,28 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
             const mp = managedJobById(reg.managed_job_id);
             if (mp == null) {
+              if (params.endPreviousExecution === true) {
+                if (deps.recoveryInstance == null || deps.appDataDir == null) {
+                  throw new DaemonCommandError('STALE_REVISION', '当前服务没有经单实例锁确认的启动边界，不能核查上次执行');
+                }
+                let evidence;
+                try {
+                  evidence = verifyPreviousManagedOwnerExit(deps.db, reg, {
+                    appDataDir: deps.appDataDir, instance: deps.recoveryInstance, now,
+                    query: deps.processQuery, treeScan: deps.processTree,
+                  });
+                } catch (error) {
+                  throw new DaemonCommandError('STALE_REVISION', error instanceof Error ? error.message : String(error));
+                }
+                deps.db.transaction(() => {
+                  for (const l of leases) {
+                    deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
+                  }
+                  deps.db.prepare(`UPDATE agent_turns SET protection_state = 'released' WHERE id = ?`).run(turn.id);
+                  emit({ released: true, releasedLeases: leases.map(l => l.lock_domain), reason: 'protection-released-previous-managed-owner-exit', previousOwnerEvidence: evidence, managedJobId: reg.managed_job_id });
+                })();
+                return { turnId: turn.id, stateChanged: true as const, releasedLeases: leases.map(l => l.lock_domain), reason: 'protection-released-previous-managed-owner-exit' };
+              }
               throw new DaemonCommandError('STALE_REVISION', '该 turn 登记为受管执行，但本进程未持有其 job 句柄（daemon 重启或已收尾）——无法核对完整结束，进入人工核对；「曾纳管」不追认为完整退出证据');
             }
             if (reg.pid != null && mp.pid !== reg.pid) {

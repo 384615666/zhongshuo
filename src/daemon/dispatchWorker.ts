@@ -1400,14 +1400,21 @@ export class DispatchWorker {
   }
 
   /**
-   * 对账后内存联动（DEV-13，recovery.reconcile 钩子）：turn 已被对账置 FAILED（非 UNKNOWN）
-   * 时释放准入占位并解除排队 skip——DB 事务先于此调用，持久状态不受此失败影响。
+   * 对账后内存联动：终态或 UNKNOWN 的正式保护释放均可回收占位；UNKNOWN 必须
+   * 同时有持久 released、正式释放事件且无遗留租约。DB 事务先于此调用。
    */
   reconcileRelease(turnId: string): void {
     const st = this.db.prepare('SELECT status, protection_state FROM agent_turns WHERE id = ?').get(turnId) as { status: string; protection_state: string | null } | undefined;
     // 双保险：仅持久状态确认后释放；r57——retained 期间不释放（与重启恢复口径一致，
     // recovery.releaseProtection 解除后经同钩子放行）。
-    if (st == null || st.status === 'UNKNOWN' || st.protection_state === 'retained') return;
+    if (st == null || st.protection_state === 'retained') return;
+    if (st.status === 'UNKNOWN') {
+      if (st.protection_state !== 'released') return;
+      const released = this.db.prepare(`SELECT 1 FROM domain_events WHERE turn_id=? AND kind='recovery.protectionReleased'
+        AND json_extract(payload_json,'$.released')=1 LIMIT 1`).get(turnId);
+      const lease = this.db.prepare("SELECT 1 FROM workspace_leases WHERE owner_turn_id=? AND status!='released' LIMIT 1").get(turnId);
+      if (!released || lease) return;
+    }
     this.admission.release(turnId);
     this.blockedOutbox.clear();
   }

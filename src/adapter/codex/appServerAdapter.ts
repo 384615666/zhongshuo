@@ -274,7 +274,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     const p = params ?? {};
     // 归属解析：v2 带 threadId/turnId；legacy 带 conversationId（ThreadId）。
     const threadKey = typeof p['threadId'] === 'string' ? p['threadId'] : typeof p['conversationId'] === 'string' ? p['conversationId'] : null;
-    const session = threadKey != null ? this.sessionByThread(threadKey) : null;
+    const session = threadKey != null ? this.sessionByThread(threadKey, typeof p['turnId'] === 'string' ? p['turnId'] : undefined) : null;
     const payloadHash = createHash('sha256').update(JSON.stringify({ method, params })).digest('hex');
     if (session == null) {
       // 无法定位归属：按协议拒绝（不悬挂服务端请求，也不投递给错误会话）。
@@ -300,7 +300,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private handleNotification(method: string, params: Record<string, unknown> | undefined): void {
     const p = params ?? {};
     const threadKey = typeof p['threadId'] === 'string' ? p['threadId'] : null;
-    const session = threadKey != null ? this.sessionByThread(threadKey) : [...this.sessions.values()][0];
+    const nestedTurnId = (p['turn'] as { id?: unknown } | undefined)?.id;
+    const notificationTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : typeof nestedTurnId === 'string' ? nestedTurnId : undefined;
+    const session = threadKey != null ? this.sessionByThread(threadKey, notificationTurnId, method === 'turn/started') : [...this.sessions.values()][0];
     if (session == null) return;
     const providerTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : undefined;
 
@@ -452,8 +454,21 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     return session.awaitingTurn?.providerTurnId == null ? session.awaitingTurn?.internalTurnId : undefined;
   }
 
-  private sessionByThread(threadId: string): SessionState | undefined {
-    return [...this.sessions.values()].find((s) => s.providerThreadId === threadId);
+  private sessionByThread(threadId: string, providerTurnId?: string, allowAwaiting = false): SessionState | undefined {
+    const candidates = [...this.sessions.values()].filter(s => s.providerThreadId === threadId);
+    // resume 创建新的本地 session，但 provider thread 不变。已知旧轮仍送回旧流；
+    // 新轮通知可能先于 start 响应，此时只认领唯一待绑定的启动者。
+    if (providerTurnId != null) {
+      const mapped = candidates.find(s => s.providerTurnToInternal.has(providerTurnId));
+      if (mapped != null) return mapped;
+      if (allowAwaiting) {
+        const awaiting = candidates.filter(s => s.awaitingTurn?.providerTurnId === null);
+        if (awaiting.length === 1) return awaiting[0];
+      }
+      return undefined;
+    }
+    // 仅无 turn ID 的线程通知归最新会话；未知轮次不投递给任何会话。
+    return candidates.at(-1);
   }
 
   private event(session: SessionState, spec: DistOmit<NormalizedRuntimeEvent, 'eventKey' | 'sessionId' | 'receivedAt'>, turnId?: string): NormalizedRuntimeEvent {
@@ -579,6 +594,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if(input.images?.length){let models:Awaited<ReturnType<CodexAppServerAdapter['listModels']>>;try{models=await this.listModels();}catch(e){throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`图片模型信息读取失败；没有发送模型输入：${e instanceof Error?e.message:'元数据不可读'}`,true);}const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(model?.inputModalities&&!model.inputModalities.includes('image'))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前模型明确不支持图片；原件保留，可仅记录或换成员',true);}
     const providerInput = codexInput(input);
     const state = this.stateOf(session);
+    if ([...this.sessions.values()].some(s => s.providerThreadId === state.providerThreadId && s.awaitingTurn?.providerTurnId === null)) {
+      throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '同一 Codex thread 的上一启动请求尚未绑定 turn；本次未发送', true);
+    }
     if(input.stage!=null&&input.stage.trim().length>0)
       state.turnStages.set(input.turnId,input.stage.trim().slice(0,120));
     // 先登记 awaiting（通知可能早于响应到达，修复轮）。

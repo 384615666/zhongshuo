@@ -19,18 +19,19 @@ export function taskExecutionBlocker(
 
 /** Queued work without an executing turn must never read as an active model. */
 export function executionBlockerHint(blocker: TaskExecutionBlocker): TaskRunHint {
+  const member = blocker.blockingMemberName ?? blocker.memberName ?? '成员';
   switch (blocker.reason) {
     case 'unknown-turn':
-      return { label: '占用未核实', icon: 'help-circle', tone: 'warning',
-        detail: blocker.note };
+      return { label: '等待确认上次回复', icon: 'help-circle', tone: 'warning',
+        detail: `${member} 的上次回复尚未确认结束，当前请求正在等待。请检查上次回复状态。` };
     case 'member-occupied':
       return { label: '等待成员', icon: 'clock', tone: 'neutral',
-        detail: blocker.note };
+        detail: `${member} 正在处理其他请求，当前请求正在排队等待。` };
     case 'write-root-occupied':
-      return { label: '等待写入目录', icon: 'lock', tone: 'neutral',
-        detail: blocker.note };
+      return { label: '等待文件操作结束', icon: 'lock', tone: 'neutral',
+        detail: `${member} 的文件操作尚未结束，当前请求正在等待，避免同时修改同一份文件。` };
     default:
-      return { label: '等待执行', icon: 'clock', tone: 'neutral', detail: blocker.note };
+      return { label: '等待执行', icon: 'clock', tone: 'neutral', detail: '当前请求已排队，尚未开始处理。' };
   }
 }
 

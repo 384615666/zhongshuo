@@ -31,6 +31,7 @@ import { PreviewPane, PreviewReopenButton } from './preview/PreviewPane';
 import type { ConversationFailedTasksResult, FailedDmTask } from '../../contracts/taskDetails.ts';
 import { DmTaskRecords } from './components/DmTaskRecords';
 import { LiveProgressCard } from './components/LiveProgress';
+import { DmInterruptedNotice } from './components/DmInterruptedNotice';
 
 const EXEC_TEXT: Record<string, string> = {
   idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务',
@@ -172,7 +173,6 @@ export function DmPage() {
     if (active != null && shouldAutoHidePreviewFor({ kind: 'dm', projectId: active.projectId, conversationId: active.id, threadId: active.threadId })) {
       autoHidePreviewForConversation(dmAutoHideKey);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dmAutoHideKey, st.preview.hidden, st.preview.tabs, st.resources]);
 
   const dailyDms = useMemo(() => dms.filter((d) => d.archivedAt == null), [dms]);
@@ -572,39 +572,7 @@ export function DmPage() {
                     ) : null}
                   </div>
                 ) : null}
-                {/* 中断待恢复（服务端分列可恢复性——不可恢复给原因，不放按钮）。 */}
-                {(active.interruptedTasks ?? []).length > 0 ? (
-                  <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-interrupted="hifi">
-                    <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>上一次回复没有完成</strong><span className="faint small">原消息与失败记录保留；继续时绑定原运行，不自动重放</span></div>
-                    {(active.interruptedTasks ?? []).map((it) => (
-                      <div key={it.taskId} style={{ marginTop: 7 }}>
-                        <div className="row tight">
-                          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
-                          <span className="faint small">{it.lastRunStatus === 'FAILED' ? '上次运行失败' : it.lastRunStatus === 'INTERRUPTED' ? '上次运行中断' : `上次状态 ${it.lastRunStatus ?? '未知'}`}</span>
-                          {it.recoverable ? (
-                            <button className="btn sm" disabled={busy != null} title={it.formatRepair ? `修复输出格式（task.redispatch formatRepair——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）` : `继续这次请求（task.redispatch——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`} onClick={() => void doRecover(it)}>{it.formatRepair ? '修复输出格式' : '继续这次请求'}</button>
-                          ) : (
-                            <Tag tone="warning" icon="octagon" title={it.blockReason ?? '当前不可恢复'}>暂不可继续</Tag>
-                          )}
-                        </div>
-                        {it.lastFailureReason != null ? (
-                          <div className="faint small" style={{ marginTop: 4, overflowWrap: 'anywhere' }}>
-                            原因：{it.lastFailureReason}{it.recoverable ? '。可以继续这次请求，或直接发送一条新消息。' : '。先按下方说明处理后再继续。'}
-                          </div>
-                        ) : (
-                          <div className="faint small" style={{ marginTop: 4 }}>
-                            {it.recoverable ? '可以继续这次请求，或直接发送一条新消息。' : '当前未记录可读的失败原因；请按恢复说明处理。'}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {(active.interruptedTasks ?? []).some((it) => !it.recoverable && it.blockReason != null) ? (
-                      <div className="faint small" style={{ marginTop: 4 }}>
-                        {(active.interruptedTasks ?? []).filter((it) => !it.recoverable && it.blockReason != null).map((it) => `下一步：${it.blockReason}`).join(' ')}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                <DmInterruptedNotice tasks={active.interruptedTasks ?? []} memberName={active.peerDisplayName ?? members.find(member => active.memberIds.includes(member.id))?.displayName ?? '成员'} queuedCount={active.queuedCount} busy={busy != null} onRecover={task => { void doRecover(task); }}/>
                 {showFailedPanel ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">
                     <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>失败任务待处理</strong><span className="faint small">任务尚未完成；继续需要明确点击，旧结果不会自动重发</span></div>
@@ -616,7 +584,7 @@ export function DmPage() {
                         {it.pending ? <span className="faint small">继续已入队，等待派发</span> : null}
                         {it.available && acceptedRetry === `${it.taskId}:${it.latestRunId}` ? <span className="faint small">继续已提交，正在核对</span> : null}
                       </div>
-                      {it.blockReason != null ? <div className="faint small">暂不可继续：{it.blockReason}</div> : null}
+                      {it.blockReason != null ? <details className="faint small"><summary>诊断详情</summary>{it.blockReason}</details> : null}
                     </div>)}
                     {failedView.truncated ? <div className="faint small">仅显示最近 20 个失败任务；其余请从原界面逐项查看。</div> : null}
                   </div>

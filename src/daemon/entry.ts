@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { writeFileSync, rmSync , readFileSync} from 'node:fs';
 import { openDatabase } from '../persistence/db.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
-import { acquireSingletonLock } from './singletonLock.ts';
+import { acquireSingletonLock, readSingletonLock } from './singletonLock.ts';
 import { applyRecovery } from './stopFlow.ts';
 import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
@@ -114,6 +114,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     lock = acquireSingletonLock(join(options.appDataDir, 'locks'));
     if (!lock.ok) throw new Error(`daemon 单实例锁获取失败：${lock.error.message}`);
     const lockHandle = lock.value;
+    const recoveryInstance = readSingletonLock(join(options.appDataDir, 'locks'));
 
     db = openDatabase(join(options.appDataDir, 'state.sqlite'), {
       backupDir: join(options.appDataDir, 'backups'),
@@ -348,6 +349,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     const prepareRuntimeConfiguration=createCodexConfigurationPreparation(db!);
     const makeCommandDeps = (): Parameters<typeof dispatchDaemonCommand>[0] => ({
+      recoveryInstance,
       db: db!,
       prepareRuntimeConfiguration,
       localUserId,

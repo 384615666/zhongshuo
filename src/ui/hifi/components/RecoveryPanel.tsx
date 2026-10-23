@@ -17,6 +17,9 @@ import { command } from '../bridge';
 import { toast } from '../shell';
 import { openExternalDeepLink } from '../loader';
 import { recordWrite } from '../data/store';
+import {getState} from '../data/store';
+import {refreshDms, refreshRooms, loadRoomPool, loadThread, loadDmHistory} from '../loader';
+import {createPreviousReplyCheck} from '../lib/checkPreviousReply';
 
 interface RecoveryStatus {
   gateHeld: boolean;
@@ -31,6 +34,7 @@ interface RecoveryStatus {
 }
 
 const fmtAt = (at?: number) => (at != null ? new Date(at).toLocaleString() : '—');
+const checkPreviousReply = createPreviousReplyCheck(command);
 
 export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin?: 'startup' | 'runtime' | null }) {
   const [data, setData] = useState<RecoveryStatus | null>(null);
@@ -41,6 +45,9 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
   const [relNote, setRelNote] = useState<{ turnId: string; note: string } | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const genRef = useRef(0);
+  const checkBusy = useRef(false);
+  const [checkResult, setCheckResult] = useState<Record<string, {ok: boolean; detail?: string}>>({});
+  const [taskTitles, setTaskTitles] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     const gen = ++genRef.current;
@@ -49,18 +56,51 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
       const r = await command<RecoveryStatus>('recovery.status', {});
       if (gen !== genRef.current) return;
       setData(r);
+      const names = await Promise.allSettled(r.unknownTurns.map(async turn => {
+        const item = await command<{task: {title?: string; owner_member_id?: string}}>('task.get', {taskId: turn.taskId});
+        const member = getState().members.find(member => member.id === item.task.owner_member_id)?.displayName;
+        return [turn.id, [member, item.task.title].filter(Boolean).join(' · ') || '上次回复'] as const;
+      }));
+      if (gen === genRef.current) setTaskTitles(Object.fromEntries(names.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])));
     } catch (e) {
       if (gen === genRef.current) setErr((e as Error).message);
     }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
 
+  const checkAndContinue = async (turnId: string) => {
+    if (checkBusy.current || busy != null) return;
+    checkBusy.current = true;
+    setBusy(`check:${turnId}`);
+    setCheckResult(previous => ({...previous, [turnId]: {ok: false}}));
+    try {
+      await checkPreviousReply(turnId);
+      recordWrite('recovery.releaseProtection', '已核查上次执行并允许排队消息继续；原请求结果保持未知，不重发');
+      setCheckResult(previous => ({...previous, [turnId]: {ok: true}}));
+      toast('已确认这次占用结束，并允许排队消息继续；原请求不会重发。', 'success');
+    } catch (error) {
+      setCheckResult(previous => ({...previous, [turnId]: {ok: false, detail: error instanceof Error ? error.message : String(error)}}));
+      toast('暂未完成检查，尚未确认排队消息可以继续。请查看说明后重试检查。', 'warn');
+    } finally {
+      await reload();
+      const state = getState();
+      await Promise.allSettled([
+        refreshDms(), refreshRooms(),
+        ...(state.ui.activeRoomId ? [loadRoomPool(state.ui.activeRoomId)] : []),
+        ...(state.ui.activeThreadId ? [loadThread(state.ui.activeThreadId)] : []),
+        ...state.dms.filter(dm => dm.interruptedTasks?.some(task => data?.unknownTurns.some(turn => turn.id === turnId && turn.taskId === task.taskId))).map(dm => loadDmHistory(dm.id)),
+      ]);
+      checkBusy.current = false;
+      setBusy(null);
+    }
+  };
+
   const resumeGate = async () => {
     setBusy('gate');
     try {
       await command('dispatch.resume', { confirm: true });
       recordWrite('dispatch.resume', '恢复门禁：用户显式确认继续派发（排队意图按合同继续）');
-      toast('已确认继续：派发门禁开放（排队意图按合同继续——不自动重放在途不确定项）', 'success');
+      toast('已允许排队消息继续；尚未确认结束的回复仍需检查。', 'success');
       await reload();
     } catch (e) { toast(`确认继续失败：${(e as Error).message}`, 'error'); }
     finally { setBusy(null); }
@@ -73,7 +113,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
     try {
       await command('recovery.reconcile', { turnId: recon.turnId, verdict: recon.verdict, note: recon.note.trim(), ...(recon.verdict === 'notStarted' ? { manualRiskAck: true } : {}) });
       recordWrite('recovery.reconcile', `对账 ${recon.turnId.slice(0, 12)}… verdict=${recon.verdict}`);
-      toast('对账已提交（退出取证由服务端生成/校验——alive/unknown 会保留租约与占位）', 'success');
+      toast('核对结果已保存；只有确认上次处理已结束，等待中的请求才能继续。', 'success');
       setRecon(null);
       await reload();
     } catch (e) { toast(`对账失败：${(e as Error).message}`, 'error'); }
@@ -104,35 +144,42 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
       <div className="modal lg" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="恢复检查" style={{ maxHeight: '78vh', display: 'flex', flexDirection: 'column', width: 'min(860px, 94vw)' }}>
         <div className="row tight" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
           <Icon name="shield" size={15} />
-          <strong>检查上次使用</strong>
+          <strong>检查上次回复</strong>
           {realAttention && origin === 'startup' ? <Tag tone="warning" icon="clock">启动时已有</Tag> : null}
           {realAttention && origin === 'runtime' ? <Tag tone="warning" icon="zap">本次运行新出现</Tag> : null}
           {pendingOnly ? <Tag plain icon="clock">普通排队（非故障）</Tag> : null}
-          <span className="faint small">只检查，不自动重发消息或解除文件保护</span>
+          <span className="faint small">先查看状态，再决定下一步；不会自动重发消息</span>
           <span style={{ flex: 1 }} />
-          <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
+          <button className="btn ghost sm" onClick={() => void reload()}>重新检查状态</button>
           <button className="btn ghost sm" onClick={() => setShowDetails((value) => !value)}>{showDetails ? '收起详情' : '查看详情'}</button>
           <button className="btn ghost sm" onClick={onClose}>关闭</button>
         </div>
         <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
           {err != null ? <div className="panel warning">恢复状态读取失败：{err}（可刷新重试）</div> : null}
-          {data == null && err == null ? <div className="panel info">正在读取恢复事实…</div> : null}
+          {data == null && err == null ? <div className="panel info">正在检查上次回复状态…</div> : null}
           {data != null && !attention ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}
           {data != null && realAttention ? (
             <div className="panel info" data-zs-recovery-summary="1">
-              <div className="row tight"><Icon name="info" size={14} /><strong>需要你看一下</strong></div>
+              <div className="row tight"><Icon name="info" size={14} /><strong>上次处理尚有待确认事项</strong></div>
               <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
                 {data.gateHeld ? <div>上次关闭时还有未完成的事项；新消息会先等待。</div> : null}
-                {data.unknownTurns.length > 0 ? <div>有 {data.unknownTurns.length} 条发送暂时无法确认结果。不要凭猜测换一条新消息重复发送；可以先打开原任务查看。</div> : null}
+                {data.unknownTurns.length > 0 ? <div>有 {data.unknownTurns.length} 次回复尚未确认结束，新的请求可能在等待这些回复。先查看原任务，再核对处理结果。</div> : null}
                 {data.interruptedRuns.length > 0 ? <div>有 {data.interruptedRuns.length} 个任务上次中断了。任务和文件都还在，可打开原任务继续处理。</div> : null}
-                {data.pendingRelease.length > 0 || data.activeUndos.length > 0 ? <div>还有文件保护或修改需要处理；为避免覆盖，众说没有自动继续。</div> : null}
+                {data.pendingRelease.length > 0 ? <div>上次文件操作还未确认结束，相关请求会继续等待。检查后仍在等待时，可打开诊断详情核对。</div> : null}
+                {data.activeUndos.length > 0 ? <div>还有未完成的撤销操作，请回到原任务查看。</div> : null}
               </div>
               <div className="row tight wrap" style={{ marginTop: 8 }}>
                 {data.gateHeld ? <button className="btn sm" disabled={busy != null} onClick={() => void resumeGate()}>{busy === 'gate' ? '正在继续…' : '继续处理已排队的消息'}</button> : null}
                 {data.unknownTurns.slice(0, 3).map((turn, index) => <button key={turn.id} className="btn ghost sm" onClick={() => locate(`#task=${turn.taskId}`)}>查看待确认任务{data.unknownTurns.length > 1 ? ` ${index + 1}` : ''}</button>)}
                 {data.interruptedRuns.slice(0, 3).map((run, index) => <button key={run.id} className="btn ghost sm" onClick={() => locate(`#task=${run.task_id}`)}>查看中断任务{data.interruptedRuns.length > 1 ? ` ${index + 1}` : ''}</button>)}
-                {data.pendingRelease.length > 0 || data.activeUndos.length > 0 ? <button className="btn ghost sm" onClick={() => setShowDetails(true)}>打开处理详情</button> : null}
+                {data.unknownTurns.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 ? <button className="btn ghost sm" onClick={() => setShowDetails(true)}>查看诊断与处理选项</button> : null}
               </div>
+              {data.unknownTurns.map(turn => <div key={turn.id} style={{marginTop: 8}} data-zs-previous-reply={turn.id}>
+                <strong>{taskTitles[turn.id] ?? '上次回复'}</strong>
+                <div className="small">{checkResult[turn.id]?.ok ? '已确认这次占用结束；原回复结果仍未确认。排队消息已获准继续，其它等待原因以最新状态为准。' : '检查上次处理是否已结束；确认后继续排队消息，保留原请求结果。'}</div>
+                <button type="button" className="btn sm" style={{marginTop: 5}} disabled={busy != null || checkResult[turn.id]?.ok === true} onClick={() => void checkAndContinue(turn.id)}>{busy === `check:${turn.id}` ? '正在检查…' : checkResult[turn.id]?.ok ? '已核查此项' : '检查并继续排队消息'}</button>
+                {checkResult[turn.id]?.detail ? <><div className="small">检查尚未完成，相关消息可能仍在等待；可再次点击重试检查。</div><details className="small faint"><summary>诊断详情</summary>{checkResult[turn.id].detail}</details></> : null}
+              </div>)}
             </div>
           ) : null}
           {pendingOnly ? (

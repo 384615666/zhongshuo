@@ -31,7 +31,7 @@ describe('R102 waiting coordinator with real member activity', () => {
   it('preserves an unknown-turn blocker ahead of live member facts', () => {
     const blocker = { reason: 'unknown-turn', note: '前序成员结果未知，需核对' } as TaskExecutionBlocker;
     const hint = coordinationProgressHint('ACTIVE', 'WAITING', running, blocker) ?? taskRunHint('WAITING', blocker);
-    expect(hint).toMatchObject({ label: '占用未核实', detail: blocker.note });
+    expect(hint).toMatchObject({ label: '等待确认上次回复', detail: '成员 的上次回复尚未确认结束，当前请求正在等待。请检查上次回复状态。' });
   });
 
   it('does not invent execution from terminal, paused or missing progress', () => {

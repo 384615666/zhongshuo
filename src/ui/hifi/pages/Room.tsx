@@ -18,8 +18,8 @@ import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
 import { taskExecutionBlocker, taskRunHint } from '../lib/taskRunHint';
+import { ExecutionWaitActions } from '../components/ExecutionWaitActions';
 import { coordinationProgressHint } from '../lib/coordinationProgressHint';
-import { requestRecoveryOpen } from '../lib/recovery';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
 import {
@@ -1203,12 +1203,7 @@ function RootCard({
       ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
       {primary?.detail ? <div className="root-next">{primary.detail}</div> : null}
-      {executionBlocker?.reason === 'unknown-turn' ? <div className="faint small">
-        <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={(event) => {
-          event.stopPropagation();
-          requestRecoveryOpen();
-        }}>打开恢复中心核对占用任务 #{executionBlocker.blockingRootTaskNumber ?? '?'} 的退出与保护状态</button>
-      </div> : null}
+      {executionBlocker != null ? <ExecutionWaitActions blocker={executionBlocker}/> : null}
       {deliveryFactLine ? <div className="faint small" data-zs-delivery-fact={delivery?.status}>{deliveryFactLine}</div> : null}
       <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
 

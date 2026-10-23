@@ -39,7 +39,7 @@ function handle(msg) {
     handleRequest(msg);
     return;
   }
-  log({ direction: 'notification', method: msg.method, params: msg.params });
+  log({ direction: 'notification', id: msg.id, method: msg.method, params: msg.params, result: msg.result });
 }
 
 function handleRequest(msg) {
@@ -106,7 +106,7 @@ function currentThreadIdOf(params) {
 /** 通知发射器：n = { kind, ...payload }，按真实协议形状映射（修复轮 3：
  * turn/started 与 turn/completed 无顶层 turnId——provider ID 只在 turn.id）。 */
 function emit(threadId, providerTurnId, n) {
-  const base = { threadId, turnId: providerTurnId };
+  const base = { threadId, turnId: n.providerTurnId ?? providerTurnId };
   switch (n.kind) {
     case 'turn.started':
       notify('turn/started', { threadId, turn: { id: providerTurnId, status: 'inProgress' } });

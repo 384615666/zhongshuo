@@ -122,6 +122,73 @@ describe('回放：终态按 turn.status 映射（不再一律成功）', () => 
 });
 
 describe('回放：轮次归属（两轮/迟到/通知先于响应）', () => {
+  it('同 provider thread 尚未绑定的启动请求不可并发发送', async () => {
+    scenario([{ responseDelayMs: 80, notifications: [{ kind: 'turn.started' }, { kind: 'turn.completed', finalText: 'first' }] }]);
+    adapter = mockAdapter();
+    try {
+      const first = await openMockSession(adapter);
+      const second = await adapter.openSession({ projectId: 'p1', memberId: 'm1', taskId: 't1', threadId: 'th1', sessionGeneration: 1, cwd: 'D:/mock', policyId: 'plan', resume: first });
+      const events = new SessionReader(adapter, first).readTurn();
+      const starting = adapter.startTurn(first, turnRequest('first'));
+      await expect(adapter.startTurn(second, turnRequest('second'))).rejects.toMatchObject({ notStarted: true });
+      await starting;
+      expect((await events).find(e => e.kind === 'turn.completed')).toMatchObject({ turnId: 'first' });
+      expect(rpcLogEntries().filter(e => e['method'] === 'turn/start')).toHaveLength(1);
+    } finally { await adapter.dispose(); }
+  });
+
+  for (const emitBeforeResponse of [false, true]) {
+    it(`续接同一 provider thread 的新 session 接收新轮通知（early=${emitBeforeResponse}），旧轮迟到仍归旧 session`, async () => {
+      scenario([
+        { notifications: [{ kind: 'turn.started' }, { kind: 'turn.completed', finalText: 'first' }] },
+        { emitBeforeResponse, notifications: [
+          { kind: 'approvalRequest', params: { turnId: 'unknown-old-turn' } },
+          { kind: 'tool.started', providerTurnId: 'unknown-old-turn', command: 'echo ghost' },
+          { kind: 'lateMessage', providerTurnId: 'unknown-old-turn', text: 'ghost' },
+          { kind: 'turn.started' },
+          { kind: 'lateMessage', providerTurnId: 'mock-turn-1', text: 'late first' },
+          { kind: 'approvalRequest' },
+          { kind: 'tool.started', command: 'echo second' },
+          { kind: 'agentMessage.completed', text: 'second' },
+          { kind: 'turn.completed', finalText: 'second' },
+        ] },
+      ]);
+      adapter = mockAdapter();
+      try {
+        const first = await openMockSession(adapter);
+        const firstReader = new SessionReader(adapter, first);
+        const firstResult = firstReader.readTurn();
+        await adapter.startTurn(first, turnRequest('first'));
+        await firstResult;
+        const second = await adapter.openSession({
+          projectId: 'p1', memberId: 'm1', taskId: 't1', threadId: 'th1',
+          sessionGeneration: 1, cwd: 'D:/mock', policyId: 'plan', resume: first,
+        });
+        expect(second.id).not.toBe(first.id);
+        expect(second.providerSessionId).toBe(first.providerSessionId);
+        const events = await runOneTurn(adapter, second, 'second', 500);
+        expect(events.find(e => e.kind === 'turn.started')).toMatchObject({ sessionId: second.id, turnId: 'second' });
+        expect(events.find(e => e.kind === 'message.completed')).toMatchObject({ text: 'second', turnId: 'second' });
+        expect(events.find(e => e.kind === 'turn.completed')).toMatchObject({ finalText: 'second', turnId: 'second' });
+        const approval = events.find(e => e.kind === 'approval.requested');
+        expect(approval).toMatchObject({ sessionId: second.id, turnId: 'second' });
+        expect(events.find(e => e.kind === 'tool.started')).toMatchObject({ sessionId: second.id, turnId: 'second' });
+        expect(events.filter(e => e.kind === 'approval.requested')).toHaveLength(1);
+        expect(events.filter(e => e.kind === 'tool.started')).toHaveLength(1);
+        expect(events.some(e => e.kind === 'message.completed' && e.text === 'ghost')).toBe(false);
+        if (approval?.kind === 'approval.requested') {
+          await expect(adapter.respondApproval(first, approval.approvalId, 'deny')).rejects.toThrow();
+          await adapter.respondApproval(second, approval.approvalId, 'deny');
+        }
+        expect(rpcLogEntries().find(e => e['id'] === 9000)).toMatchObject({ result: { decision: 'deny' } });
+        const late = await firstReader.next(500);
+        expect(late).toMatchObject({ value: { kind: 'message.completed', text: 'late first', sessionId: first.id, turnId: 'first' } });
+      } finally {
+        await adapter.dispose();
+      }
+    });
+  }
+
   it('同会话两轮：旧轮迟到事件不冒充新轮', async () => {
     scenario([
       { notifications: [{ kind: 'turn.completed', status: 'completed', finalText: '第一轮完成' }] },
@@ -311,10 +378,9 @@ describe('回放（修复轮 3）：真实协议形状反例', () => {
     })();
     await adapter.startTurn(session, turnRequest('turn_current'));
     const events = await reading;
-    // 幽灵终态存在且不带内部 turnId。
+    // 无法精确归属的幽灵终态不进入当前会话。
     const ghost = events.find((e) => e.kind === 'turn.failed');
-    expect(ghost).toBeDefined();
-    expect(ghost?.turnId).toBeUndefined();
+    expect(ghost).toBeUndefined();
     // 当前轮消息与终结归属正确。
     expect(events.find((e) => e.kind === 'message.completed')?.turnId).toBe('turn_current');
     const completed = events.find((e) => e.kind === 'turn.completed' && e.turnId === 'turn_current');
@@ -322,7 +388,7 @@ describe('回放（修复轮 3）：真实协议形状反例', () => {
     await adapter.dispose();
   });
 
-  it('worker 側：未知归属终态被审计且不终结当前 turn（DispatchWorker×mock 集成）', async () => {
+  it('worker 側：未知归属终态不投递且不终结当前 turn（DispatchWorker×mock 集成）', async () => {
     const { openDatabase } = await import('../../src/persistence/db.ts');
     const { createRoomRootTask } = await import('../../src/persistence/stores/roomRootTask.ts');
     const { DispatchWorker } = await import('../../src/daemon/dispatchWorker.ts');
@@ -351,7 +417,7 @@ describe('回放（修复轮 3）：真实协议形状反例', () => {
     expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_1')).toMatchObject({ status: 'DONE' });
     expect(db.prepare('SELECT status FROM workflow_runs WHERE task_id = ?').get('task_1')).toMatchObject({ status: 'SUCCEEDED' });
     const audit = db.prepare("SELECT count(*) c FROM domain_events WHERE kind = 'turn.unattributedTerminal'").get();
-    expect(audit).toMatchObject({ c: 1 });
+    expect(audit).toMatchObject({ c: 0 });
     await adapter.dispose();
     db.close();
   });
