@@ -791,10 +791,10 @@ export async function loadSidebarRooms(projectId: string): Promise<SidebarRoomSu
  * only after the target project's projections load do we route to it. */
 export async function openSidebarRoom(projectId: string, roomId: string): Promise<boolean> {
   const intent = beginUserNavIntent();
+  const urlSeqAtStart = currentNavSeq();
   const before = getState();
   const previous = {
     activeProjectId: before.activeProjectId,
-    loadGen: before.loadGen ?? 0,
     visibleProjectIds: before.visibleProjectIds,
     expandedProjectIds: before.expandedProjectIds,
     rooms: before.rooms,
@@ -804,6 +804,52 @@ export async function openSidebarRoom(projectId: string, roomId: string): Promis
   };
   let gen: number | null = null;
   let committed = false;
+
+  /**
+   * R106: room opening owns the same landing marker as project.open. The old
+   * route must yield while this operation commits its project and waits for the
+   * async projections; otherwise its ProjectAlign effect can focus the previous
+   * project and make the new room load fail its ownership gate.
+   */
+  const ownsOpenState = (state: HifiState): boolean => {
+    const ownedGen = gen;
+    return ownedGen != null
+      && state.loadGen === ownedGen
+      && state.openInFlight
+      && state.openInFlightTarget?.projectId === projectId
+      && state.openInFlightTarget.urlSeqAtStart === urlSeqAtStart;
+  };
+  const clearOwnedOpenState = (): void => {
+    setState((state) => ownsOpenState(state)
+      ? { ...state, openInFlight: false, openInFlightTarget: null }
+      : state);
+  };
+  const rollbackOwned = (): boolean => {
+    if (!ownsOpenState(getState())) return false;
+    const stillOwnsFocus = getState().activeProjectId === projectId;
+    setState((state) => {
+      if (!ownsOpenState(state)) return state;
+      if (!stillOwnsFocus) return { ...state, openInFlight: false, openInFlightTarget: null };
+      return {
+        ...state,
+        activeProjectId: previous.activeProjectId,
+        openInFlight: false,
+        openInFlightTarget: null,
+        visibleProjectIds: previous.visibleProjectIds,
+        expandedProjectIds: previous.expandedProjectIds,
+        rooms: previous.rooms,
+        members: previous.members,
+        memberRuntimes: previous.memberRuntimes,
+        dms: previous.dms,
+      };
+    });
+    return true;
+  };
+  const operationActive = (): boolean =>
+    navIntentActive(intent) && currentNavSeq() === urlSeqAtStart;
+  const stopListening = onNavIntentCancel(intent, () => {
+    rollbackOwned();
+  });
   try {
     const project = getState().projects.find((item) => item.id === projectId);
     if (project == null || project.removedAt != null) {
@@ -815,7 +861,7 @@ export async function openSidebarRoom(projectId: string, roomId: string): Promis
       return false;
     }
     const rooms = await loadSidebarRooms(projectId);
-    if (!navIntentActive(intent)) return false;
+    if (!operationActive()) return false;
     const target = rooms.find((room) => room.id === roomId && room.archivedAt == null);
     if (target == null) {
       toast('目标房间不存在或已归档，项目与草稿均未切换', 'error');
@@ -828,12 +874,13 @@ export async function openSidebarRoom(projectId: string, roomId: string): Promis
       loadGen: nextGen,
       activeProjectId: projectId,
       openInFlight: true,
+      openInFlightTarget: { projectId, urlSeqAtStart },
       visibleProjectIds: [...new Set([...state.visibleProjectIds, projectId])],
       expandedProjectIds: [...new Set([...state.expandedProjectIds, projectId])],
     }));
     const loaded = await Promise.allSettled([refreshRooms(projectId), refreshMembers(projectId), refreshDms(projectId)]);
     if (loaded[0]?.status === 'rejected') throw loaded[0].reason;
-    if (!navIntentActive(intent) || getState().activeProjectId !== projectId) return false;
+    if (!ownsOpenState(getState()) || !operationActive() || getState().activeProjectId !== projectId) return false;
     if (loaded[1]?.status === 'rejected' || loaded[2]?.status === 'rejected') {
       recordWrite('navigation.room.partial', '房间已装载，但成员或私信投影读取失败；保留旧投影并进入目标房间');
     }
@@ -842,36 +889,26 @@ export async function openSidebarRoom(projectId: string, roomId: string): Promis
       return false;
     }
     const { persistNav } = await import('./data/store');
-    if (!navIntentActive(intent)) return false;
-    persistNav(getState(), () => navIntentActive(intent) && getState().activeProjectId === projectId);
+    if (!ownsOpenState(getState()) || !operationActive()) return false;
+    persistNav(getState(), () => ownsOpenState(getState()) && operationActive() && getState().activeProjectId === projectId);
+    if (!ownsOpenState(getState()) || !operationActive()) return false;
     recordWrite('navigation.room.open', `切换到项目「${project.displayName}」并进入房间「${target.name}」`);
+    // Release this intent before navigate(), which cancels all remaining intents.
+    stopListening();
+    releaseNavIntent(intent);
     navigate(`/project/${projectId}/room/${roomId}`);
-    setState((state) => ({ ...state, openInFlight: false }));
     committed = true;
+    clearOwnedOpenState();
     return true;
   } catch (error) {
-    if (navIntentActive(intent)) {
+    if (ownsOpenState(getState()) && operationActive()) {
       toast(`打开项目房间失败：${(error as Error).message}；页面与草稿保留`, 'error');
     }
     return false;
   } finally {
-    if (!committed && gen != null && getState().loadGen === gen) {
-      const stillOwnsFocus = getState().activeProjectId === projectId;
-      setState((state) => stillOwnsFocus
-        ? {
-            ...state,
-            activeProjectId: previous.activeProjectId,
-            loadGen: previous.loadGen,
-            openInFlight: false,
-            visibleProjectIds: previous.visibleProjectIds,
-            expandedProjectIds: previous.expandedProjectIds,
-            rooms: previous.rooms,
-            members: previous.members,
-            memberRuntimes: previous.memberRuntimes,
-            dms: previous.dms,
-          }
-        : { ...state, openInFlight: false });
-    }
+    stopListening();
+    if (!committed) rollbackOwned();
+    else clearOwnedOpenState();
     releaseNavIntent(intent);
   }
 }
