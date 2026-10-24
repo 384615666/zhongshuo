@@ -45,7 +45,8 @@ export interface TaskDetailFailure {
 export interface TaskDetailRun {
   id: string; mode: string; status: string; stage: string | null; roundNo: number | null;
   revision: number; budget: unknown | null;
-  participants: Array<{ memberId: string; displayName: string; role: string; expected: boolean; status: string }>;
+  participants: Array<{ memberId: string; displayName: string; role: string; expected: boolean; status: string;
+    failure?: TaskDetailFailure | null; notStarted?: boolean }>;
   turns: Array<{ id: string; memberId: string; displayName: string; status: string; stageKey: string; purpose: string; attempt: number; runtime?:{kind:string|null;model:string|null;effort:string|null;policy:string|null};usage: Array<{ normalized: unknown; quality: string }>; usageTruncated: boolean }>;
   turnsTruncated: boolean;
   events: TaskDetailEvent[]; eventsTruncated: boolean;
@@ -64,10 +65,62 @@ export interface TaskDetailMemberRun extends TaskDetailRun {
   locate: string;
 }
 
+export type PreDispatchFailureEventKind =
+  | 'task.contextAssemblyFailed'
+  | 'task.deliberationPrepareFailed'
+  | 'task.memberDisabledBlocked';
+
+/**
+ * Reserved for the formal command entry. Consumers must only render an action when
+ * this binding is present; the projection itself never grants or restores access.
+ */
+export interface PreDispatchFailureRecoveryBinding {
+  method: 'task.redispatch';
+  taskId: string;
+  expectedTaskRevision: number;
+  expectedStopGeneration: number;
+  sourceRunId: null;
+}
+
+/** A confirmed failure that stopped a request before any run, turn, or model call. */
+export interface PreDispatchFailureProjection {
+  state: 'NOT_STARTED';
+  taskId: string;
+  conversationId: string;
+  threadId: string | null;
+  memberId: string | null;
+  memberName: string | null;
+  memberEnabled: boolean | null;
+  event: {
+    seq: number;
+    kind: PreDispatchFailureEventKind;
+    at: number;
+    reason: string;
+    message: string;
+  };
+  runCount: 0;
+  turnCount: 0;
+  callCount: 0;
+  callStarted: false;
+  outbox: {
+    id: number;
+    dispatchKey: string;
+    status: 'done' | 'failed';
+  } | null;
+  action: {
+    kind: 'resubmit-original-message';
+    instruction: string;
+  };
+  recoveryBinding?: PreDispatchFailureRecoveryBinding;
+}
+
 export interface TaskDetailsResult {
+  automaticRecovery?: {state:string;kind:string;attempt:number;maxExtraAttempts:number;nextAttemptAt:number;reason:string;taskId:string}|null;
   coordination?:CoordinationDetails|null;
   /** Present only when queued work exists without an executing turn. */
   executionBlocker?: TaskExecutionBlocker | null;
+  /** Present only for a confirmed pre-dispatch failure with zero runs, turns, and calls. */
+  preDispatchFailure?: PreDispatchFailureProjection | null;
   task: { id: string; projectId: string; conversationId: string; title: string; objective: string | null; status: string; reviewPolicy: string; revision: number; stopGeneration: number; roomTaskNumber: number | null; ownerMemberId: string | null; ownerDisplayName: string | null; parentTaskId: string | null; currentDeliveryId: string | null };
   clarificationRetry?: { available:boolean;pending:boolean;blockReason:string|null };
   failedRetry: { available: boolean; pending: boolean; blockReason: string | null; formatRepair?:boolean };

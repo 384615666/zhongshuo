@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { stopCoordinationChildren,settleStoppedCoordination } from './coordination.ts';
 import {settleStoppedDeliberation} from './deliberationRunner.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
+import {cancelWaitingAutomaticRecovery,safeRecoveryWaiting} from './automaticRecovery.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { holdDispatchGate } from '../persistence/daemonState.ts';
@@ -86,6 +87,7 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
           });
           settleStoppedDeliberation(db,task.id,input.targetRunId);
           settleStoppedCoordination(db,task.id,input.targetRunId);
+          cancelWaitingAutomaticRecovery(db,task.id,input.targetRunId,input.now);
         });
         tx();
       }
@@ -143,6 +145,7 @@ export interface RecoverySnapshot {
  * （pending outbox 遗留）——两者都不得直接派发遗留工作。
  */
 export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnapshot {
+  const safeWaiting=safeRecoveryWaiting(db);
   // 真实调用台账（第十八轮二补漏）：恢复前先取将被标 UNKNOWN 的 turn 清单——崩溃现场的真实
   // startTurn 台账行按「执行不确定」结算（不永久 inflight；崩溃≠请求未发出）。
   const recoveringTurnIds = (db
@@ -150,13 +153,14 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
     .all() as Array<{ id: string }>).map((r) => r.id);
   const tx = db.transaction((): RecoverySnapshot => {
     const interruptedRuns = db
-      .prepare(`UPDATE workflow_runs SET status = 'INTERRUPTED' WHERE status IN ('QUEUED','RUNNING','WAITING','STOPPING')`)
-      .run().changes;
+      .prepare(`UPDATE workflow_runs SET status = 'INTERRUPTED' WHERE status IN ('QUEUED','RUNNING','WAITING','STOPPING') AND id NOT IN (${safeWaiting.runIds.map(()=>'?').join(',')||"''"})`)
+      .run(...safeWaiting.runIds).changes;
     const unknownTurns = db
       .prepare(`UPDATE agent_turns SET status = 'UNKNOWN' WHERE status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')`)
       .run().changes;
     // 单实例锁保证旧持有者已终止：启动恢复重排全部 leased（孤儿租约），
     // 不等待 60s 自然过期（修复轮 4 发现：未过期孤儿租约会卡住重启后的派发）。
+    const unsafeLeased=(db.prepare(`SELECT count(*) n FROM outbox WHERE status='leased' AND dispatch_key NOT IN (${safeWaiting.dispatchKeys.map(()=>'?').join(',')||"''"})`).get(...safeWaiting.dispatchKeys) as {n:number}).n;
     const requeuedOutbox = db
       .prepare(`UPDATE outbox SET status = 'pending', lease_owner = NULL, lease_until = NULL WHERE status = 'leased'`)
       .run().changes;
@@ -167,8 +171,8 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
       .map((row) => ({ lockDomain: row.lock_domain, ownerTurnId: row.owner_turn_id, status: row.status }));
     // 已提交未领取的遗留派发工作：同样落下门禁，等用户确认继续。
     const pendingOutbox = (db
-      .prepare(`SELECT count(*) c FROM outbox WHERE status = 'pending'`)
-      .get() as { c: number }).c;
+      .prepare(`SELECT count(*) c FROM outbox WHERE status = 'pending' AND dispatch_key NOT IN (${safeWaiting.dispatchKeys.map(()=>'?').join(',')||"''"})`)
+      .get(...safeWaiting.dispatchKeys) as { c: number }).c;
     // 上次退出的不确定记录（实际持久化在 daemon_state——重启可读，stderr 不算持久化）。
     let stopRecord: RecoverySnapshot['stopRecord'] = null;
     const stopRow = db.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string } | undefined;
@@ -181,7 +185,7 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
       } catch { /* 损坏记录不阻断恢复 */ }
     }
     const gateNeeded =
-      interruptedRuns > 0 || unknownTurns > 0 || requeuedOutbox > 0 || heldLeases.length > 0 || pendingOutbox > 0;
+      interruptedRuns > 0 || unknownTurns > 0 || unsafeLeased > 0 || heldLeases.length > 0 || pendingOutbox > 0;
     if (gateNeeded) holdDispatchGate(db, now);
     const unknownTurnRows = db
       .prepare(`SELECT t.id AS turnId, t.run_id AS runId, r.task_id AS taskId, t.stage_key AS stageKey, t.status

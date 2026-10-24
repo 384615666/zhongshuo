@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HifiState } from '../../src/ui/hifi/data/store';
 import { getState, setState } from '../../src/ui/hifi/data/store';
 import { focusProject } from '../../src/ui/hifi/data/actions-nav';
 import { buildRoomRootEnvelope, buildThreadEnvelope, defaultDeliberationMaxTurns, loadSidebarRooms, openSidebarRoom } from '../../src/ui/hifi/loader';
 import { cancelAllNavIntents } from '../../src/ui/hifi/lib/navIntent';
-import { currentNavSeq } from '../../src/ui/hifi/lib/router';
+import { currentNavSeq, navigate } from '../../src/ui/hifi/lib/router';
 
 type Command = (envelope: { commandId: string; method: string; params: Record<string, unknown> }) =>
   Promise<{ ok: boolean; data: unknown }>;
@@ -214,6 +214,11 @@ describe('R90 independent project room index', () => {
     const refreshGate = new Promise<void>((resolve) => { refreshStarted = resolve; });
     let releaseRefresh!: () => void;
     const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let navigationSetStarted!: () => void;
+    const navigationSetGate = new Promise<void>((resolve) => { navigationSetStarted = resolve; });
+    let releaseNavigationSet!: () => void;
+    const delayedNavigationSet = new Promise<void>((resolve) => { releaseNavigationSet = resolve; });
+    const navigationSets: Array<Record<string, unknown>> = [];
     let staleRouteResult: 'not-run' | 'yielded' | 'stole-focus' = 'not-run';
 
     const runStaleProjectAlignEffect = () => {
@@ -251,6 +256,9 @@ describe('R90 independent project room index', () => {
         case 'runtime.status':
           return { ok: true, data: { memberBindings: [], dispatchGuard: null } };
         case 'navigation.set':
+          navigationSets.push(envelope.params);
+          navigationSetStarted();
+          await delayedNavigationSet;
           return { ok: true, data: { saved: true } };
         default:
           throw new Error(`unexpected command ${envelope.method}`);
@@ -268,6 +276,201 @@ describe('R90 independent project room index', () => {
     expect(getState().rooms.map((item) => [item.id, item.conversationId])).toEqual([
       ['room_default_projB', 'conv_default_projB'],
     ]);
+    expect(getState().openInFlight).toBe(false);
+    expect(getState().openInFlightTarget).toBeNull();
+    expect(location.hash.replace(/^#/, '')).toBe('/project/projB/room/room_default_projB');
+    await navigationSetGate;
+    expect(navigationSets).toHaveLength(1);
+    expect(navigationSets[0]).toMatchObject({
+      clientId: 'desktop-hifi',
+      activeProjectId: 'projB',
+    });
+    releaseNavigationSet();
+    await vi.waitFor(() => expect(navigationSets).toHaveLength(1));
+  });
+
+  it('invalidates a successful room preference write when a newer navigation lands before the formal write', async () => {
+    setState((state) => ({
+      ...state,
+      rooms: [room('room_default_projA', 'projA', 'conv_default_projA', '默认房间')],
+    }));
+    let navigationSets = 0;
+    const { location } = installWindow(async (envelope) => {
+      switch (envelope.method) {
+        case 'room.list':
+          return {
+            ok: true,
+            data: {
+              items: [{ id: 'room_default_projB', name: '默认房间', conversationId: 'conv_default_projB', revision: 1 }],
+            },
+          };
+        case 'member.list':
+          return { ok: true, data: { items: [{ id: 'mB', displayName: 'B', principalType: 'agent', enabled: true }] } };
+        case 'conversation.list':
+          return { ok: true, data: { conversations: [] } };
+        case 'runtime.status':
+          return { ok: true, data: { memberBindings: [], dispatchGuard: null } };
+        case 'navigation.set':
+          navigationSets += 1;
+          return { ok: true, data: { saved: true } };
+        default:
+          throw new Error(`unexpected command ${envelope.method}`);
+      }
+    });
+
+    await expect(openSidebarRoom('projB', 'room_default_projB')).resolves.toBe(true);
+    navigate('/settings');
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(location.hash).toBe('/settings');
+    expect(navigationSets).toBe(0);
+  });
+
+  it('keeps landed B authoritative while C awaits its room index, then serializes B before C despite a delayed B response', async () => {
+    setState((state) => ({
+      ...state,
+      rooms: [room('room_default_projA', 'projA', 'conv_default_projA', '默认房间')],
+    }));
+    let cIndexCalls = 0;
+    let cIndexWaiting!: () => void;
+    let releaseCIndex!: () => void;
+    const cIndexStarted = new Promise<void>((resolve) => { cIndexWaiting = resolve; });
+    const cIndexGate = new Promise<void>((resolve) => { releaseCIndex = resolve; });
+    let bWriteProcessed!: () => void;
+    const bProcessed = new Promise<void>((resolve) => { bWriteProcessed = resolve; });
+    let releaseBResponse!: () => void;
+    const bResponseGate = new Promise<void>((resolve) => { releaseBResponse = resolve; });
+    let cWriteProcessed!: () => void;
+    const cProcessed = new Promise<void>((resolve) => { cWriteProcessed = resolve; });
+    const sentTargets: string[] = [];
+    const processedTargets: string[] = [];
+    let authoritative = 'projA';
+    let navigationQueue = Promise.resolve();
+
+    const { location } = installWindow(async (envelope) => {
+      switch (envelope.method) {
+        case 'room.list': {
+          const targetProject = String(envelope.params.projectId);
+          if (targetProject === 'projC') {
+            cIndexCalls += 1;
+            if (cIndexCalls === 1) {
+              cIndexWaiting();
+              await cIndexGate;
+            }
+            return {
+              ok: true,
+              data: {
+                items: [{ id: 'room_default_projC', name: '默认房间', conversationId: 'conv_default_projC', revision: 1 }],
+              },
+            };
+          }
+          return {
+            ok: true,
+            data: {
+              items: [{ id: 'room_default_projB', name: '默认房间', conversationId: 'conv_default_projB', revision: 1 }],
+            },
+          };
+        }
+        case 'member.list':
+          return { ok: true, data: { items: [{ id: 'mLatest', displayName: 'Latest', principalType: 'agent', enabled: true }] } };
+        case 'conversation.list':
+          return { ok: true, data: { conversations: [] } };
+        case 'runtime.status':
+          return { ok: true, data: { memberBindings: [], dispatchGuard: null } };
+        case 'navigation.set': {
+          const targetProject = String(envelope.params.activeProjectId);
+          sentTargets.push(targetProject);
+          const processed = navigationQueue.then(async () => {
+            processedTargets.push(targetProject);
+            authoritative = targetProject;
+            if (targetProject === 'projB') {
+              bWriteProcessed();
+              await bResponseGate;
+            } else {
+              cWriteProcessed();
+            }
+          });
+          navigationQueue = processed.catch(() => {});
+          await processed;
+          return { ok: true, data: { saved: true } };
+        }
+        default:
+          throw new Error(`unexpected command ${envelope.method}`);
+      }
+    });
+
+    await expect(openSidebarRoom('projB', 'room_default_projB')).resolves.toBe(true);
+    expect(location.hash.replace(/^#/, '')).toBe('/project/projB/room/room_default_projB');
+    const landedGeneration = getState().loadGen;
+
+    const openingC = openSidebarRoom('projC', 'room_default_projC');
+    await cIndexStarted;
+    expect(location.hash.replace(/^#/, '')).toBe('/project/projB/room/room_default_projB');
+    expect(getState().loadGen).toBe(landedGeneration);
+    await bProcessed;
+    expect(sentTargets).toEqual(['projB']);
+    expect(processedTargets).toEqual(['projB']);
+    expect(authoritative).toBe('projB');
+
+    releaseCIndex();
+    await expect(openingC).resolves.toBe(true);
+    await vi.waitFor(() => expect(sentTargets).toEqual(['projB', 'projC']));
+    expect(processedTargets).toEqual(['projB']);
+    expect(authoritative).toBe('projB');
+
+    releaseBResponse();
+    await navigationQueue;
+    await cProcessed;
+    expect(processedTargets).toEqual(['projB', 'projC']);
+    expect(authoritative).toBe('projC');
+    expect(sentTargets).toEqual(['projB', 'projC']);
+  });
+
+  it('keeps landed B authoritative when a newer C intent fails while loading its room index', async () => {
+    setState((state) => ({
+      ...state,
+      rooms: [room('room_default_projA', 'projA', 'conv_default_projA', '默认房间')],
+    }));
+    const navigationSets: string[] = [];
+    let cIndexStarted!: () => void;
+    const cIndexWaiting = new Promise<void>((resolve) => { cIndexStarted = resolve; });
+    const { location } = installWindow(async (envelope) => {
+      switch (envelope.method) {
+        case 'room.list':
+          if (envelope.params.projectId === 'projC') {
+            cIndexStarted();
+            throw new Error('synthetic room index failure');
+          }
+          return {
+            ok: true,
+            data: {
+              items: [{ id: 'room_default_projB', name: '默认房间', conversationId: 'conv_default_projB', revision: 1 }],
+            },
+          };
+        case 'member.list':
+          return { ok: true, data: { items: [{ id: 'mB', displayName: 'B', principalType: 'agent', enabled: true }] } };
+        case 'conversation.list':
+          return { ok: true, data: { conversations: [] } };
+        case 'runtime.status':
+          return { ok: true, data: { memberBindings: [], dispatchGuard: null } };
+        case 'navigation.set':
+          navigationSets.push(String(envelope.params.activeProjectId));
+          return { ok: true, data: { saved: true } };
+        default:
+          throw new Error(`unexpected command ${envelope.method}`);
+      }
+    });
+
+    await expect(openSidebarRoom('projB', 'room_default_projB')).resolves.toBe(true);
+    await vi.waitFor(() => expect(navigationSets).toEqual(['projB']));
+
+    const openingC = openSidebarRoom('projC', 'room_default_projC');
+    await cIndexWaiting;
+    await expect(openingC).resolves.toBe(false);
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+
+    expect(navigationSets).toEqual(['projB']);
+    expect(getState().activeProjectId).toBe('projB');
+    expect(getState().rooms.map((item) => item.id)).toEqual(['room_default_projB']);
     expect(getState().openInFlight).toBe(false);
     expect(getState().openInFlightTarget).toBeNull();
     expect(location.hash.replace(/^#/, '')).toBe('/project/projB/room/room_default_projB');

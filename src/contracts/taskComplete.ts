@@ -14,6 +14,8 @@ export const taskCompleteSchema=z.strictObject({
   /** Optional model-authored document; null is a valid short-reply result. */
   document:documentSchema.nullable().optional(),
   responseKind:z.enum(['conversation','work']).optional(),
+  /** Internal completion is still required when no visible reply is useful. */
+  replyDisposition:z.enum(['reply','none']).optional(),
   files:z.array(z.string()),
   executedVerifications:z.array(z.string()),
   unexecutedVerifications:z.array(z.strictObject({item:z.string(),reason:z.string()})),
@@ -31,6 +33,7 @@ export function taskCompleteOutputSchema(resultKey:string,planning=false){
     // semantically optional through null when no document is useful.
     document:documentSchema.nullable(),
     responseKind:z.enum(['conversation','work']),
+    replyDisposition:z.enum(['reply','none']),
     handoffs:z.array(memberHandoffSchema).max(4),
   });
   // Claude CLI validates draft-07; Codex shares the same closed object schema.

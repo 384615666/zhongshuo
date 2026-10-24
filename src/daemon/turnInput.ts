@@ -184,6 +184,8 @@ export interface AssembledTurnInput {
   coordinationNote?: string;
   coordination?:{phase:'planning'|'child'|'integration';runId:string|null;role:string};
   communicationContract?:TurnBundleEnvelope['communicationContract'];
+  /** DELIBERATE only needs attachment/permission assembly here; its IND owns discovery. */
+  skipFileDiscovery?: boolean;
   writeAccess?: ReturnType<typeof effectiveTaskWriteAccess>;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
@@ -283,7 +285,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   }
 
   const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
-  const fileDiscovery = projectRoot != null ? projectScopedFileListing(projectRoot) : null;
+  const fileDiscovery = projectRoot != null && !input.skipFileDiscovery ? projectScopedFileListing(projectRoot) : null;
 
   // 必要材料 2：本线程获准历史（§13.1-6：当前 root message、线程回复）。
   const history = (task.inputThreadMessageSeq==null?db
@@ -401,6 +403,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
             ? [`上一轮真实文件变更（禁止再次执行业务写入；仅用于回填交付）：${JSON.stringify(input.repairContext.sourceFiles)}`]
             : []),
           '修复要求：本 turn 是只读验证修复，不重复执行业务写入、不重建文件；直接按输出契约重新提交完整 TaskComplete。answer 使用最短有用表达；确有可复用方案/清单/报告时提供 document（filename/purpose/markdown，不要缩短或删除内容），否则 document=null。字段以 schema 为准，resultKey 使用给定源值；直接输出 JSON，不要代码围栏或额外解释。',
+          '保留原结果中仍有效、且本轮接口允许的 ask/review/reply 交接，尤其是完成修改后尚欠的同伴审查；只读补交不代表待办已完成。仅纠正被明确拒绝的字段或非法交接，不因禁止重复实施而删除合法复核请求。',
         );
       }
       if (input.reviewFeedback != null) {
@@ -617,6 +620,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
             ? [`上一轮真实文件变更（禁止再次执行业务写入；仅用于回填交付）：${JSON.stringify(input.repairContext.sourceFiles)}`]
             : []),
           '修复要求：直接按输出契约重新提交完整 TaskComplete。不要重复执行业务写入、不要重建文件；依据已完成的实际变更填写 files/changeSummary/document，resultKey 使用给定源值；直接输出 JSON，不要代码围栏或额外解释。',
+          '原结果中仍有效且当前接口允许的 ask/review/reply 必须保留；只读补交不会完成尚欠的审查，不得把禁止重复实施误解为删除合法交接。',
         );
       }
       if (input.reviewFeedback != null) {

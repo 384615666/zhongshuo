@@ -12,12 +12,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Composer } from '../components/Composer';
 import type { FormalSendOutcome } from '../components/Composer';
 import { Icon } from '../components/Icon';
-import { MessageView } from '../components/MessageView';
+import { MessageView, RootMessagePreview } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
 import { taskExecutionBlocker, taskRunHint } from '../lib/taskRunHint';
+import {AnalysisContinueAction} from '../components/AnalysisContinueAction';
 import { ExecutionWaitActions } from '../components/ExecutionWaitActions';
 import { coordinationProgressHint } from '../lib/coordinationProgressHint';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
@@ -541,7 +542,6 @@ export function RoomPage({
         }}
       >
         <div className="pool-head" style={{ padding: '12px 18px 0' }}>
-          <Icon name={room.archivedAt ? 'archive' : 'hash'} size={16} className="faint" />
           <span className="pool-title">{room.name}</span>
           {room.archivedAt || ownerReadOnly ? (
             <Tag tone="neutral" icon="archive">{room.archivedAt ? '已归档 · 只读' : ownerReadOnly}</Tag>
@@ -854,7 +854,7 @@ function RoomPool({
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
             const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, {
-              collaboration: p.collaboration,
+              collaboration: p.collaboration, analysisOnly:p.analysisOnly,
               ...(p.collaboration != null && p.budgetMaxTurns != null ? { deliberationBudget: { maxTurns: p.budgetMaxTurns } } : {}),
               imageAck: p.imageAck,
               attachmentRanges: attachmentRangesFromDraft(draftKey),
@@ -948,6 +948,7 @@ function RootCard({
   const executionBlocker = thread
     ? taskExecutionBlocker(s.threadTasks[thread.id],s.roomPool[message.roomId]?.find((card) => card.threadId === thread.id))
     : null;
+  const preDispatchFailure=thread&&task?.status==='BLOCKED'&&!run?(s.threadTasks[thread.id]?.preDispatchFailure??s.roomPool[message.roomId]?.find(card=>card.threadId===thread.id)?.preDispatchFailure):null;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
   const saved = s.savedMessageRefs[message.id] === true || message.saved === true;
@@ -982,6 +983,7 @@ function RootCard({
    */
   const primary = useMemo(() => {
     if (!task) return null;
+    if(preDispatchFailure)return {label:'尚未启动',icon:'octagon',tone:'danger' as const,detail:`${preDispatchFailure.memberName??'执行成员'} · 模型尚未被调用 · ${preDispatchFailure.event.message}`};
     // 1) 需要用户介入的最高优先
     if (task.status === 'REVIEW') {
       const cs = s.changeSets.find((c) => c.taskId === task.id);
@@ -1058,7 +1060,7 @@ function RootCard({
       };
     }
     return taskRunHint(run?.status, executionBlocker);
-  }, [task, run, executionBlocker, s.changeSets, s.issues, s.turns, s.threadProgress, s.members, thread, delivery, deliveryDetail]);
+  }, [task, run, executionBlocker, preDispatchFailure, s.changeSets, s.issues, s.turns, s.threadProgress, s.members, thread, delivery, deliveryDetail]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
 
@@ -1202,10 +1204,10 @@ function RootCard({
         </div>
       ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
-      {primary?.detail ? <div className="root-next">{primary.detail}</div> : null}
+      {primary?.detail ? <div className="root-next" title={primary.detail}>{primary.detail}</div> : null}
       {executionBlocker != null ? <ExecutionWaitActions blocker={executionBlocker}/> : null}
       {deliveryFactLine ? <div className="faint small" data-zs-delivery-fact={delivery?.status}>{deliveryFactLine}</div> : null}
-      <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
+      <div className="root-body"><RootMessagePreview message={message} /></div>
 
       {/* 主池消息携带的附件（正式=真实 attachmentId 芯片——点击只读预览，不发送给 AI）。 */}
       {(message.formalAttachments ?? []).length > 0 ? (
@@ -1231,6 +1233,8 @@ function RootCard({
           ))}
         </div>
       ) : null}
+
+      <AnalysisContinueAction failure={preDispatchFailure} roomId={message.roomId}/>
 
       {/* E4：有人一直不回时，线程里明确显示等待谁 */}
       {absent && !absent.continued ? (
@@ -2062,7 +2066,7 @@ function ThreadDetails({
     setRetryBusyTask(snapshot.taskId);
     void (async () => {
       try {
-        await command('task.redispatch', { ...snapshot,...(details.failedRetry.formatRepair?{formatRepair:true}:{}), reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':details.failedRetry.formatRepair?'用户显式修复输出格式':'用户在运行详情显式继续最近失败运行' });
+        await command('task.redispatch', { ...snapshot,...(details.failedRetry.formatRepair?{formatRepair:true,useCurrentExecutionSnapshot:true}:{}), reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':details.failedRetry.formatRepair?'用户按当前成员配置只读补交已有结果':'用户在运行详情显式继续最近失败运行' });
         setAcceptedRetryRun(snapshot.sourceRunId);
         recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
         toast('继续请求已入队；等待正式执行结果', 'success');
@@ -2243,7 +2247,7 @@ function ThreadOverview({
         </dl>
       </div>
 
-      {formal ? <div className="panel info">{taskRunGuidance(formal)}</div> : null}
+      {formal ? <><div className="panel info">{taskRunGuidance(formal)}</div><AnalysisContinueAction failure={formal.preDispatchFailure} roomId={anchor.roomId}/></> : null}
 
       {/* 完整原始要求：不裁剪、不折叠，长文本完整可读（原消息身份与定位能力保留） */}
       <div className="card tight">
@@ -2578,7 +2582,7 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
       </div>
       <details className="small faint"><summary>操作快照身份</summary>任务 revision {detail?.revision ?? task.revision} · 停止代次 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
     </div>
-    {formal ? <TaskExtraFacts detail={formal} /> : null}
+    {formal ? <><TaskExtraFacts detail={formal}/><AnalysisContinueAction failure={formal.preDispatchFailure} roomId={task.roomId}/></> : null}
     </>
   );
 }

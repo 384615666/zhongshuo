@@ -4,12 +4,14 @@ import type { TaskExecutionBlocker } from '../contracts/executionBlockers.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import { readCoordination } from './coordination.ts';
 import { lockDomainsOverlap } from './directoryIdentity.ts';
+import {pendingAutomaticRecovery} from './automaticRecovery.ts';
+import { readPreDispatchFailure } from './preDispatchFailure.ts';
 
 type EventRow = { seq: number; kind: string; created_at: number; run_id: string | null; turn_id: string | null; payload_json: string };
 const eventOf = (e: EventRow): TaskDetailEvent => {
     const payload: unknown = JSON.parse(e.payload_json);
     const p = payload != null && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-    const summary = [p.message, p.reason, p.question, p.status, p.resultSummary, p.toolName, p.outcome, p.note]
+    const summary = [p.message, p.reason, Array.isArray(p.issues)?p.issues.filter(x=>typeof x==='string').join('; '):null, p.question, p.status, p.resultSummary, p.toolName, p.outcome, p.note]
       .find((x): x is string => typeof x === 'string')?.slice(0, 200) ?? '';
     return { seq: e.seq, kind: e.kind, at: e.created_at, runId: e.run_id, turnId: e.turn_id,
       toolCallId: typeof p.toolCallId === 'string' ? p.toolCallId : null, summary,
@@ -285,6 +287,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     FROM tasks t LEFT JOIN project_members pm ON pm.id = t.owner_member_id AND pm.project_id = t.project_id WHERE t.id = ?`).get(taskId) as Record<string, unknown>;
   const projectId = task.project_id as string;
   const conversationId = task.conversation_id as string;
+  const preDispatchFailure = readPreDispatchFailure(db, taskId);
   const bounded = <T>(sql: string, params: unknown[], limit: number): { items: T[]; truncated: boolean } => {
     const rows = db.prepare(`${sql} LIMIT ?`).all(...params, limit + 1) as T[];
     return { items: rows.slice(0, limit), truncated: rows.length > limit };
@@ -310,7 +313,8 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const selectedRow = selectedIsOutsideWindow ? db.prepare(`SELECT rowid AS cursor_id, id, mode, status, stage, round_no, revision, budget_json
     FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedParentRunId, taskId, conversationId) as RunRow | undefined : undefined;
   const coordinationBlocked=task.status==='BLOCKED'&&db.prepare("SELECT 1 FROM coordination_runs WHERE task_id=? AND state='blocked'").get(taskId)!=null;
-  const failedLatest = (task.status === 'ACTIVE'||coordinationBlocked) && task.stop_generation === 0 && runRows.items[0]?.status === 'FAILED';
+  const latestTurnGeneration=(db.prepare('SELECT stop_generation_snapshot g FROM agent_turns WHERE run_id=? ORDER BY rowid DESC LIMIT 1').get(latestRunId) as {g:number}|undefined)?.g;
+  const failedLatest = (task.status === 'ACTIVE'||coordinationBlocked) && (latestTurnGeneration==null?task.stop_generation===0:latestTurnGeneration===task.stop_generation) && runRows.items[0]?.status === 'FAILED';
   const integrationRepair=failedLatest&&db.prepare(`SELECT 1 FROM coordination_integration_attempts i JOIN agent_turns a ON a.run_id=i.execution_run_id
     WHERE i.execution_run_id=? AND a.status='FAILED' AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.outputInvalid')
     AND NOT EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.source_turn_id=a.id OR f.consumed_turn_id=a.id)`).get(latestRunId)!=null;
@@ -338,6 +342,17 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       FROM run_participants rp JOIN project_members pm ON pm.id = rp.member_id WHERE rp.run_id = ? AND pm.project_id = ? ORDER BY rp.role, rp.member_id`)
       .all(r.id, projectId) as Array<{ member_id: string; display_name: string; role: string; expected: number; status: string }>).map((p) => ({
       memberId: p.member_id, displayName: p.display_name, role: p.role, expected: p.expected === 1, status: p.status,
+      ...(() => {
+        // Read the member's durable failure separately from the bounded activity
+        // page: a busy peer's tool events must not hide a seat that never started.
+        const e=db.prepare(`SELECT kind,created_at,payload_json FROM domain_events
+          WHERE run_id=? AND task_id=? AND kind='run.stepFailed' AND json_extract(payload_json,'$.memberId')=?
+          ORDER BY seq DESC LIMIT 1`).get(r.id,runTaskId,p.member_id) as {kind:string;created_at:number;payload_json:string}|undefined;
+        if(!e)return {};
+        const payload=parse(e.payload_json) as {message?:unknown;code?:unknown}|null;
+        const notStarted=db.prepare('SELECT 1 FROM agent_turns WHERE run_id=? AND member_id=? LIMIT 1').get(r.id,p.member_id)==null;
+        return {notStarted,failure:{eventKind:e.kind,at:e.created_at,message:typeof payload?.message==='string'?payload.message:null,code:typeof payload?.code==='string'?payload.code:null}};
+      })(),
     }));
     const turnRows = bounded<{ id: string; member_id: string; display_name: string; status: string; stage_key: string; turn_purpose: string; attempt: number;capabilities_json:string|null;input_policy:string|null }>(
       `SELECT a.id, a.member_id, pm.display_name, a.status, a.stage_key, a.turn_purpose, a.attempt,s.capabilities_json,
@@ -388,6 +403,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     if (pinned != null) memberRunRows.items.push(pinned);
   }
   const failureOf = (runId: string, runTaskId: string): TaskDetailFailure | null => {
+    if((db.prepare('SELECT status FROM agent_turns WHERE run_id=? ORDER BY rowid DESC LIMIT 1').get(runId) as {status:string}|undefined)?.status==='SUCCEEDED')return null;
     const row = db.prepare(`SELECT seq,kind,created_at,run_id,turn_id,payload_json FROM domain_events
       WHERE run_id=? AND task_id=? AND project_id=? AND (conversation_id=? OR conversation_id IS NULL)
         AND (kind IN ('turn.failed','run.failed','turn.outputInvalid') OR kind='turn.statusChanged' AND json_extract(payload_json,'$.status')='FAILED')
@@ -421,7 +437,9 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     'SELECT id, kind, revision, hash FROM artifacts WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY rowid DESC', [taskId, projectId, conversationId], 100);
   const selectedMemberRun = memberRuns.find((r) => r.id === selectedRunId);
   return {
+    automaticRecovery:(()=>{const job=pendingAutomaticRecovery(db,taskId)??children.items.map(child=>pendingAutomaticRecovery(db,child.id)).find(Boolean);return job?{state:job.state,kind:job.kind,attempt:job.extraAttempts,maxExtraAttempts:2,nextAttemptAt:job.nextAttemptAt,reason:job.reason,taskId:job.taskId}:null;})(),
     executionBlocker: readExecutionBlocker(db, taskId),
+    preDispatchFailure,
     task: { id: task.id as string, projectId: task.project_id as string, conversationId: task.conversation_id as string,
       title: task.title as string, objective: task.objective as string | null, status: task.status as string,
       reviewPolicy: task.review_policy as string, revision: task.revision as number,

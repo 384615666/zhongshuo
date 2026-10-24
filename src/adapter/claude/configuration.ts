@@ -6,12 +6,42 @@ import { join, resolve } from 'node:path';
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const routingKey = /^(ANTHROPIC_|CLAUDE_CODE_(?:USE_|HOST_|PROVIDER_|PROCESS_WRAPPER)|HTTP_PROXY$|HTTPS_PROXY$|ALL_PROXY$)/i;
+// This changes the fingerprint algorithm, not an existing authorization snapshot.
+// Callers must retain old snapshots and explicitly authorize/migrate them; a v1
+// digest alone cannot prove equivalence to v2. Never replace a saved launchIdentity.
+export const CLAUDE_CONFIGURATION_FINGERPRINT_VERSION = 'claude-configuration-v2';
+// Frozen R104/v1 exclusions: do not extend this list with new v2 exclusions.
+const v1LegacyStateKeys = new Set(['numStartups','tipsHistory','promptQueueUseCount','firstStartTime','seenNotifications','changelogLastFetched','hasCompletedOnboarding','lastOnboardingVersion','lastReleaseNotesSeen','tipLifetimeShownCounts','closedIssuesLastChecked','pluginUsage','officialMarketplaceAutoInstallAttempted','officialMarketplaceAutoInstalled','hasSeenAutoModeEntryWarning','hasSeenAutoDefaultNotice','hasResetAutoModeOptInForDefaultOffer','unpinOpus47LaunchEffort','unpinOpus48LaunchEffort','unpinFable5LaunchEffort','opusProMigrationComplete','sonnet1m45MigrationComplete','migrationVersion']);
+function v1StableConfiguration(value:unknown):unknown {
+  if(Array.isArray(value))return value.map(v1StableConfiguration);
+  if(value!=null&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,v1StableConfiguration(v)]));
+  return value;
+}
+function v1LegacyConfiguration(settings:Record<string,unknown>,cwd:string) {
+  const result=Object.fromEntries(Object.entries(settings).filter(([key])=>!v1LegacyStateKeys.has(key)&&key!=='projects'));
+  const projects=settings.projects;
+  if(projects!=null&&typeof projects==='object'&&!Array.isArray(projects)){
+    const entry=Object.entries(projects).find(([path])=>resolve(path).toLowerCase()===resolve(cwd).toLowerCase());
+    if(entry)result.projects={[entry[0]]:entry[1]};
+  }else if(projects!=null)result.projects=projects;
+  return v1StableConfiguration(result);
+}
 // The CLI rewrites these local UI/usage facts during an ordinary turn. They are
 // not launch configuration. Keep all other (including unknown) fields guarded.
-const legacyStateKeys = new Set(['numStartups','tipsHistory','promptQueueUseCount','firstStartTime','seenNotifications','changelogLastFetched','hasCompletedOnboarding','lastOnboardingVersion','lastReleaseNotesSeen','tipLifetimeShownCounts','closedIssuesLastChecked','pluginUsage','officialMarketplaceAutoInstallAttempted','officialMarketplaceAutoInstalled','hasSeenAutoModeEntryWarning','hasSeenAutoDefaultNotice','hasResetAutoModeOptInForDefaultOffer','unpinOpus47LaunchEffort','unpinOpus48LaunchEffort','unpinFable5LaunchEffort','opusProMigrationComplete','sonnet1m45MigrationComplete','migrationVersion']);
+const legacyStateKeys = new Set(['numStartups','tipsHistory','tipsHistoryByCommand','promptQueueUseCount','firstStartTime','seenNotifications','changelogLastFetched','hasCompletedOnboarding','lastOnboardingVersion','lastReleaseNotesSeen','tipLifetimeShownCounts','closedIssuesLastChecked','pluginUsage','officialMarketplaceAutoInstallAttempted','officialMarketplaceAutoInstalled','hasSeenAutoModeEntryWarning','hasSeenAutoDefaultNotice','hasResetAutoModeOptInForDefaultOffer','unpinOpus47LaunchEffort','unpinOpus48LaunchEffort','unpinFable5LaunchEffort','opusProMigrationComplete','sonnet1m45MigrationComplete','migrationVersion']);
+// Observed CLI project usage/session statistics (R105 config-key-evidence).
+// Exact names only: a future last* field may affect execution. Trust, external
+// include approval, tools, MCP configuration and unknown fields remain guarded.
+const legacyProjectStateKeys = new Set([
+  'lastCost','lastAPIDuration','lastAPIDurationWithoutRetries','lastToolDuration',
+  'lastDuration','lastLinesAdded','lastLinesRemoved','lastTotalInputTokens',
+  'lastTotalOutputTokens','lastTotalCacheCreationInputTokens','lastTotalCacheReadInputTokens',
+  'lastTotalWebSearchRequests','lastFpsAverage','lastFpsLow1Pct','lastModelUsage',
+  'lastSessionId','lastSessionMetrics','lastStartTime','lastGracefulShutdown','lastVersionBase',
+]);
 function stableConfiguration(value:unknown):unknown {
   if(Array.isArray(value))return value.map(stableConfiguration);
-  if(value!=null&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,stableConfiguration(v)]));
+  if(value!=null&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([k,v])=>[k,stableConfiguration(v)]));
   return value;
 }
 function legacyConfiguration(settings:Record<string,unknown>,cwd:string) {
@@ -19,7 +49,14 @@ function legacyConfiguration(settings:Record<string,unknown>,cwd:string) {
   const projects=settings.projects;
   if(projects!=null&&typeof projects==='object'&&!Array.isArray(projects)) {
     const entry=Object.entries(projects).find(([path])=>resolve(path).toLowerCase()===resolve(cwd).toLowerCase());
-    if(entry)result.projects={[entry[0]]:entry[1]};
+    if(entry){
+      const project=entry[1];
+      if(project!=null&&typeof project==='object'&&!Array.isArray(project)){
+        const configuration=Object.fromEntries(Object.entries(project).filter(([key])=>!legacyProjectStateKeys.has(key)));
+        // Creating a statistics-only project entry must equal its prior absence.
+        if(Object.keys(configuration).length)result.projects={[entry[0]]:configuration};
+      }else result.projects={[entry[0]]:project};
+    }
   }else if(projects!=null)result.projects=projects;
   return stableConfiguration(result);
 }
@@ -32,6 +69,7 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   const configDir = resolve(cwd, env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'));
   const sources: string[] = [];
   const stamps: string[] = [];
+  const legacyStamps: string[] = [];
   const reasons: string[] = [];
   let configuredModel:string|null=null;
   let endpoint = env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com';
@@ -41,7 +79,10 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
       const raw = readFileSync(file, 'utf8');
       const settings = JSON.parse(raw) as { model?:unknown; env?: Record<string, unknown>; apiKeyHelper?: unknown; processWrapper?: unknown };
       if (settings == null || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('object required');
-      stamps.push(`${file}:${digest(label.includes('旧配置')?JSON.stringify(legacyConfiguration(settings,cwd)):raw)}`); sources.push(label);
+      // Strip state only in the legacy CLI state store, never recursively or in
+      // settings files where the same key could be an execution configuration.
+      stamps.push(`${file}:${digest(JSON.stringify(label.includes('旧配置')?legacyConfiguration(settings,cwd):stableConfiguration(settings)))}`); sources.push(label);
+      legacyStamps.push(`${file}:${digest(label.includes('旧配置')?JSON.stringify(v1LegacyConfiguration(settings,cwd)):raw)}`);
       if (settings.env != null && (typeof settings.env !== 'object' || Array.isArray(settings.env))) throw new Error('env object required');
       if (settings.apiKeyHelper != null || settings.processWrapper != null) reasons.push(`${label}含动态凭据或进程包装，无法核实有效渠道`);
       const entries = Object.entries(settings.env ?? {});
@@ -56,8 +97,8 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
         if (key === 'ANTHROPIC_BASE_URL') { endpoint = String(value); endpointSource = label; }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') { stamps.push(`${file}:${label.includes('旧配置')?digest('{}'):'absent'}`); return; }
-      reasons.push(`${label}读取或解析失败`); stamps.push(`${file}:unreadable`);
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') { const stamp=`${file}:${label.includes('旧配置')?digest('{}'):'absent'}`;stamps.push(stamp);legacyStamps.push(stamp); return; }
+      reasons.push(`${label}读取或解析失败`); stamps.push(`${file}:unreadable`);legacyStamps.push(`${file}:unreadable`);
     }
   };
   // CLI also accepts the legacy global config env. Ambiguous authentication pinning is fail-closed.
@@ -73,7 +114,7 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   if (process.platform === 'win32') for (const hive of ['HKLM', 'HKCU']) {
     const policy = spawnSync('reg.exe', ['query', `${hive}\\SOFTWARE\\Policies\\ClaudeCode`, '/s'], { windowsHide: true, timeout: 2000 });
     const absentText = policy.stderr == null ? '' : new TextDecoder('gb18030').decode(policy.stderr);
-    if (policy.status === 0) { reasons.push('存在 Windows 托管策略，无法核实最终配置'); stamps.push(digest(policy.stdout.toString('hex'))); }
+    if (policy.status === 0) { reasons.push('存在 Windows 托管策略，无法核实最终配置'); const stamp=digest(policy.stdout.toString('hex'));stamps.push(stamp);legacyStamps.push(stamp); }
     else if (policy.error || policy.status !== 1 || !/unable to find|cannot find|找不到|不存在/i.test(absentText)) reasons.push('Windows 托管策略读取失败');
   }
   if (extraArgs.some(arg => /^--(?:settings|setting-sources|model|permission-mode|betas|restricted|safe-mode)(?:=|$)/.test(arg))) reasons.push('额外启动参数覆盖配置、模型或权限，尚未认证');
@@ -88,8 +129,16 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   let channel = '无法确定';
   try { const url = new URL(endpoint); if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('invalid endpoint'); channel = `${url.origin}${url.pathname.replace(/\/$/, '')}`; } catch { reasons.push('有效 endpoint 无效或包含私密参数'); }
   const routing = Object.entries(env).filter(([key]) => routingKey.test(key)).sort(([a], [b]) => a.localeCompare(b));
+  // Optional additive API for older structural consumers; always present here.
+  // This is v1 over CURRENT bytes, not the saved historical configuration. Only
+  // compare it against an unversioned snapshot; never use v2 equality as fallback
+  // when this key differs, and never refresh the snapshot on a mismatch.
+  const compatibility: {legacyConfigurationKey?:string} = {
+    legacyConfigurationKey:digest(JSON.stringify({configDir,cwd:resolve(cwd),stamps:legacyStamps,routing,extraArgs})),
+  };
   return { env: { ...inherited }, restrictedEnv: env, configuredModel:configuredModel as string|null, configDir, cwd: resolve(cwd), endpointHash: digest(endpoint), channel: reasons.length ? `无法确定（候选用户渠道：${channel}）` : channel, endpointSource, sources,
     reason: [...new Set(reasons)].join('；') || null,
-    configurationKey: digest(JSON.stringify({ configDir, cwd: resolve(cwd), stamps, routing, extraArgs })),
+    configurationKey: digest(JSON.stringify({ fingerprintVersion:CLAUDE_CONFIGURATION_FINGERPRINT_VERSION, configDir, cwd: resolve(cwd), stamps, routing, extraArgs })),
+    ...compatibility,
   };
 }

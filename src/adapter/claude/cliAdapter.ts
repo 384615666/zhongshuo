@@ -62,6 +62,14 @@ export const CLAUDE_PROJECT_WRITE_TOOL_ARGS = [
   '--disallowedTools','Bash,PowerShell,REPL,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,mcp__*',
   '--strict-mcp-config','--bare','--disable-slash-commands',
 ] as const;
+/** Public-repository analysis may read the web, but can never execute or write. */
+export const CLAUDE_ANALYSIS_TOOL_ARGS = [
+  '--permission-mode','plan','--permission-prompts','none',
+  '--tools','Read,Glob,Grep,WebFetch,WebSearch',
+  '--allowedTools','Read,Glob,Grep,WebFetch,WebSearch',
+  '--disallowedTools','Bash,PowerShell,REPL,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill,TodoWrite,mcp__*',
+  '--strict-mcp-config','--bare','--disable-slash-commands',
+] as const;
 
 const executableHashes = new Map<string, { stamp: string; hash: string }>();
 export function claudeLaunchIdentity(options: ClaudeCliAdapterOptions, cwd: string) {
@@ -71,10 +79,10 @@ export function claudeLaunchIdentity(options: ClaudeCliAdapterOptions, cwd: stri
   let cached = executableHashes.get(path);
   if (cached?.stamp !== stamp) { cached = { stamp, hash: createHash('sha256').update(readFileSync(path)).digest('hex') }; executableHashes.set(path, cached); }
   const configuration = resolveClaudeConfiguration(cwd, options.extraArgs);
-  const identityKey = createHash('sha256').update(JSON.stringify({ executableHash: cached.hash,
+  const identityFor=(configurationKey:string)=>createHash('sha256').update(JSON.stringify({ executableHash: cached.hash,
     model: options.model ?? process.env.ZS_CLAUDE_MODEL, permissionMode: options.permissionMode ?? 'bypassPermissions', effort:options.effort??null,
-    adapterVersion: CLAUDE_ADAPTER_VERSION, configurationKey: configuration.configurationKey })).digest('hex');
-  return { ...configuration, executableHash: cached.hash, identityKey };
+    adapterVersion: CLAUDE_ADAPTER_VERSION, configurationKey })).digest('hex');
+  return { ...configuration, executableHash: cached.hash, identityKey:identityFor(configuration.configurationKey),legacyIdentityKey:configuration.legacyConfigurationKey?identityFor(configuration.legacyConfigurationKey):undefined };
 }
 
 /** 渠道裸模型名（deepseek-flash / deepseek/deepseek-v4.1-flash / glm-5.3…）；拒绝 [1m] 类后缀语法。 */
@@ -365,7 +373,23 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
-    if (state.writeAccess?.fullAccess && input.repairOnly !== true) {
+    const analysisOnly = state.writeAccess?.analysisOnly === true;
+    if (analysisOnly && state.writeAccess != null && (state.writeAccess.fullAccess === true || state.writeAccess.modificationAuthorized)) {
+      throw new AdapterCallError('CAPABILITY_UNSUPPORTED','analysisOnly请求与可写权限不一致，未启动模型');
+    }
+    if (analysisOnly && state.writeAccess != null) {
+      if (this.options.extraArgs?.length) {
+        throw new AdapterCallError('CAPABILITY_UNSUPPORTED','只读分析请求不接受额外启动参数，防止覆盖工具、权限或MCP限制，未启动');
+      }
+      const identity = claudeLaunchIdentity({...this.options, permissionMode:'plan'}, session.cwd);
+      if(state.writeAccess.launchConfigurationKey && identity.identityKey!==state.writeAccess.launchConfigurationKey) {
+        throw new AdapterCallError('CAPABILITY_UNSUPPORTED','只读分析启动配置已变化，未启动模型');
+      }
+      if (input.repairOnly !== true) {
+        args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,
+          ...CLAUDE_ANALYSIS_TOOL_ARGS);
+      }
+    } else if (state.writeAccess?.fullAccess && input.repairOnly !== true) {
       if (!['bypassPermissions',undefined].includes(this.options.permissionMode)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','完整权限与成员配置不匹配');
       if(state.writeAccess.launchConfigurationKey && claudeLaunchIdentity(this.options,session.cwd).identityKey!==state.writeAccess.launchConfigurationKey) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','启动配置已变化，未启动模型');
       args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,'--permission-mode','bypassPermissions','--dangerously-skip-permissions');
@@ -773,6 +797,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         this.pushEvent(state, turn, {
           kind: 'turn.failed', code: subtype.startsWith('error_') ? subtype.slice(6).toUpperCase() : 'PROVIDER_ERROR',
           message: String(parsed['result'] ?? subtype), retryable: subtype !== 'error_during_execution',
+          failureEvidence:{source:'provider-terminal'},
           ...this.baseEvent(state, turn, randomUUID().slice(0, 6)),
         } as NormalizedRuntimeEvent);
       } else {

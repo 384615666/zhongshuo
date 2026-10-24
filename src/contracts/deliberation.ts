@@ -89,7 +89,12 @@ export const analysisDraftPayloadSchema = z.strictObject({
   summary: z.string().min(1),
   detailMarkdown: z.string().optional(),
   document: documentSchema.nullable().optional(),
-  claims: z.array(analysisClaimSchema).min(1),
+  /** Optional: absent/null preserves the original full deliberation flow. */
+  completion: z.strictObject({
+    disposition: z.enum(['continue', 'conversation', 'direct_answer', 'no_reply']),
+    reason: z.string().trim().min(1),
+  }).nullable().optional(),
+  claims: z.array(analysisClaimSchema),
   recommendations: z.array(z.string()),
   openQuestions: z.array(z.string()),
 });
@@ -107,7 +112,7 @@ export interface AnalysisReport {
 /** CROSS_REVIEW 阶段模型输出：对他人初稿 claim 的逐条评审（三元组绑定，防跨成员/跨版本混并）。 */
 export const reviewPayloadSchema = z.strictObject({
   schemaVersion: z.literal(CROSS_REVIEW_SCHEMA_VERSION),
-  summary: z.string().min(1).optional(),
+  summary: z.string().optional(),
   detailMarkdown: z.string().optional(),
   document: documentSchema.nullable().optional(),
   reviews: z.array(z.strictObject({
@@ -118,7 +123,7 @@ export const reviewPayloadSchema = z.strictObject({
     reason: z.string().min(1),
     evidenceIds: z.array(z.string().min(1)),
     suggestedVerification: z.string().optional(),
-  })).min(1),
+  })),
 });
 export type ReviewPayload = z.infer<typeof reviewPayloadSchema>;
 
@@ -159,6 +164,11 @@ export const synthesisPayloadSchema = z.strictObject({
   summary: z.string().min(1),
   detailMarkdown: z.string().optional(),
   document: documentSchema.nullable().optional(),
+  /** A request, not authorization: the runner verifies frozen review coverage. */
+  ratification: z.strictObject({
+    disposition: z.enum(['required', 'skip_if_unchanged']),
+    reason: z.string().trim().min(1),
+  }).nullable().optional(),
   issueResolutions: z.array(issueResolutionSchema).optional(),
   claims: z.array(z.strictObject({
     statement: z.string().min(1),
@@ -176,7 +186,7 @@ export type SynthesisPayload = z.infer<typeof synthesisPayloadSchema>;
 /** RATIFY 模型输出：逐结论确认/异议；提交事务验证 claimId 全覆盖且无重复（§6.5）。 */
 export const ratifyPayloadSchema = z.strictObject({
   schemaVersion: z.literal(RATIFY_SCHEMA_VERSION),
-  summary: z.string().min(1).optional(),
+  summary: z.string().optional(),
   detailMarkdown: z.string().optional(),
   document: documentSchema.nullable().optional(),
   deliveryFeedback: deliveryFeedbackSchema.optional(),

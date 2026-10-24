@@ -2621,12 +2621,52 @@ button.composer-file-token-open:hover {
   font-size: var(--fs-11);
   color: var(--text-3);
   line-height: 1.55;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .root-body {
   margin-top: var(--sp-1);
   font-size: var(--fs-12);
   color: var(--text-2);
   line-height: 1.65;
+}
+/**
+ * R106 room-pool reading preview.
+ *
+ * The body is an index into the conversation, not a second full reading
+ * surface. Five lines fit the requested 4–6 line range after Markdown spacing.
+ * This is visual overflow only; the full source remains in the DOM for
+ * selection/search and the existing copy/quote actions.
+ */
+.root-message-preview {
+  position: relative;
+  font-size: var(--fs-15);
+  line-height: 1.65;
+}
+.root-message-preview-content {
+  overflow-wrap: anywhere;
+}
+.root-message-preview-content > .md-view {
+  line-height: inherit;
+}
+.root-message-preview.is-folded .root-message-preview-content {
+  max-height: 8.25em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
+}
+.root-message-preview-prompt {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 3px;
+  color: var(--accent-text);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 /* 预览：默认只留 2 条，别让它把卡片撑高（详情在串里） */

@@ -10,6 +10,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { AppState, ContextTarget, CurrentRunBudget, DeliveryFact, Thread, ThreadCard, RouteMode } from './types';
+import type { PreDispatchFailureProjection } from '../../../contracts/taskDetails';
 import type { TaskExecutionBlocker } from '../../../contracts/executionBlockers.ts';
 import type {ThreadMembersSnapshot} from '../../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../../contracts/runtimeProgress';
@@ -39,6 +40,7 @@ export interface ThreadTaskDetail {
   nextInputBudget?: { maxTurns: number } | null;
   currentRunBudget?: CurrentRunBudget | null;
   executionBlocker?: TaskExecutionBlocker | null;
+  preDispatchFailure?: PreDispatchFailureProjection | null;
   pendingDelivery: { id: string; revision: number; manifestHash: string } | null;
   /** r58 返工待执行（验收与执行分离呈现）；r59 含完整执行身份（点击冻结快照）。 */
   reworkPending: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
@@ -286,6 +288,8 @@ export interface HifiDraftAttachment {
 }
 export interface HifiDraft {
   collaboration?: 'deliberate';
+  /** One-shot request scope. The Composer only offers this for room_root sends. */
+  analysisOnly?: boolean;
   body: string;
   mentions: string[];
   attachments: HifiDraftAttachment[];
@@ -737,6 +741,8 @@ export interface PendingSendEnvelope {
     attachmentRefs?: string[];
     threadMemberVersion?: string;
     collaboration?: 'deliberate';
+    /** Frozen one-shot request scope; older envelopes omit it and mean false. */
+    analysisOnly?: boolean;
     /** 本次独立研讨的冻结预算；UNKNOWN 重试只能沿用这一份，不能被新草稿设置改写。 */
     deliberationBudget?: { maxTurns: number };
   };
@@ -839,6 +845,7 @@ function validateDraft(d: unknown): d is HifiDraft {
   if (!Array.isArray(d.attachments) || d.attachments.some((a) => !isPlainObject(a) || typeof a.attachmentId !== 'string' || typeof a.name !== 'string')) return false;
   if (typeof d.access !== 'string' || (d.sendAs !== 'ai' && d.sendAs !== 'record')) return false;
   if (d.collaboration != null && d.collaboration !== 'deliberate') return false;
+  if (d.analysisOnly !== undefined && typeof d.analysisOnly !== 'boolean') return false;
   if (d.budgetMaxTurns != null && (typeof d.budgetMaxTurns !== 'number' || !Number.isInteger(d.budgetMaxTurns) || d.budgetMaxTurns < 1)) return false;
   if (d.deliberateMemberIds != null && (!Array.isArray(d.deliberateMemberIds) || d.deliberateMemberIds.some((id) => typeof id !== 'string'))) return false;
   if (d.rev != null && typeof d.rev !== 'number') return false;
@@ -853,6 +860,7 @@ function validateEnvelope(e: unknown): e is PendingSendEnvelope {
   if (typeof e.commandId !== 'string' || e.commandId.length === 0 || e.method !== 'message.submit') return false;
   const p = e.params;
   if (!isPlainObject(p) || typeof p.body !== 'string' || (p.intent !== 'default' && p.intent !== 'record_only') || !isPlainObject(p.target)) return false;
+  if (p.analysisOnly !== undefined && typeof p.analysisOnly !== 'boolean') return false;
   if (p.deliberationBudget != null && (!isPlainObject(p.deliberationBudget) || !Number.isInteger(p.deliberationBudget.maxTurns) || (p.deliberationBudget.maxTurns as number) < 1)) return false;
   if (e.at != null && typeof e.at !== 'number') return false;
   if (e.queued != null && (!Array.isArray(e.queued) || e.queued.some((q) => !validateEnvelope(q)))) return false;
@@ -1238,6 +1246,7 @@ export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?
     body: nextBody,
     mentions: mentionsClear ? [] : d.mentions,
     attachments: keptAttachments,
+    analysisOnly: unchanged ? false : d.analysisOnly,
     // 兼容旧调用方的明确记录串结算标记；R90 的普通聊天页面不再传这个选项。
     sendAs: opts?.recordThread === true ? 'record' : 'ai',
   };

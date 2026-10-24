@@ -293,6 +293,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1',
     });
     const worker = new DispatchWorker({
+      automaticRecovery:true,
       db,
       adapter,
       adapterFor: (memberId) => memberRuntime.adapterFor(memberId),

@@ -644,8 +644,10 @@ export function pendingIdentityMatches(
   collaboration?:'deliberate',
   budgetMaxTurns?: number,
   defaultBudgetMaxTurns?: number,
+  analysisOnly = false,
 ): boolean {
   if(env.params.collaboration!==collaboration)return false;
+  if ((env.params.analysisOnly === true) !== analysisOnly) return false;
   const envBudget = env.params.deliberationBudget?.maxTurns;
   const expectedBudget = budgetMaxTurns ?? defaultBudgetMaxTurns;
   if (collaboration === 'deliberate') {
@@ -726,6 +728,8 @@ export function Composer({
     collaboration?:'deliberate';
     /** 独立研讨本次调用预算；页面必须冻结进 message.submit，而不是只留在 UI。 */
     budgetMaxTurns?: number;
+    /** 仅房间主输入可用；页面只在 true 时冻结进 message.submit。 */
+    analysisOnly?: boolean;
     commandId: string;
     target: ComposerTarget;
     /** 发起时草稿编辑代次（页面冻结进信封——清算判定用）。 */
@@ -871,6 +875,9 @@ export function Composer({
    * 在历史记录串里继续聊天也会自然发起新的 AI 请求，不再静默 record_only。
    */
   const sendAs = 'ai' as const;
+  const analysisOnlyAvailable = target.kind === 'room_root';
+  const [analysisOnly, setAnalysisOnly] = useState(false);
+  const effectiveAnalysisOnly = analysisOnlyAvailable && analysisOnly;
   const [deliberate,setDeliberate]=useState(false);
   const [deliberateMemberIds,setDeliberateMemberIds]=useState<string[]>([]);
   const [budgetMaxTurns,setBudgetMaxTurns]=useState<number | null>(null);
@@ -1280,6 +1287,7 @@ export function Composer({
     );
     const restoredBudget = saved.budgetMaxTurns != null && Number.isInteger(saved.budgetMaxTurns) && saved.budgetMaxTurns >= 1
       ? saved.budgetMaxTurns : null;
+    setAnalysisOnly(targetKindRef.current === 'room_root' && saved.analysisOnly === true);
     setBudgetMaxTurns(restoredBudget);
     setBudgetInput(restoredBudget == null ? '' : String(restoredBudget));
     setAccess(saved.access as AccessMode);
@@ -1342,16 +1350,18 @@ export function Composer({
       && cur.access === access
       && cur.sendAs === sendAs
       && cur.collaboration === collaboration
+      && (cur.analysisOnly === true) === effectiveAnalysisOnly
       && cur.budgetMaxTurns === (budgetMaxTurns ?? undefined)
       && (cur.deliberateMemberIds ?? []).length === deliberateMemberIds.length
       && (cur.deliberateMemberIds ?? []).every((id, index) => id === deliberateMemberIds[index]);
     if (same) return;
     setDraftFull(draftKey, {
       ...cur, body, mentions, access, sendAs, collaboration,
+      analysisOnly: effectiveAnalysisOnly,
       ...(budgetMaxTurns != null ? { budgetMaxTurns } : { budgetMaxTurns: undefined }),
       deliberateMemberIds,
     });
-  }, [draftKey, body, mentions, access, sendAs, collaboration, budgetMaxTurns, deliberateMemberIds]);
+  }, [draftKey, body, mentions, access, sendAs, collaboration, effectiveAnalysisOnly, budgetMaxTurns, deliberateMemberIds]);
 
   useEffect(() => {
     if (!insertText || appliedInsertRef.current === insertText.id) return;
@@ -1487,6 +1497,7 @@ export function Composer({
       collaboration,
       callBudgetEnabled === true ? budgetMaxTurns ?? undefined : undefined,
       callBudgetEnabled === true && collaboration ? budgetPreview?.calls ?? undefined : undefined,
+      effectiveAnalysisOnly,
     )) {
       setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
       return;
@@ -1533,6 +1544,7 @@ export function Composer({
     const sentBudget = callBudgetEnabled === true && collaboration
       ? (budgetMaxTurns ?? budgetPreview?.calls)
       : undefined;
+    const sentAnalysisOnly = effectiveAnalysisOnly;
 
     const outcome = onSend({
       body: text,
@@ -1540,6 +1552,7 @@ export function Composer({
       mentionIds: effectiveMentionIds,
       ...(collaboration?{collaboration}:{}),
       ...(sentBudget != null ? { budgetMaxTurns: sentBudget } : {}),
+      ...(sentAnalysisOnly ? { analysisOnly: true } : {}),
       method: { planFirst: access === 'plan', skipFirstDraft, splitWork },
       access,
       attachments: sentAttachments,
@@ -1568,6 +1581,7 @@ export function Composer({
         body: nextBody,
         mentions: mentionsClear ? [] : d.mentions,
         attachments: keptAttachments,
+        analysisOnly: unchanged ? false : d.analysisOnly,
         sendAs: 'ai',
       };
       setDraftFull(key, settled);
@@ -1578,6 +1592,7 @@ export function Composer({
       if (draftKeyRef.current !== key) return; // 已切目标：不动当前输入（B 的草稿不受 A 回执影响）
       setBody(settled.body);
       setMentions(settled.mentions); // r63：已发 @ 的清理结果随统一清结算同步（此前不同步=芯片残留）
+      setAnalysisOnly(targetKindRef.current === 'room_root' && settled.analysisOnly === true);
       // 附件芯片由 store 驱动（clearSettledUploads 已按 refs 清）——不同步本地状态。
       if (editorRef.current != null) {
         renderEditorBody(editorRef.current, settled.body, getState().uploadItems[key] ?? []);
@@ -1649,6 +1664,7 @@ export function Composer({
         if (draftKeyRef.current === keyAtSend) {
           setBody(settled.body);
           setMentions(settled.mentions);
+          setAnalysisOnly(targetKindRef.current === 'room_root' && settled.analysisOnly === true);
           if (editorRef.current != null) {
             renderEditorBody(editorRef.current, settled.body, getState().uploadItems[keyAtSend] ?? []);
             setEditorCaret(editorRef.current);
@@ -2289,6 +2305,20 @@ export function Composer({
             >
               <Icon name={methodChip.on ? 'check-circle' : 'circle'} size={11} />
               {methodChip.label}
+            </button>
+          ) : null}
+
+          {analysisOnlyAvailable ? (
+            <button
+              type="button"
+              className={`method-chip${effectiveAnalysisOnly ? ' on' : ''}`}
+              title="这条消息仅做只读分析，不修改项目文件；下一条消息恢复为普通发送"
+              aria-pressed={effectiveAnalysisOnly}
+              data-zs-analysis-only={effectiveAnalysisOnly ? 'true' : 'false'}
+              onClick={() => setAnalysisOnly((current) => !current)}
+            >
+              <Icon name={effectiveAnalysisOnly ? 'check-circle' : 'search'} size={11} />
+              本次仅分析
             </button>
           ) : null}
 

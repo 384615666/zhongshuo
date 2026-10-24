@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, statSync, lstatSync,realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
+import {pendingAutomaticRecovery} from './automaticRecovery.ts';
+import {assessTaskRedispatchReadiness} from '../persistence/stores/recoveryGuard.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { coordinationCallAvailable, validateCoordinationPlan, coordinationTopologicalSteps,type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
@@ -38,6 +40,7 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
   if(task.source_connection_id!=null)throw Error('本版协作仅开放本机已授权发送；外部来源协作尚未接入授权预算');
   if (db.prepare('SELECT 1 FROM coordination_scopes WHERE task_id=?').get(taskId)) return;
   const route=JSON.parse(task.route_json) as {mode:string;frozenMemberIds:string[];participantScope?:'selected'};
+  const analysisOnly=(JSON.parse((db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId) as {write_scope_json:string}).write_scope_json) as {analysisOnly?:boolean}).analysisOnly===true;
   const members=coordinationRoomMembers(db,task.room_id,task.project_id,route.mode==='AUTO'&&route.participantScope!=='selected'?undefined:route.frozenMemberIds);
   if (members.length > 12) throw Error('自动协作最多选择 12 位房间成员；请先调整房间名单');
   if(!members.some(m=>m.id===task.owner_member_id))throw Error('协调者必须是本房间启用的 AI 成员');
@@ -47,7 +50,7 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
       if(!['claude','codex','fake'].includes(runtime.kind??''))throw Error('成员未配置可执行渠道');
       const program=memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind);if(program.status==='missing')throw Error(program.reason);
       return { memberId:m.id, displayName:m.display_name, description:m.description,
-      writeScope:snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,m.id) }; }
+      writeScope:snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,m.id,{analysisOnly}) }; }
     catch (error) { return { memberId:m.id,displayName:m.display_name,description:m.description,writeScope:null,unavailableReason:String(error) }; }
   });
   db.prepare('INSERT INTO coordination_scopes(task_id,roster_json,created_at) VALUES(?,?,?)').run(taskId,JSON.stringify(roster),Date.now());
@@ -89,9 +92,10 @@ export function seedExplicitRecipientCoordination(
   if(recipients.length>12)throw Error('一次最多请求12位 AI');
   const members=coordinationRoomMembers(db,parent.room_id,parent.project_id,recipients);
   if(members.length!==recipients.length)throw Error('明确收件人中有成员已停用或不属于本房间');
+  const analysisOnly=(JSON.parse((db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId) as {write_scope_json:string}).write_scope_json) as {analysisOnly?:boolean}).analysisOnly===true;
   const roster:ScopeMember[]=members.map(member=>{
     let writeScope:string|null=null,unavailableReason:string|undefined;
-    try{writeScope=snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,member.id);}
+    try{writeScope=snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,member.id,{analysisOnly});}
     catch(error){unavailableReason=String(error);}
     return{memberId:member.id,displayName:member.display_name,description:member.description,writeScope,unavailableReason};
   });
@@ -143,6 +147,49 @@ export function explicitRecipientChild(db:ZhongshuoDatabase,childTaskId:string):
     WHERE s.child_task_id=? LIMIT 1`).get(childTaskId)!=null;
 }
 
+/** An explicit child continue may reopen its original coordination only after
+ * all UNKNOWN/process/lease facts have been formally resolved. */
+export function resumeBlockedCoordinationChild(db:ZhongshuoDatabase,childTaskId:string,now:number){
+  if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='coordination_steps'").get())return;
+  const child=childCoordination(db,childTaskId);if(!child||child.state!=='blocked')return;
+  const parent=db.prepare('SELECT status,stop_generation FROM tasks WHERE id=?').get(child.task_id) as {status:string;stop_generation:number};
+  if(['CANCELLED','DONE'].includes(parent.status)||parent.stop_generation!==child.stop_generation)throw Error('父协作已停止或有后续完成结果，旧步骤不能直接复活');
+  const steps=db.prepare('SELECT child_task_id FROM coordination_steps WHERE run_id=?').all(child.run_id) as {child_task_id:string}[];
+  for(const step of steps){const blocked=assessTaskRedispatchReadiness(db,step.child_task_id,{queueOnly:true});if(blocked)throw Error(blocked.message);}
+  db.prepare("UPDATE coordination_runs SET state='running',error_message=NULL WHERE run_id=? AND state='blocked'").run(child.run_id);
+  db.prepare("UPDATE workflow_runs SET status='WAITING',stage='分工执行' WHERE id=?").run(child.run_id);
+  db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=?").run(child.task_id);
+  db.prepare("UPDATE coordination_messages SET status='accepted',target_turn_id=NULL,error_message=NULL,updated_at=? WHERE child_task_id=? AND status='blocked'").run(now,childTaskId);
+  const p=db.prepare('SELECT * FROM tasks WHERE id=?').get(child.task_id) as Parent;
+  event(db,p,child.run_id,'coordination.resumed',{childTaskId,reason:'正式继续原步骤；已核实并释放的历史未知结果保留，不重放'});
+}
+
+/** Close obsolete failed steps only against an explicitly selected, accepted
+ * later result of this same parent. Failed runs/turns are never made successful. */
+export function settleSupersededCoordinationSteps(db:ZhongshuoDatabase,taskId:string,sourceRunId:string,now:number){
+  const parent=db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId) as Parent;
+  const current=db.prepare(`SELECT r.id FROM workflow_runs r JOIN tasks t ON t.id=r.task_id JOIN task_deliveries d ON d.id=t.current_delivery_id
+    WHERE r.id=? AND t.id=? AND r.status='SUCCEEDED' AND t.status='DONE' AND d.run_id=r.id
+      AND r.id=(SELECT id FROM workflow_runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1)`).get(sourceRunId,taskId);
+  if(!current)throw Error('接续结果必须是当前父任务已完成的最新正式交付');
+  const rows=db.prepare(`SELECT s.child_task_id FROM coordination_steps s JOIN coordination_runs c ON c.run_id=s.run_id
+    JOIN workflow_runs old ON old.id=c.run_id JOIN tasks t ON t.id=s.child_task_id
+    WHERE c.task_id=? AND c.state='blocked' AND old.rowid<(SELECT rowid FROM workflow_runs WHERE id=?)
+      AND t.status NOT IN ('DONE','CANCELLED')`).all(taskId,sourceRunId) as {child_task_id:string}[];
+  const closed:string[]=[],preserved:string[]=[];
+  for(const row of rows){
+    const latest=db.prepare('SELECT id,status FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(row.child_task_id) as {id:string;status:string}|undefined;
+    if(!latest||!['FAILED','INTERRUPTED'].includes(latest.status)||assessTaskRedispatchReadiness(db,row.child_task_id)){preserved.push(row.child_task_id);continue;}
+    db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=?").run(row.child_task_id);
+    db.prepare("UPDATE coordination_messages SET status='cancelled',error_message=?,updated_at=? WHERE child_task_id=? AND status IN ('accepted','queued','blocked')").run('旧步骤已由后续正式交付接续；旧失败保留，不代表旧执行成功',now,row.child_task_id);
+    const child=db.prepare('SELECT * FROM tasks WHERE id=?').get(row.child_task_id) as Parent;
+    event(db,child,latest.id,'coordination.stepSuperseded',{sourceRunId,parentTaskId:taskId,reason:'后续正式交付已接续；旧步骤取消排队，原失败记录保留'});
+    closed.push(row.child_task_id);
+  }
+  event(db,parent,sourceRunId,'coordination.supersededStepsSettled',{closed,preserved,reason:'显式结清已被当前正式交付替代的失败步骤'});
+  return{closed,preserved};
+}
+
 /** The original control result remains in storage. Prompt handoffs carry the
  * visible answer/document plus formal delivery refs, without serializing the
  * same internal result (including document markdown) a second time. */
@@ -185,7 +232,7 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
     ??(rosterOverride?{route_json:task.route_json??'null',roster_json:JSON.stringify(rosterOverride)}:undefined);
   const routeJson=queued?.route_json??task.route_json;
   if(routeJson && JSON.parse(routeJson).mode==='AUTO' && !dispatchKey.includes(':conversation:')) {
-    return {kind:'planning' as const,run:null,request,note:`你是协调成员。先读取完成任务所需的上下文，再在已授权名单内分派实施与独立评审；实施修改交给合适的实施步骤。你的职责是分工、审核和最终整合，不是 runtime 降权理由；本轮实际工具/文件权限以程序输入为准。已授权分工无需用户逐步确认，不使用 request_participant；名单外成员不得派发。所有步骤连同本次规划共用信封预算，预留2次整合，不重新扩充总预算。简单问候、普通提问直接自然回答，responseKind=conversation，coordinationPlan=null。需要同伴接手时可在 handoffs 提交具体消息（toMemberId、message、purpose）；复杂依赖也可提交 coordinationPlan，两者二选一。coordinationPlan 字段为（summary 与 steps，最多8步；每步 key/memberId/title/objective/role/dependsOn）。role 为 analysis/implementation/review；权限由成员快照和本轮有效授权决定，不由角色标签降级。按需安排不同成员，评审须依赖实施并读取实际文件。依赖只能引用本计划key且无环。只有程序接受计划才算已派发。最终整合由你完成。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
+    return {kind:'planning' as const,run:null,request,note:`本轮为 AUTO 接单，是否分工按【本轮指令】判断，单人可完成的工作直接完成，不因可用成员多就派工。coordinationPlan=null 表示不创建计划；handoffs 和 coordinationPlan 二选一，无交接时 handoffs=[]。提交计划的回合只做必要调查与分工，不先实施同一工作再让子步骤重复实施；若已完成修改，交付实际结果即可。所有步骤共用信封预算，预留2次整合，不扩充总预算。计划字段：summary、steps（最多8步）；每步 key/memberId/title/objective/role/dependsOn，role=analysis/implementation/review，依赖只能引用本计划key且无环；评审依赖实施并读取冻结的实际版本。权限以本轮输入头为准，不由角色降级。已授权成员无需逐个确认，不使用 request_participant，不派发名单外成员；只有程序接受才算已排队。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
   }
   return null;
 }
@@ -395,7 +442,7 @@ function freezeRecipientRequests(db:ZhongshuoDatabase,runId:string,taskId:string
     const step=steps.find(item=>item.child_task_id===taskId)!;
     const upstream=plan.steps.find(item=>item.key===step.step_key)!.dependsOn.map(key=>{
       const source=steps.find(item=>item.step_key===key)!;
-      if(source.status!=='DONE'||db.prepare("SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND a.status='UNKNOWN'").get(source.child_task_id))throw Error('交接来源未完成或结果未知');
+      if(source.status!=='DONE'||assessTaskRedispatchReadiness(db,source.child_task_id,{queueOnly:true}))throw Error('交接来源未完成或结果未知');
       const saved=JSON.parse(source.handoff_json??'{}') as {output?:unknown};
       if(!saved.output){saved.output=finalHandoff(db,source.child_task_id);db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify(saved),runId,key);}
       return saved.output;
@@ -432,7 +479,11 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       const saved=JSON.parse(step.handoff_json??'{}') as {output?:unknown};
       if(!saved.output){step.handoff_json=JSON.stringify({...saved,output:finalHandoff(db,step.child_task_id)});db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(step.handoff_json,run.run_id,step.step_key);}
     }
-    const blocked=steps.find(s=>['BLOCKED','CANCELLED','WAITING_USER'].includes(s.status) || db.prepare("SELECT 1 FROM workflow_runs WHERE task_id=? AND status IN ('FAILED','INTERRUPTED')").get(s.child_task_id) || db.prepare("SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND a.status='UNKNOWN'").get(s.child_task_id));
+    const blocked=steps.find(s=>assessTaskRedispatchReadiness(db,s.child_task_id,{queueOnly:true})!=null
+      ||!pendingAutomaticRecovery(db,s.child_task_id)&&!db.prepare(`SELECT 1 FROM outbox o JOIN domain_events e ON e.kind='task.redispatchEnqueued' AND json_extract(e.payload_json,'$.dispatchKey')=o.dispatch_key
+        JOIN tasks t ON t.id=e.task_id WHERE t.id=? AND o.status IN ('pending','leased') AND o.stop_generation_at_enqueue=t.stop_generation
+          AND NOT EXISTS(SELECT 1 FROM agent_turns a WHERE a.dispatch_key=o.dispatch_key) LIMIT 1`).get(s.child_task_id)&&(['BLOCKED','CANCELLED','WAITING_USER'].includes(s.status)
+        ||s.status!=='DONE'&&db.prepare("SELECT 1 FROM workflow_runs WHERE id=(SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1) AND status IN ('FAILED','INTERRUPTED')").get(s.child_task_id)));
     if(blocked) {
       db.prepare(`UPDATE coordination_messages SET status='blocked',error_message='同伴步骤未完成或结果待核实；不会自动继续',updated_at=? WHERE coordination_run_id=? AND status IN ('accepted','queued') AND target_turn_id IS NULL`).run(Date.now(),run.run_id);
       db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=?").run(`步骤「${blocked.step_key}」未完成或结果待核实；不会自动重试`,run.run_id);

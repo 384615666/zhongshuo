@@ -1,3 +1,4 @@
+import type {PreDispatchFailureProjection} from '../../../contracts/taskDetails.ts';
 /**
  * 众说原型 · 领域模型类型
  * 严格对齐设计报告 v1.8 §3.1 对象层级与 §12.2 表结构目录。
@@ -308,6 +309,7 @@ export interface ThreadCard {
   currentRunBudget?: CurrentRunBudget | null;
   delivery?: DeliveryFact | null;
   executionBlocker?: TaskExecutionBlocker | null;
+  preDispatchFailure?:PreDispatchFailureProjection|null;
   ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;

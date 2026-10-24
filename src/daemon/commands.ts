@@ -8,11 +8,12 @@
  * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
 import {runtimeCatalog} from './runtimeCatalog.ts';
+import type {PreparedRuntimeConfiguration} from './prepareCodexConfiguration.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
-import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
+import { projectWriteAccess, snapshotTaskWriteAccess,snapshotConversationWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import {snapshotRedispatchExecution} from './redispatchExecution.ts';
-import { coordinationRoomMembers, freezeCoordinationScope, seedExplicitRecipientCoordination } from './coordination.ts';
+import { coordinationRoster,coordinationRoomMembers, freezeCoordinationScope, resumeBlockedCoordinationChild, seedExplicitRecipientCoordination,settleSupersededCoordinationSteps } from './coordination.ts';
 import {readThreadMembers,persistThreadMember,readThreadProgress,readDmProgress} from './threadMembers.ts';
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
 import { CALL_BUDGET_ENABLED_SETTING_KEY, type CallBudgetMode, type FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
@@ -38,6 +39,7 @@ import { commandEnvelopeSchema } from '../contracts/commands.ts';
 import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHistoryParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
+import {readPreDispatchFailure} from './preDispatchFailure.ts';
 import { readExecutionBlocker, readTaskDetails, readTaskHistory, taskRunBelongsToDetails } from './taskDetails.ts';
 import { turnDeadlineFromConfig } from './turnDeadline.ts';
 import { messageFileChanges } from './messageFileChanges.ts';
@@ -79,9 +81,14 @@ import { getReceipt } from '../persistence/commandGateway.ts';
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
 
+function assertPreparedRuntimeConfigurations(receipts:readonly PreparedRuntimeConfiguration[]):void {
+  try{for(const receipt of receipts)receipt.assertCurrent();}
+  catch(error){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`${(error as Error).message}；原消息或草稿保留`);}
+}
+
 export interface DaemonCommandDeps {
   /** No-inference configuration preparation before a new send is frozen. */
-  prepareRuntimeConfiguration?:(memberId:string,projectId:string)=>Promise<void>;
+  prepareRuntimeConfiguration?:(memberId:string,projectId:string)=>Promise<PreparedRuntimeConfiguration|null>;
   db: ZhongshuoDatabase;
   localUserId: string;
   interruptTurn: (turnId: string) => Promise<void>;
@@ -336,6 +343,7 @@ const messageSubmitParams = z.strictObject({
   // 图片能力门（第二十九轮三）：omit-images=用户明确选择仅发送文字（注入如实注明图片未发送）。
   imageAck: z.literal('omit-images').optional(),
   collaboration:z.literal('deliberate').optional(),
+  analysisOnly:z.boolean().optional(),
   /** Room-only user cap. Kept unknown at the schema boundary so every malformed
    * value gets one stable Chinese message instead of leaking Zod wording. */
   deliberationBudget:z.unknown().optional(),
@@ -1641,6 +1649,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           pendingDelivery: pendingDelivery ?? null,
           reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued },
           executionBlocker: readExecutionBlocker(deps.db, params.taskId),
+          preDispatchFailure:readPreDispatchFailure(deps.db,params.taskId),
           ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'task.history':
@@ -1725,6 +1734,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
         };
         if(params.collaboration&&params.target.kind!=='room_root'&&params.target.kind!=='thread')throw new DaemonCommandError('VALIDATION_INVALID','独立研讨仅适用于房间新话题或回复串；当前会话和草稿保留');
+        if(params.analysisOnly&&params.target.kind!=='room_root')throw new DaemonCommandError('VALIDATION_INVALID','本次仅分析选择适用于房间新请求；原消息与草稿保留');
         if(params.collaboration&&params.intent!=='default')throw new DaemonCommandError('VALIDATION_INVALID','独立研讨必须交给 AI，不能与仅记录同时使用；当前草稿保留');
         if(requestedDeliberationBudget!=null&&params.collaboration!=='deliberate'){
           throw new DaemonCommandError('VALIDATION_INVALID','本次研讨预算只适用于房间独立研讨与回复串独立研讨；当前草稿保留');
@@ -1788,6 +1798,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if(t.kind==='thread'){const th=deps.db.prepare('SELECT th.status,r.archived_at,p.status projectStatus FROM conversation_threads th JOIN rooms r ON r.id=th.room_id JOIN projects p ON p.id=th.project_id WHERE th.id=?').get(t.threadId) as {status:string;archived_at:number|null;projectStatus:string}|undefined;if(!th||th.status!=='open'||th.archived_at!=null||th.projectStatus!=='active')throw new DaemonCommandError('CONVERSATION_UNAVAILABLE','项目、房间或回复串已归档；不能追加消息');}
           if (t.kind === 'dm' && conv.archived_at != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑（重放拒绝）');
         };
+        const preparedConfigurations:PreparedRuntimeConfiguration[]=[];
         if(params.intent==='default'&&deps.prepareRuntimeConfiguration&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)){
           submitReplayGuard();
           const preparationMembers=():string[]=>{
@@ -1813,15 +1824,22 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const bindings=members.map(memberId=>({memberId,runtime:resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null)}));
           for(const {memberId,runtime} of bindings){
             if(runtime.kind!=='codex'||memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='missing')continue;
-            try{await deps.prepareRuntimeConfiguration(memberId,params.target.projectId);}catch(e){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`执行配置尚未就绪：${(e as Error).message}；没有提交模型输入，草稿保留`);}
+            try{
+              const receipt=await deps.prepareRuntimeConfiguration(memberId,params.target.projectId);
+              if(!receipt||receipt.memberId!==memberId||receipt.projectId!==params.target.projectId)throw Error('配置准备未返回对应成员的核验依据');
+              receipt.assertCurrent();preparedConfigurations.push(receipt);
+            }catch(e){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`执行配置尚未就绪：${(e as Error).message}；没有提交模型输入，草稿保留`);}
           }
           submitReplayGuard();
           if(params.target.kind==='room_root'&&coordinator!==coordinatorOf(deps.db,params.target.roomId))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间协调成员变化；未提交，草稿保留');
           if(params.target.kind==='thread'&&preparedThreadSelection!==JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration)))throw new DaemonCommandError('CONFIGURATION_NOT_READY','准备期间本串收件人已变化，请确认名单后再发送；草稿保留');
           if(JSON.stringify(members)!==JSON.stringify(preparationMembers())||bindings.some(b=>JSON.stringify(b.runtime)!==JSON.stringify(resolveMemberRuntime(deps.db,b.memberId,process.env.ZS_RUNTIME??null))))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间房间名单或成员配置变化；未提交，草稿保留');
+          assertPreparedRuntimeConfigurations(preparedConfigurations);
 
         }
         const result = run(() => {
+          assertPreparedRuntimeConfigurations(preparedConfigurations);
+          try{
           submitReplayGuard();
           if (params.target.kind === 'thread') {
             const target = params.target;
@@ -2026,7 +2044,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 throw new DaemonCommandError('STORAGE_UNAVAILABLE', '本次调用预算冻结失败；本次未提交，草稿保留');
               }
             }
-            try{snapshotTaskWriteAccess(deps.db,ids.taskId);freezeCoordinationScope(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
+            try{snapshotTaskWriteAccess(deps.db,ids.taskId,{analysisOnly:params.analysisOnly});freezeCoordinationScope(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
             attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
             if(route.value.kind==='dispatch'&&route.value.mode==='AUTO'&&route.value.participantScope==='selected'&&route.value.frozenMemberIds.length>1){
               seedExplicitRecipientCoordination(deps.db,ids.taskId,ids.messageId,params.body,route.value.frozenMemberIds);
@@ -2035,6 +2053,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               ? created.value
               : { ...created.value, callBudget: frozenCallBudget, ...(params.collaboration === 'deliberate' ? { deliberationBudget: { maxTurns: frozenCallBudget.maxTurns } } : {}) };
           })();
+          }finally{assertPreparedRuntimeConfigurations(preparedConfigurations);}
         }, submitReplayGuard);
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
@@ -5120,6 +5139,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             currentRunBudget: budgetProjection(t.latest_run_budget_json),
             delivery: deliveryFactsOfTask(deps.db, t.root_task_id ?? ''),
             executionBlocker: t.root_task_id == null ? null : readExecutionBlocker(deps.db, t.root_task_id),
+            preDispatchFailure:t.root_task_id==null?null:readPreDispatchFailure(deps.db,t.root_task_id),
             // The cold room view needs the same factual child activity as an
             // opened thread, without fetching each thread's history/details.
             progress: t.root_task_id != null && ['ACTIVE','WAITING_USER'].includes(t.task_status ?? '')
@@ -5163,6 +5183,17 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return { gate: 'open' as const };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'task.settleSupersededSteps': {
+        const params=z.strictObject({taskId:z.string().min(1),sourceRunId:z.string().min(1),expectedTaskRevision:z.number().int().nonnegative()}).parse(env.params);
+        assertTaskAudience(deps.db,deps.localUserId,params.taskId);
+        const result=run(()=>{
+          const task=deps.db.prepare('SELECT revision FROM tasks WHERE id=?').get(params.taskId) as {revision:number}|undefined;
+          if(task?.revision!==params.expectedTaskRevision)throw new DaemonCommandError('STALE_REVISION','任务已变化，请按当前正式交付重新核对');
+          try{return settleSupersededCoordinationSteps(deps.db,params.taskId,params.sourceRunId,Date.now());}
+          catch(error){throw new DaemonCommandError('STALE_REVISION',String(error));}
+        });
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
       }
       case 'task.stop': {
         const params = z.strictObject({ taskId: z.string().min(1), targetRunId: z.string().min(1), expectedStopGeneration: z.number().int().nonnegative() }).parse(env.params);
@@ -5213,22 +5244,80 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         //   派发过——新一次合法中断产生新源 run=新意图）；不再撞固定唯一键。
         const params = z.strictObject({
           taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional(),
+          useCurrentExecutionSnapshot:z.boolean().optional(),
+          analysisOnly:z.boolean().optional(),
           sourceRunId: z.string().min(1).optional(), expectedTaskRevision: z.number().int().nonnegative().optional(),
           expectedStopGeneration: z.number().int().nonnegative().optional(), expectedRunStatus: z.enum(['FAILED','SUCCEEDED']).optional(),
         }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 回执重放也不能绕过 DM audience
         assertTaskDispatchScope(deps.db, params.taskId);
+        if(params.analysisOnly&&(params.formatRepair||params.sourceRunId||params.expectedRunStatus))throw new DaemonCommandError('VALIDATION_INVALID','仅分析继续只适用于尚未开始执行的原请求；原结果保留');
+        const analysisReceipts:PreparedRuntimeConfiguration[]=[];
+        let preparedAnalysisTask:{revision:number;stopGeneration:number;memberId:string;projectId:string}|null=null;
+        if(params.analysisOnly&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)){
+          const original=deps.db.prepare(`SELECT revision,stop_generation,owner_member_id,project_id,status FROM tasks WHERE id=?`).get(params.taskId) as {revision:number;stop_generation:number;owner_member_id:string|null;project_id:string;status:string}|undefined;
+          if(!original?.owner_member_id||original.status!=='BLOCKED'||deps.db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=?').get(params.taskId)||!deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND kind IN ('task.contextAssemblyFailed','task.deliberationPrepareFailed','task.memberDisabledBlocked')").get(params.taskId))throw new DaemonCommandError('STALE_REVISION','原请求并非未启动的准备失败；请刷新后按实际执行记录处理');
+          if(original.stop_generation>0||params.expectedTaskRevision!=null&&params.expectedTaskRevision!==original.revision||params.expectedStopGeneration!=null&&params.expectedStopGeneration!==original.stop_generation)throw new DaemonCommandError('STALE_REVISION','原请求版本或停止代次变化；未准备会话');
+          if(!readPreDispatchFailure(deps.db,params.taskId)?.recoveryBinding)throw new DaemonCommandError('STALE_REVISION','原请求当前不具备仅分析继续条件；请刷新查看具体原因');
+          const blocked=assessTaskRedispatchReadiness(deps.db,params.taskId);if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
+          preparedAnalysisTask={revision:original.revision,stopGeneration:original.stop_generation,memberId:original.owner_member_id,projectId:original.project_id};
+          const ids=[...new Set([original.owner_member_id,...coordinationRoster(deps.db,params.taskId).filter(m=>m.writeScope!=null).map(m=>m.memberId)])];
+          for(const memberId of ids){
+            const expected=JSON.stringify(resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null));
+            const runtime=JSON.parse(expected) as {kind:string|null};
+            const scopeBefore=runtime.kind==='claude'?snapshotConversationWriteAccess(deps.db,params.taskId,process.env.ZS_RUNTIME??null,memberId,{analysisOnly:true}):null;
+            analysisReceipts.push({memberId,projectId:original.project_id,assertCurrent:()=>{
+              if(JSON.stringify(resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null))!==expected||scopeBefore!=null&&snapshotConversationWriteAccess(deps.db,params.taskId,process.env.ZS_RUNTIME??null,memberId,{analysisOnly:true})!==scopeBefore)throw Error('准备期间成员或有效执行配置变化；原消息保留');
+            }});
+          }
+          for(const memberId of ids){
+            const runtime=resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null);
+            if(runtime.kind!=='codex'||!deps.prepareRuntimeConfiguration||memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='missing')continue;
+            try{
+              const proof=await deps.prepareRuntimeConfiguration(memberId,original.project_id);
+              if(!proof||proof.memberId!==memberId||proof.projectId!==original.project_id)throw Error('配置准备未返回对应成员的核验依据');
+              proof.assertCurrent();analysisReceipts.push(proof);
+            }catch(error){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`${(error as Error).message}；原消息保留`);}
+          }
+          assertPreparedRuntimeConfigurations(analysisReceipts);
+        }
+        let preparedUnstartedDm:{revision:number;stopGeneration:number;memberId:string;projectId:string}|null=null;
+        let preparedDmConfiguration:PreparedRuntimeConfiguration|null=null;
+        if(!params.analysisOnly&&!params.formatRepair&&deps.prepareRuntimeConfiguration&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)){
+          const unstarted=deps.db.prepare(`SELECT t.revision,t.stop_generation,t.owner_member_id,t.project_id FROM tasks t
+            WHERE t.id=? AND t.kind='dm_turn' AND t.status='BLOCKED' AND t.owner_member_id IS NOT NULL
+              AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.task_id=t.id)
+              AND EXISTS(SELECT 1 FROM domain_events e WHERE e.task_id=t.id AND e.kind IN ('task.contextAssemblyFailed','task.memberDisabledBlocked'))`).get(params.taskId) as {revision:number;stop_generation:number;owner_member_id:string;project_id:string}|undefined;
+          if(unstarted&&resolveMemberRuntime(deps.db,unstarted.owner_member_id,process.env.ZS_RUNTIME??null).kind==='codex'){
+            if(unstarted.stop_generation>0||params.expectedTaskRevision!=null&&params.expectedTaskRevision!==unstarted.revision||params.expectedStopGeneration!=null&&params.expectedStopGeneration!==unstarted.stop_generation)throw new DaemonCommandError('STALE_REVISION','原请求版本或停止代次变化；未准备会话，请刷新后重新决定');
+            const blocked=assessTaskRedispatchReadiness(deps.db,params.taskId);
+            if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
+            preparedUnstartedDm={revision:unstarted.revision,stopGeneration:unstarted.stop_generation,memberId:unstarted.owner_member_id,projectId:unstarted.project_id};
+            try{
+              preparedDmConfiguration=await deps.prepareRuntimeConfiguration(unstarted.owner_member_id,unstarted.project_id);
+              if(!preparedDmConfiguration||preparedDmConfiguration.memberId!==unstarted.owner_member_id||preparedDmConfiguration.projectId!==unstarted.project_id)throw Error('配置准备未返回对应成员的核验依据');
+              preparedDmConfiguration.assertCurrent();
+            }catch(e){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`执行配置尚未就绪：${(e as Error).message}；原消息保留`);}
+          }
+        }
         const result = run(() => {
+          const receipts=[...analysisReceipts,...(preparedDmConfiguration?[preparedDmConfiguration]:[])];
+          assertPreparedRuntimeConfigurations(receipts);
+          try{
           const task = deps.db
             .prepare('SELECT id, status, revision, stop_generation, conversation_id FROM tasks WHERE id = ?')
             .get(params.taskId) as { id: string; status: string; revision: number; stop_generation: number; conversation_id: string } | undefined;
           if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
+          if(params.analysisOnly&&(task.status!=='BLOCKED'||task.stop_generation>0||deps.db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=?').get(task.id)))throw new DaemonCommandError('STALE_REVISION','原请求已开始执行或状态变化；不以只读意图重播');
+          if(preparedAnalysisTask&&(task.revision!==preparedAnalysisTask.revision||task.stop_generation!==preparedAnalysisTask.stopGeneration||!deps.db.prepare('SELECT 1 FROM tasks WHERE id=? AND owner_member_id=? AND project_id=?').get(task.id,preparedAnalysisTask.memberId,preparedAnalysisTask.projectId)))throw new DaemonCommandError('STALE_REVISION','准备期间原请求身份变化；原消息保留');
+          if(preparedUnstartedDm&&(task.revision!==preparedUnstartedDm.revision||task.stop_generation!==preparedUnstartedDm.stopGeneration||deps.db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=?').get(params.taskId)||!deps.db.prepare('SELECT 1 FROM tasks WHERE id=? AND owner_member_id=? AND project_id=?').get(params.taskId,preparedUnstartedDm.memberId,preparedUnstartedDm.projectId)))throw new DaemonCommandError('STALE_REVISION','准备期间原请求状态变化；请刷新后重新决定，原消息保留');
           assertConversationAudience(deps.db, deps.localUserId, task.conversation_id);
           assertTaskDispatchScope(deps.db, params.taskId);
           if (params.expectedTaskRevision != null && task.revision !== params.expectedTaskRevision) throw new DaemonCommandError('STALE_REVISION', '任务版本已变化——请刷新后按当前任务事实重试');
           if (params.expectedStopGeneration != null && task.stop_generation !== params.expectedStopGeneration) throw new DaemonCommandError('STALE_REVISION', '停止代次已变化——旧运行的继续请求已作废');
           if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
-          if (task.stop_generation > 0) throw new DaemonCommandError('STALE_REVISION', '任务停止已生效：不再追加 turn');
+          if(task.stop_generation>0){const latest=deps.db.prepare('SELECT a.stop_generation_snapshot g FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1').get(params.taskId) as {g:number}|undefined;if(params.expectedStopGeneration!==task.stop_generation||latest?.g!==task.stop_generation)throw new DaemonCommandError('STALE_REVISION','任务停止已生效：旧代次不再追加 turn');}
+          if(params.useCurrentExecutionSnapshot&&!params.formatRepair)throw new DaemonCommandError('VALIDATION_INVALID','当前配置补交仅用于已有输出的只读修复');
           if (params.expectedRunStatus != null) {
             if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
             const expected = deps.db.prepare('SELECT status FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.sourceRunId, params.taskId, task.conversation_id) as { status: string } | undefined;
@@ -5332,7 +5421,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             : params.sourceRunId ?? ((deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string } | undefined)?.id ?? null);
           const dispatchKey = params.formatRepair === true
             ? `task:${params.taskId}:repair:${(deps.db.prepare(`SELECT source_turn_id FROM format_repair_workitems WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`).get(params.taskId) as { source_turn_id: string }).source_turn_id}` // 按逻辑输出版本化——同任务多轮修复不撞唯一键
-            : sourceRunId != null ? `task:${params.taskId}:redispatch:${sourceRunId}` : `task:${params.taskId}:redispatch`;
+            : sourceRunId != null ? `task:${params.taskId}:redispatch:${sourceRunId}`
+              : params.analysisOnly||deps.db.prepare("SELECT 1 FROM tasks WHERE id=? AND kind='dm_turn'").get(params.taskId)
+                ? `task:${params.taskId}:redispatch:unstarted_${randomUUID()}` : `task:${params.taskId}:redispatch`;
           // 同任务在途恢复意图（第四十轮 §3：任务级核对——不只查客户端指定的键；双端同源
           // 双击/异源并发=恰一个意图）。GLOB 而非 LIKE：任务号含 '_'（LIKE 通配符会误匹配）。
           const pendingIntent = deps.db
@@ -5353,6 +5444,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           // 事实可能已变化，以 INSERT 前最终权威判定为准）。
           const blockedFinal = assessTaskRedispatchReadiness(deps.db, params.taskId);
           if (blockedFinal != null) throw new DaemonCommandError(blockedFinal.code, blockedFinal.message);
+          try{resumeBlockedCoordinationChild(deps.db,params.taskId,Date.now());}catch(error){throw new DaemonCommandError('RECONCILE_REQUIRED',String(error));}
           freezeTaskCallBudgetForNewExecution(deps.db, params.taskId);
           deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0); // 意图入队代次（迁移 034）
           appendDomainEvent(deps.db, {
@@ -5363,9 +5455,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             kind: 'task.redispatchEnqueued',
             createdAt: Date.now(),
             payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true, sourceRunId, dispatchKey,
-              ...(params.formatRepair!==true?{execution:snapshotRedispatchExecution(deps.db,params.taskId)}:{}) },
+              ...(!params.formatRepair||params.useCurrentExecutionSnapshot?{execution:snapshotRedispatchExecution(deps.db,params.taskId,{analysisOnly:params.analysisOnly})}:{}),
+              ...(params.analysisOnly?{analysisOnly:true}:{}),
+              ...(params.useCurrentExecutionSnapshot?{useCurrentExecutionSnapshot:true}:{}) },
           });
           return { enqueued: true as const, dispatchKey, formatRepair: params.formatRepair === true, sourceRunId };
+          }finally{assertPreparedRuntimeConfigurations(receipts);}
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }

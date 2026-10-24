@@ -350,7 +350,7 @@ describe('信封 hash（PP-04 一致性基础）', () => {
     const a = { b: 1, a: { d: 2, c: [3, 4] } };
     const b = { a: { c: [3, 4], d: 2 }, b: 1 };
     expect(canonicalJson(a)).toBe(canonicalJson(b));
-    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.5');
+    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.6');
     expect(computeTurnBundleHash.name).toBe('computeTurnBundleHash');
   });
 });

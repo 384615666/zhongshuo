@@ -58,7 +58,7 @@ export interface DmConversationSummary {
   lastReadSeq: number;
   unread: number;
   /** 会话执行态：idle=无活动 run；running=活动 dm_turn；queued=有排队消息；paused=停止后队列挂起；
-   * interrupted=有 ACTIVE 任务但其 run 全部终态（停机中断等——泵不再推进，需显式恢复）。 */
+   * interrupted=有停机中断或 0-run pre-dispatch 失败（泵不再推进，需显式恢复）。 */
   execState: 'idle' | 'running' | 'queued' | 'paused' | 'interrupted';
   /** 活动执行的 task/run（execState=running 时非空——UI 停止入口用）。 */
   activeTaskId: string | null;
@@ -68,9 +68,9 @@ export interface DmConversationSummary {
   stopPending: boolean;
   /** 排队中的消息数（运行中同时有排队时一并呈现——不吞掉排队事实）。 */
   queuedCount: number;
-  /** 中断待恢复的任务（第三十八轮 #7：ACTIVE+只有终态 run 的 dm_turn 永不被泵——如实呈现并给
-   * 正式重派入口 task.redispatch。第三十九轮 §2：**可恢复性服务端分列**——前端不得仅凭
-   * INTERRUPTED run 显示可执行按钮；UNKNOWN 未对账/停止代次生效=不可恢复并给原因）。 */
+  /** 中断/未派发待恢复的任务：既有 ACTIVE+终态 run 链保持不变；另收有持久化失败证据、
+   * 0-run 的 BLOCKED dm_turn（普通 BLOCKED 不列入）。第三十九轮 §2：可恢复性服务端分列——
+   * 前端不得仅凭 INTERRUPTED run 显示可执行按钮；UNKNOWN 未对账/停止代次生效=不可恢复并给原因。 */
   interruptedTasks: Array<{
     taskId: string;
     title: string;
@@ -151,11 +151,13 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       `SELECT t.id AS taskId FROM tasks t WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE' ORDER BY t.rowid DESC LIMIT 1`,
     ).get(row.id) as { taskId: string } | undefined;
     const reworkDerived = reworkTaskRow != null ? reworkPendingOf(db, reworkTaskRow.taskId) : null;
-    // 中断待恢复（第三十八轮 #7）：ACTIVE 且**已有 run 但全部终态**（无活动 run/排队派发时永远
-    // 不被泵——pumpDmQueue 只放行「无 run」的任务）。不自动重放：恢复经 task.redispatch 正式链
-    // （核对停止代次/在途/终态/幂等）。queuedCount 只数「无 run」的排队任务，与此分列。
+    // 中断/未派发待恢复：
+    // - ACTIVE 且已有 run、但无活动 run：原停机中断链保持不变；
+    // - BLOCKED 且 0 run：只收有持久化 pre-dispatch 失败事件的 DM，普通 BLOCKED 不冒充失败；
+    //   这类任务从未进入模型，恢复仍经 task.redispatch 以当前配置重新提交当前消息。
+    // 不自动重放；queuedCount 只数 ACTIVE 且尚未派发的新排队任务，与此分列。
     const interruptedRaw = db.prepare(
-      `SELECT t.id AS taskId, t.title AS title, t.revision AS taskRevision, t.stop_generation AS stopGen,
+      `SELECT t.id AS taskId, t.title AS title, t.status AS taskStatus, t.revision AS taskRevision, t.stop_generation AS stopGen,
               (SELECT r.id FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunId,
               (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunStatus,
               EXISTS(
@@ -166,12 +168,26 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
                   AND latest.task_id=t.id AND a.status='FAILED'
               ) AS formatRepair
        FROM tasks t
-       WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE'
-         AND EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id)
+       WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status IN ('ACTIVE','BLOCKED')
          AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id AND r.status IN ('RUNNING','WAITING','STOPPING'))
          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dispatch_key = 'dmtask:' || t.id || ':initial' AND o.status IN ('pending','leased'))
+         AND (
+           (t.status = 'ACTIVE' AND EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id))
+           OR (
+             t.status = 'BLOCKED'
+             AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id)
+             AND EXISTS (
+               SELECT 1 FROM domain_events e
+               WHERE e.task_id = t.id AND e.kind IN (
+                 'task.contextAssemblyFailed',
+                 'task.deliberationPrepareFailed',
+                 'task.memberDisabledBlocked'
+               )
+             )
+           )
+         )
        ORDER BY t.rowid`,
-    ).all(row.id) as Array<{ taskId: string; title: string; taskRevision: number; stopGen: number; lastRunId: string | null; lastRunStatus: string | null; formatRepair: number }>;
+    ).all(row.id) as Array<{ taskId: string; title: string; taskStatus: 'ACTIVE' | 'BLOCKED'; taskRevision: number; stopGen: number; lastRunId: string | null; lastRunStatus: string | null; formatRepair: number }>;
     // 可恢复性（第四十轮 §2：与 task.redispatch 守卫**共用服务端判定**——recoveryGuard
     // 四分离：在途/保护未解除（FAILED+未释放租约同样拦）/UNKNOWN 未闭环（settled 但无
     // 正式 protectionReleased 事件=退出未确认）；停止代次生效另行拦截。
@@ -203,7 +219,11 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
         lastMessagePreview = typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 40) : null;
       } catch { /* 残缺消息不虚构预览 */ }
     }
-    const freshPending = pending.c - interrupted.length; // 真·排队（从未派发）与中断分列
+    // pending only counts ACTIVE rows. BLOCKED pre-dispatch failures belong to
+    // interruptedTasks but were never part of that SQL count, so subtract only
+    // ACTIVE interruption rows. Clamp for defensive consistency during reads.
+    const pendingInterruptedCount = interruptedRaw.filter((task) => task.taskStatus === 'ACTIVE').length;
+    const freshPending = Math.max(0, pending.c - pendingInterruptedCount);
     out.push({
       conversationId: row.id,
       projectId: row.project_id,

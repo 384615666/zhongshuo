@@ -8,7 +8,7 @@
  *  - E3：点子任务卡 = 定向跟进该子任务
  */
 
-import { useId, useMemo, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {chatAnswer} from '../../../contracts/chatAnswer';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
@@ -523,6 +523,77 @@ function MessageFooter({
 /** Legacy/over-budget prose folds to roughly 8–12 lines; full detail cards stay outside. */
 const FOLD_LINES = 10;
 const FOLD_CHARS = 600;
+/** The room pool keeps a five-line reading preview; the full body stays in the reply thread. */
+const ROOT_PREVIEW_LINES = 5;
+const ROOT_PREVIEW_CHARS = 360;
+const ROOT_PREVIEW_LINE_HEIGHT = 1.65;
+
+function exceedsFoldLimit(text: string, lines: number, chars: number): boolean {
+  const logicalLines = text.split('\n').filter((line) => line.trim() !== '').length;
+  return logicalLines > lines || text.length > chars;
+}
+
+/** Layout threshold shared by the observer and its deterministic display test. */
+export function rootMessagePreviewOverflows(contentHeight: number, lineHeight: number): boolean {
+  return Number.isFinite(contentHeight)
+    && Number.isFinite(lineHeight)
+    && contentHeight > lineHeight * ROOT_PREVIEW_LINES + 1;
+}
+
+/**
+ * Read-only body projection for the room pool.
+ *
+ * The complete Markdown remains in the DOM so browser selection/search and the
+ * surrounding copy/quote actions still see the original message. Server output
+ * uses deterministic text thresholds; after layout, ResizeObserver checks the
+ * real wrapped height so narrow Chinese paragraphs cannot be clipped silently.
+ */
+export function RootMessagePreview({ message }: { message: Message }) {
+  const text = chatAnswer(message.body, message.authorType);
+  const textFold = exceedsFoldLimit(text, ROOT_PREVIEW_LINES, ROOT_PREVIEW_CHARS);
+  const [folded, setFolded] = useState(textFold);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      const content = contentRef.current;
+      if (content == null) return;
+      const computed = window.getComputedStyle(content);
+      const measuredLineHeight = Number.parseFloat(computed.lineHeight);
+      const measuredFontSize = Number.parseFloat(computed.fontSize);
+      const fontSize = Number.isFinite(measuredFontSize) ? measuredFontSize : 15;
+      const lineHeight = Number.isFinite(measuredLineHeight)
+        ? measuredLineHeight
+        : fontSize * ROOT_PREVIEW_LINE_HEIGHT;
+      setFolded(rootMessagePreviewOverflows(content.scrollHeight, lineHeight));
+    };
+
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure);
+      if (contentRef.current != null) observer.observe(contentRef.current);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [text]);
+
+  return (
+    <div
+      className={`root-message-preview${folded ? ' is-folded' : ''}`}
+      data-zs-root-message-preview={folded ? 'folded' : 'complete'}
+    >
+      <div ref={contentRef} className="root-message-preview-content">
+        <MarkdownView text={text} />
+      </div>
+      {folded ? (
+        <span className="root-message-preview-prompt" data-zs-root-message-preview-prompt="1">
+          进入对话串查看全文与回复
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function MessageText({ message, text, readingAids, hasDetail }: { message: Message; text: string; readingAids: boolean; hasDetail: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -531,8 +602,7 @@ function MessageText({ message, text, readingAids, hasDetail }: { message: Messa
   const isHuman = message.authorType === 'human';
   /* 流式中一律不折叠、不出目录、不转字段表：内容还在变，版面不能跟着跳。 */
   const aids = readingAids && message.streaming !== true;
-  const logicalLineCount = useMemo(() => text.split('\n').filter((l) => l.trim() !== '').length, [text]);
-  const foldable = aids && (logicalLineCount > FOLD_LINES || text.length > FOLD_CHARS);
+  const foldable = aids && exceedsFoldLimit(text, FOLD_LINES, FOLD_CHARS);
   const outline = useMemo(() => (aids && !isHuman ? outlineOf(text) : []), [aids, isHuman, text]);
   const jumpTo = (index: number): void => {
     const reveal = (): void => {

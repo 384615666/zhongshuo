@@ -92,6 +92,8 @@ export interface CodexAdapterOptions {
   executable?: string;
   codexCmdPath?: string;
   requestTimeoutMs?: number;
+  /** Metadata preparation must confirm its own child closed before freezing input. */
+  requireConfirmedClose?:boolean;
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
   /** thread/start 的 model 覆盖（e2e 认证用低成本渠道，如 gpt-6 luna）。 */
   model?: string;
@@ -132,7 +134,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private stderrTail = '';
   /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
   private handshakeDone = false;
-  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { cwd?:string; effort?:string; executable?:string; codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
+  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { requireConfirmedClose?:boolean; cwd?:string; effort?:string; executable?:string; codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
 
@@ -142,6 +144,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       cwd:options.cwd,
       codexCmdPath: options.codexCmdPath,
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
+      requireConfirmedClose:options.requireConfirmedClose,
       sandboxMode: options.sandboxMode ?? 'danger-full-access',
       model: options.model,
       effort:options.effort,
@@ -407,6 +410,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
               ? 'turn 被 interrupt（codex turn.status=interrupted）'
               : String(turn?.error?.['message'] ?? 'codex turn 失败'),
             retryable: false,
+            ...(status==='failed'&&exactlyMappedInternalTurnId!=null&&providerTurnId!=null?{failureEvidence:{source:'provider-terminal' as const,providerTurnId}}:{}),
             ...(status === 'interrupted' && exactlyMappedInternalTurnId != null && providerTurnId != null
               ? { terminalEvidence: { source: 'provider-turn-completed' as const, status: 'interrupted' as const, providerTurnId } }
               : {}),
@@ -671,8 +675,10 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     this.sessions.delete(session.id);
     if (this.sessions.size === 0 && this.child != null) {
       const child = this.child;
-      this.child = null;
-      await this.killAndWait(child);
+      if(!this.options.requireConfirmedClose)this.child = null;
+      const confirmed=await this.killAndWait(child);
+      if(!confirmed&&this.options.requireConfirmedClose)throw Error('Codex 配置准备进程尚未确认关闭；未提交，输入保留');
+      if(this.child===child)this.child=null;
     }
   }
 
@@ -687,19 +693,22 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     this.sessions.clear();
     if (this.child != null) {
       const child = this.child;
-      this.child = null;
-      await this.killAndWait(child);
+      if(!this.options.requireConfirmedClose)this.child = null;
+      const confirmed=await this.killAndWait(child);
+      if(!confirmed&&this.options.requireConfirmedClose)throw Error('Codex 配置准备进程尚未确认关闭；未提交，输入保留');
+      if(this.child===child)this.child=null;
     }
   }
 
   /** 终止并等待子进程退出（默认 5s 上限）：避免残留进程锁住 fixture 目录（EPERM）。 */
-  private async killAndWait(child: ChildProcessWithoutNullStreams, timeoutMs = 5_000): Promise<void> {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => resolve(), timeoutMs);
+  private async killAndWait(child: ChildProcessWithoutNullStreams, timeoutMs = 5_000): Promise<boolean> {
+    if(child.exitCode!=null||child.signalCode!=null)return true;
+    return await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
       timer.unref?.();
       child.once('close', () => {
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       });
       child.kill();
     });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { resolveClaudeConfiguration } from '../../src/adapter/claude/configuration.ts';
 import { CLAUDE_ADAPTER_VERSION, ClaudeCliAdapter, claudeLaunchIdentity } from '../../src/adapter/claude/cliAdapter.ts';
 import { claudeCertificationMismatches } from '../../src/daemon/imageCapability.ts';
@@ -18,6 +18,110 @@ function fixture() {
   return {root,user,cwd,settings,save,env:{CLAUDE_CONFIG_DIR:user,ANTHROPIC_BASE_URL:'https://shell.example.test'} };
 }
 describe('R77 configuration identity: no model calls, immutable certificate', () => {
+  it('R105 exports the exact v1 preimage over current bytes, without substituting the v2 key',()=>{
+    const f=fixture();
+    const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
+    const settings='{"env":{"ANTHROPIC_BASE_URL":"https://user.example.test/v1"}}';
+    writeFileSync(f.settings,settings);
+    const legacy={numStartups:1,pluginUsage:{count:1},tipsHistoryByCommand:{read:1},
+      projects:{[f.cwd]:{lastCost:1,allowedTools:['Read']},[join(f.root,'other')]:{lastCost:9}}};
+    const legacyPath=join(f.user,'.claude.json');writeFileSync(legacyPath,JSON.stringify(legacy));
+    const managedDir=process.platform==='win32'?'C:\\\\Program Files\\\\ClaudeCode':process.platform==='darwin'?'/Library/Application Support/ClaudeCode':'/etc/claude-code';
+    const stamps=[
+      `${legacyPath}:${digest(JSON.stringify({projects:{[f.cwd]:{allowedTools:['Read'],lastCost:1}},tipsHistoryByCommand:{read:1}}))}`,
+      `${f.settings}:${digest(settings)}`,
+      `${join(f.cwd,'.claude','settings.json')}:absent`,
+      `${join(f.cwd,'.claude','settings.local.json')}:absent`,
+      `${join(managedDir,'managed-settings.json')}:absent`,
+      `${join(f.user,'managed-settings.json')}:absent`,
+    ];
+    const before=resolveClaudeConfiguration(f.cwd,[],f.env);
+    expect(before.reason).toBeNull();
+    expect(before.legacyConfigurationKey).toBe(digest(JSON.stringify({configDir:resolve(f.user),cwd:resolve(f.cwd),stamps,
+      routing:[['ANTHROPIC_BASE_URL','https://user.example.test/v1']],extraArgs:[]})));
+    expect(before.legacyConfigurationKey).not.toBe(before.configurationKey);
+    writeFileSync(legacyPath,JSON.stringify({...legacy,numStartups:2,pluginUsage:{count:2}}));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).legacyConfigurationKey).toBe(before.legacyConfigurationKey);
+    writeFileSync(f.settings,JSON.stringify(JSON.parse(settings),null,2)+'\n');
+    const formatted=resolveClaudeConfiguration(f.cwd,[],f.env);
+    expect(formatted.configurationKey).toBe(before.configurationKey);
+    expect(formatted.legacyConfigurationKey).not.toBe(before.legacyConfigurationKey);
+    writeFileSync(f.settings,settings);
+    writeFileSync(legacyPath,JSON.stringify({...legacy,projects:{[f.cwd]:{allowedTools:['Read'],lastCost:2}}}));
+    const statistics=resolveClaudeConfiguration(f.cwd,[],f.env);
+    expect(statistics.configurationKey).toBe(before.configurationKey);
+    expect(statistics.legacyConfigurationKey).not.toBe(before.legacyConfigurationKey);
+    writeFileSync(legacyPath,JSON.stringify({...legacy,tipsHistoryByCommand:{read:2}}));
+    const tips=resolveClaudeConfiguration(f.cwd,[],f.env);
+    expect(tips.configurationKey).toBe(before.configurationKey);
+    expect(tips.legacyConfigurationKey).not.toBe(before.legacyConfigurationKey);
+  });
+  it('R105 ignores only verified current-project runtime statistics, including their first creation',()=>{
+    const f=fixture(),legacy=join(f.user,'.claude.json');
+    const key=()=>resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey;
+    const before=key();
+    const statistics={lastCost:1,lastAPIDuration:2,lastAPIDurationWithoutRetries:3,lastToolDuration:4,
+      lastDuration:5,lastLinesAdded:6,lastLinesRemoved:7,lastTotalInputTokens:8,lastTotalOutputTokens:9,
+      lastTotalCacheCreationInputTokens:10,lastTotalCacheReadInputTokens:11,lastTotalWebSearchRequests:12,
+      lastFpsAverage:13,lastFpsLow1Pct:14,lastModelUsage:{model:{cost:1}},lastSessionId:'fixture-session',
+      lastSessionMetrics:{latency:1},lastStartTime:15,lastGracefulShutdown:true,lastVersionBase:'fixture-version'};
+    writeFileSync(legacy,JSON.stringify({tipsHistoryByCommand:{read:1},projects:{[f.cwd]:statistics}}));
+    expect(key()).toBe(before);
+    const project={allowedTools:['Read'],hasTrustDialogAccepted:false,...statistics};
+    writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:project}}));const guarded=key();
+    expect(guarded).not.toBe(before);
+    writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:{...project,lastCost:99,lastSessionMetrics:{latency:99},lastSessionId:'next-session'}}},null,2));
+    expect(key()).toBe(guarded);
+    writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:{allowedTools:['Read'],hasTrustDialogAccepted:false}}}));
+    expect(key()).toBe(guarded);
+  });
+  it('R105 keeps current-project trust, include approval, MCP, tools and unknown fields guarded',()=>{
+    const f=fixture(),legacy=join(f.user,'.claude.json');
+    const key=()=>resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey;
+    writeFileSync(legacy,'{}');const before=key();
+    for(const field of ['allowedTools','hasTrustDialogAccepted','hasClaudeMdExternalIncludesApproved',
+      'hasClaudeMdExternalIncludesWarningShown','mcpServers','mcpContextUris','enabledMcpjsonServers',
+      'disabledMcpjsonServers','lastUnknownExecutionPolicy','unknownExecutionPolicy']){
+      writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:{[field]:{lastCost:'guarded-nested-value'}}}}));
+      expect(key(),field).not.toBe(before);
+    }
+    // State-like names nested inside an execution configuration are not stripped.
+    writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:{mcpServers:{lastCost:1}}}}));const nested=key();
+    writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:{mcpServers:{lastCost:2}}}}));
+    expect(key()).not.toBe(nested);
+    for(const value of [null,[],42]){
+      writeFileSync(legacy,JSON.stringify({projects:{[f.cwd]:value}}));expect(key()).not.toBe(before);
+    }
+  });
+  it('R105 retains unknown global legacy execution fields instead of ignoring last* patterns',()=>{
+    const f=fixture(),legacy=join(f.user,'.claude.json');
+    writeFileSync(legacy,'{}');const before=resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey;
+    for(const field of ['lastUnknownExecutionPolicy','machineID','userID','installMethod']){
+      writeFileSync(legacy,JSON.stringify({[field]:'fixture'}));
+      expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey,field).not.toBe(before);
+    }
+  });
+  it.each(['user','project','project-local','managed','legacy'])('R105 canonicalizes JSON objects in %s, preserving array order and unknown values',source=>{
+    const f=fixture();
+    const path=source==='user'?f.settings:source==='project'?join(f.cwd,'.claude','settings.json')
+      :source==='project-local'?join(f.cwd,'.claude','settings.local.json')
+      :source==='managed'?join(f.user,'managed-settings.json'):join(f.user,'.claude.json');
+    const a={unknownPolicy:{z:1,a:{second:true,first:false}},tools:['Read','Write']};
+    writeFileSync(path,JSON.stringify(a));const before=resolveClaudeConfiguration(f.cwd,[],f.env);
+    writeFileSync(path,JSON.stringify({tools:['Read','Write'],unknownPolicy:{a:{first:false,second:true},z:1}},null,4)+'\n');
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env)).toMatchObject({configurationKey:before.configurationKey,reason:before.reason});
+    writeFileSync(path,JSON.stringify({...a,tools:['Write','Read']}));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).not.toBe(before.configurationKey);
+    writeFileSync(path,JSON.stringify({...a,unknownPolicy:{...a.unknownPolicy,z:2}}));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).not.toBe(before.configurationKey);
+  });
+  it('R105 never strips state-named keys from settings files or nested execution data',()=>{
+    const f=fixture();const before=resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey;
+    for(const settings of [{tipsHistoryByCommand:{read:1}},{lastCost:1},{projects:{[f.cwd]:{lastCost:1}}}]){
+      writeFileSync(f.settings,JSON.stringify(settings));
+      expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).not.toBe(before);
+    }
+  });
   it('R83 CLI startup/usage metadata does not invalidate a completed task, actual configuration still does',()=>{
     const f=fixture(),legacy=join(f.user,'.claude.json');
     const absent=resolveClaudeConfiguration(f.cwd,[],f.env);

@@ -122,7 +122,15 @@ export interface ProbeResult {
 
 export interface OpenSessionInput {
   /** Effective immutable project/member scope; absent remains read-only. */
-  writeAccess?: { fullAccess?: boolean; modificationAuthorized: boolean; allowedWriteRoots: string[]; identityKey: string; launchConfigurationKey?: string };
+  writeAccess?: {
+    fullAccess?: boolean;
+    modificationAuthorized: boolean;
+    /** Request-level analysis mode. It requires a non-writable scope and is enforced by the adapter. */
+    analysisOnly?: boolean;
+    allowedWriteRoots: string[];
+    identityKey: string;
+    launchConfigurationKey?: string;
+  };
   projectId: string;
   memberId: string;
   taskId: string;
@@ -242,6 +250,9 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
         code: string;
         message: string;
         retryable: boolean;
+        /** Retry authorization requires an actual provider terminal, never a
+         * transport/process close or an intermediate internal retry notice. */
+        failureEvidence?: {source:'provider-terminal';providerTurnId?:string};
         /**
          * Structured proof that the provider itself emitted a terminal for the exact
          * mapped turn. An interrupt RPC acknowledgement, transport close or a shared

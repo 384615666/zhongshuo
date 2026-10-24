@@ -91,11 +91,17 @@ const reviewLabel: Record<string, string> = { pending: '待验收', accepted: '�
 
 /** Keep task progress separate from the latest attempt's outcome. */
 export function taskRunGuidance(detail: TaskDetailsResult): string {
+  const recovery=detail.automaticRecovery;
+  if(recovery)return `自动恢复：第${recovery.attempt}/${recovery.maxExtraAttempts}次额外尝试，${recovery.state==='waiting'?`等待至 ${fullTime(recovery.nextAttemptAt)}`:recovery.state==='queued'?'已排队':'执行中'}。${recovery.kind==='output'?'仅补交结果，不重复修改。':''}上次原因：${recovery.reason}`;
+  const preDispatch=detail.preDispatchFailure;
+  if(preDispatch)return `${preDispatch.memberName??preDispatch.memberId??'执行成员'}尚未开始调用（${preDispatch.state}）：${preDispatch.event.message}。${preDispatch.action.instruction}`;
   const latest = detail.runs.find((r) => r.id === detail.latestRunId);
   if (detail.executionBlocker != null) {
     const hint = executionBlockerHint(detail.executionBlocker);
     return `${hint.label}：${hint.detail}`;
   }
+  const unstarted=latest?.participants.filter(p=>p.notStarted&&p.failure)??[];
+  if(unstarted.length>0)return `${unstarted.map(p=>`${p.displayName} 未开始调用：${p.failure?.message??'派发准备失败'}`).join('；')}。已有结果和文件保留；在原对话串 @ 该成员，明确只补交尚未完成的分析。`;
   if (detail.task.status === 'BLOCKED') return '任务受阻。查看活动与运行诊断中的具体原因，处理成员、权限或前置条件后，再由原任务入口显式重试。';
   if (detail.task.status === 'REVIEW') return '新交付等待人工验收；在「交付与验收」核对当前版本后决定。';
   if (detail.task.status === 'DONE') return '任务已完成；历史运行与验收记录仍可查看。';
@@ -119,13 +125,14 @@ const executionLabel: Record<string,string> = { PENDING:'待派发',DISPATCHING:
 const purposeLabel: Record<string,string> = { stage_work:'任务执行',checkpoint:'检查点',format_repair:'格式修复' };
 const roleLabel: Record<string,string> = { executor:'执行成员',coordinator:'协调成员',worker:'执行成员' };
 const eventLabel: Record<string,string> = {
+  'turn.outputInvalid':'结果提交未通过', 'recovery.scheduled':'自动恢复等待', 'recovery.queued':'自动恢复已排队', 'recovery.exhausted':'自动恢复已停止',
   'tool.started':'工具开始', 'tool.completed':'工具结束', 'turn.started':'开始执行', 'turn.completed':'执行完成', 'turn.failed':'执行失败',
   'usage.updated':'用量更新', 'message.completed':'回复已保存', 'task.reviewRecorded':'验收意见已记录', 'task.reworkRequested':'返工已请求',
   'run.reconcileRequired':'运行结果需要核对', 'task.deliveryCreated':'新交付已保存', 'run.started':'运行开始', 'run.failed':'运行失败',
   'input.requested':'等待补充输入', 'approval.requested':'等待批准',
 };
 export function isDiagnosticEvent(kind:string):boolean {
-  return kind.startsWith('tool.') || /failed|failure/i.test(kind) || ['turn.statusChanged','run.reconcileRequired','input.requested','approval.requested'].includes(kind);
+  return kind.startsWith('tool.') || kind.startsWith('recovery.') || /failed|failure/i.test(kind) || ['turn.outputInvalid','turn.statusChanged','run.reconcileRequired','input.requested','approval.requested'].includes(kind);
 }
 export function activityLabel(kind: string, status?:string|null): string {
   if(kind==='turn.statusChanged') return status!=null ? executionLabel[status]??'执行状态更新' : '执行状态更新';
@@ -199,6 +206,7 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
 
 export function TaskExtraFacts({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight">
+    <PreDispatchFailureFacts detail={detail}/>
     <ExecutionBlockerFacts detail={detail}/>
     <div className="section-title">任务与关联记录</div>
     {detail.coordination?<CoordinationFacts detail={detail}/>:null}
@@ -228,6 +236,39 @@ export function ChildTaskDetails({projectId,taskId,parentTaskId,conversationId,d
       {detail&&matches&&deliveryId&&!locatedDelivery?<div className="panel warning" role="alert">指定交付未读取到，未以最新版本代替。</div>:null}
       {detail&&matches?<>{locatedDelivery?<div className="panel info" data-zs-located-delivery={locatedDelivery.id}>已定位步骤成果 v{locatedDelivery.revision}<details><summary>交付身份</summary>{locatedDelivery.id} · {locatedDelivery.manifestHash}</details></div>:null}<div className="section-title">{detail.task.title}</div><TaskExtraFacts detail={detail}/><ActualMembers detail={detail}/><RunExtraFacts detail={detail} onSelectRun={formal.selectRun}/><DeliveryHistoryFacts detail={detail}/></>:null}
     </div>
+  </div>;
+}
+
+export function PreDispatchFailureFacts({ detail }: { detail: TaskDetailsResult }) {
+  const failure = detail.preDispatchFailure;
+  if (failure == null) return null;
+  const member = failure.memberName ?? failure.memberId ?? '执行成员';
+  return <div
+    className="panel warning"
+    role="alert"
+    data-zs-pre-dispatch-failure={failure.event.reason}
+    data-zs-pre-dispatch-state={failure.state}
+  >
+    <div className="panel-title">请求在派发前停止</div>
+    <div>
+      <strong>{member}</strong> · {failure.state} · 模型尚未被调用
+      {failure.memberEnabled === false ? ' · 当前成员已停用' : ''}
+    </div>
+    <div className="small" data-zs-pre-dispatch-message={failure.event.reason}>
+      <strong>具体原因：</strong>{failure.event.message}
+    </div>
+    <div className="small">
+      <strong>建议处理：</strong>{failure.action.instruction}
+    </div>
+    <details className="small faint" style={{marginTop:6}}>
+      <summary>诊断详情</summary>
+      <div>原因代码：{failure.event.reason}</div>
+      <div>事件 #{failure.event.seq} · {failure.event.kind}</div>
+      <div>运行 {failure.runCount} · 执行轮次 {failure.turnCount} · 真实模型调用 {failure.callCount}</div>
+      {failure.outbox != null
+        ? <div>派发意图 #{failure.outbox.id} · outbox {failure.outbox.status} · {failure.outbox.dispatchKey}</div>
+        : <div>没有可关联的 outbox 终态记录。</div>}
+    </details>
   </div>;
 }
 
@@ -296,7 +337,7 @@ export function ActualMembers({ detail }: { detail: TaskDetailsResult }) {
     {detail.runs.length === 0 ? <div className="faint small">尚无运行与执行轮次。</div> : detail.runs.map((r) => <div key={r.id} style={{ marginBottom: 8 }}>
       <div className="small strong">{r.mode} · <RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></div>
       {r.detailLoaded === false ? <div className="faint small">在运行详情中选择本次运行后读取执行成员。</div> : null}
-      {r.participants.length > 0 ? r.participants.map((p) => <div key={p.memberId} className="small">{p.displayName} · {roleLabel[p.role]??'参与成员'} · {executionLabel[p.status]??'状态未提供'}{p.expected ? '' : ' · 非预期参与'}<details className="faint"><summary>参与身份</summary>{p.role} · {p.status}</details></div>) : null}
+      {r.participants.length > 0 ? r.participants.map((p) => <div key={p.memberId} className="small">{p.displayName} · {roleLabel[p.role]??'参与成员'} · {executionLabel[p.status]??'状态未提供'}{p.expected ? '' : ' · 非预期参与'}{p.failure?<div>{p.notStarted?'尚未派发，未调用模型':'执行问题'}：{p.failure.message??'未提供具体原因'}</div>:null}<details className="faint"><summary>参与身份</summary>{p.role} · {p.status}</details></div>) : null}
       {r.turns.map((t) => <div key={t.id} className="small">{t.displayName} · {executionLabel[t.status]??'状态未提供'} · {purposeLabel[t.purpose]??'执行轮次'} · 第 {t.attempt} 次尝试</div>)}
       {r.detailLoaded !== false && r.participants.length === 0 && r.turns.length === 0 ? <div className="faint small">本次运行尚无成员参与记录。</div> : null}
       {r.turnsTruncated ? <div className="faint small">仅显示最近 80 轮</div> : null}
@@ -312,7 +353,8 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
   return <div className="msg-list">
     <ExecutionBlockerFacts detail={detail}/>
     <div className="panel info">{taskRunGuidance(detail)}</div>
-    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':detail.failedRetry.formatRepair?'修复输出格式':'继续最近失败运行'}</button> : null}
+    {detail.failedRetry.formatRepair&&detail.failedRetry.available?<p className="small faint">按当前成员配置只读补交已保存的结果和真实文件变化，随后继续尚未完成的审查。</p>:null}
+    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':detail.failedRetry.formatRepair?'补交已有结果':'继续最近失败运行'}</button> : null}
     {detail.failedRetry.available && retryBusy ? <span className="faint small">继续请求正在提交或核对，暂不重复发送。</span> : null}
     {detail.failedRetry.pending||detail.clarificationRetry?.pending ? <div className="panel info">继续已入队；等待派发结果。</div> : null}
     {detail.runs.length === 0 ? <div className="card tight">任务尚无运行记录。</div> : ordered.map((r) => <div key={r.id} className="card tight">
@@ -328,7 +370,14 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
           {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div title={t.usage.map(u=>runtimeModelId(u.normalized)).filter((id):id is string=>id!=null).map(id=>`完整模型 ID：${id}`).join('；')||undefined}>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => {const modelId=runtimeModelId(u.normalized);return <div key={k} className="small" title={modelId?`完整模型 ID：${modelId}`:undefined}>{usageText(u.normalized, u.quality)}</div>;})}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
           <details className="small faint"><summary>轮次身份与原始状态</summary>{t.id} · {t.status} · {t.stageKey} · {t.purpose}</details>
         </div>)}{r.turnsTruncated ? '仅显示最近 80 轮' : null}</dd>
-      </dl><details className="small faint"><summary>运行身份</summary>{r.id} · revision {r.revision}</details>
+      </dl>
+      {r.participants.some(p=>p.failure) ? <div className="panel info" data-zs-participant-failures="1">
+        {r.participants.filter(p=>p.failure).map(p=><div key={p.memberId} className="small">
+          <strong>{p.displayName}</strong> · {p.notStarted?'尚未派发，未调用模型':'成员执行遇到问题'}：{p.failure?.message??'未提供具体原因'}
+          {p.notStarted?<div>已有初稿和文件已保留；请在原对话串中按当前配置明确补交该成员的独立分析。</div>:null}
+        </div>)}
+      </div>:null}
+      <details className="small faint"><summary>运行身份</summary>{r.id} · revision {r.revision}</details>
       <div className="section-title">工具与诊断活动</div>
       {r.events.filter((e) => isDiagnosticEvent(e.kind)).length === 0
         ? <div className="faint small">这次运行的可见窗口没有工具或诊断事件。</div>

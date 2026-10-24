@@ -2,7 +2,35 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前施工：R87 自然协作与电脑小白易用性（2026-10-17）
+## 当前状态：R107 / V50 技术验收通过，等待用户反馈（2026-10-24）
+
+指挥会话 `01a16d02-2621-7330-afbe-b2d116627da4`。完整交付见 [R107 原比较任务恢复与只读分析](../reviews/r107-analysis-preflight-20261024.md)。最终包 `dist/desktop/desktop-daily-win-v50-r107-analysis-20261024`，build `bld_64960bf21b281f99`，595 项清单一致，daemon SHA-256 `e2bc23bc6aa2d04bcc0848c5bffc5269f8cbbc748235a1f6b9dcb60390816fda`。**沿用现有数据使用包内 start-existing-data.vbs；仍指向 V44 server-data，不搬移或覆盖。**
+
+用户实测原任务 `task_993d7e3e-ad2c-4951-a24a-a7d1a760ce0c`（zhongshuo / D:/zhongshuo / 默认房间 #1 / Claude AUTO）已 DONE/rev6，查证子任务 DONE，原串六条回复和 22,296B 完整七维对比文档已可见。初始故障是 changeset 写入基线包含 dist 旧包、5007 文件 truncated，0 run/turn/call；不是 Codex 指纹。根卡/串/详情现在直接显示持久的具体原因与 NOT_STARTED，原失败卡可“仅分析继续”，新根消息可选“本次仅分析”。只读意图在普通继续、同串、AUTO 子任务/交接/整合继承，不从原 full scope 或 bypass 默认升权。
+
+真实新增 calls20–23：3 成功、1 Codex 复制错 Claude 长 ID 的合同失败；已手动通过正式 `task.redispatch(formatRepair=true,useCurrentExecutionSnapshot=true)` 只读补交原结果，补交 toolStarts=0，失败事件/旧 FAILED run 保留。不是全自动无失败。四个 session 的 full/modification 均 false、analysisOnly 均 true。**可写大目录完整基线超限仍拒绝，未放宽或宣称全量写入已修。** 未新增第二个相同业务根。
+
+全量 237 文件 / 1964 项通过（排除 githubSandbox），双 typecheck 通过；lint commands10/Room12/store8 为既有 30 项，store8 已 HEAD 复现，其余定向检查通过。模型窗口 2583 个 tracked+非 ignored untracked 路径（含4个既有删除）前后无字节变化；原 task scope/成员配置不变。activeTurns/pendingOutbox=[]、未释放租约0、备份 integrity=ok。证据根 `dist/review-r107-preflight-20261024`，01–04 原生截图逐张 view_image 核对；完整对比 artifact hash `9b221d7ca3eb5ea6007b9e0efb3f7e06e641a3dffb3a2fa2f805625a9d7ef4c8`。完整数据根升级前冷备、完成后在线备份均保留。
+
+统筹已独立核验包、原图、原scope/绑定/字节清单与最终状态并明确技术验收通过；原生 V50 保持打开在比较文档预览。用户随后于 2026-10-24 明确要求推送 GitHub，由统筹统一选择性提交 R104–R107 源码、测试与八份修复/审查报告到 `origin/codex/full-implementation`，并推送此前尚未同步的本地提交（含 138e999），不改写历史。原数据、打包产物、无关设计/工具目录及既有 debug 文件删除不纳入本次提交；下文各轮“未 commit/push”为当时的历史状态。实际提交号与远端一致性以本轮 Git 交付结果为准。停止新增模型、业务执行、功能或封包，等待用户新指令。
+
+## 历史状态：R106 / V49 技术验收通过（2026-10-24）
+
+当前指挥会话为 `01a16d02-2621-7330-afbe-b2d116627da4`。本轮四项产品修复与最终事实见 [R106 产品修复与验证](../reviews/r106-product-repair-20261024.md)。最终包 `dist/desktop/desktop-daily-win-v49-r106-final-20261024`，build `bld_49b786e55f9b69ef`，595 项 payload 清单一致，daemon SHA-256 `f56a44ae228c240b9f5c6820643324a09c8d2e90569793857bec1eb6b1a30501`。**沿用现有数据使用包内 start-existing-data.vbs，仍指向 V44 的 server-data，不搬移或覆盖它。**
+
+已修标题装饰、主池长正文约五行/长辅助摘要三行、Codex 版本化配置指纹与无推理准备、明确未派发提示、单初稿加其他成员预派发失败时不单人整合/自认，以及跨项目同名房间的首次点击与正式导航持久化。准备返回 proof 并贯穿事务复核；旧无版本/显式 v1 Codex scope 用精确 v1 比较，旧失败不被 v2 自动收养；0-run DM 恢复用独立意图键且保留 UNKNOWN 保护。
+
+最终全量 231 文件 / 1933 项通过（排除禁止的 githubSandbox），双类型与主要变更 lint 通过；commands/Room 仍有 10/12 项历史 lint。原生 UI 最终新票及独立审计在 `dist/review-r106-product-20261024`。旧误标截图保留并在 evidence-errata.json 作废；以逐张打开过的 verified-01/02/04/05/06/07/09/10 为准。
+
+真实新增 5 次调用（4 成功，1 短答 claims 合同失败后同 run fx 补交成功），无在途 turn、未释放租约 0、业务工具 0。Codex 私信与只 @Codex 的房间直接回复均已可见，实际配置 newapi/deepseek-flash/high；双成员短交流仍只发布主持者合并回复，不称每席均可见。原 #4 保持 BLOCKED/原 5 调用；需求文档保持 25556B、SHA `744d45626e056c061facf05f6a0632ab18d80b63298983a7e95364d9b70ab3d2`。原 DM scope 原始字节未改，显式当前配置恢复后 DONE。原两人独立研讨输入偏好已恢复。
+
+本轮保留本地导航提交 `138e999`（子代理创建，未 push），后续本轮补丁为 WIP。不要 reset/revert 共享修改或自动重放旧业务。原配置失配只能证明整体指纹变化；无旧分项前像时不能把某个 trust 块说成唯一原始原因。用户已有启动路径优先级保持：正常重开可按 ui.autoOpenProjectPath 返回默认项目 A，不能为测试改用户启动设置。开源比较由统筹独立完成。
+
+## 历史状态：R105 / V47 已验收，统筹已接管（2026-10-24）
+
+用户已要求新统筹接替旧会话 `01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79`，并回复编码会话 `01a16bd8-dbb4-7553-93eb-aecb1395c860`。当前权威断点见 [R105 统筹接管与验收记录](../reviews/r105-coordinator-takeover-20261024.md) 和 [R105 修复报告](../reviews/r105-recovery-20261024.md)。V47 的 595 项包清单已重新核对，恢复专项重新运行 30/30 通过，原任务已恢复收口。当前等待用户实测反馈；下方 R87 及其后续旧施工段落为历史记录，不能据此自动重开旧任务。沿用原数据须用 V47 的 `start-existing-data.vbs`，并保留其指向的 V44 `server-data`。
+
+## 历史施工：R87 自然协作与电脑小白易用性（2026-10-17）
 
 人类在审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79明确说“开始这一轮吧”，已通过read_thread核对原userMessage。权威范围见 [R87完整任务书](r87-product-usability-plan-20261017.md)；原方案“尚未实施”是历史状态，现已授权持续完成施工、真实验收及最终集中交付。唯一产品写入方为本会话，审阅方只读，不启新代理。
 
