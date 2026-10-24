@@ -1,8 +1,9 @@
 /**
  * 应用设置（R64 原型还原）：**壳=已批准原型**（七项导航 + 搜索 + 分区副标题 + 设置行组件
  * §3.1/§3.4/§17.8）；**内容=真实能力**——已接命令的设置读写并回读核对（app.settings /
- * 主题 / runtime 绑定 / 数据与草稿存储 / 远程监听事实 / BUILD 身份）；后端没有的能力在
- * 原型位置**禁用并说明**（通知偏好、托盘/自启、配对码、MCP 接入），不用模拟值冒充实际值。
+ * 主题 / runtime 绑定 / 数据与草稿存储 / 远程监听事实 / BUILD 身份）；通知静音使用真实
+ * thread_subscriptions 并回读。后端没有的能力在原型位置**禁用并说明**（托盘/自启、配对码、
+ * MCP 接入），不用模拟值冒充实际值。
  * 项目设置独立于 /project/:id/settings（原归属保持——本页只放应用级）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,6 +24,12 @@ import {
   parseCallBudgetEnabledSetting,
   serializeCallBudgetEnabledSetting,
 } from '../../../contracts/callBudget';
+import {
+  TASK_NOTIFICATION_COMMANDS,
+  taskNotificationPollResultSchema,
+  type TaskNotificationAttemptView,
+  type TaskNotificationPollResult,
+} from '../../../contracts/taskNotifications';
 
 export type AppSettingsSection =
   | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
@@ -43,6 +50,7 @@ type NavItem = { key: AppSettingsSection; label: string; icon: string; hint: str
 const NAV: NavItem[] = [
   { key: 'general', label: '通用', icon: 'settings', hint: '启动与打开位置' },
   { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
+  { key: 'notifications', label: '通知', icon: 'bell', hint: '按真实线程订阅管理桌面通知静音' },
   { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: 'AI 成员的模型与权限' },
   { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
   { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
@@ -54,6 +62,7 @@ type SearchEntry = { section: AppSettingsSection; label: string; keywords: strin
 const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
   { section: 'appearance', label: '主题（深色外观）', keywords: '外观 主题 深色 浅色 暗色', match: '深色外观' },
+  { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用 次数 预算 上限 DIRECT AUTO DELIBERATE', match: '启用调用次数预算' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
   { section: 'connections', label: '远程访问监听事实', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
@@ -389,13 +398,193 @@ function AppearanceAvatarRow({
 
 /* ============================================================ 分区：通知 ============================================================ */
 
-function SectionNotifications() {
+export interface NotificationSubscriptionItem {
+  threadId: string;
+  followed: boolean;
+  muted: boolean;
+  projectId: string;
+  taskId: string | null;
+}
+
+export function notificationMuteWrite(threadId: string, muted: boolean): {
+  method: 'thread.subscribe';
+  params: { threadId: string; mute: boolean };
+} {
+  return { method: 'thread.subscribe', params: { threadId, mute: muted } };
+}
+
+export function notificationMuteReadBackMatches(
+  items: NotificationSubscriptionItem[],
+  threadId: string,
+  expected: boolean,
+): boolean {
+  return items.find((item) => item.threadId === threadId)?.muted === expected;
+}
+
+export function SectionNotifications() {
+  const [items, setItems] = useState<NotificationSubscriptionItem[]>([]);
+  const [titles, setTitles] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [delivery, setDelivery] = useState<TaskNotificationPollResult | null>(null);
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const genRef = useRef(0);
+
+  const reload = useCallback(async (): Promise<NotificationSubscriptionItem[]> => {
+    const gen = ++genRef.current;
+    setLoading(true);
+    try {
+      const result = await command<{ items: NotificationSubscriptionItem[] }>('thread.subscriptions', {});
+      if (gen !== genRef.current) return result.items;
+      setItems(result.items);
+      setError(null);
+      const titled = await Promise.all(result.items
+        .filter((item) => item.taskId != null)
+        .map(async (item) => {
+          try {
+            const detail = await command<{ task?: { title?: string } }>('task.get', { taskId: item.taskId });
+            return [item.taskId!, detail.task?.title?.trim() || ''] as const;
+          } catch {
+            return [item.taskId!, ''] as const;
+          }
+        }));
+      if (gen === genRef.current) {
+        setTitles(Object.fromEntries(titled.filter(([, title]) => title.length > 0)));
+      }
+      try {
+        const notificationRead = await command<unknown>(TASK_NOTIFICATION_COMMANDS.poll, { limit: 1 });
+        if (gen === genRef.current) {
+          setDelivery(taskNotificationPollResultSchema.parse(notificationRead));
+          setDeliveryError(null);
+        }
+      } catch (notificationError) {
+        if (gen === genRef.current) {
+          setDelivery(null);
+          setDeliveryError((notificationError as Error).message);
+        }
+      }
+      return result.items;
+    } catch (loadError) {
+      if (gen === genRef.current) setError((loadError as Error).message);
+      return [];
+    } finally {
+      if (gen === genRef.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+    return () => { genRef.current += 1; };
+  }, [reload]);
+
+  const setMuted = async (item: NotificationSubscriptionItem, muted: boolean): Promise<void> => {
+    if (busy != null) return;
+    setBusy(item.threadId);
+    try {
+      const write = notificationMuteWrite(item.threadId, muted);
+      await command(write.method, write.params);
+      const readBack = await command<{ items: NotificationSubscriptionItem[] }>('thread.subscriptions', {});
+      if (!notificationMuteReadBackMatches(readBack.items, item.threadId, muted)) {
+        toast('线程通知设置保存后回读不一致，未显示为成功', 'error');
+        return;
+      }
+      setItems(readBack.items);
+      recordWrite(write.method, `${titles[item.taskId ?? ''] ?? item.threadId.slice(0, 12)} → ${muted ? '静音' : '通知'}（已回读）`);
+      toast(muted ? '该线程已静音；任务仍会保留，系统通知不再弹出' : '该线程已恢复系统通知', 'success');
+    } catch (writeError) {
+      toast(`线程通知设置保存失败：${(writeError as Error).message}`, 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div>
-      <SectionHead title="通知" sub={<>房间和回复串的通知设置在各自菜单中。</>} />
-      <div className="panel info">目前没有需要在这里修改的应用级通知设置。</div>
+      <SectionHead title="通知" sub={<>按对话串管理桌面通知与静音，投递记录可在下方查看。</>} />
+      <div className="panel info">
+        任务完成、需要处理、等待输入或待验收时会发送系统通知。静音某个线程后，它的任务和未读仍保留，只是不再弹出桌面通知。
+      </div>
+      <div className="card" data-zs-notification-settings="1">
+        <div className="card-title">对话串通知</div>
+        {loading ? <div className="small faint" style={{ padding: '10px 14px' }}>正在读取真实线程静音状态…</div> : null}
+        {error != null ? (
+          <div className="panel warning" style={{ margin: 12 }}>
+            线程通知设置读取失败：{error}
+            <button className="btn sm" onClick={() => void reload()}>重试读取</button>
+          </div>
+        ) : null}
+        {!loading && error == null && items.length === 0 ? (
+          <div className="small faint" style={{ padding: '10px 14px' }}>
+            还没有设置过对话串通知。可在对话串右上角菜单中设置静音，再到这里统一管理。
+          </div>
+        ) : null}
+        {items.map((item) => (
+          <SettingsRow
+            key={item.threadId}
+            label={titles[item.taskId ?? ''] ?? `线程 ${item.threadId.slice(0, 12)}`}
+            hint={`${item.followed ? '已关注' : '未关注'} · 项目 ${item.projectId.slice(0, 12)}`}
+          >
+            <Switch
+              checked={item.muted}
+              disabled={busy != null}
+              label={item.muted ? '已静音' : '通知'}
+              onChange={(next) => void setMuted(item, next)}
+            />
+          </SettingsRow>
+        ))}
+      </div>
+      <div className="card" style={{ marginTop: 14 }} data-zs-notification-delivery="1">
+        <div className="card-title">桌面投递状态</div>
+        {deliveryError != null ? (
+          <div className="panel warning" style={{ margin: 12 }}>投递状态读取失败：{deliveryError}</div>
+        ) : delivery == null ? (
+          <div className="small faint" style={{ padding: '10px 14px' }}>正在读取桌面投递记录…</div>
+        ) : (
+          <>
+            <div className="row tight" style={{ padding: '8px 14px', flexWrap: 'wrap' }}>
+              <Tag tone="neutral">已尝试 {delivery.health.attempted}</Tag>
+              <Tag tone="neutral">已请求显示 {delivery.health.showRequested}</Tag>
+              <Tag tone="neutral">已显示 {delivery.health.shown}</Tag>
+              <Tag tone={delivery.health.unknown > 0 ? 'warning' : 'neutral'}>未确认 {delivery.health.unknown}</Tag>
+              <Tag tone={delivery.health.failed > 0 ? 'danger' : 'neutral'}>失败 {delivery.health.failed}</Tag>
+              <Tag tone="neutral">已点击 {delivery.health.clicked}</Tag>
+            </div>
+            {delivery.recentAttempts.length === 0 ? (
+              <div className="small faint" style={{ padding: '2px 14px 12px' }}>尚无桌面投递尝试。</div>
+            ) : (
+              <DetailFold summary="查看最近投递记录">
+                {delivery.recentAttempts.map((attempt: TaskNotificationAttemptView) => (
+                  <SettingsRow
+                    key={attempt.notificationId}
+                    label={attempt.title}
+                    hint={attemptStateLabel(attempt)}
+                  >
+                    <span className="small faint">{new Date(attempt.claimRequestedAt).toLocaleString()}</span>
+                  </SettingsRow>
+                ))}
+              </DetailFold>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
+}
+
+function attemptStateLabel(attempt: TaskNotificationAttemptView): string {
+  const parts: string[] = [{
+    pending: '未请求',
+    claimed: '已领取',
+    show_requested: '已请求显示',
+    shown: '已显示',
+    failed: '显示失败',
+    unknown: '已请求但结果未确认',
+    suppressed: '已静音抑制',
+  }[attempt.state]];
+  if (attempt.failureReason != null) parts.push(attempt.failureReason);
+  if (attempt.clickedAt != null) parts.push('已点击');
+  return parts.join(' · ');
 }
 
 /* ============================================================ 分区：AI 工具 ============================================================ */

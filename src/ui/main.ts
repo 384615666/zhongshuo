@@ -6,7 +6,7 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Notification as ElectronNotification } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,6 +19,11 @@ import type { PipeClient } from '../contracts/daemonIpc.ts';
 import {claimActiveDataOperation,dataControlPaths,dataLocationHash,loadDataCopyJob,prepareDataCopyJob,processAlive,readActiveDataOperation,readDataJobStatus,readDataLocation,reconcileInterruptedDataOperation,releaseActiveDataOperation,type DataCopyJob,type DataJobStatus} from '../contracts/dataCopyJob.ts';
 import {findLocalDataRoot} from '../contracts/localDataCopy.ts';
 import { resolveDisplayPlacement } from './testDisplay.ts';
+import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId(process.env.ZS_APP_USER_MODEL_ID ?? 'com.zhongshuo.desktop');
+}
 
 // zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
 // file:// 源下 ES 模块被模块 CORS 拦截（Chromium 对 file 源互为 opaque）。standard+secure
@@ -494,6 +499,22 @@ let dataOperationStarting = false;
       backgroundThrottling: false,
     },
   });
+  const disposeTaskNotificationIpc = registerTaskNotificationIpc({
+    ipcMain,
+    assertTrustedSender,
+    sendCommand: async (method, params) => {
+      await ensureConnection();
+      return await pipe!.send({
+        protocolVersion: 1,
+        commandId: `task-notification-${randomUUID()}`,
+        method,
+        params,
+      }) as { ok: boolean; data?: unknown; error?: { message?: string } };
+    },
+    getWindow: () => win,
+    createNotification: ({ title, body }) => new ElectronNotification({ title, body }),
+  });
+  app.once('will-quit', disposeTaskNotificationIpc);
   applyRequestedTestDisplay(win, true);
   // renderer 故障恢复（r60 P3，review-r60 §2）：真实崩溃（Page.crash 级）此前留白屏——
   // 用户只能重开应用。此处按「界面重载、daemon 不动」恢复：daemon/任务状态不受 renderer

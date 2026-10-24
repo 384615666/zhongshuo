@@ -1,3 +1,4 @@
+import {TaskExecutionStatusView} from './components/TaskExecutionStatusView';
 /**
  * 私信页（r56 H4 §5 扩展 → R66 P2/P5 原型布局还原）：真实 conversation.list/history/
  * create/markRead + Composer 正式异步发送。已读水位继承既有合同——**前台+贴底+当前路由**
@@ -572,6 +573,7 @@ export function DmPage() {
                     ) : null}
                   </div>
                 ) : null}
+                <TaskExecutionStatusView status={active.executionStatus}/>
                 <DmInterruptedNotice tasks={active.interruptedTasks ?? []} memberName={active.peerDisplayName ?? members.find(member => active.memberIds.includes(member.id))?.displayName ?? '成员'} queuedCount={active.queuedCount} busy={busy != null} onRecover={task => { void doRecover(task); }}/>
                 {showFailedPanel ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">

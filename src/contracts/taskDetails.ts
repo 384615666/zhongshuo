@@ -1,3 +1,4 @@
+import type {TaskExecutionStatus} from './executionStatus.ts';
 /** Read-only task detail projection. Every collection reports whether the bounded page is complete. */
 import { z } from 'zod';
 import type { CoordinationDetails } from './coordination.ts';
@@ -115,6 +116,7 @@ export interface PreDispatchFailureProjection {
 }
 
 export interface TaskDetailsResult {
+  executionStatus?:TaskExecutionStatus|null;
   automaticRecovery?: {state:string;kind:string;attempt:number;maxExtraAttempts:number;nextAttemptAt:number;reason:string;taskId:string}|null;
   coordination?:CoordinationDetails|null;
   /** Present only when queued work exists without an executing turn. */

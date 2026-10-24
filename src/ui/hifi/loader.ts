@@ -1,3 +1,7 @@
+import type {TaskExecutionStatus} from '../../contracts/executionStatus.ts';
+import type {MessageRepairLineage} from '../../contracts/repairLineage.ts';
+import {sendRequestPayloadHash} from '../../contracts/sendRecovery.ts';
+import type {SendLookupResult,RecoveredSendLocation} from '../../contracts/sendRecovery.ts';
 import type {PreDispatchFailureProjection} from '../../contracts/taskDetails';
 /**
  * 真实数据装载与写动作（H1 首包，第四十七轮修订）：正式命令 → 原型视图模型映射。
@@ -12,7 +16,7 @@ import type {PreDispatchFailureProjection} from '../../contracts/taskDetails';
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
+import {stageOutbound,updateSendReference,settleOutbound, setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
@@ -22,6 +26,7 @@ import type { CollaborationStage, CurrentRunBudget, DeliveryFact, DocumentView, 
 import { deriveDeliberateMaxTurns } from '../../contracts/deliberation.ts';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 import { currentNavSeq, navigate } from './lib/router';
+import {canonicalJson} from '../../contracts/common.ts';
 import { navIntentActive, cancelAllNavIntents, beginUserNavIntent, onNavIntentCancel, releaseNavIntent, type NavIntent } from './lib/navIntent';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
@@ -30,9 +35,9 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?: {maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
-interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
-export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?: {maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
+export interface HistoryMessage { repairLineage?:MessageRepairLineage|null; id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[]; progress?: ThreadVisibleProgress[] }
 interface FileChangeCarrier { fileChanges?: MessageFileChange[] }
 import {chatAnswer} from '../../contracts/chatAnswer';
@@ -219,6 +224,14 @@ async function initDraftPersistenceFromIdentity(): Promise<void> {
     markPersistenceDegraded(`持久化身份不可用（${e instanceof Error ? e.message : String(e)}）——草稿仅本次进程内有效`);
   }
 }
+let draftIdentityInitialization:Promise<void>|null=null;
+/** Manual opens and cold deep links share bootstrap's authenticated root/user
+ * identity. A failed identity read remains retryable; sending stays gated. */
+async function ensureDraftPersistenceReady():Promise<void>{
+  if(getState().draftPersist.mode!=='off')return;
+  if(!draftIdentityInitialization)draftIdentityInitialization=initDraftPersistenceFromIdentity().finally(()=>{draftIdentityInitialization=null;});
+  await draftIdentityInitialization;
+}
 
 /** 一次继承判定（自动通道 ①②③ + 用户导入候选登记 ④）。结论写继承标记（含候选队列）；
  * 失败不写 done（下次重试）。重扫保留已导入项的 importedAt（不复活已处理候选）。 */
@@ -319,10 +332,10 @@ function collectLegacyPersistKeys(localUserId: string): Array<{ key: string; dir
 export async function bootRemembered(): Promise<void> {
   for (let i = 0; i < 60; i += 1) {
     const s = getState();
-    if (s.boot === 'ready' || s.boot === 'failed') return; // 已装载/用户已手动打开
+    if (s.boot === 'ready' || s.boot === 'failed') {await ensureDraftPersistenceReady();return;} // 手动打开同样需要可信持久化身份
     try {
       const remembered = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
-      await initDraftPersistenceFromIdentity();
+      await ensureDraftPersistenceReady();
       // R65：注册表+服务端导航偏好（无行=本地/全量默认）。欢迎页「最近项目」来自真实注册表；
       // 偏好中的有效 id 才采用（已移除/归档项目自动清出，不猜）。
       await loadProjectRegistry();
@@ -550,6 +563,8 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
   if (!navIntentActive(intent)) return cancelledOpen();
   if (opts?.fromIntent !== true) cancelAllNavIntents(intent);
   const urlSeqAtStart = currentNavSeq();
+  await ensureDraftPersistenceReady();
+  if(!navIntentActive(intent))return cancelledOpen();
   const prevFocus = getState().activeProjectId; // 装载刷新期取消时还原焦点（仅当焦点仍指向本次结果）
   let prevLastPath: string | null = null;
   try { prevLastPath = localStorage.getItem('zs.lastProjectPath'); } catch { prevLastPath = null; }
@@ -1046,6 +1061,7 @@ export async function refreshDms(projectIdArg?: string): Promise<void> {  const 
       id: c.conversationId, projectId: c.projectId ?? projectId,
       peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.unread ?? 0,
       memberIds: [], threadId: '', createdAt: 0, lastMessageAt: 0,
+      executionStatus:c.executionStatus??null,
       execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? undefined, lastMessagePreview: c.lastMessagePreview ?? '',
       // r56 H4 操作面投影：revision CAS/停止三重绑定/中断恢复/待验收/排队数。
       revision: c.revision ?? 0,
@@ -1088,7 +1104,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       taskMode: it.taskMode, ownerMemberId: it.ownerMemberId,
       latestRun: it.latestRun,
       nextInputBudget: it.nextInputBudget ?? null, currentRunBudget: it.currentRunBudget ?? null, delivery: it.delivery ?? null,
-      executionBlocker: it.executionBlocker ?? null, preDispatchFailure:it.preDispatchFailure??null,
+      executionBlocker: it.executionBlocker ?? null, preDispatchFailure:it.preDispatchFailure??null,executionStatus:it.executionStatus??null,
       body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
       authorType: it.authorType, authorId: it.authorId, formalAttachments: it.attachments,
       replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
@@ -1105,7 +1121,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
           const cached=threadTasks[item.threadId];
           if(cached)threadTasks[item.threadId]={...cached,status:item.taskStatus??cached.status,
             revision:item.taskRevision??cached.revision,activeRun:item.latestRun??null,
-            delivery:item.delivery??null,executionBlocker:item.executionBlocker??null,preDispatchFailure:item.preDispatchFailure??null};
+            delivery:item.delivery??null,executionBlocker:item.executionBlocker??null,preDispatchFailure:item.preDispatchFailure??null,executionStatus:item.executionStatus??null};
         }
         if (item.progress == null || (progressTickets.get(item.threadId) ?? 0) > ticket) continue;
         progressTickets.set(item.threadId, ticket);
@@ -1245,7 +1261,7 @@ interface ThreadGetData {  thread: { id: string; projectId: string; conversation
  * thread.history 的回复项。`body` 是服务端 `JSON.parse(body_json)` 的完整对象
  * （R91：含 `collaborationStage`），loader 只取 `text` 正文并转译阶段标记。
  */
-export interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown; detailMarkdown?: string; document?: unknown; delivery?: unknown; runtimeControlResult?: string } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>;replyExecution?:Message['formalReplyExecution'] }
+export interface ThreadHistoryItem { repairLineage?:MessageRepairLineage|null; id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown; detailMarkdown?: string; document?: unknown; delivery?: unknown; runtimeControlResult?: string } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>;replyExecution?:Message['formalReplyExecution'] }
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
 interface TaskGetData {
   task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
@@ -1254,7 +1270,7 @@ interface TaskGetData {
   activeRun: { id: string; status: string; budget?: CurrentRunBudget | null } | null;
   delivery?: DeliveryFact | null;
   executionBlocker?: TaskExecutionBlocker | null;
-  preDispatchFailure?:PreDispatchFailureProjection|null;
+  preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null;
   pendingDelivery: { id: string; revision: number; manifest_hash: string } | null;
   reworkPending?: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
   lastStartupFailureMessage?: string;
@@ -1274,7 +1290,7 @@ export const msgOfReply = (projectId: string, roomId: string, threadId: string, 
     body: readable, createdAt: it.createdAt, threadMessageSeq: it.seq,
     attachmentIds: [], formalAttachments: formalAttachmentsOf(it.attachments, document),
     fileChanges: (it as ThreadHistoryItem & FileChangeCarrier).fileChanges,
-    formalReplyExecution:it.replyExecution,
+    formalReplyExecution:it.replyExecution,formalRepairLineage:it.repairLineage??null,
   detailMarkdown: (it.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(it.body),
   };
   if (document != null) message.document = document;
@@ -1353,7 +1369,7 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
         revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
         objective: tg.task.objective, reviewPolicy: tg.task.review_policy, mode: tg.task.mode ?? undefined,
         ownerMemberId: tg.task.owner_member_id, parentTaskId: tg.task.parent_task_id, currentDeliveryId: tg.task.current_delivery_id,
-        activeRun: tg.activeRun, delivery: tg.delivery ?? null, executionBlocker: tg.executionBlocker ?? null, preDispatchFailure:tg.preDispatchFailure??null,
+        activeRun: tg.activeRun, delivery: tg.delivery ?? null, executionBlocker: tg.executionBlocker ?? null, preDispatchFailure:tg.preDispatchFailure??null,executionStatus:tg.executionStatus??null,
         nextInputBudget: tg.task.deliberationBudget ?? null, currentRunBudget: tg.activeRun?.budget ?? null,
         pendingDelivery: tg.pendingDelivery == null ? null
           : { id: tg.pendingDelivery.id, revision: tg.pendingDelivery.revision, manifestHash: tg.pendingDelivery.manifest_hash },
@@ -1517,7 +1533,7 @@ export async function refreshThreadTask(threadId: string): Promise<void> {
     revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
     objective: tg.task.objective, reviewPolicy: tg.task.review_policy, mode: tg.task.mode ?? undefined,
     ownerMemberId: tg.task.owner_member_id, parentTaskId: tg.task.parent_task_id, currentDeliveryId: tg.task.current_delivery_id,
-    activeRun: tg.activeRun, delivery: tg.delivery ?? null, executionBlocker: tg.executionBlocker ?? null, preDispatchFailure:tg.preDispatchFailure??null,
+    activeRun: tg.activeRun, delivery: tg.delivery ?? null, executionBlocker: tg.executionBlocker ?? null, preDispatchFailure:tg.preDispatchFailure??null,executionStatus:tg.executionStatus??null,
     nextInputBudget: tg.task.deliberationBudget ?? null, currentRunBudget: tg.activeRun?.budget ?? null,
     pendingDelivery: tg.pendingDelivery == null ? null
       : { id: tg.pendingDelivery.id, revision: tg.pendingDelivery.revision, manifestHash: tg.pendingDelivery.manifest_hash },
@@ -1541,7 +1557,7 @@ export const msgOfDmHistory = (projectId: string, conversationId: string, m: His
     authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
     authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: textOf(m),
     createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? index,
-    attachmentIds: [], formalAttachments: formalAttachmentsOf(m.attachments, document),
+    attachmentIds: [], formalAttachments: formalAttachmentsOf(m.attachments, document),formalRepairLineage:m.repairLineage??null,
     fileChanges: (m as HistoryMessage & FileChangeCarrier).fileChanges,
     detailMarkdown: (m.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(body),
   };
@@ -1779,7 +1795,28 @@ export async function executeTaskRework(snapshot: { taskId: string; deliveryId: 
 
 /** 发送不可变信封（正式管道——重试与首次共用，保证同号同参）。 */
 export async function sendEnvelope(env: PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
-  const r = await sendCommand<SendResult>(env.commandId, env.method, env.params);
+  await ensureDraftPersistenceReady();
+  const draftKey=sendDraftKey(env);
+  const state=getState();
+  const candidates=[...(state.outboundLedger[draftKey]??[]),...(state.pendingSends[draftKey]?[state.pendingSends[draftKey],...(state.pendingSends[draftKey].queued??[])]:[])];
+  const durable=candidates.find(item=>item.commandId===env.commandId);
+  if(durable&&canonicalJson(durable.params)!==canonicalJson(JSON.parse(JSON.stringify(env.params))))return{status:'failed',code:'IDEMPOTENCY_CONFLICT',error:'原发送参数已改变；未覆盖保存的请求或发送新内容'};
+  const frozen=JSON.parse(JSON.stringify(durable??env)) as PendingSendEnvelope;
+  const staged=durable!=null;
+  if(!staged){const persisted=stageOutbound(draftKey,frozen);if(!persisted.ok)return{status:'failed',code:'SEND_REFERENCE_NOT_SAVED',error:persisted.error??'原发送引用未能保存，本次未发送'};}
+  try{
+    frozen.payloadHash=await sendRequestPayloadHash(frozen);
+    if(env.payloadHash&&env.payloadHash!==frozen.payloadHash)throw Error('原发送参数与冻结摘要不一致');
+    env.payloadHash=frozen.payloadHash;
+    if(!updateSendReference(draftKey,frozen,'sending',{payloadHash:frozen.payloadHash}))throw Error('原请求引用未能耐久保存，本次未发送');
+  }catch(error){return{status:'failed',code:'SEND_REFERENCE_NOT_SAVED',error:(error as Error).message};}
+  let r = await sendCommand<SendResult>(frozen.commandId, frozen.method, frozen.params);
+  const confirmed=getState().lastSendReferences[draftKey];
+  if(r.status==='unknown'&&confirmed?.commandId===frozen.commandId&&confirmed.outcome==='accepted'
+    &&confirmed.payloadHash===frozen.payloadHash&&confirmed.location){
+    r={status:'ok',data:{taskId:confirmed.location.taskId??undefined,threadId:confirmed.location.threadId??undefined,disposition:'recovered'}};
+  }
+  updateSendReference(draftKey,frozen,r.status==='ok'?'accepted':r.status==='failed'?'rejected':'unknown',r.status!=='ok'?{error:r.error}:undefined);
   if (r.status === 'ok') recordWrite('message.submit', `${env.params.target.kind === 'dm' ? '私信' : '房间'} ${env.params.intent === 'record_only' ? '仅记录' : '发送'}（${String(env.params.body).slice(0, 24)}…）`);
   return r;
 }
@@ -1819,6 +1856,31 @@ export async function createDm(memberId: string): Promise<string> {
 }
 
 /** 结果未知信封的严格重发（review-r47 §2/r48 §3）：原 commandId+原参数逐字重发——不重组。 */
+export function sendDraftKey(env:PendingSendEnvelope):string {
+  const target=env.params.target;
+  return target.kind==='room_root'?`room:${String(target.roomId)}`:target.kind==='thread'?`thread:${String(target.threadId)}`:`dm:${String(target.conversationId)}`;
+}
+/** Read the original receipt only; neither a missing record nor transport failure sends. */
+export async function querySubmittedSend(env:PendingSendEnvelope):Promise<SendLookupResult>{
+  const frozen=JSON.parse(JSON.stringify(env)) as PendingSendEnvelope;
+  const hash=await sendRequestPayloadHash(frozen);
+  if(frozen.payloadHash&&frozen.payloadHash!==hash)throw Error('原请求引用摘要已损坏；未查询或重新发送');
+  const result=await command<SendLookupResult>('message.lookupSubmission',{request:{commandId:frozen.commandId,method:frozen.method,params:frozen.params},payloadHash:hash});
+  if(result.commandId!==frozen.commandId||result.payloadHash!==hash)throw Error('查询返回了不同请求，原信封保留');
+  if(result.status==='found'){
+    const key=sendDraftKey(frozen),state=getState(),reference=state.lastSendReferences[key];
+    const unsettled=(state.outboundLedger[key]??[]).some(item=>item.commandId===frozen.commandId)
+      ||state.pendingSends[key]?.commandId===frozen.commandId||state.pendingSends[key]?.queued?.some(item=>item.commandId===frozen.commandId);
+    if(unsettled&&!(reference?.commandId===frozen.commandId&&reference.settled===true))settleOutbound(key,frozen);
+    updateSendReference(key,frozen,'accepted',{payloadHash:hash,location:result.location});
+  }
+  return result;
+}
+export async function openRecoveredSend(location:RecoveredSendLocation):Promise<void>{
+  // The existing deep-link resolver rechecks the locator and owns cross-project navigation.
+  await openExternalDeepLink(`#${location.taskId?'task='+location.taskId:location.threadId?'msg='+location.messageId:location.roomId?'msg='+location.messageId:'dm='+location.conversationId}`);
+}
+
 export async function retryUnknownSend(env: PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
   return sendEnvelope(env);
 }

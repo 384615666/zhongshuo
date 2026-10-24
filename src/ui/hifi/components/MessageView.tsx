@@ -20,6 +20,7 @@ import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
 import { MarkdownView, outlineOf } from '../preview/MarkdownView';
 import { ATTACHMENT_KIND_LABEL, GeneratedFiles, normalizeFormalAttachments } from './GeneratedFiles';
+import type { MessageRepairLineage } from '../../../contracts/repairLineage';
 
 /* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
 export { ATTACHMENT_KIND_LABEL };
@@ -145,7 +146,7 @@ export function MessageView({
   onSteer,
   onQuote,
 }: {
-  message: Message;
+  message: Message & { formalRepairLineage?: MessageRepairLineage | null };
   domId?:string;
   linkThreadId?:string;
   author?: ProjectMember;
@@ -174,6 +175,13 @@ export function MessageView({
   const formalAttachments = normalizeFormalAttachments(message.formalAttachments);
   const hasDetail = formalAttachments.some((attachment) => attachment.detailMarkdown === true) || typeof message.detailMarkdown === 'string';
   const roleClass=isSystem?' msg-system':isHuman?' msg-human':' msg-agent';
+  const repairLineage = message.formalRepairLineage?.state === 'repaired'
+    && (message.id === message.formalRepairLineage.sourceMessageId || message.id === message.formalRepairLineage.replacementMessageId)
+    ? message.formalRepairLineage
+    : undefined;
+  const repairRole = repairLineage?.messageRole;
+  const isRepairedSource = repairRole === 'source' && message.id === repairLineage?.sourceMessageId;
+  const isRepairReplacement = repairRole === 'replacement' && message.id === repairLineage?.replacementMessageId;
   const copyMessage=async():Promise<void>=>{
     try{
       if(navigator.clipboard==null)throw Error('clipboard unavailable');
@@ -186,7 +194,7 @@ export function MessageView({
       window.setTimeout(()=>setCopyState('idle'),1800);
     }
   };
-  const messageContent = (
+  const primaryContent = (
     <>
       <MessageBody message={message} mode={mode} readingAids={readingAids === true} hasDetail={hasDetail} memberName={author?.displayName} onOpenSubtask={onOpenSubtask} onOpenArtifact={onOpenArtifact} onApproval={onApproval} />
       {typeof message.detailMarkdown === 'string' && message.detailMarkdown.trim().length > 0 ? (
@@ -195,12 +203,32 @@ export function MessageView({
           <div className="msg-detail-fallback-body"><MarkdownView text={message.detailMarkdown} specTables={readingAids === true} headingAnchors={readingAids === true} /></div>
         </details>
       ) : null}
+    </>
+  );
+  const messageContent = (
+    <>
+      {isRepairReplacement ? (
+        <div className="panel success msg-repair-banner" data-zs-repair-lineage="replacement">
+          <span className="panel-title"><Icon name="refresh" size={13} /> 补交版本</span>
+          <span className="small muted">已由明确的格式补交输出替代原始失败版本。</span>
+        </div>
+      ) : null}
+      {isRepairedSource ? (
+        <details className="msg-detail-fallback msg-repair-source-history" data-zs-repair-lineage="source">
+          <summary>原答已补交 · 查看历史原文</summary>
+          <div className="msg-detail-fallback-body">{primaryContent}</div>
+        </details>
+      ) : primaryContent}
       <DeliveryFacts delivery={message.delivery} />
       <MessageFooter message={message} formalAttachments={formalAttachments} onOpenAttachment={onOpenAttachment} onOpenResource={onOpenResource} />
     </>
   );
   return (
-    <div className={`msg${roleClass}${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}`} id={domId??`msg-${message.id}`}>
+    <div
+      className={`msg${roleClass}${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}${isRepairedSource ? ' msg-repaired-source' : ''}${isRepairReplacement ? ' msg-repair-replacement' : ''}`}
+      id={domId??`msg-${message.id}`}
+      data-zs-repair-lineage={repairRole}
+    >
       <div className="msg-avatar">
         {isSystem ? (
           <span className="avatar avatar-22" style={{ background: 'var(--bg-surface-3)', color: 'var(--text-3)', border: '1px solid var(--border)' }} title="系统消息">
@@ -220,6 +248,8 @@ export function MessageView({
               <span className="msg-author">{isHuman ? '你' : author?.displayName ?? '未知成员'}</span>
               {!isHuman && author?.ordinal && author.ordinal > 1 ? <span className="small faint">#{author.ordinal}</span> : null}
               {message.collaborationStage != null ? <span className="msg-stage-tag"><Tag tone="info" icon="layers" title="研讨阶段产物（已完成并保存为正式消息）">{collaborationStageText(message.collaborationStage)}</Tag></span> : null}
+              {isRepairedSource ? <Tag tone="neutral" icon="refresh" title="此文保留为历史原文，当前有效版本已补交">原答已补交</Tag> : null}
+              {isRepairReplacement ? <Tag tone="accent" icon="refresh" title="来自明确的格式补交输出">补交</Tag> : null}
               {!isHuman && message.kind === 'report' ? <Tag tone="accent" icon="file-text">报告</Tag> : null}
               {message.streaming ? <Tag tone="info" icon="loader">流式中</Tag> : null}
               <span className="msg-time">{clockTime(message.createdAt)}</span>

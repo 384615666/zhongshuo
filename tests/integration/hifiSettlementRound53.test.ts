@@ -1,3 +1,4 @@
+import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
 /**
  * 第五十三轮 H2 真实链测试（review-r52 §3/§4）：**打包 hifi 前端数据层 × 正式 daemon ×
  * fake 库**——上传回执**原子结算**（settleUploadReady：uploadId 存在/未移除/发起会话一致才
@@ -46,6 +47,7 @@ interface LoaderApi {
   sendEnvelope(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; code?: string; error?: string }>;
 }
 interface StoreApi {
+  initDraftPersistence(namespace:string,rootId?:string):boolean;
   getState(): { rooms: Array<{ id: string; conversationId?: string }>; uploadItems: Record<string, Array<{ uploadId: string; draftKey: string; status: string; attachmentId?: string; removed?: boolean; error?: string }>> };
   addUploadItem(item: { uploadId: string; draftKey: string; conversationId: string; name: string; size: number; status: 'uploading' | 'ready' | 'failed' }): void;
   settleUploadReady(draftKey: string, uploadId: string, conversationId: string, receipt: { name: string; size: number; attachmentId: string; hash?: string; revision?: number; kind?: string }): boolean;
@@ -72,6 +74,7 @@ async function makeHarness(): Promise<Harness> {
     zs: { command: async (env: { commandId: string; method: string; params: unknown }) => raw(env.method, env.params, env.commandId) },
   };
   const bundle = await import(pathToFileURL(bundlePath).href) as unknown as Harness['bundle'];
+  initializeHifiSendPersistence(bundle.store,`r108-hifiSettlementRound53.test.ts|${randomUUID()}`);
   return { bundle, raw, db, close: () => db.close() } as unknown as Harness;
 }
 

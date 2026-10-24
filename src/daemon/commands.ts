@@ -1,3 +1,4 @@
+import {TaskNotificationError,pollTaskNotifications,claimTaskNotification,ackTaskNotification} from './taskNotifications.ts';
 /**
  * daemon 命令面（DEV-07；修复轮 5 扩充）。
  * - 每连接经凭据握手后才进入此处；CallerContext 由验证入口构造（可信）。
@@ -40,6 +41,9 @@ import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHisto
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import {readPreDispatchFailure} from './preDispatchFailure.ts';
+import {readTaskExecutionStatus} from './executionStatus.ts';
+import {readMessageRepairLineages} from './repairLineage.ts';
+import {lookupSubmittedMessage} from './sendRecovery.ts';
 import { readExecutionBlocker, readTaskDetails, readTaskHistory, taskRunBelongsToDetails } from './taskDetails.ts';
 import { turnDeadlineFromConfig } from './turnDeadline.ts';
 import { messageFileChanges } from './messageFileChanges.ts';
@@ -1561,6 +1565,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const items = rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at }));
         // 消息附件（第二十七轮三：已发消息附件可点击预览——能力②闭环到页面）。
         attachMessageSummaries(deps.db, items);
+        const repairs=readMessageRepairLineages(deps.db,items.map(item=>item.id));
+        for(const item of items)Object.assign(item,{repairLineage:repairs.get(item.id)??null});
         const requestRows=(items.length?deps.db.prepare(`SELECT r.message_id,r.status,r.error_message,r.run_id,r.turn_id FROM (SELECT message_id,project_id,conversation_id,task_id,thread_id,status,error_message,run_id,turn_id FROM conversation_reply_requests UNION ALL SELECT message_id,project_id,conversation_id,task_id,thread_id,status,error_message,run_id,turn_id FROM thread_reply_requests) r JOIN messages m ON m.id=r.message_id
           WHERE r.thread_id=? AND r.conversation_id=? AND r.project_id=m.project_id AND r.task_id=m.task_id AND r.thread_id=m.thread_id AND r.message_id IN (${items.map(()=>'?').join(',')})`).all(params.threadId,scope.conversation_id,...items.map(i=>i.id)):[]) as Array<{message_id:string;status:string;error_message:string|null;run_id:string|null;turn_id:string|null}>;
         const requestByMessage=new Map(requestRows.map(r=>[r.message_id,r]));
@@ -1650,6 +1656,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued },
           executionBlocker: readExecutionBlocker(deps.db, params.taskId),
           preDispatchFailure:readPreDispatchFailure(deps.db,params.taskId),
+          executionStatus:readTaskExecutionStatus(deps.db,params.taskId),
           ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'task.history':
@@ -1669,7 +1676,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const detail=taskDetailsParamsSchema.parse(env.params);
           if(detail.deliveryId&&!deps.db.prepare('SELECT 1 FROM task_deliveries WHERE id=? AND task_id=?').get(detail.deliveryId,detail.taskId))throw new DaemonCommandError('RESOURCE_NOT_FOUND','交付不属于目标任务或不存在');
         }
-        return withCommandId({ ok: true, data: env.method === 'task.history' ? readTaskHistory(deps.db, taskHistoryParamsSchema.parse(env.params)) : readTaskDetails(deps.db, params.taskId, params.runId, taskDetailsParamsSchema.parse(env.params).deliveryId) });
+        return withCommandId({ ok: true, data: env.method === 'task.history' ? readTaskHistory(deps.db, taskHistoryParamsSchema.parse(env.params)) : {...readTaskDetails(deps.db, params.taskId, params.runId, taskDetailsParamsSchema.parse(env.params).deliveryId),executionStatus:readTaskExecutionStatus(deps.db,params.taskId)} });
       }
       case 'message.protocol': {
         const p=z.strictObject({projectId:z.string().min(1),messageId:z.string().min(1)}).parse(env.params);
@@ -1721,6 +1728,19 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         const capabilities = members.map((id) => memberImageCapability(deps.db, id));
         return withCommandId({ ok: true, data: { willDispatch, supported: !willDispatch || capabilities.length > 0 && capabilities.every((c) => c.status === 'supported'), members: capabilities } });
+      }
+      case 'taskNotification.poll': return withCommandId({ok:true,data:pollTaskNotifications(deps.db,deps.localUserId,env.params)});
+      case 'taskNotification.claim': return withCommandId({ok:true,data:claimTaskNotification(deps.db,deps.localUserId,env.params)});
+      case 'taskNotification.ack': return withCommandId({ok:true,data:ackTaskNotification(deps.db,deps.localUserId,env.params)});
+      case 'message.lookupSubmission': {
+        const input=z.strictObject({request:z.strictObject({commandId:z.string().min(8).max(128),method:z.literal('message.submit'),params:z.record(z.string(),z.unknown()),expectedRevision:z.number().int().nonnegative().nullable().optional()}),payloadHash:z.string().regex(/^[a-f0-9]{64}$/)}).parse(env.params);
+        const original=messageSubmitParams.parse(input.request.params);
+        const target=original.target;
+        assertConversationAudience(deps.db,deps.localUserId,target.conversationId);
+        const conversation=deps.db.prepare('SELECT project_id,kind,room_id FROM conversations WHERE id=?').get(target.conversationId) as {project_id:string;kind:string;room_id:string|null}|undefined;
+        if(!conversation||conversation.project_id!==target.projectId||target.kind==='dm'&&conversation.kind!=='dm'||target.kind!=='dm'&&conversation.kind!=='room'||target.kind==='room_root'&&conversation.room_id!==target.roomId)throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH','原发送目标与当前可信会话归属不一致');
+        if(target.kind==='thread'&&!deps.db.prepare('SELECT 1 FROM conversation_threads WHERE id=? AND project_id=? AND conversation_id=? AND room_id=?').get(target.threadId,target.projectId,target.conversationId,conversation.room_id))throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH','原回复串不属于指定会话');
+        return withCommandId({ok:true,data:lookupSubmittedMessage(deps.db,deps.localUserId,input)});
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
@@ -2955,7 +2975,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({ projectId: z.string().min(1).optional(), archived: z.boolean().optional() }).parse(env.params);
         const all = listDmConversations(deps.db, deps.localUserId, params.projectId);
         const rows = params.archived == null ? all : all.filter((c) => params.archived === (c.archivedAt != null));
-        return withCommandId({ ok: true, data: { conversations: rows } });
+        return withCommandId({ ok: true, data: { conversations: rows.map(row=>{const current=row.activeTaskId??(deps.db.prepare('SELECT id FROM tasks WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1').get(row.conversationId) as {id:string}|undefined)?.id;return{...row,executionStatus:current?readTaskExecutionStatus(deps.db,current):null};}) } });
       }
       case 'conversation.failedTasks': {
         // R78: failed DM attempts stay task ACTIVE. Surface only a viewer's own DM tasks,
@@ -3016,7 +3036,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 消息附件（第二十七轮三：已发消息附件可点击预览；raw 行补 attachments 键）。
         const attByMsg = messageAttachmentSummaries(deps.db, messages.map((m) => String(m.id)));
         const changesByMsg = messageFileChanges(deps.db, messages.map((m) => String(m.id)));
+        const repairs=readMessageRepairLineages(deps.db,messages.map(message=>String(message.id)));
         for (const m of messages) {
+          m.repairLineage=repairs.get(String(m.id))??null;
           (m as { attachments?: unknown }).attachments = attByMsg.get(String(m.id)) ?? [];
           m.fileChanges = changesByMsg.get(String(m.id)) ?? [];
         }
@@ -5140,6 +5162,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             delivery: deliveryFactsOfTask(deps.db, t.root_task_id ?? ''),
             executionBlocker: t.root_task_id == null ? null : readExecutionBlocker(deps.db, t.root_task_id),
             preDispatchFailure:t.root_task_id==null?null:readPreDispatchFailure(deps.db,t.root_task_id),
+            executionStatus:t.root_task_id==null?null:readTaskExecutionStatus(deps.db,t.root_task_id),
             // The cold room view needs the same factual child activity as an
             // opened thread, without fetching each thread's history/details.
             progress: t.root_task_id != null && ['ACTIVE','WAITING_USER'].includes(t.task_status ?? '')
@@ -5147,6 +5170,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               ? readThreadProgress(deps.db, t.id) : [],
           });
         }
+        const repairs=readMessageRepairLineages(deps.db,items.flatMap(item=>item.recentReplies.map(reply=>reply.id)));
+        for(const item of items)for(const reply of item.recentReplies)Object.assign(reply,{repairLineage:repairs.get(reply.id)??null});
         return withCommandId({ ok: true, data: { items } });
       }
       case 'run.progress': {
@@ -5566,6 +5591,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     if (error instanceof DaemonCommandError) {
       return withCommandId({ ok: false, error: { code: error.code, message: error.message, retryable: false, ...(error.operationPending ? { operationPending: true } : {}), ...(error.operationKnownRejected ? { operationKnownRejected: true } : {}) } });
     }
+    if(error instanceof TaskNotificationError)return withCommandId({ok:false,error:{code:error.code,message:error.message,retryable:false}});
     if (error instanceof z.ZodError) {
       return withCommandId({ ok: false, error: { code: 'VALIDATION_INVALID', message: error.issues[0]?.message ?? '参数无效', retryable: false } });
     }

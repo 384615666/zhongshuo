@@ -1,3 +1,4 @@
+import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
 /**
  * 第四十七轮 H1 真实链测试（review-r46 §3/§7）：**打包的 hifi 前端代码 × 正式 daemon 命令面 ×
  * 独立 fake 库/worker**——不是传输桩。
@@ -77,6 +78,7 @@ interface LoaderApi {
   buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): { commandId: string; method: 'message.submit'; params: Record<string, unknown> };
 }
 interface StoreApi {
+  initDraftPersistence(namespace:string,rootId?:string):boolean;
   getState(): { projects: Array<{ displayName: string }>; dms: Array<{ id: string; unread: number }>; rooms: Array<{ id: string; memberIds: string[]; conversationId?: string }>; dmHistory: Record<string, Array<{ id: string; authorId: string; createdAt: number }>> };
   setReadGate?(gate: ((conversationId: string) => boolean) | null): void;
 }
@@ -108,6 +110,7 @@ async function makeHarness(): Promise<Harness> {
     },
   };
   const bundle = await import(pathToFileURL(bundlePath).href) as unknown as Harness['bundle'];
+  initializeHifiSendPersistence(bundle.store,`r108-hifiFirstPackage.test.ts|${randomUUID()}`);
   return {
     bundle,
     raw,

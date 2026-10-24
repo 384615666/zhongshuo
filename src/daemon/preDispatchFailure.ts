@@ -160,14 +160,21 @@ export function readPreDispatchFailure(
   `).get(taskId) as FailureRow | undefined;
   if (failure == null || !preDispatchFailureKinds.includes(failure.kind)) return null;
 
-  // Worker order is task.statusChanged(BLOCKED) before the failure audit.
-  // A later status transition or redispatch makes this failure historical.
+  // Most preparation failures follow BLOCKED. The legacy member-disabled
+  // worker emits its evidence immediately before that one BLOCKED transition.
+  // Any other later transition or redispatch makes the failure historical.
   const laterStatus = db.prepare(`
-    SELECT seq FROM domain_events
+    SELECT seq, payload_json FROM domain_events
     WHERE task_id = ? AND kind = 'task.statusChanged' AND seq > ?
     ORDER BY seq DESC LIMIT 1
-  `).get(taskId, failure.seq) as { seq: number } | undefined;
-  if (laterStatus != null) return null;
+  `).get(taskId, failure.seq) as { seq: number;payload_json:string } | undefined;
+  if(laterStatus!=null){
+    let disabledBlock=false;
+    try{disabledBlock=failure.kind==='task.memberDisabledBlocked'
+      &&(JSON.parse(laterStatus.payload_json) as {status?:unknown}).status==='BLOCKED'
+      &&(db.prepare("SELECT count(*) n FROM domain_events WHERE task_id=? AND kind='task.statusChanged' AND seq>?").get(taskId,failure.seq) as {n:number}).n===1;}catch{/* unknown audit stays conservative */}
+    if(!disabledBlock)return null;
+  }
   const laterRedispatch = db.prepare(`
     SELECT seq FROM domain_events
     WHERE task_id = ? AND kind = 'task.redispatchEnqueued' AND seq > ?

@@ -57,6 +57,7 @@ import { migration055 } from './055-coordination-run-rosters.ts';
 import { migration056 } from './056-deliberation-budget-snapshot.ts';
 import { migration057 } from './057-thread-deliberation-identity.ts';
 import { migration058 } from './058-r98-call-budget-and-file-changes.ts';
+import { migration059 } from './059-task-notifications.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -118,4 +119,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration056,
   migration057,
   migration058,
+  migration059,
 ];

@@ -1,3 +1,5 @@
+import type {TaskExecutionStatus} from '../../../contracts/executionStatus.ts';
+import type {RecoveredSendLocation} from '../../../contracts/sendRecovery.ts';
 /**
  * 正式侧状态层（H1 首包，第四十七轮修订）：**替换原型种子 store 的真实实现**。
  *
@@ -20,6 +22,7 @@ import { configureReadingPositions, readingPosition, saveReadingPosition } from 
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
  * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
 export interface ThreadTaskDetail {
+  executionStatus?:TaskExecutionStatus|null;
   responseKind?:'conversation'|'work'|null;
   id: string;
   title: string;
@@ -77,6 +80,7 @@ export interface HifiExtension {
   /** 结果未知的在途信封（review-r47 §2）：按目标草稿键持有**不可变原信封**——重试严格重发
    * 原内容；期间新编辑作为独立草稿保留（组件卸载/切目标不丢）。 */
   pendingSends: Record<string, PendingSendEnvelope>;
+  lastSendReferences:Record<string,LastSendReference>;
   /** 标读统一门（review-r47 §4）：页面注册——markRead 发起前**此刻**重查（当前会话/前台/
    * 贴底/接管）；缺省拒绝（安全侧）。 */
   readGate: ((conversationId: string) => boolean) | null;
@@ -157,7 +161,7 @@ function makeEmptyState(): HifiState {
     // —— 正式侧扩展 ——
     loadGen: 0,
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
-    readErrors: {}, pendingSends: {}, readGate: null, threadReadGate: null,
+    readErrors: {}, pendingSends: {}, lastSendReferences:{}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null, openInFlight: false, openInFlightTarget: null,
     conn: 'online', connInfo: null,
@@ -748,6 +752,7 @@ export interface PendingSendEnvelope {
   };
   targetLabel: string;
   at: number;
+  payloadHash?:string;
   /** 发起时的草稿编辑代次（review-r48 §4）：清算只在代次未变时剥离已发内容。 */
   revAtSend?: number;
   /** 同键连续未知（review-r48 §4）：先到先重试，不覆盖前一份未确认信封。 */
@@ -755,6 +760,8 @@ export interface PendingSendEnvelope {
   /** r62 P1：重载收口标记——出站账本恢复为「结果未知」人工同号确认项。 */
   recovered?: boolean;
 }
+
+export interface LastSendReference extends PendingSendEnvelope { outcome:'sending'|'unknown'|'accepted'|'rejected';settled?:boolean;location?:RecoveredSendLocation;error?:string }
 
 export function setReadGate(gate: ((conversationId: string) => boolean) | null): void {
   setState((s) => ({ ...s, readGate: gate }));
@@ -860,6 +867,7 @@ function validateEnvelope(e: unknown): e is PendingSendEnvelope {
   if (typeof e.commandId !== 'string' || e.commandId.length === 0 || e.method !== 'message.submit') return false;
   const p = e.params;
   if (!isPlainObject(p) || typeof p.body !== 'string' || (p.intent !== 'default' && p.intent !== 'record_only') || !isPlainObject(p.target)) return false;
+  if(e.payloadHash!=null&&(typeof e.payloadHash!=='string'||!/^[a-f0-9]{64}$/.test(e.payloadHash)))return false;
   if (p.analysisOnly !== undefined && typeof p.analysisOnly !== 'boolean') return false;
   if (p.deliberationBudget != null && (!isPlainObject(p.deliberationBudget) || !Number.isInteger(p.deliberationBudget.maxTurns) || (p.deliberationBudget.maxTurns as number) < 1)) return false;
   if (e.at != null && typeof e.at !== 'number') return false;
@@ -887,7 +895,7 @@ function persistSnapshot(): void {
     const draftsOut: Record<string, HifiDraft> = {};
     const now = Date.now();
     for (const [k, v] of drafts) draftsOut[k] = v.updatedAt != null ? v : { ...v, updatedAt: now };
-    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, ...(persistRootId != null ? { dataRootId: persistRootId } : {}), drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut, outboundLedger: state.outboundLedger });
+    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, ...(persistRootId != null ? { dataRootId: persistRootId } : {}), drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut, outboundLedger: state.outboundLedger,lastSendReferences:state.lastSendReferences });
     localStorage.setItem(persistKey, payload);
     if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote, legacyImport: s.draftPersist.legacyImport } }));
   } catch (e) {
@@ -965,8 +973,10 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
         if (kept.length !== list.length) droppedSends += list.length - kept.length;
         if (kept.length > 0) ledger[k] = kept.map((x) => ({ ...x, stage: 'sending' as const }));
       }
+      const lastSendReferences:Record<string,LastSendReference>={};
+      for(const [key,value] of Object.entries((data.lastSendReferences??{}) as Record<string,unknown>)){if(validateEnvelope(value)&&['sending','unknown','accepted','rejected'].includes(String((value as LastSendReference).outcome)))lastSendReferences[key]={...(value as LastSendReference),...((value as LastSendReference).outcome==='sending'?{outcome:'unknown' as const}:{})};}
       draftRev = Math.max(draftRev, maxRev);
-      setState((s) => ({ ...s, pendingSends: { ...sends, ...s.pendingSends }, uploadItems: { ...uploads, ...s.uploadItems }, outboundLedger: ledger }));
+      setState((s) => ({ ...s, pendingSends: { ...sends, ...s.pendingSends }, uploadItems: { ...uploads, ...s.uploadItems }, outboundLedger: ledger,lastSendReferences:{...lastSendReferences,...s.lastSendReferences} }));
     }
     // 任一不可恢复/丢弃/过期：原件逐字隔离（先隔离后覆写——不销毁唯一原件；隔离尽力而为，
     // 失败时保留主键原样并说明，本轮内存态照常可用）。隔离件中的未确认账本不解析不派发。
@@ -1206,13 +1216,15 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
     // 防护失效。拒绝发送并给出恢复路径（不冒充已保存）。
     return { ok: false, error: '草稿快照保全锁定中（原件未隔离成功，主键不可覆盖）——发送已取消；请先释放存储空间并到「设置 → 草稿存储」重试，恢复后再发送' };
   }
-  const entry: OutboundLedgerEntry = { ...env, stage: 'sending' };
-  setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: [...(s.outboundLedger[draftKey] ?? []), entry] } }));
+  const frozen=JSON.parse(JSON.stringify(env)) as PendingSendEnvelope;
+  const previousReference=getState().lastSendReferences[draftKey];
+  const entry: OutboundLedgerEntry = { ...frozen, stage: 'sending' };
+  setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: [...(s.outboundLedger[draftKey] ?? []), entry] },lastSendReferences:{...s.lastSendReferences,[draftKey]:{...frozen,outcome:'sending'}} }));
   persistSnapshot();
   const err = getState().draftPersist.error;
   if (err != null) {
     // 落盘失败=账本不可靠：回滚内存条目并取消发送（不冒充已保存原信封）。
-    setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId) } }));
+    setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId) },lastSendReferences:Object.fromEntries(Object.entries({...s.lastSendReferences,[draftKey]:previousReference}).filter((entry):entry is [string,LastSendReference]=>entry[1]!=null)) }));
     return { ok: false, error: `原信封未能耐久保存（${err}）——本次未发送；存储恢复后重试即自动可用` };
   }
   return { ok: true };
@@ -1229,6 +1241,12 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
  * 等待期新编辑/新 @/新附件保留。返回结算后的草稿（现挂目标 UI 同步用）。
  */
 export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?: { recordThread?: boolean }): HifiDraft {
+  const known=getState().lastSendReferences[draftKey];
+  if(known?.commandId===env.commandId&&known.settled===true
+    &&!(getState().outboundLedger[draftKey]??[]).some(item=>item.commandId===env.commandId)
+    &&getState().pendingSends[draftKey]?.commandId!==env.commandId
+    &&!getState().pendingSends[draftKey]?.queued?.some(item=>item.commandId===env.commandId))return getDraftFull(draftKey);
+  updateSendReference(draftKey,env,'accepted');
   const d = getDraftFull(draftKey);
   const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
   // 正文 token 只是编辑器里的结构化文件气泡；发送信封走 attachmentRefs。成功后按真实
@@ -1267,12 +1285,14 @@ export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?
     }
     return { ...s, outboundLedger: nextLedger, pendingSends: sends };
   });
+  updateSendReference(draftKey,env,'accepted',{settled:true});
   persistSnapshot();
   return settled;
 }
 
 /** 明确拒绝：删账本条目（草稿保留）。 */
 export function dropOutbound(draftKey: string, env: PendingSendEnvelope): void {
+  updateSendReference(draftKey,env,'rejected');
   setState((s) => {
     const ledger = (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId);
     const nextLedger = { ...s.outboundLedger };
@@ -1284,6 +1304,7 @@ export function dropOutbound(draftKey: string, env: PendingSendEnvelope): void {
 
 /** 结果未知：账本条目转 pendingSends（横幅=人工同号同参确认；排队语义沿用 park）。 */
 export function confirmOutboundUnknown(draftKey: string, env: PendingSendEnvelope): void {
+  updateSendReference(draftKey,env,'unknown');
   setState((s) => {
     const ledger = (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId);
     const nextLedger = { ...s.outboundLedger };
@@ -1365,3 +1386,13 @@ export function recordWrite(api: string, detail: string) {
 }
 /** 批准组件内部触发的本地动作（复制正文等）——如实登记「本地动作」，不冒充后端行为。 */
 export function recordLocalOnly(name: string, detail: string) { recordWrite(`LOCAL_ONLY:${name}`, detail); }
+
+/** Update only this immutable request identity, including after a late response. */
+export function updateSendReference(draftKey:string,env:PendingSendEnvelope,outcome:LastSendReference['outcome'],details?:{payloadHash?:string;location?:RecoveredSendLocation;error?:string;settled?:boolean}):boolean{
+  const current=getState().lastSendReferences[draftKey];
+  if(current&&current.commandId!==env.commandId)return true;
+  const next:LastSendReference={...(current??JSON.parse(JSON.stringify(env)) as PendingSendEnvelope),outcome,...details};
+  setState(state=>({...state,lastSendReferences:{...state.lastSendReferences,[draftKey]:next}}));
+  persistSnapshot();
+  return getState().draftPersist.error==null&&!persistLocked&&persistKey!=null;
+}

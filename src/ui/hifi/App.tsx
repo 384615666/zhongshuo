@@ -1,3 +1,4 @@
+import {TaskNotificationController} from './components/TaskNotificationController';
 /**
  * 正式外壳（H1 首包，第四十七轮修订）：原型侧栏三段式（§17.1/第十五批）+ 主区路由 房间/私信。
  * 未换装入口经「原界面」**定向接管**（takeLegacy(target) 按 legacy 既有面板/开关定位到对应
@@ -410,6 +411,7 @@ export default function App() {
   return (
     <>
       <TitleBar />
+      <TaskNotificationController/>
       <HifiErrorBoundary>
         <div className="app" data-zs-boot={s.boot}>
         <div className="app-body">

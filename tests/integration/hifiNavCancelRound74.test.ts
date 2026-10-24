@@ -1,3 +1,4 @@
+import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
 /**
  * 第七十四轮 P1 集成测试（review-r73 §P1：取消凭据没有进入项目打开内部）。
  *
@@ -50,12 +51,14 @@ export { loader, store, navIntent };
 interface NavIntentLike { cancelled: boolean }
 interface OpenResult { id: string; isCurrent(): boolean }
 interface LoaderApi {
+  bootRemembered():Promise<void>;
   openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntentLike }): Promise<OpenResult>;
   ensureProjectActive(projectId: string, intent?: NavIntentLike): Promise<void>;
   locateThread(threadId: string, intent?: NavIntentLike): Promise<{ projectId: string; roomId: string }>;
   sendEnvelope(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; error?: { message: string } }>;
 }
 interface StoreApi {
+  initDraftPersistence(namespace:string,rootId?:string):boolean;
   getState(): {
     activeProjectId: string; openInFlight: boolean; loadGen: number;
     rooms: Array<{ id: string; projectId: string }>;
@@ -87,7 +90,7 @@ interface Harness {
   close(): void;
 }
 
-async function makeHarness(): Promise<Harness> {
+async function makeHarness(initializeStorage=true): Promise<Harness> {
   const db = openDatabase(':memory:');
   const appDir = join(tmpRoot, 'app');
   mkdirSync(appDir, { recursive: true });
@@ -109,6 +112,7 @@ async function makeHarness(): Promise<Harness> {
   };
   (globalThis as unknown as { localStorage: unknown }).localStorage = ls;
   (globalThis as unknown as { window: unknown }).window = {
+    location: { hash: '#/welcome' },
     setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
     zs: {
       command: async (env: { commandId: string; method: string; params: Record<string, unknown> }) => {
@@ -123,6 +127,7 @@ async function makeHarness(): Promise<Harness> {
     },
   };
   const bundle = await import(`${pathToFileURL(bundlePath).href}?run=${randomUUID()}`) as unknown as Harness['bundle'];
+  if(initializeStorage)initializeHifiSendPersistence(bundle.store,`r108-hifiNavCancelRound74.test.ts|${randomUUID()}`);
   const hold = (match: Hold['match']): Hold => {
     let release!: () => void;
     const promise = new Promise<void>((res) => { release = res; });
@@ -151,6 +156,49 @@ const mkProj = (name: string) => {
 };
 
 describe('第七十四轮 P1：取消凭据贯穿项目打开内部（真实链）', () => {
+  it('R108：启动设置迟到时，手动打开及首次发送使用正式身份耐久保存', async () => {
+    await buildHifiBundle();
+    const h = await makeHarness(false);
+    const gate = h.hold((env) => env.method === 'app.settings.get' &&
+      (env.params.keys as string[] | undefined)?.includes('ui.autoOpenProjectPath') === true);
+    gate.once = true;
+    const boot = h.bundle.loader.bootRemembered();
+    try {
+      await waitForSent(h, (env) => gate.match(env), '启动设置仍在途');
+      const opened = await h.bundle.loader.openProjectByPath(mkProj('r108-first-send'));
+      expect(opened.isCurrent()).toBe(true);
+      const identity = (await h.raw('app.identity', {})).data as {
+        localUserId: string; appDataDir: string; dataRootId: string | null;
+      };
+      const namespace = identity.dataRootId == null
+        ? `${identity.appDataDir}|${identity.localUserId}`
+        : `v2.${identity.dataRootId}|${identity.localUserId}`;
+      const storageKey = `zs.hifi.persist.${namespace}`;
+      expect(h.localStorageBacked.has(storageKey)).toBe(true);
+      const room = h.db.prepare('SELECT id FROM rooms WHERE project_id=? LIMIT 1').get(opened.id) as { id: string };
+      const conversation = h.db.prepare("SELECT id FROM conversations WHERE project_id=? AND kind='room' LIMIT 1").get(opened.id) as { id: string };
+      const commandId = `r108-first-${randomUUID()}`;
+      const sent = await h.bundle.loader.sendEnvelope({ commandId, method: 'message.submit', params: {
+        target: { kind: 'room_root', projectId: opened.id, conversationId: conversation.id, roomId: room.id },
+        body: 'R108 启动迟到后的首次记录', intent: 'record_only', mentions: [],
+      } });
+      expect(sent.status).toBe('ok');
+      const snapshot = h.localStorageBacked.get(storageKey)!;
+      expect(snapshot).toContain(commandId);
+      expect(snapshot).toMatch(/"payloadHash":"[a-f0-9]{64}"/);
+      gate.release();
+      await boot;
+      expect(h.bundle.store.getState().activeProjectId).toBe(opened.id);
+      expect(h.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE body_json LIKE ?').get('%R108 启动迟到后的首次记录%')).toEqual({ n: 1 });
+      expect(h.db.prepare('SELECT COUNT(*) AS n FROM workflow_runs').get()).toEqual({ n: 0 });
+      expect(h.sent.filter((env) => env.method === 'app.identity')).toHaveLength(1);
+    } finally {
+      gate.release();
+      await boot;
+      h.close();
+    }
+  });
+
   it('project.open/成员装载/thread.get 等待期取消分列 + 反序回执 + 正例', async () => {
     await buildHifiBundle();
     const h = await makeHarness();

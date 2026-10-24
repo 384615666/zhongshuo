@@ -1,3 +1,5 @@
+import type {MessageRepairLineage} from '../../../contracts/repairLineage.ts';
+import type {TaskExecutionStatus} from '../../../contracts/executionStatus.ts';
 import type {PreDispatchFailureProjection} from '../../../contracts/taskDetails.ts';
 /**
  * 众说原型 · 领域模型类型
@@ -310,6 +312,7 @@ export interface ThreadCard {
   delivery?: DeliveryFact | null;
   executionBlocker?: TaskExecutionBlocker | null;
   preDispatchFailure?:PreDispatchFailureProjection|null;
+  executionStatus?:TaskExecutionStatus|null;
   ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;
@@ -380,6 +383,7 @@ export type ThreadTabKey =
   | 'run';
 
 export interface Message {
+  formalRepairLineage?:MessageRepairLineage|null;
   fileChanges?: MessageFileChange[];
   id: string;
   projectId: string;
@@ -1184,6 +1188,7 @@ export interface AttentionItem {
  *  - 项目内所有成员都可作为私聊对象
  */
 export interface DmConversation {
+  executionStatus?:TaskExecutionStatus|null;
   id: string;
   projectId: string;
   /** 正式侧投影（第四十七轮）：conversation.list 的执行态/对端名/预览（H1 呈现用）。 */

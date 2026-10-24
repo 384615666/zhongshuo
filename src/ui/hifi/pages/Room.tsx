@@ -1,3 +1,5 @@
+import {TaskExecutionStatusView} from '../components/TaskExecutionStatusView';
+import {taskExecutionNeedsReview,taskExecutionStatusSummary} from '../components/ExecutionStatus';
 /**
  * 房间页（§17.1 主窗口布局 / §17.2 房间 / §17.6 多任务不变量）
  *
@@ -948,6 +950,7 @@ function RootCard({
   const executionBlocker = thread
     ? taskExecutionBlocker(s.threadTasks[thread.id],s.roomPool[message.roomId]?.find((card) => card.threadId === thread.id))
     : null;
+  const executionStatus=thread?(s.threadTasks[thread.id]?.executionStatus??s.roomPool[message.roomId]?.find(card=>card.threadId===thread.id)?.executionStatus):null;
   const preDispatchFailure=thread&&task?.status==='BLOCKED'&&!run?(s.threadTasks[thread.id]?.preDispatchFailure??s.roomPool[message.roomId]?.find(card=>card.threadId===thread.id)?.preDispatchFailure):null;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
@@ -972,7 +975,7 @@ function RootCard({
   const deliveryFactLine = deliveryLabel == null ? null
     : `程序交付：${deliveryLabel}${delivery?.overallConsensus === 'disputed' ? ' · 仍有分歧' : delivery?.overallConsensus === 'unconfirmed' ? ' · 仍有成员未确认' : delivery?.overallConsensus === 'qualified' ? ' · 附条件确认' : ''}`;
   // 主池只留 2 条预览：它是"要不要点进去"的判断依据，不是正文（§3.4 允许 2—3 条）
-  const preview = thread ? replyPreview(s, thread.id, 2) : [];
+  const preview = thread ? replyPreview(s, thread.id, 2).filter(reply=>!(reply.formalRepairLineage?.state==='repaired'&&reply.formalRepairLineage.messageRole==='source')) : [];
 
   /**
    * 主状态：每张卡只突出一个，并给一句"下一步"。
@@ -983,6 +986,7 @@ function RootCard({
    */
   const primary = useMemo(() => {
     if (!task) return null;
+    if(executionStatus){const summary=taskExecutionStatusSummary(executionStatus);return {label:summary.label,icon:'activity',tone:taskExecutionNeedsReview(executionStatus)?'warning' as const:executionStatus.phase==='COMPLETED'?'success' as const:['UNKNOWN','FAILED','NOT_STARTED_FAILED'].includes(executionStatus.phase)?'danger' as const:'info' as const,detail:[summary.main,summary.detail,summary.result].filter(Boolean).join(' · ')};}
     if(preDispatchFailure)return {label:'尚未启动',icon:'octagon',tone:'danger' as const,detail:`${preDispatchFailure.memberName??'执行成员'} · 模型尚未被调用 · ${preDispatchFailure.event.message}`};
     // 1) 需要用户介入的最高优先
     if (task.status === 'REVIEW') {
@@ -1060,7 +1064,7 @@ function RootCard({
       };
     }
     return taskRunHint(run?.status, executionBlocker);
-  }, [task, run, executionBlocker, preDispatchFailure, s.changeSets, s.issues, s.turns, s.threadProgress, s.members, thread, delivery, deliveryDetail]);
+  }, [task, run, executionBlocker, preDispatchFailure, executionStatus, s.changeSets, s.issues, s.turns, s.threadProgress, s.members, thread, delivery, deliveryDetail]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
 
@@ -1825,6 +1829,7 @@ function ThreadPanel({
        * 「回复」「成果」保持原样。URL 仍写既有 tab 键，旧深链不动。
        */}
 
+      {s.threadTasks[thread.id]?.executionStatus?<TaskExecutionStatusView status={s.threadTasks[thread.id]?.executionStatus}/>:null}
       <div className="list-wrap">
         {view === 'replies' ? (
           <>
@@ -2582,7 +2587,7 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
       </div>
       <details className="small faint"><summary>操作快照身份</summary>任务 revision {detail?.revision ?? task.revision} · 停止代次 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
     </div>
-    {formal ? <><TaskExtraFacts detail={formal}/><AnalysisContinueAction failure={formal.preDispatchFailure} roomId={task.roomId}/></> : null}
+    {formal ? <><TaskExecutionStatusView status={formal.executionStatus} density="detail"/><TaskExtraFacts detail={formal}/><AnalysisContinueAction failure={formal.preDispatchFailure} roomId={task.roomId}/></> : null}
     </>
   );
 }

@@ -25,6 +25,7 @@ import {
   stripInlineAttachmentTokens, staleAttachmentUploadIds,
 } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem, InlineAttachmentToken, InlineBodySegment } from '../data/store';
+import {SendRecoveryAction} from './SendRecoveryAction';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
 import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
@@ -1087,10 +1088,11 @@ export function Composer({
     detectMentionTrigger(editor);
   };
   /** 行内发送错误（按发起目标键归属——迟到回执不污染当前目标，review-r47 §3）。 */
-  const [sendErrorFor, setSendErrorState] = useState<{ key: string; text: string } | null>(null);
+  const [sendErrorFor, setSendErrorState] = useState<{ key: string; text: string; commandId?:string } | null>(null);
   const sendError = sendErrorFor != null && sendErrorFor.key === draftKey ? sendErrorFor.text : null;
-  const setSendErrorFor = (key: string, text: string) => setSendErrorState({
+  const setSendErrorFor = (key: string, text: string, commandId?:string) => setSendErrorState({
     key,
+    commandId,
     text: text.replace(/(?:^|[\s：])([A-Z][A-Z0-9_]{3,})\s*[:：]\s*/g, ' ').replace(/\s+/g, ' ').trim(),
   });
   /** 当前挂载目标键（结算时核对——迟到回执只在同键在挂时同步当前输入）。 */
@@ -1499,7 +1501,7 @@ export function Composer({
       callBudgetEnabled === true && collaboration ? budgetPreview?.calls ?? undefined : undefined,
       effectiveAnalysisOnly,
     )) {
-      setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
+      setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先查询刚才的发送，或点「重发原内容」（同号幂等）',pendingEnv.commandId);
       return;
     }
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
@@ -1537,6 +1539,7 @@ export function Composer({
     setSendErrorState(null);
     setImageGate(null);
     const keyAtSend = draftKey;
+    const commandIdAtSend = commandIdRef.current;
     const sentMentions = effectiveMentionIds;
     /** 本次实际发送的附件引用（refs 身份——不再按文件名/大小识别，review-r51 §2）。 */
     const sentAttachmentIds = draftRefs.map((a) => a.attachmentId);
@@ -1556,7 +1559,7 @@ export function Composer({
       method: { planFirst: access === 'plan', skipFirstDraft, splitWork },
       access,
       attachments: sentAttachments,
-      commandId: commandIdRef.current,
+      commandId: commandIdAtSend,
       target,
       draftRev: getDraftFull(draftKey).rev,
       ...(imageAck === 'omit-images' ? { imageAck: 'omit-images' as const } : {}),
@@ -1615,16 +1618,16 @@ export function Composer({
           commandIdRef.current = newId(); // 成功后下一次是新的命令
         } else if (r.status === 'failed') {
           commandIdRef.current = newId(); // 确定失败：新命令号重发
-          setSendErrorFor(keyAtSend, `发送失败：${r.error}——内容已保留，修正后可重发`);
+          setSendErrorFor(keyAtSend, `发送失败：${r.error}——内容已保留，修正后可重发`,commandIdAtSend);
         } else {
           // 页面已在发送前用正式 builder 冻结完整信封并按 unknown 入库（park）——此处只换新号。
           commandIdRef.current = newId();
-          setSendErrorFor(keyAtSend, `发送结果未知（${r.error}）——原信封已保留，可「重发原内容」（同命令号不重复）`);
+          setSendErrorFor(keyAtSend, `发送结果未知（${r.error}）——原信封已保留，可「重发原内容」（同命令号不重复）`,commandIdAtSend);
         }
       }).catch((e: unknown) => {
         // 无明确业务回执的异常：页面按 unknown 已冻结原信封——此处只换新号。
         commandIdRef.current = newId();
-        setSendErrorFor(keyAtSend, `发送结果未知（${e instanceof Error ? e.message : String(e)}）——原信封已保留，可「重发原内容」`);
+        setSendErrorFor(keyAtSend, `发送结果未知（${e instanceof Error ? e.message : String(e)}）——原信封已保留，可「重发原内容」`,commandIdAtSend);
       }).finally(() => {
         sendingKeys.delete(keyAtSend); // 只清发起键（不清其它在途目标——r48 §4）
         setSending(false);
@@ -1674,12 +1677,12 @@ export function Composer({
       }
       if (r.status === 'failed') {
         clearUnknownEnvelope(keyAtSend); // 原信封被服务明确拒绝：信封作废
-        setSendErrorFor(keyAtSend, `重发失败：${r.error}`);
+        setSendErrorFor(keyAtSend, `重发失败：${r.error}`,env.commandId);
         return;
       }
-      setSendErrorFor(keyAtSend, `重发仍未知（${r.error}）——原信封继续保留，可再重试`);
+      setSendErrorFor(keyAtSend, `重发仍未知（${r.error}）——原信封继续保留，可再重试`,env.commandId);
     }).catch((e: unknown) => {
-      setSendErrorFor(keyAtSend, `重发仍未知（${e instanceof Error ? e.message : String(e)}）——原信封继续保留`);
+      setSendErrorFor(keyAtSend, `重发仍未知（${e instanceof Error ? e.message : String(e)}）——原信封继续保留`,env.commandId);
     }).finally(() => {
       sendingKeys.delete(keyAtSend);
       setSending(false);
@@ -2120,6 +2123,13 @@ export function Composer({
 
       {/* 结果未知的在途信封（review-r47 §2）：与当前草稿分列——重试严格重发原信封。
           R66 P3：文件-only 信封 body 为空——摘要显示附件数而不是空正文。 */}
+      <SendRecoveryAction draftKey={draftKey} onRecovered={(settled,recovered)=>{
+        if(draftKeyRef.current!==recovered.draftKey)return;
+        setSendErrorState(previous=>previous?.key===recovered.draftKey&&previous.commandId===recovered.commandId?null:previous);
+        setBody(settled.body);setMentions(settled.mentions);
+        setAnalysisOnly(targetKindRef.current==='room_root'&&settled.analysisOnly===true);
+        if(editorRef.current){renderEditorBody(editorRef.current,settled.body,getState().uploadItems[draftKey]??[]);setEditorCaret(editorRef.current);}
+      }}/>
       {pendingEnv != null ? (
         <div className="composer-mentions">
           <span className="chip composer-info-chip" title={`结果未知的发送：${pendingEnvSummary(pendingEnv)}（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>

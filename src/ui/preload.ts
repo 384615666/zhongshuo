@@ -49,6 +49,21 @@ contextBridge.exposeInMainWorld('zsDownload', {
 });
 
 /**
+ * Desktop task notifications. Renderer submits only a controlled opaque ID;
+ * daemon owns title/body/locator and main validates the claimed delivery before
+ * constructing a native Electron Notification.
+ */
+contextBridge.exposeInMainWorld('zsTaskNotifications', {
+  show: (notificationId: string): Promise<unknown> =>
+    ipcRenderer.invoke('zs:task-notification.show', notificationId),
+  onClick: (cb: (event: unknown) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown): void => cb(payload);
+    ipcRenderer.on('zs:task-notification.click', listener);
+    return () => ipcRenderer.removeListener('zs:task-notification.click', listener);
+  },
+});
+
+/**
  * Complete local data operations. The renderer only names an enum action; the
  * source/destination paths come from native folder pickers in main. The current
  * process exits before the detached worker reads any profile or data root.

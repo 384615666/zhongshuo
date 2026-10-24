@@ -1,3 +1,4 @@
+import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
 /**
  * 第五十二轮 H2 真实链测试（review-r51 §2/§3/§5/§6.3）：**打包 hifi 前端数据层 × 正式
  * daemon × fake 库**——附件归属（uploadId 收敛/移除即弃/refs 清算）、fatal UTF-8 字节合同、
@@ -50,6 +51,7 @@ interface LoaderApi {
   stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }>;
 }
 interface StoreApi {
+  initDraftPersistence(namespace:string,rootId?:string):boolean;
   getState(): {
     rooms: Array<{ id: string; conversationId?: string }>;
     dms: Array<{ id: string }>;
@@ -89,6 +91,7 @@ async function makeHarness(): Promise<Harness> {
     zs: { command: async (env: { commandId: string; method: string; params: unknown }) => raw(env.method, env.params, env.commandId) },
   };
   const bundle = await import(pathToFileURL(bundlePath).href) as unknown as Harness['bundle'];
+  initializeHifiSendPersistence(bundle.store,`r108-hifiUploadDeepLinkRound52.test.ts|${randomUUID()}`);
   return { bundle, raw, sent, db, close: () => db.close() } as unknown as Harness;
 }
 

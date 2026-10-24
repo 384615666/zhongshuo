@@ -1,3 +1,4 @@
+import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
 /**
  * 第五十一轮 H2 真实链测试（review-r50 §4）：**打包的 hifi 前端数据层 × 正式 daemon 命令面
  * × 独立 fake 库/worker**——回复串/任务详情/附件/深链 DTO 与合同本体。
@@ -74,6 +75,7 @@ interface LoaderApi {
   attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string };
 }
 interface StoreApi {
+  initDraftPersistence(namespace:string,rootId?:string):boolean;
   getState(): {
     rooms: Array<{ id: string; conversationId?: string; memberIds: string[] }>;
     roomPool: Record<string, Array<{ threadId: string; taskId: string | null; replyCount: number; unread: number }>>;
@@ -109,6 +111,7 @@ async function makeHarness(): Promise<Harness> {
     zs: { command: async (env: { commandId: string; method: string; params: unknown }) => raw(env.method, env.params, env.commandId) },
   };
   const bundle = await import(pathToFileURL(bundlePath).href) as unknown as Harness['bundle'];
+  initializeHifiSendPersistence(bundle.store,`r108-hifiThreadRound51.test.ts|${randomUUID()}`);
   return {
     bundle,
     raw,
