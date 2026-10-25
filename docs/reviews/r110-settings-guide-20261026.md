@@ -22,4 +22,12 @@
 
 已实际派发 `zcode/GLM-5.3-Trial` / max，代理 `01a173d3-0b88-7c73-a3d9-de1c1909b229`。服务返回 `429 Too Many Requests` 并超过重试限额；代理未产出修改，已关闭。统筹完成实现，没有用其他模型替代后声称由 GLM 完成。
 
-V53 源码及验证完成；新包构建与GitHub推送结果在交付后补记。
+V53 已构建：`dist/desktop/desktop-daily-win-v53-r110-settings-guide-20261026`。源码提交 `947e2586e08f35fe1b5bad807769d86d4aa84cb9`，BUILD `bld_27ac1b55c2fedc88`，599项文件逐项SHA256一致；设置内手册与本次UI构建一致，正文与随包离线版相同。`start-existing-data.bat/.vbs` 与V52逐字节一致，继续原V44数据位置；用户先正常退出旧版，再开新包。没有直接替用户切换原数据。
+
+`BUILD.dirty=true` 的差异哈希仍为 `454ea1ce9699825673ca8282921e6dc82471aa994870a87cb97bcf8fcc5befa4`，来自保留的4个debug删除与无关untracked；构建前本轮源码已提交，不能把该包称clean。
+
+另用同版本Electron宿主实际加载新包的main/preload/renderer及随包Node/daemon，独立Fake数据根 `dist/r110-guide-smoke/package-data-17f30ecf`。帮助路由、同源手册、14章、V53版本、子框架无应用桥均通过；agent_turns=0、real_calls=0。正常 `win.close()` 后daemon.shutdown已投递、进程退出0、无超时/强杀，daemon.pid移除。整包界面截图和shutdown事实保存在同数据根；这仍是自动化隔离检查，不是用户原数据实测或人工点X验收。
+
+此前辅助脚本有失败记录：第一次打包Electron忽略脚本参数，检测超时；第二次用app.quit提前结束异步停机。两次均无turn/real_call，残留pid文件对应15384/44568已核对不存活；保留原证据。修正辅助脚本的宿主和退出方式后通过，期间未修改产品源码或新包。
+
+源码与本交付记录推送到 `origin/codex/full-implementation`；最后的远端核对以实际Git结果为准。

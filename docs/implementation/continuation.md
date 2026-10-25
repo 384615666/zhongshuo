@@ -6,7 +6,9 @@
 
 用户要求手册放进设置且以后更新同步维护，已实施“设置 → 帮助与关于”直接阅读14章完整手册，并接现有设置搜索。`build:ui` 每次从 docs/user-guide/README.md 生成设置内本地资源与离线HTML，打包附带离线版；README及施工总任务书写明功能/入口/交互变更须同步改手册、版本、日期及相关截图。只做此项，不恢复旧52项扩张。
 
-已实际派发 zcode/GLM-5.3-Trial / max，子代理因429重试失败，无修改产出，已关闭，由统筹完成。双类型、构建、本轮代码lint、11项隐藏Electron正式组件及同源手册检查通过；900/1440宽窄无横向溢出。未启动真实模型或用户原数据，未跑全量/e2e/GitHub sandbox；具体检查边界见 [R110记录](../reviews/r110-settings-guide-20261026.md)。V53待打包推送后补记身份，保留4个debug删除和无关untracked。
+已实际派发 zcode/GLM-5.3-Trial / max，子代理因429重试失败，无修改产出，已关闭，由统筹完成。双类型、构建、本轮代码lint、11项隐藏Electron正式组件及同源手册检查通过；900/1440宽窄无横向溢出。未启动产品真实模型或用户原数据，未跑全量/真实模型e2e/GitHub sandbox；具体检查边界见 [R110记录](../reviews/r110-settings-guide-20261026.md)。
+
+V53包desktop-daily-win-v53-r110-settings-guide-20261026，源码947e2586e08f35fe1b5bad807769d86d4aa84cb9，BUILD bld_27ac1b55c2fedc88，599项独立hash一致，内外手册正文一致。设置整包资产+随包daemon隔离启动检查通过，0turn/0real_call，正常关窗daemon退出0、pid移除；辅助启动器前两次失败及无遗留进程边界保留在报告。start-existing-data.vbs继续原V44数据位置，用户正常退出旧版再开；未实际切换用户数据。BUILD.dirty=true仍为既有debug删除及untracked，不能称clean。提交推送按既有授权进行，保留4个debug删除和无关untracked。
 
 ## 2026-10-25：精简7项已实施，V52已交付
 
