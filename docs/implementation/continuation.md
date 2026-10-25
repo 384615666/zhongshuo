@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-10-25：用户要求先审查实际使用流程，暂不施工
+
+用户反馈：Claude 说没有向 Codex 派发通道；串内“打开回复串”却去详情；“查询刚才的发送”只在原会话且常驻。**用户明确要求先列问题表和整改方案，看过后再修改。** 当前只交付 [使用流程排查与整改方案](../reviews/r109-usage-audit-proposal-20261025.md)，未改业务代码、未重新封包、未重跑用户任务；不能把早先修复授权解释为本轮可直接开工。
+
+只读原库核实：这次含“然后@Codex”的跟进仅将 Claude 保存为正式 mention，DIRECT/direct.work、只有 Claude 一条执行请求、成员交接 0；其工作结果明确记录 Codex 验证未发生，任务仍 DONE。现有纯 mention 解析函数能复现中文相邻 @ 漏识别。源码确认 thread 状态动作固定 `?tab=run`；找回入口只按当前 draftKey 读取且 accepted 仍显示；找回优先 task 深链落概况；“按原请求继续”实际固定 analysisOnly。方案共 15 项，先解决收件人与有依赖协作／完成判定，再整理上下文动作与跨页找回，其后整理状态、通知、应用内帮助与升级入口。接下来等待用户评审选择，不自动派发给编码会话或启动子代理修复。
+
 ## 2026-10-25：用户操作手册随版本交付
 
 用户要求“添加了新功能应该把操作手册一起给我”。操作手册统一放在 [docs/user-guide/README.md](../user-guide/README.md)，配隔离演示项目截图；`node scripts/package-user-guide.mjs` 生成离线 HTML，追加桌面包绝对路径参数即可只补发手册、不重建程序。`make-desktop-daily.mjs` 在各轮旧说明写完后自动附带根目录 `众说操作手册.html` 和 `操作手册/`，并在 README-DAILY 顶部放当前指引。最终 V51 原数据入口仍为 `start-existing-data.vbs`，不改程序、启动器或数据。
