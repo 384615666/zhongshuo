@@ -5,6 +5,7 @@
 import { build } from 'esbuild';
 import { cpSync, rmSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { packageUserGuideAssets, writeUserGuide } from './package-user-guide.mjs';
 
 const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
@@ -89,4 +90,7 @@ await build({
 copyFileSync(join(root, 'node_modules', '@extend-ai', 'react-xlsx', 'dist', 'duke_sheets_wasm_bg.wasm'), join(hifiOut, 'duke_sheets_wasm_bg.wasm'));
 
 cpSync(join(root, 'src', 'ui', 'renderer'), join(root, 'dist', 'ui', 'renderer'), { recursive: true });
+// Generate both editions on every UI build; never ship a stale checked-in HTML copy.
+writeUserGuide();
+packageUserGuideAssets(join(root, 'dist', 'ui', 'renderer', 'user-guide'));
 process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/pdfjs + assets/vendor + hifi/xlsx 引擎资产）\n');

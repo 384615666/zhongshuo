@@ -54,7 +54,7 @@ const NAV: NavItem[] = [
   { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: 'AI 成员的模型与权限' },
   { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
   { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
-  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '版本、诊断与本地信息' },
+  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '操作手册、版本与诊断' },
 ];
 
 /** Search only real actions shown on this page. */
@@ -71,6 +71,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
   { section: 'data', label: '草稿快照健康与重试', keywords: '草稿 快照 保存 锁定 重试', match: '草稿快照' },
   { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
+  { section: 'help', label: '操作手册', keywords: '帮助 文档 使用 教程 手册', match: 'user-guide' },
   { section: 'help', label: '版本与构建身份', keywords: '版本 构建 build 关于', match: '版本与构建' },
 ];
 
@@ -1055,7 +1056,15 @@ function SectionHelp() {
   }, []);
   return (
     <div>
-      <SectionHead title="帮助与关于" sub={<>版本、构建身份与诊断。</>} />
+      <SectionHead title="帮助与关于" sub={<>操作手册、版本与诊断。</>} />
+      <section data-settings-row="user-guide" aria-label="操作手册" style={{ marginBottom: 24 }}>
+        <iframe
+          title="众说操作手册"
+          src="user-guide/index.html"
+          sandbox="allow-same-origin"
+          style={{ display: 'block', width: '100%', height: '70vh', minHeight: 420, border: '1px solid var(--border)', borderRadius: 10, background: '#fff' }}
+        />
+      </section>
       <LocalDiagnostics />
       <ReadOnlyRow label="应用" value="众说 · 本地多成员协作工作台" />
       <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />

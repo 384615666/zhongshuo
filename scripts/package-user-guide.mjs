@@ -22,7 +22,7 @@ const sections = [
   ['help', '常见问题'],
 ];
 
-export function renderUserGuide({ assetPrefix = '', markdownPath = 'README.md' } = {}) {
+export function renderUserGuide({ assetPrefix = '', markdownPath = 'README.md', embedded = false } = {}) {
   const md = new MarkdownIt({ html: true, linkify: false, typographer: false });
   for (const [rule, attribute] of [['image', 'src'], ['link_open', 'href']]) {
     const original = md.renderer.rules[rule];
@@ -59,9 +59,9 @@ img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var
 </style>
 </head>
 <body>
-<header class="topbar"><div class="brand">众说<span class="edition">用户操作手册</span></div><a href="${markdownPath}">查看文字版</a></header>
+${embedded ? '' : `<header class="topbar"><div class="brand">众说<span class="edition">用户操作手册</span></div><a href="${markdownPath}">查看文字版</a></header>`}
 <div class="layout"><aside aria-label="章节导航"><p>按问题找操作</p>${nav}</aside><main>${body}</main></div>
-<footer class="footer">本手册可离线阅读 · 点击图片可看大图 · 浏览器 Ctrl + P 可打印或另存为 PDF</footer>
+<footer class="footer">${embedded ? '操作手册随当前程序版本提供 · 可离线阅读' : '本手册可离线阅读 · 点击图片可看大图 · 浏览器 Ctrl + P 可打印或另存为 PDF'}</footer>
 </body>
 </html>
 `;
@@ -69,6 +69,13 @@ img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var
 
 export function writeUserGuide() {
   writeFileSync(join(guideDir, 'index.html'), renderUserGuide(), 'utf8');
+}
+
+/** Build the in-app manual from the same source as the offline manual. */
+export function packageUserGuideAssets(target) {
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, 'index.html'), renderUserGuide({ embedded: true }), 'utf8');
+  if (existsSync(join(guideDir, 'images'))) cpSync(join(guideDir, 'images'), join(target, 'images'), { recursive: true });
 }
 
 /** Only documentation beside the program is changed; app payload and data stay outside this operation. */
@@ -90,7 +97,7 @@ export function packageUserGuide(packageDir) {
   writeFileSync(readmePath, `<!-- user-guide:start -->
 # 先看操作手册
 
-**双击 [众说操作手册.html](众说操作手册.html)**，无需联网；也可阅读 [文字版](操作手册/README.md)。
+在应用中打开 **设置 → 帮助与关于**，即可阅读完整操作手册。也可双击 [众说操作手册.html](众说操作手册.html) 离线阅读，或阅读 [文字版](操作手册/README.md)。
 
 ${launch}
 

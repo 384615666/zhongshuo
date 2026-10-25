@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-10-26：R110 设置内完整手册已接入
+
+用户要求手册放进设置且以后更新同步维护，已实施“设置 → 帮助与关于”直接阅读14章完整手册，并接现有设置搜索。`build:ui` 每次从 docs/user-guide/README.md 生成设置内本地资源与离线HTML，打包附带离线版；README及施工总任务书写明功能/入口/交互变更须同步改手册、版本、日期及相关截图。只做此项，不恢复旧52项扩张。
+
+已实际派发 zcode/GLM-5.3-Trial / max，子代理因429重试失败，无修改产出，已关闭，由统筹完成。双类型、构建、本轮代码lint、11项隐藏Electron正式组件及同源手册检查通过；900/1440宽窄无横向溢出。未启动真实模型或用户原数据，未跑全量/e2e/GitHub sandbox；具体检查边界见 [R110记录](../reviews/r110-settings-guide-20261026.md)。V53待打包推送后补记身份，保留4个debug删除和无关untracked。
+
 ## 2026-10-25：精简7项已实施，V52已交付
 
 用户最新明确说“开始做吧”，已授权实施 [精简7项](../design-proposals/usability-20261025/simplified-scope.md)，不再停在待评审。范围仍以该精简版为准，不恢复旧52项界面设计。当前统筹在D:/zhongshuo直接修改既有源码；保留4个debug删除和无关untracked。用户既有GitHub推送授权继续有效。默认测试已排除githubSandbox，绝不运行专用GitHub sandbox或真实模型/e2e套件。
