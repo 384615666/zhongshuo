@@ -1,0 +1,334 @@
+{
+  "date": "2026-10-25",
+  "status": "proposal_only_pending_review",
+  "authority": "latest_user_feedback",
+  "supersedes": [
+    "decisions.json",
+    "previous_workbench_prototype",
+    "previous_sequence_options_prototype"
+  ],
+  "principle": "精简后易用；不新增面板、输入提示、模式选择或额外操作；模型理解任务意图；只在X退出时加简短确认",
+  "groups": {
+    "S1": "X退出确认",
+    "S2": "现有位置展示文件夹路径",
+    "S3": "建房沿用现有默认AI",
+    "S4": "完整手册",
+    "S5": "现有派发、完成及继续行为",
+    "S6": "现有入口正确落点",
+    "S7": "现有内容与展示错误修复"
+  },
+  "items": [
+    {
+      "id": "U01",
+      "title": "关闭时说明正在进行的工作",
+      "disposition": "reduced_existing_flow",
+      "group": "S1"
+    },
+    {
+      "id": "U02",
+      "title": "清理草稿不删除待确认发送",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U03",
+      "title": "保留隔天继续写的草稿",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U04",
+      "title": "一个日常入口继续原数据",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U05",
+      "title": "能取消固定启动项目",
+      "disposition": "reduced_existing_flow",
+      "group": "S2"
+    },
+    {
+      "id": "U06",
+      "title": "备份完成后找得到文件",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U07",
+      "title": "只在未准备好时给下一步",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U08",
+      "title": "应用内有完整操作手册",
+      "disposition": "reduced_existing_flow",
+      "group": "S4"
+    },
+    {
+      "id": "U09",
+      "title": "项目名切换、箭头展开",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U10",
+      "title": "范围明确，保留合理默认",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U11",
+      "title": "建房保持快速，成员可选调整",
+      "disposition": "reduced_existing_flow",
+      "group": "S3"
+    },
+    {
+      "id": "U12",
+      "title": "讲清三层成员范围",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U13",
+      "title": "归并AI准备状态",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U14",
+      "title": "以当前有效权限解释授权",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U15",
+      "title": "保存配置后说明新旧任务边界",
+      "disposition": "reduced_existing_flow",
+      "group": "S7"
+    },
+    {
+      "id": "U16",
+      "title": "停用明确为停止接新任务",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U17",
+      "title": "中文提及与正式名单一致",
+      "disposition": "reduced_existing_flow",
+      "group": "S5"
+    },
+    {
+      "id": "U18",
+      "title": "自然表达接入已有顺序计划",
+      "disposition": "reduced_existing_flow",
+      "group": "S5"
+    },
+    {
+      "id": "U19",
+      "title": "整项完成绑定已接受要求",
+      "disposition": "reduced_existing_flow",
+      "group": "S5"
+    },
+    {
+      "id": "U20",
+      "title": "把当前安排放到看得见的位置",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U21",
+      "title": "私信可辨认但仍独立",
+      "disposition": "keep_existing",
+      "group": null
+    },
+    {
+      "id": "U22",
+      "title": "提交修改意见就真正开始修改",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U23",
+      "title": "文件评论与让AI处理分开",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U24",
+      "title": "操作名称和当前位置一致",
+      "disposition": "reduced_existing_flow",
+      "group": "S6"
+    },
+    {
+      "id": "U25",
+      "title": "完成优先看当前结果",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U26",
+      "title": "继续任务不悄悄变只读",
+      "disposition": "reduced_existing_flow",
+      "group": "S5"
+    },
+    {
+      "id": "U27",
+      "title": "能直接找到占用自己的任务",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U28",
+      "title": "在别的页面也能找回未确认发送",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U29",
+      "title": "成功后收起异常面板",
+      "disposition": "reduced_existing_flow",
+      "group": "S7"
+    },
+    {
+      "id": "U30",
+      "title": "找回就定位到那条消息",
+      "disposition": "reduced_existing_flow",
+      "group": "S6"
+    },
+    {
+      "id": "U31",
+      "title": "旧任务成果不误报为空",
+      "disposition": "reduced_existing_flow",
+      "group": "S7"
+    },
+    {
+      "id": "U32",
+      "title": "先做文件名与路径查找",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U33",
+      "title": "看得懂改动，也能继续读完整列表",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U34",
+      "title": "把已有恢复能力接到正式界面",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U35",
+      "title": "引用多少文字就说清多少",
+      "disposition": "reduced_existing_flow",
+      "group": "S7"
+    },
+    {
+      "id": "U36",
+      "title": "保存当前预览版本还是磁盘新版",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U37",
+      "title": "看完搜索结果能回来接着找",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U38",
+      "title": "搜索会话筛选包含本人私信",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U39",
+      "title": "快捷查找点谁就到谁",
+      "disposition": "reduced_existing_flow",
+      "group": "S6"
+    },
+    {
+      "id": "U40",
+      "title": "归档查找不要假装查完",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U41",
+      "title": "原看板里找全自己的任务",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U42",
+      "title": "待处理条目可辨认、同串不重复",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U43",
+      "title": "设置搜索稳定找到实际控件",
+      "disposition": "reduced_existing_flow",
+      "group": "S6"
+    },
+    {
+      "id": "U44",
+      "title": "通知默认和静音例外分清",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U45",
+      "title": "通知回来就能做对应的事",
+      "disposition": "reduced_existing_flow",
+      "group": "S6"
+    },
+    {
+      "id": "U46",
+      "title": "设备配对给具体下一步",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U47",
+      "title": "只保护真正会丢内容的表单",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U48",
+      "title": "键盘与焦点随改动同步修",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U49",
+      "title": "新错误不会被旧计时器消掉",
+      "disposition": "reduced_existing_flow",
+      "group": "S7"
+    },
+    {
+      "id": "U50",
+      "title": "一条主状态加按需细节",
+      "disposition": "reduced_existing_flow",
+      "group": "S7"
+    },
+    {
+      "id": "U51",
+      "title": "保持保存习惯，统一成功反馈",
+      "disposition": "removed_from_this_round",
+      "group": null
+    },
+    {
+      "id": "U52",
+      "title": "预算用次数和后果解释",
+      "disposition": "removed_from_this_round",
+      "group": null
+    }
+  ]
+}
