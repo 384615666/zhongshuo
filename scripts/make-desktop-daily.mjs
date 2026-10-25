@@ -16,6 +16,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { packageUserGuide } from './package-user-guide.mjs';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
@@ -362,6 +363,7 @@ Codex/GLM 等运行时返回自然正文并附带内部 TaskComplete 时，程�
 - 结果未知、权限变化和恢复动作仍需你明确处理。
 `,'utf8');
 }
+packageUserGuide(out);
 console.log(`[daily-pkg] 就绪：${out}`);
 console.log(`[daily-pkg] 清单核对 ${checked} 一致，不符/缺失 ${missing}；buildId=${build.buildId} commit=${build.commit} dirty=${build.dirty}`);
 if (missing > 0) process.exit(1);

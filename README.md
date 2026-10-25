@@ -2,6 +2,8 @@
 
 本地项目群聊多 Agent 协同工作台：以文件夹为项目，在群聊中组织多个 CLI agent 完成工作；仿照 Raft 的协作体验，控制面与工作记录保存在本机。
 
+**日常使用先看 [众说 V51 操作手册](docs/user-guide/README.md)**（[离线 HTML 版](docs/user-guide/index.html)）：包括执行状态、找回刚才的发送、桌面通知与静音、原答与补交版，附操作步骤、界面图和常见问题。桌面包根目录也有 `众说操作手册.html`，双击即可阅读。下方早期原型与设计记录保留作历史参考。
+
 本目录承载设计资料（含 Obsidian 配置）与交互原型，**自 2026-09-25 起已在 `D:\zhongshuo` 初始化 Git 仓库**（分支 `main`，见下方「仓库」一节）；目录归属与迁移安排见[目录方案](docs/workspace-layout-proposal.md)，正式开发前的待办见 [docs/pre-development-checklist.md](docs/pre-development-checklist.md)。
 
 ## 原型（2026-09-19）

@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>众说 V51 操作手册</title>
+<style>
+:root{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:#253549;background:#f3f6f9;font-size:16px;line-height:1.85;--accent:#087a70;--line:#dfe7ee}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:90px}body{margin:0}a{color:#086f9b;text-underline-offset:3px}a:hover{color:var(--accent)}
+.topbar{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid var(--line);padding:12px 32px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.brand{font-weight:800;font-size:20px;letter-spacing:.1em;color:#172d43}.edition{font-size:13px;letter-spacing:0;font-weight:500;color:#607488;margin-left:14px}.topbar a{font-size:13px}
+.layout{max-width:1360px;margin:0 auto;display:grid;grid-template-columns:230px minmax(0,1fr);gap:28px;padding:30px}
+aside{position:sticky;top:90px;align-self:start;padding:14px 0}aside p{font-size:12px;color:#6a7b8d;margin:0 12px 12px;letter-spacing:.1em}aside a{display:flex;gap:12px;text-decoration:none;color:#53657a;padding:9px 12px;border-radius:8px;font-size:14px}aside a:hover{background:#e4f1ee}aside span{color:#8b9aa9;font-size:12px;padding-top:2px}
+main{min-width:0;background:#fff;border:1px solid var(--line);border-radius:16px;padding:38px 46px;box-shadow:0 8px 30px #263f5910}h1,h2,h3{color:#19334b;line-height:1.45}h1{font-size:34px;letter-spacing:-.02em;margin:0 0 12px}h1+p{color:#607488;font-size:14px}h2{font-size:25px;margin:46px 0 18px;border-top:1px solid var(--line);padding-top:26px}h3{font-size:19px;margin:27px 0 12px}p{margin:12px 0 18px}li{padding-left:3px;margin:6px 0}strong{font-weight:700;color:#173a51}
+code{font-family:Consolas,monospace;font-size:.88em;overflow-wrap:anywhere;background:#eff3f7;padding:2px 5px;border-radius:4px}.table-scroll{overflow-x:auto;margin:20px 0 24px;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:12px 15px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;min-width:125px}th{background:#edf5f5;color:#24544f;font-weight:700}tr:last-child td{border-bottom:0}td:first-child{color:#23485a}tr:nth-child(even) td{background:#fafcfd}
+img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var(--line);margin:24px auto 8px}p:has(>em:only-child){color:#64768a;font-size:13px}hr{border:0;border-top:1px solid var(--line);margin:36px 0}summary{cursor:pointer;font-weight:600;color:#245c78}details{border:1px solid var(--line);border-radius:8px;padding:12px 16px}details p{margin:12px 0 0}.repair-example{background:#f7fafc;padding:18px;border:1px solid var(--line);border-radius:12px}.repair-current{margin-top:12px;background:#eaf7ef;border:1px solid #b6dfc7;border-radius:8px;padding:14px 16px}.repair-current p{margin:6px 0 0}.footer{max-width:1000px;margin:0 auto 30px;padding:0 30px;font-size:12px;text-align:center;color:#718195}
+@media(max-width:1000px){.layout{grid-template-columns:1fr;padding:18px;gap:10px}aside{position:static;padding:0 0 12px;display:flex;flex-wrap:wrap;gap:2px}aside p{width:100%;margin-bottom:4px}aside a{padding:5px 9px}main{padding:28px}h1{font-size:29px}.topbar{padding:12px 20px}}
+@media(max-width:580px){:root{font-size:15px}.layout{padding:10px}main{padding:22px 18px;border-radius:10px}.topbar{padding:10px 16px}.edition{display:block;margin:0;font-size:11px}.brand{font-size:18px}.topbar a{font-size:12px}h1{font-size:26px}h2{font-size:22px}aside a{font-size:12px;gap:5px}th,td{padding:10px;min-width:110px}.footer{padding:0 16px}}
+@media print{:root{background:#fff;color:#111;font-size:11pt}.topbar,aside,.footer{display:none}.layout{display:block;padding:0}main{border:0;border-radius:0;padding:0;box-shadow:none}h2{break-after:avoid}h3{break-after:avoid}table{font-size:10pt}tr,img,.repair-example{break-inside:avoid}img{max-height:150mm;object-fit:contain}.table-scroll{overflow:visible}a{color:inherit}details>p{display:block!important}summary::after{content:"（历史原文示意）";font-weight:normal}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand">众说<span class="edition">V51 · 用户操作手册</span></div><a href="README.md">查看文字版</a></header>
+<div class="layout"><aside aria-label="章节导航"><p>按问题找操作</p><a href="#start"><span>01</span>打开与日常使用</a>
+<a href="#status"><span>02</span>看懂执行状态</a>
+<a href="#send"><span>03</span>找回刚才的发送</a>
+<a href="#notifications"><span>04</span>桌面通知与静音</a>
+<a href="#repair"><span>05</span>原答与补交版本</a>
+<a href="#example"><span>06</span>完整使用示例</a>
+<a href="#help"><span>07</span>常见问题</a></aside><main><h1>众说 V51 操作手册</h1>
+<p>适用版本：V51 / R108 · 更新日期：2026-10-25</p>
+<p>这份手册教你从哪里进入、点什么、看到结果后怎么办。本次新增的三项功能是<strong>执行状态、找回刚才的发送、任务桌面通知</strong>；同时修复了<strong>原答与补交版重复展示</strong>的问题。</p>
+<h2>按你现在的问题找入口</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>你想做什么</th>
+<th>直接看这里</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>打开程序，继续原来的项目和聊天</td>
+<td><a href="#start">1. 打开与日常使用</a></td>
+</tr>
+<tr>
+<td>AI 没说话，想知道它在干什么</td>
+<td><a href="#status">2. 看懂执行状态</a></td>
+</tr>
+<tr>
+<td>点过发送，但不知道发出去没有</td>
+<td><a href="#send">3. 找回刚才的发送</a></td>
+</tr>
+<tr>
+<td>做完了提醒我，或者关闭某个任务的提醒</td>
+<td><a href="#notifications">4. 桌面通知与静音</a></td>
+</tr>
+<tr>
+<td>同一回答出现两遍，想分清当前版本</td>
+<td><a href="#repair">5. 原答与补交版本</a></td>
+</tr>
+<tr>
+<td>跟着操作一遍</td>
+<td><a href="#example">6. 完整使用示例</a></td>
+</tr>
+<tr>
+<td>遇到异常，不知道下一步点什么</td>
+<td><a href="#help">7. 常见问题</a></td>
+</tr>
+</tbody>
+</table></div>
+<p><a id="start"></a></p>
+<h2>1. 打开与日常使用</h2>
+<h3>继续你原来的数据</h3>
+<ol>
+<li>打开最终 V51 文件夹：<code>desktop-daily-win-v51-r108-usability-final-20261025</code>。</li>
+<li><strong>双击 <code>start-existing-data.vbs</code></strong>。这个入口沿用你原来的项目、聊天、成员和附件。</li>
+<li>在左侧展开项目，点它下面的房间；要找一对一聊天，点左侧的 <strong>私信</strong>。</li>
+</ol>
+<p>这份 V51 的原数据仍保存在旧 V44 包的 <code>server-data</code> 中。请保留那个目录。<code>start-desktop.vbs</code> 使用另一个数据位置；从它进入可能看到空项目，不能据此判断原聊天丢失。</p>
+<p>如果是全新使用、没有旧数据，才从 <code>start-desktop.vbs</code> 开始，通过左侧 <strong>打开/切换项目</strong> 选本地文件夹，再到 <strong>成员管理</strong> 核对可用 AI。</p>
+<h3>发任务、看回复、继续追问</h3>
+<ol>
+<li>在房间底部输入你的要求。需要指定 AI 时，输入 <code>@</code>，从列表选成员。</li>
+<li>点 <strong>发送</strong>。房间中出现一张任务卡片。</li>
+<li>点卡片或 <strong>回复</strong>，在右侧打开这件事的对话串。这里会集中显示它的回复、成果和详情。</li>
+<li>要继续同一件事，在右侧的 <strong>跟进当前任务</strong> 输入框追问。房间底部用于另起话题。</li>
+<li>看结果时切到 <strong>成果</strong>；想核对执行情况时切到 <strong>详情</strong>。如果要求人工验收，按界面里的验收入口检查当前交付，再决定确认还是要求修改。</li>
+</ol>
+<p>房间是多件事的总览，对话串是其中一件事的完整记录。房间里的长内容会缩略；点进对话串，需要时再点 <strong>展开全文</strong>。收起右侧对话串、切换房间或最小化窗口，都不会因此停止任务。</p>
+<p><a id="status"></a></p>
+<h2>2. 看懂执行状态：AI 没说话时先看这里</h2>
+<p><strong>用途：分清“正在干活”“等别人”“等你处理”和“未能开始”，减少盲等与重复发送。</strong></p>
+<h3>从哪里看</h3>
+<ul>
+<li><strong>房间总览</strong>：看任务卡片标题附近的状态，以及标题下方的成员活动或等待原因。</li>
+<li><strong>任务对话串</strong>：点开任务，看顶部状态条；需要更多信息再切到 <strong>详情</strong>，查看 <strong>活动与进展</strong> 或 <strong>运行详情</strong>。</li>
+<li><strong>私信</strong>：左侧 <strong>私信</strong> → 选对应聊天，看消息区上方的状态。</li>
+</ul>
+<p>例如，“Codex 正在查资料；Claude 等待结果”表示 Codex 还在工作，Claude 正在等它。这种情况下，暂时没有聊天回复不等于任务没执行。</p>
+<h3>每种状态该怎么处理</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>看到的状态</th>
+<th>是什么意思</th>
+<th>你接下来怎么做</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>正在执行</td>
+<td>某位成员已经开始处理任务</td>
+<td>看成员活动，等待结果；想知道具体过程就打开详情</td>
+</tr>
+<tr>
+<td>排队中</td>
+<td>请求已登记，等待安排执行</td>
+<td>等待即可，不用再发相同要求</td>
+</tr>
+<tr>
+<td>等待另一任务</td>
+<td>同一成员忙，或另一任务正在修改同一位置</td>
+<td>看等待原因；先处理占用它的任务，或等其结束</td>
+</tr>
+<tr>
+<td>等同伴</td>
+<td>当前成员正在等另一位成员的结果</td>
+<td>看成员名字，判断在等谁</td>
+</tr>
+<tr>
+<td>等你处理</td>
+<td>需要你补充信息、处理权限或其他前置条件</td>
+<td>阅读状态条的原因和按钮，完成它要求的步骤</td>
+</tr>
+<tr>
+<td>待你验收</td>
+<td>已有一版交付，等你决定是否接受</td>
+<td>点 <strong>验收交付 vN</strong>，查看当前版本后确认或提修改意见</td>
+</tr>
+<tr>
+<td>已完成</td>
+<td>当前任务已完成；可能有回复，也可能有文件成果</td>
+<td>看回复和成果；要继续修改就在原对话串跟进</td>
+</tr>
+<tr>
+<td>未能开始</td>
+<td>执行前就被拦住了，尚未进入正常工作</td>
+<td>打开详情找原因，处理成员、配置或前置条件后再按界面继续</td>
+</tr>
+<tr>
+<td>未完成</td>
+<td>已尝试执行，但这次没有正常完成</td>
+<td>看运行详情与已有结果，再决定如何继续</td>
+</tr>
+<tr>
+<td>待核对</td>
+<td>还不能确认上次执行的结果</td>
+<td>先看左下角 <strong>恢复检查</strong>；不要靠反复发送来判断</td>
+</tr>
+<tr>
+<td>正在停止</td>
+<td>已提出停止，但执行端还没确认停下</td>
+<td>等待状态变为已停止或出现进一步说明</td>
+</tr>
+<tr>
+<td>已停止</td>
+<td>本次执行已经停止</td>
+<td>查看保留下来的回复与成果，再决定是否继续</td>
+</tr>
+<tr>
+<td>未开始</td>
+<td>当前尚无已开始执行的记录</td>
+<td>查看详情中的安排；不要把它当作正在运行</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>vN</code> 指当前交付的版本号，例如 <code>v2</code>。<strong>待你验收</strong>仍需要你的决定，不能当成已经验收。</p>
+<p>状态依据程序能确认的活动显示。“正在查资料”“正在处理文件”“正在执行命令”对应已收到的活动；只有“正在处理任务”时，程序没有更多可展示的细节。这里没有预计完成时间，也不会凭等待时长推算完成百分比。</p>
+<p><a href="images/execution-status.jpg"><img src="images/execution-status.jpg" alt="房间任务卡片上的正在执行与成员活动示例"></a></p>
+<p><em>图 1：隔离演示项目中的真实界面。留意卡片里的“正在执行”和成员活动说明。点击图片可查看大图。</em></p>
+<p><a id="send"></a></p>
+<h2>3. 找回刚才的发送：不确定发出去时先查询</h2>
+<p><strong>用途：找到上一次发送对应的原消息和原任务，避免再建一个相同任务。查询本身不会发起 AI 工作。</strong></p>
+<p>适合这种情况：点过发送后界面报连接错误、一直没回执，或者重新打开程序后不确定刚才那条发到了哪里。</p>
+<h3>操作步骤</h3>
+<ol>
+<li>回到刚才发送的房间或私信，找到对应输入框。</li>
+<li>在输入框上方点 <strong>查询刚才的发送</strong>。按钮会暂时显示 <strong>正在查询原发送…</strong>。</li>
+<li>如果出现 <strong>已找到原消息与原任务</strong> 或 <strong>已找到原消息与原会话</strong>，点旁边的 <strong>打开原会话</strong>。</li>
+<li>在原会话里看执行状态与回复，继续在那里跟进。</li>
+</ol>
+<p>找到后，只会清掉与这次发送对应的旧错误提示；你后来另写的草稿和后来的错误不会被一并清空。正常关闭重开、继续使用同一份数据，仍可以查询保留的发送记录。</p>
+<p><a href="images/find-original-send.jpg"><img src="images/find-original-send.jpg" alt="查询找到原消息和原任务，并提供打开原会话按钮"></a></p>
+<p><em>图 2：查询成功后的蓝色提示区。下一步点“打开原会话”，无需把同一段话重新发一次。</em></p>
+<h3>查询结果怎么读</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>查询结果</th>
+<th>含义</th>
+<th>下一步</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>已找到原消息与原任务／原会话</td>
+<td>原发送已经被接收，位置已找到</td>
+<td>点 <strong>打开原会话</strong></td>
+</tr>
+<tr>
+<td>尚未查到原发送回执</td>
+<td>暂时没查到，<strong>不代表确定没发出去</strong></td>
+<td>先核对原会话历史，必要时稍后再查询</td>
+</tr>
+<tr>
+<td>原回执正文已过期</td>
+<td>回执详细内容已过保存期，不会因此重新执行</td>
+<td>到原会话核对消息与任务记录</td>
+</tr>
+<tr>
+<td>上次发送已明确拒绝</td>
+<td>上次发送没有被正常接受，界面会说明原因</td>
+<td>按原因处理后，再决定发送</td>
+</tr>
+<tr>
+<td>查询未确认</td>
+<td>查询本身失败，例如连接暂时不可用</td>
+<td>保留现场，连接恢复后再查；原请求没有被重新发送</td>
+</tr>
+</tbody>
+</table></div>
+<h3>“查询”“重发原内容”“放弃”有什么区别</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>实际会做什么</th>
+<th>什么时候用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>查询刚才的发送</td>
+<td>只核对原发送的回执和位置，不创建新任务、不调用模型</td>
+<td>发送结果不确定时，先用它</td>
+</tr>
+<tr>
+<td>重发原内容</td>
+<td>再提交同一次请求：如果原请求已接受，不会再建第二份；如果之前未接受，可能从这里开始执行</td>
+<td>已看过查询结果，明确决定继续提交这次原请求时</td>
+</tr>
+<tr>
+<td>放弃</td>
+<td>清除本地这次待处理发送提示，<strong>不会停止服务端已经开始的任务</strong></td>
+<td>确定不再从这个提示处理时；要停任务，需进入原任务使用停止入口</td>
+</tr>
+</tbody>
+</table></div>
+<p>“重发原内容”和“放弃”只会在有待确认发送时出现。不要把复制文字后重新点 <strong>发送</strong> 当成查询；那可能是另一条新请求。</p>
+<p>这个入口针对<strong>当前输入框保留的最近一次发送</strong>，不是全项目历史搜索。找更早的内容，可在原房间、私信历史或 <strong>搜索与收藏</strong> 中查找。</p>
+<p><a id="notifications"></a></p>
+<h2>4. 桌面通知：不用一直盯着任务</h2>
+<p><strong>用途：任务完成，或需要你补信息、处理问题、验收时，用系统通知提醒你回来。</strong></p>
+<h3>正常怎么用</h3>
+<ol>
+<li>发任务后保持众说运行，可以最小化窗口去做别的事。</li>
+<li>任务完成或需要你处理时，程序会尝试显示桌面通知。</li>
+<li>回到原任务，查看回复、成果或待处理事项。</li>
+</ol>
+<p>不需要为每个新任务先建一条提醒。关闭并退出整个程序后，不能依靠它继续运行任务或即时提醒。重开时也不会把旧历史通知成批再弹一次；后续确实发生新的完成或待处理事件，仍可以产生新通知。</p>
+<p>点击系统通知的设计行为是回到对应任务或对话。<strong>这一点击定位尚未在本机完成实测</strong>；如果没有跳转，可从左侧项目、房间或私信进入原会话。</p>
+<h3>只关闭某个对话串的提醒</h3>
+<ol>
+<li>打开那件事的对话串。</li>
+<li>点对话串右上角 <strong>…</strong>，选择 <strong>静音</strong>。</li>
+<li>想恢复时，再从同一菜单选 <strong>取消静音</strong>。</li>
+</ol>
+<p>静音不会停止任务或删除回复；任务和待办仍然保留。需要停止执行时，要使用任务的 <strong>停止任务</strong> 入口。</p>
+<p>也可以到左下角 <strong>设置 → 通知 → 对话串通知</strong>，统一管理已经有设置记录的对话串。开关显示 <strong>已静音</strong> 时表示关闭该串提醒，显示 <strong>通知</strong> 时表示允许提醒。</p>
+<p>如果这里写着“还没有设置过对话串通知”，表示暂时没有保存过单独设置，<strong>不是全局通知被关闭</strong>。先在某个对话串菜单里设置静音，就能在这里统一管理。</p>
+<h3>没看到弹窗，去哪里核对</h3>
+<p>进入 <strong>设置 → 通知 → 桌面投递状态</strong>，需要细节时展开 <strong>查看最近投递记录</strong>。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>显示项</th>
+<th>告诉你的事情</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>已尝试</td>
+<td>程序尝试投递过多少条通知</td>
+</tr>
+<tr>
+<td>已请求显示</td>
+<td>已经向桌面通知接口提出显示请求</td>
+</tr>
+<tr>
+<td>已显示</td>
+<td>收到了通知显示的回报；不能据此保证你亲眼看到了弹窗</td>
+</tr>
+<tr>
+<td>未确认</td>
+<td>请求后还没有可靠的显示结果</td>
+</tr>
+<tr>
+<td>失败</td>
+<td>投递发生错误，可看最近记录中的说明</td>
+</tr>
+<tr>
+<td>已点击</td>
+<td>记录到多少次通知点击</td>
+</tr>
+</tbody>
+</table></div>
+<p>这些是<strong>通知投递情况</strong>。例如“已显示 4”表示通知的显示回报数量，不能用它判断四个任务的成果是否合格。</p>
+<p>若没看到通知，依次检查：程序是否仍运行 → 该串是否静音 → 最近投递记录是否失败或未确认 → Windows 是否允许众说显示通知、是否处于勿扰模式。即使没有弹窗，也可以从原会话或左侧 <strong>待我处理</strong> 查看任务。</p>
+<p><a href="images/notification-settings.jpg"><img src="images/notification-settings.jpg" alt="设置中的对话串通知与桌面投递状态"></a></p>
+<p><em>图 3：设置 → 通知。上方管理静音，下方核对通知投递；图中数量来自隔离演示项目，不是你的任务统计。</em></p>
+<p><a id="repair"></a></p>
+<h2>5. 原答与补交版本：分清现在该看哪一份</h2>
+<p><strong>用途：AI 补交了一份有效回答时，把旧版本收起来，避免两段相似长文同时占满屏幕。</strong></p>
+<p>有时 AI 已经输出一段文字，但程序没能将它确认为有效交付，例如回复格式不符合要求。之后补交成功，原答和补交版都会留下记录。</p>
+<h3>现在怎么读</h3>
+<ol>
+<li>在右侧对话串中，优先看带 <strong>补交</strong> 标签、绿色 <strong>补交版本</strong> 提示的回答。</li>
+<li>旧回答默认折叠为 <strong>原答已补交 · 查看历史原文</strong>。</li>
+<li>想对照原答时，点这行文字展开；正文仍很长时，再点 <strong>展开全文</strong>。</li>
+<li>看完后再点摘要收起。原答的复制、引用、收藏入口仍保留。</li>
+</ol>
+<p>下面是阅读方式示意，可以在 HTML 手册中点开试试，<strong>它不是你的实际聊天记录</strong>：</p>
+<div class="repair-example">
+<details>
+<summary>原答已补交 · 查看历史原文</summary>
+<p>这里保留原回答。需要比较前后内容时再打开阅读。</p>
+</details>
+<div class="repair-current"><strong>补交版本</strong><p>这里展示当前补交的有效回答。平时从这一份开始看。</p></div>
+</div>
+<p>只在能明确对应、且补交成功时才这样展示。补交仍在进行、失败或结果不明时，不会凭文字相似就把原答隐藏。两条文字相近、但没有上述标识的回复，不能仅凭本功能判定为同一份补交。</p>
+<p>这次处理的是显示方式：<strong>原消息没有删除，也没有重新执行你之前的任务</strong>。</p>
+<p><a id="example"></a></p>
+<h2>6. 完整示例：发出任务后没有及时看到回复</h2>
+<p>假设你刚发了“帮我整理这份文档”，随后界面出现连接错误。</p>
+<ol>
+<li><strong>先别把原话再发一次。</strong> 在刚才输入框上方点 <strong>查询刚才的发送</strong>。</li>
+<li>查到原任务后，点 <strong>打开原会话</strong>。</li>
+<li>看状态：如果是“Codex 正在查资料”，说明已开始处理；如果是“等你处理”，读旁边的原因并处理。</li>
+<li>保持程序运行，可以最小化去做别的事。完成或需要你处理时会尝试通知。</li>
+<li>回来查看回复与 <strong>成果</strong>。如果显示 <strong>待你验收</strong>，检查交付后再确认，或提出修改意见。</li>
+<li>若看到 <strong>原答已补交</strong>，默认读绿色 <strong>补交版本</strong>；只有需要对照时才展开旧回答。</li>
+<li>需要继续修改，就在这件事的右侧对话串输入意见，方便保留上下文。</li>
+</ol>
+<p>整个过程里，查询负责“找回位置”，状态负责“说明进度”，通知负责“叫你回来”，版本折叠负责“让你看清当前回答”。</p>
+<p><a id="help"></a></p>
+<h2>7. 常见问题</h2>
+<h3>我找不到“查询刚才的发送”</h3>
+<p>回到真正发出那条消息的房间、私信或任务输入框。只有该输入框保存了发送记录时才显示；还没发送过的新会话没有这个按钮。如果刚换了启动入口，先核对是不是进入了另一份数据。</p>
+<h3>查询说没找到，可以马上重发吗？</h3>
+<p>“尚未查到”不等于“确定没发送”。先核对原会话历史，连接恢复后再查询。如果最终决定提交原请求，使用界面保留的 <strong>重发原内容</strong>，不要把相同文字当新任务连发。</p>
+<h3>AI 很久不回，但状态仍是“正在执行”</h3>
+<p>点开原任务看成员活动和 <strong>详情</strong>。最近一次活动只表示已收到的进展，不保证此刻仍在持续产出。想停止就使用任务的停止入口；显示 <strong>正在停止</strong> 时等执行端确认。若变为 <strong>待核对</strong>，到 <strong>恢复检查</strong> 按说明处理。</p>
+<h3>显示“未能开始”或“缺少必要的前置成果”怎么办？</h3>
+<p>打开 <strong>详情 → 活动与进展／运行详情</strong>，确认具体拦截原因。先处理成员可用性、配置、权限或前置成果；再使用该任务实际提供的继续入口。</p>
+<p>如果原要求只是查资料、比较或分析，并且界面提供 <strong>按原请求继续</strong>，可按提示继续。<strong>它不能用来保证文件修改任务会执行写入</strong>；有些可写任务仍可能被文件基线等条件拦住，应按详情中的实际原因处理。</p>
+<h3>任务完成了，我还要点验收吗？</h3>
+<p>看状态。如果显示 <strong>待你验收</strong> 或有 <strong>验收交付 vN</strong>，需要你检查当前交付并作决定。普通对话回答、自动完成的任务不要求每次额外点击验收。</p>
+<h3>静音后任务会不会不做了？</h3>
+<p>不会。静音是对话串的通知偏好；执行名单和任务仍保留。需要停止工作，进入原任务点 <strong>停止任务</strong>。</p>
+<h3>为什么设置里没有列出我所有的对话？</h3>
+<p><strong>对话串通知</strong> 展示的是已保存的订阅设置，不是全部聊天列表。直接到目标串右上角 <strong>…</strong> 设置静音即可，之后再来统一管理。</p>
+<h3>为什么旧回答还在？</h3>
+<p>旧回答保留作历史。看到 <strong>原答已补交 · 查看历史原文</strong> 就说明它已经折叠；当前先读 <strong>补交版本</strong>。你仍可以主动展开旧内容、复制或引用。</p>
+<h3>我从新包打开后，原项目没了</h3>
+<p>先退出该窗口，再从最终 V51 的 <strong><code>start-existing-data.vbs</code></strong> 进入。这个入口沿用原数据；普通 <code>start-desktop.vbs</code> 的数据位置不同。不要为了找聊天先删除任何旧包的 <code>server-data</code>。</p>
+<h3>还是不对，反馈什么最有用？</h3>
+<p>说明你用的版本、启动文件名、哪个项目和房间／私信、发生时间、刚才点了什么，并附上状态条或 <strong>详情</strong> 的截图。如果是发送问题，再附上 <strong>查询刚才的发送</strong> 的结果。不要只写“没反应”，这些信息能帮助区分未发送、等待、执行失败和显示问题。</p>
+<hr>
+<p>手册内截图来自隔离演示项目，用于指认界面入口。实际成员名字、任务数量和状态以你的程序为准。本手册随桌面包提供；后续新增功能或改动入口时，应同步更新对应操作说明。</p>
+</main></div>
+<footer class="footer">本手册可离线阅读 · 点击图片可看大图 · 浏览器 Ctrl + P 可打印或另存为 PDF</footer>
+</body>
+</html>
