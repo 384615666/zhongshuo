@@ -7,7 +7,7 @@ import {openDatabase,type ZhongshuoDatabase} from '../../src/persistence/db.ts';
 import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
-import {coordinationDispatchContext,pumpCoordinations} from '../../src/daemon/coordination.ts';
+import {coordinationDispatchContext,pumpCoordinations,seedExplicitRecipientCoordination} from '../../src/daemon/coordination.ts';
 import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
 import {acceptMemberHandoffs,validateMemberHandoffs} from '../../src/daemon/coordinationMessages.ts';
 
@@ -47,7 +47,16 @@ async function fixture(){
     return result as {ok:boolean;data:T;error?:unknown};
   };
   const cmd=async<T>(method:string,params:unknown,commandId?:string)=>{
-    const result=await raw<T>(method,params,commandId);expect(result.ok,JSON.stringify(result.error)).toBe(true);return result.data;
+    const result=await raw<T>(method,params,commandId);expect(result.ok,JSON.stringify(result.error)).toBe(true);
+    // These fixtures represent persisted V51 runs. New model-authored request
+    // planning is covered by the R109 tests in coordinationR86.
+    const input=params as {target?:{kind:string};body?:string;mentions?:Array<{kind:string;memberId:string}>};
+    if(method==='message.submit'&&input.target?.kind==='room_root'&&(input.mentions?.length??0)>1){
+      const sent=result.data as {taskId:string;messageId:string};
+      db.prepare("UPDATE outbox SET status='done' WHERE dispatch_key=? AND status='pending'").run(`task:${sent.taskId}:initial`);
+      seedExplicitRecipientCoordination(db,sent.taskId,sent.messageId,input.body!,input.mentions!.map(m=>m.memberId));
+    }
+    return result.data;
   };
   const projectId=(await cmd<{project:{id:string}}>('project.open',{path:project})).project.id;
   const room=(await cmd<{items:Array<{id:string;conversationId:string;revision:number}>}>('room.list',{projectId})).items[0]!;

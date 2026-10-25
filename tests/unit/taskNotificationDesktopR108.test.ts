@@ -144,6 +144,7 @@ describe('R108 desktop task-notification main bridge', () => {
     expect(win.focus).toHaveBeenCalledOnce();
     expect(webContents.send).toHaveBeenCalledWith(TASK_NOTIFICATION_IPC.click, {
       notificationId: notification.notificationId,
+      kind: notification.kind,
       locator: notification.locator,
     });
 

@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,snapshotConversationWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import {snapshotRedispatchExecution} from './redispatchExecution.ts';
-import { coordinationRoster,coordinationRoomMembers, freezeCoordinationScope, resumeBlockedCoordinationChild, seedExplicitRecipientCoordination,settleSupersededCoordinationSteps } from './coordination.ts';
+import { coordinationRoster,coordinationRoomMembers, freezeCoordinationScope, resumeBlockedCoordinationChild,settleSupersededCoordinationSteps } from './coordination.ts';
 import {readThreadMembers,persistThreadMember,readThreadProgress,readDmProgress} from './threadMembers.ts';
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
 import { CALL_BUDGET_ENABLED_SETTING_KEY, type CallBudgetMode, type FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
@@ -1937,12 +1937,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               deps.db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.conversationIntent',?) WHERE id=?").run(params.intent,message.messageId);
               if(selection){
                 if(!thread.root_task_id)thread.root_task_id=createTaskForRecordThread(deps.db,thread.id,message.messageId,taskTitleOf(params.body,resolvedAtts.map(a=>a.displayName)),selection,reviewPolicyOf(deps.db,target.projectId));
-                const explicitRecipients=selection.recipientIds.length>1
-                  &&(params.mentions.some(m=>m.kind==='all')||params.mentions.filter(m=>m.kind==='member').length>1);
-                if(explicitRecipients&&params.collaboration!=='deliberate'){
-                  const seeded=seedExplicitRecipientCoordination(deps.db,thread.root_task_id,message.messageId,params.body,selection.recipientIds,threadCallBudget);
-                  return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey:null,coordinationRunId:seeded.runId,recipientIds:selection.recipientIds};
-                }
                 const dispatchKey=enqueueThreadReply(deps.db,thread.id,message.messageId,message.threadMessageSeq,selection,deps.localUserId,threadCallBudget);
                 return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey};
               }
@@ -2066,9 +2060,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
             try{snapshotTaskWriteAccess(deps.db,ids.taskId,{analysisOnly:params.analysisOnly});freezeCoordinationScope(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
             attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
-            if(route.value.kind==='dispatch'&&route.value.mode==='AUTO'&&route.value.participantScope==='selected'&&route.value.frozenMemberIds.length>1){
-              seedExplicitRecipientCoordination(deps.db,ids.taskId,ids.messageId,params.body,route.value.frozenMemberIds);
-            }
             return frozenCallBudget == null
               ? created.value
               : { ...created.value, callBudget: frozenCallBudget, ...(params.collaboration === 'deliberate' ? { deliberationBudget: { maxTurns: frozenCallBudget.maxTurns } } : {}) };

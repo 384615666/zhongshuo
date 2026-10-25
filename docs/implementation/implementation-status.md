@@ -1,5 +1,9 @@
 # 众说正式工程 · 施工总账
 
+## R109 当前：精简7项已实施，V52装配中（2026-10-25）
+
+用户已批准 [精简范围](../design-proposals/usability-20261025/simplified-scope.md)。源码修改和14章手册已完成，相关19文件189项通过，主工程与hifi类型检查通过，lint无新增。权威结果与交付状态见 [R109实施记录](../reviews/r109-simple-implementation-20261025.md)。旧52项新增界面提案已撤回，不再按下方历史施工记录扩张范围。本轮未调用真实模型、未重跑用户原任务或改动原数据。
+
 ## R87 rc4 当前候选（2026-10-18），R86 历史候选在后
 
 **rc4 当前候选**：无协议提示复跑确认自定义 GLM 路由仍可能忽略 Codex 原生 `outputSchema` 并返回 Markdown。修复提交 `ecaef7d5ac7683619986608af7fc294a8b209326` 把“有无 outputSchema 时 final 只能是原始 JSON”的约束放入 Codex developer 指令；`16700ed86a65de28e6ca506c79f4dbf4804f1175` 又在运行时抑制计划步骤重复 handoff 产生的额外 OPEN 任务。从 `16700ed` 的 clean worktree 构建 **`bld_da8c2e34f5842bd5` / `desktop-daily-win-v26-r87-rc4-20261018` / `dirty=false` / 595 清单 / 无 `server-data`**。

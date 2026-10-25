@@ -155,7 +155,7 @@ describe('mention 有效性（§4.1/AT-09）', () => {
 describe('R87 explicit advanced deliberation',()=>{
   it('only an explicit advanced choice starts independent review, while ordinary mentions do not',()=>{
     expect(resolveTopLevelRoute({intent:'default',mentions:[ALL],room:ROOM,collaboration:'deliberate'})).toMatchObject({ok:true,value:{mode:'DELIBERATE',rosterSource:'all',initialWakeMemberIds:ROOM.enabledAgentMemberIds}});
-    expect(route('default',[m('m_a'),m('m_c')])).toMatchObject({ok:true,value:{mode:'AUTO',coordinatorMemberId:'m_a',initialWakeMemberIds:['m_a','m_c'],frozenMemberIds:['m_a','m_c'],participantScope:'selected'}});
+    expect(route('default',[m('m_a'),m('m_c')])).toMatchObject({ok:true,value:{mode:'AUTO',coordinatorMemberId:'m_a',initialWakeMemberIds:['m_a'],frozenMemberIds:['m_a','m_c'],participantScope:'selected'}});
   });
   it('does not guess recipients for a single or absent advanced selection; record-only still dispatches nothing',()=>{
     for(const mentions of [[],[m('m_a')]])expect(resolveTopLevelRoute({intent:'default',mentions,room:ROOM,collaboration:'deliberate'})).toMatchObject({ok:false,error:{code:'VALIDATION_INVALID'}});

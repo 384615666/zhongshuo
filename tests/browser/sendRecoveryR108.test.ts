@@ -659,7 +659,7 @@ describe('R108 browser send recovery store + loader', () => {
     const opening = fx.loader.openRecoveredSend(location);
     await Promise.resolve();
     expect(calls.map((call) => call.method)).toEqual(['deepLink.resolve']);
-    expect(calls[0]!.params).toEqual({ hash: '#task=task-b' });
+    expect(calls[0]!.params).toEqual({ hash: '#msg=message-b' });
     routerMock.seq += 1;
     resolveLookup({
       ok: true,

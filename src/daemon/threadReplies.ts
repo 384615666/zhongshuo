@@ -12,7 +12,7 @@ import {appendDomainEvent} from '../persistence/events.ts';
 import type {ConversationReplyRow} from './conversationReplies.ts';
 
 export interface ThreadReplyScopeMember {
-  memberId:string;displayName:string;description:string|null;writeScope:string|null;
+  memberId:string;displayName:string;description:string|null;writeScope:string|null;unavailableReason?:string;
 }
 export interface ThreadReplySelection {
   memberId:string;recipientIds:string[];candidateIds:string[];inviteIds:string[];
@@ -68,11 +68,12 @@ export function selectThreadRecipients(
   const roomCoordinator=(db.prepare('SELECT coordinator_member_id FROM rooms WHERE id=?').get(snapshot.roomId) as {coordinator_member_id:string|null})?.coordinator_member_id;
   const memberId=owner&&recipientIds.includes(owner)?owner:roomCoordinator&&recipientIds.includes(roomCoordinator)?roomCoordinator:recipientIds[0]!;
   const inviteIds=all?[]:explicit.filter(id=>!snapshot.memberIds.includes(id));
-  const candidateIds=!all&&!explicit.length?snapshot.eligibleMemberIds:recipientIds;
+  const removed=(db.prepare("SELECT member_id FROM thread_agent_followers WHERE thread_id=? AND status!='following'").all(threadId) as {member_id:string}[]).map(m=>m.member_id);
+  const candidateIds=!all&&explicit.length<2?available.filter(id=>explicit.includes(id)||!removed.includes(id)):recipientIds;
   const explicitScope=all||explicit.length>1;
-  const route:TopLevelRouteOutcome=recipientIds.length===1&&candidateIds.length===1
+  const route:TopLevelRouteOutcome=recipientIds.length===1&&(explicit.length===1||candidateIds.length===1)
     ?{kind:'dispatch',mode:'DIRECT',targetMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]}
-    :{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,...(explicitScope?{participantScope:'selected' as const}:{}),frozenMemberIds:recipientIds,initialWakeMemberIds:explicitScope?recipientIds:[memberId]};
+    :{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,...(explicitScope?{participantScope:'selected' as const}:{}),frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]};
   return{memberId,recipientIds,candidateIds,inviteIds,route,membershipVersion:snapshot.version};
 }
 
@@ -120,7 +121,11 @@ export function enqueueThreadReply(
     FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {project_id:string;conversation_id:string;room_id:string;root_task_id:string;stop_generation:number;status:string;current_delivery_id:string|null};
   const roster=selection.candidateIds.map(memberId=>{
     const member=db.prepare('SELECT display_name,description FROM project_members WHERE id=? AND project_id=?').get(memberId,th.project_id) as {display_name:string;description:string|null};
-    return{memberId,displayName:member.display_name,description:member.description,writeScope:snapshotConversationWriteAccess(db,th.root_task_id,process.env.ZS_RUNTIME??null,memberId)};
+    try{return{memberId,displayName:member.display_name,description:member.description,writeScope:snapshotConversationWriteAccess(db,th.root_task_id,process.env.ZS_RUNTIME??null,memberId)};}
+    catch(error){
+      if(memberId===selection.memberId)throw error;
+      return{memberId,displayName:member.display_name,description:member.description,writeScope:null,unavailableReason:String(error)};
+    }
   });
   for(const id of selection.inviteIds)persistThreadMember(db,threadId,id,'add',authorId);
   const source=db.prepare(`SELECT a.id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1`).get(th.root_task_id) as {id:string}|undefined;
@@ -178,8 +183,10 @@ export function threadReplyBlock(db:ZhongshuoDatabase,q:GeneralThreadReply,defau
   const recovery=assessTaskRedispatchReadiness(db,q.taskId,{queueOnly:true});if(recovery)return recovery;
   const eligible=readThreadMembers(db,q.threadId).eligibleMemberIds;
   const roster=JSON.parse(q.rosterJson) as ThreadReplyScopeMember[];
-  if(roster.some(m=>!eligible.includes(m.memberId)))return{code:'MEMBER_UNAVAILABLE',message:'本次请求中的 AI 已移出或停用，请调整成员后重新发送'};
-  try{for(const member of roster)effectiveTaskWriteAccess(db,q.taskId,member.memberId,defaultKind,member.writeScope??undefined);}
+  const route=JSON.parse(q.routeJson) as {mode:string;participantScope?:string;frozenMemberIds:string[]};
+  const required=route.mode==='DELIBERATE'||route.participantScope==='selected'?route.frozenMemberIds:[q.memberId];
+  if(required.some(id=>!eligible.includes(id)))return{code:'MEMBER_UNAVAILABLE',message:'本次请求中的 AI 已移出或停用，请调整成员后重新发送'};
+  try{for(const member of roster.filter(m=>required.includes(m.memberId)))effectiveTaskWriteAccess(db,q.taskId,member.memberId,defaultKind,member.writeScope??undefined);}
   catch(error){return{code:'CONFIGURATION_CHANGED',message:`AI 配置已变化，请确认配置后重新发送；${(error as Error).message}`};}
   return null;
 }

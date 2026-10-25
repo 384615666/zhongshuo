@@ -15,6 +15,7 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(test){for(let n=0;n<150;n++){if(test())return;await sleep(10);}throw Error('UI wait timed out: '+document.body.innerText);}
 const check=(name,ok)=>checks.push({name,ok:Boolean(ok)});
 window.zs={command:async env=>{
+ if(env.method==='deepLink.resolve')return{ok:true,data:{kind:'msg',projectId:'p1',conversationId:'c1',threadId:'th1',messageId:'msg1'}};
  if(env.method==='message.lookupSubmission')return await new Promise(resolve=>{pendingLookup=()=>resolve({ok:true,data:{status:'found',commandId:env.params.request.commandId,payloadHash:env.params.payloadHash,acceptedAt:1,location:{projectId:'p1',conversationId:'c1',roomId:'r1',threadId:'th1',taskId:'task1',messageId:'msg1'}}});});
  if(env.method==='app.settings.get')return{ok:true,data:{values:{'callBudget.enabled':'false'}}};
  return{ok:true,data:{}};
@@ -35,10 +36,13 @@ function edit(text){const editor=document.querySelector('.composer-editor');edit
 window.run=async()=>{
  await mount();send();await until(()=>document.body.innerText.includes('发送结果未知'));
  check('unknown_error_visible_before_lookup',document.body.innerText.includes('第一条回执丢失'));
- query();await until(()=>pendingLookup!==null);pendingLookup();await until(()=>document.body.innerText.includes('已找到原消息'));
+ query();await until(()=>pendingLookup!==null);pendingLookup();await until(()=>store.getState().pendingSends['room:r1']==null&&!document.querySelector('[data-zs-send-recovery]'));
  check('same_request_unknown_error_cleared',!document.body.innerText.includes('发送结果未知'));
  check('lookup_does_not_send_again',submitted===1);
  check('accepted_draft_settled',store.getDraftFull('room:r1').body==='');
+ check('accepted_recovery_panel_hidden',!document.querySelector('[data-zs-send-recovery]'));
+ await until(()=>location.hash.includes('/thread/th1?message=msg1'));
+ check('recovery_opens_original_message',location.hash.includes('/thread/th1?message=msg1'));
  await mount();send();await until(()=>document.body.innerText.includes('发送结果未知'));
  query();await until(()=>pendingLookup!==null);edit('后续修改的新草稿');await sleep(25);send();await until(()=>document.body.innerText.includes('第二条明确拒绝'));
  pendingLookup();await until(()=>store.getState().pendingSends['room:r1']==null);

@@ -36,12 +36,17 @@ export function isExternalDeepLink(hash: string): boolean {
  * 归属分列（review-r51 §3.1 修复）：DM 任务（无线程）只落 DM；房间会话按 conversationId
  * 匹配已装载房间落主池——**未知归属不得默认当 DM**（此前房间交付被错送到空私信页）。
  */
-export function routeForResolved(res: ResolvedDeepLink, s: DeepLinkState): string | null {
+export function routeForResolved(res: ResolvedDeepLink, s: DeepLinkState, threadTab:'task'|'replies'|'delivery'|'run'=res.kind==='delivery'?'delivery':'task'): string | null {
   if (res.kind === 'dm') return `/dm/${res.conversationId}`;
   const roomOf = (conversationId: string) => s.rooms.find((r) => r.conversationId === conversationId);
   const isDmConversation = (conversationId: string) => s.dms.some((d) => d.id === conversationId);
   if (res.kind === 'task' || res.kind === 'delivery') {
-    if (res.threadId != null && res.threadId.length > 0) return `/thread/${res.threadId}?tab=task${res.parentTaskId&&res.taskId?`&task=${encodeURIComponent(res.taskId)}${res.kind==='delivery'&&res.deliveryId?`&delivery=${encodeURIComponent(res.deliveryId)}`:''}`:''}`;
+    if (res.threadId != null && res.threadId.length > 0) {
+      const query=new URLSearchParams();
+      if(threadTab!=='replies')query.set('tab',threadTab);
+      if(res.parentTaskId&&res.taskId){query.set('task',res.taskId);if(res.kind==='delivery'&&res.deliveryId)query.set('delivery',res.deliveryId);}
+      return `/thread/${res.threadId}${query.size?'?'+query.toString():''}`;
+    }
     // 无线程：DM 任务（dm_turn）落会话；房间会话（异常形态）落主池；都查不到=无落点。
     if (isDmConversation(res.conversationId)) return `/dm/${res.conversationId}`;
     const room = roomOf(res.conversationId);
@@ -54,6 +59,6 @@ export function routeForResolved(res: ResolvedDeepLink, s: DeepLinkState): strin
   }
   const room = roomOf(res.conversationId);
   if (room != null) return `/room/${room.id}`;
-  if (isDmConversation(res.conversationId)) return `/dm/${res.conversationId}`;
+  if (isDmConversation(res.conversationId)) return `/dm/${res.conversationId}${res.messageId?'?message='+encodeURIComponent(res.messageId):''}`;
   return null;
 }

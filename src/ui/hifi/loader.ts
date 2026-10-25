@@ -1878,7 +1878,7 @@ export async function querySubmittedSend(env:PendingSendEnvelope):Promise<SendLo
 }
 export async function openRecoveredSend(location:RecoveredSendLocation):Promise<void>{
   // The existing deep-link resolver rechecks the locator and owns cross-project navigation.
-  await openExternalDeepLink(`#${location.taskId?'task='+location.taskId:location.threadId?'msg='+location.messageId:location.roomId?'msg='+location.messageId:'dm='+location.conversationId}`);
+  await openExternalDeepLink(`#msg=${location.messageId}`);
 }
 
 export async function retryUnknownSend(env: PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
@@ -1992,7 +1992,7 @@ export async function previewTextAttachment(attachmentId: string, conversationId
  * 跨项目先经 rootPath 打开真实项目（实体身份保留），再导航到对应页面；失败如实报错
  * （不静默跳转、不猜实体）。刷新/前进后退走内部路由（斜杠形态），不再进本函数。
  */
-export async function openExternalDeepLink(hash: string): Promise<void> {
+export async function openExternalDeepLink(hash: string, threadTab?:'task'|'replies'|'delivery'|'run'): Promise<void> {
   const urlSeq = currentNavSeq();
   const res = await command<ResolvedDeepLink>('deepLink.resolve', { hash });
   if (currentNavSeq() !== urlSeq) return;
@@ -2002,7 +2002,7 @@ export async function openExternalDeepLink(hash: string): Promise<void> {
     const opened = await openProjectByPath(res.rootPath);
     if (!opened.isCurrent()) return;
   }
-  const route = routeForResolved(res, getState());
+  const route = routeForResolved(res, getState(), threadTab);
   if (route == null) throw new Error(`深链解析成功但无对应界面落点（kind=${res.kind}）`);
   if (currentNavSeq() !== urlSeq) return;
   navigate(route);

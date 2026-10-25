@@ -1,6 +1,6 @@
 {
   "date": "2026-10-25",
-  "status": "proposal_only_pending_review",
+  "status": "implementation_authorized",
   "authority": "latest_user_feedback",
   "supersedes": [
     "decisions.json",
@@ -330,5 +330,6 @@
       "disposition": "removed_from_this_round",
       "group": null
     }
-  ]
+  ],
+  "implementationReport": "../../reviews/r109-simple-implementation-20261025.md"
 }

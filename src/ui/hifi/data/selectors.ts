@@ -318,7 +318,7 @@ export function deriveRoute(
     return { mode: 'AUTO', resolvedMemberIds: [], note: '无 @：默认协调者接单，可自行决定是否分工' };
   }
   if (named.length === 1) {
-    return { mode: 'DIRECT', resolvedMemberIds: named, note: '仅该成员被调用，其他成员零调用' };
+    return { mode: 'DIRECT', resolvedMemberIds: named, note: '由所选成员接单' };
   }
   return { mode: collaboration==='deliberate'?'DELIBERATE':'AUTO', resolvedMemberIds: named, note: `所选 ${named.length} 人${collaboration==='deliberate'?'参与独立研讨':'参与本条协作'}` };
 }

@@ -254,7 +254,10 @@ function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: numb
               }}
             >
               <Icon name={p.status === 'missing' ? 'alert-triangle' : 'folder'} size={13} />
-              <span className="truncate">{p.displayName}</span>
+              <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                <span className="truncate" style={{ display: 'block' }}>{p.displayName}</span>
+                <span className="small faint" style={{ display: 'block', overflowWrap: 'anywhere' }}>{p.rootPath}</span>
+              </span>
               {isCurrent ? <span className="tag accent">当前</span> : null}
               {p.status === 'missing' ? <span className="tag danger">目录失效</span> : null}
             </button>

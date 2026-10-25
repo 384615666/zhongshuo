@@ -1829,7 +1829,7 @@ function ThreadPanel({
        * 「回复」「成果」保持原样。URL 仍写既有 tab 键，旧深链不动。
        */}
 
-      {s.threadTasks[thread.id]?.executionStatus?<TaskExecutionStatusView status={s.threadTasks[thread.id]?.executionStatus}/>:null}
+      {s.threadTasks[thread.id]?.executionStatus?<TaskExecutionStatusView status={s.threadTasks[thread.id]?.executionStatus} hideThreadNavigation={view==='replies'}/>:null}
       <div className="list-wrap">
         {view === 'replies' ? (
           <>
@@ -2440,9 +2440,11 @@ function ThreadArtifacts({
       if (gen === genRef.current) setData({ ...next });
       if (task != null && projectId !== '') {
         try {
-          const r = await command<{ groups: Array<{ projectId: string; deliveries: NonNullable<typeof data>['deliveries'] }> }>('files.view', { scope: 'project', projectId });
+          const r = await command<{ task:{title:string}; deliveries:Array<{id:string;revision:number;manifestHash:string;reviewedAt:number|null}> }>('task.details', {
+            projectId:task.projectId,taskId:task.id,...(task.currentDeliveryId?{deliveryId:task.currentDeliveryId}:{}),
+          });
           if (gen !== genRef.current) return;
-          next.deliveries = (r.groups.find((g) => g.projectId === projectId)?.deliveries ?? []).filter((d) => d.taskId === task.id);
+          next.deliveries = r.deliveries.map(d=>({deliveryId:d.id,revision:d.revision,manifestHash:d.manifestHash,reviewedAt:d.reviewedAt,taskId:task.id,title:r.task.title}));
         } catch (e) { if (gen === genRef.current) next.delErr = (e as Error).message; }
       }
       if (gen === genRef.current) setData({ ...next });
@@ -3263,7 +3265,6 @@ export function CreateRoomModal({ projectId, onClose }: { projectId: string; onC
   /** 在途锁：创建期间按钮禁用——连点恰一次；失败保留输入（不 onClose 清掉）。 */
   const [busy, setBusy] = useState(false);
   const project = s.projects.find((p) => p.id === projectId);
-  const members = s.members.filter((m) => m.projectId === projectId);
 
   return (
     <Modal
@@ -3296,8 +3297,7 @@ export function CreateRoomModal({ projectId, onClose }: { projectId: string; onC
         <label className="field-label">房间名称</label>
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：性能专项" />
         <div className="field-hint">
-          将建在项目「{project?.displayName ?? projectId}」下；协调者沿用项目当前默认协调者（
-          {memberLabel(members[0])}），成员默认加入项目现有成员。
+          默认加入项目现有成员，协调者沿用原设置。
         </div>
       </div>
     </Modal>

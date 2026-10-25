@@ -1367,11 +1367,17 @@ export function persistNav(s: HifiState, isCurrent: () => boolean = () => true):
 
 /* ---------- 提示与主题 ---------- */
 export type ToastTone = 'info' | 'warn' | 'error' | 'success';
+let toastTimer: number | undefined;
 export function toast(text: string, tone: ToastTone = 'info') {
+  if (toastTimer !== undefined) clearTimeout(toastTimer);
   setState((s) => ({ ...s, ui: { ...s.ui, toast: { text, tone } } }));
-  window.setTimeout(() => { clearToast(); }, 4200);
+  toastTimer = window.setTimeout(() => { clearToast(); }, 4200);
 }
-export function clearToast() { setState((s) => ({ ...s, ui: { ...s.ui, toast: undefined } })); }
+export function clearToast() {
+  if (toastTimer !== undefined) clearTimeout(toastTimer);
+  toastTimer = undefined;
+  setState((s) => ({ ...s, ui: { ...s.ui, toast: undefined } }));
+}
 export function setTheme(theme: 'light' | 'dark') {
   setState((s) => ({ ...s, ui: { ...s.ui, theme } }));
   try { localStorage.setItem('zs.hifi.theme', theme); } catch { /* 忽略 */ }

@@ -10,15 +10,28 @@ import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
 import {successTurn,type FakeTurnScript} from '../../src/adapter/fake/script.ts';
 import {runtimeProgressWaitLabel,type ThreadVisibleProgress} from '../../src/contracts/runtimeProgress.ts';
+import {seedExplicitRecipientCoordination} from '../../src/daemon/coordination.ts';
+import {readThreadMembers} from '../../src/daemon/threadMembers.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
-async function fixture(){
+async function fixture(legacyExplicit=false){
   vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');
   const dir=mkdtempSync(join(tmpdir(),'zs-r87-members-')),project=join(dir,'project');mkdirSync(project);
   const file=join(dir,'state.sqlite');const db=openDatabase(file);
   const deps={db,localUserId:'u_local',appDataDir:dir,interruptTurn:async()=>{}};
   const raw=async<T>(method:string,params:unknown,id:string=randomUUID())=>await dispatchDaemonCommand(deps,{protocolVersion:1,commandId:id,method,params}) as {ok:boolean;data:T;replayed?:boolean;error?:{code:string}};
-  const cmd=async<T>(method:string,params:unknown,id?:string)=>{const r=await raw<T>(method,params,id);expect(r.ok,JSON.stringify(r.error)).toBe(true);return r.data;};
+  const cmd=async<T>(method:string,params:unknown,id?:string)=>{
+    const r=await raw<T>(method,params,id);expect(r.ok,JSON.stringify(r.error)).toBe(true);
+    const input=params as {target?:{kind:string;threadId?:string};body?:string;collaboration?:string;mentions?:Array<{kind:string;memberId?:string}>};
+    if(legacyExplicit&&method==='message.submit'&&input.collaboration!=='deliberate'&&(input.mentions?.some(m=>m.kind==='all')||(input.mentions?.length??0)>1)){
+      const sent=r.data as {taskId:string;messageId:string};
+      const recipients=input.mentions!.some(m=>m.kind==='all')?readThreadMembers(db,input.target!.threadId!).eligibleMemberIds:input.mentions!.map(m=>m.memberId!);
+      db.prepare("DELETE FROM outbox WHERE dispatch_key IN (?,?) AND status='pending'").run(`task:${sent.taskId}:initial`,`task:${sent.taskId}:thread-reply:${sent.messageId}`);
+      db.prepare('DELETE FROM thread_reply_requests WHERE message_id=?').run(sent.messageId);
+      seedExplicitRecipientCoordination(db,sent.taskId,sent.messageId,input.body!,recipients);
+    }
+    return r.data;
+  };
   const projectId=(await cmd<{project:{id:string}}>('project.open',{path:project})).project.id;
   const room=(await cmd<{items:Array<{id:string;conversationId:string}>}>('room.list',{projectId})).items[0]!;
   const ids:string[]=[];for(const name of ['同名','同名','房间其他成员'])ids.push((await cmd<{memberId:string}>('member.create',{projectId,displayName:name})).memberId);
@@ -59,8 +72,8 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect(f.db.prepare('SELECT count(*) n FROM tasks').get()).toEqual({n:2});
     }finally{f.db.close();}
   });
-  it('thread all fans out to every current participant, excludes room C, and keeps each reply visible',async()=>{
-    const f=await fixture();try{
+  it('V51 persisted: thread all fans out to every current participant, excludes room C, and keeps each reply visible',async()=>{
+    const f=await fixture(true);try{
       const answers=['你好！','甲的明确回复','乙的明确回复'];
       let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:(input)=>{
         const match=input.text.match(/resultKey=([^；\n]+)/)??input.text.match(/"resultKey":"(result_[^"]+)"/);
@@ -108,7 +121,9 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
     const f=await fixture();try{
       const finish=(handoffs:unknown[]=[]):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'work',answer:'核对请求',changeSummary:'核对请求',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs})}}];
       const valid={toMemberId:f.ids[1],purpose:'review',message:'请核对总额。'};
-      const invalid=bad==='foreign-recipient'?[{...valid,toMemberId:f.ids[2]}]:bad==='duplicate'?[valid,valid]:bad==='self-echo'?[{...valid,toMemberId:f.ids[0]}]:[{toMemberId:f.ids[0],purpose:'implement',message:'请修改项目文件。'}];
+      let foreignId='foreign';
+      if(bad==='foreign-recipient'){const other=join(f.dir,'other-project');mkdirSync(other);const p=await f.cmd<{project:{id:string}}>('project.open',{path:other});foreignId=(await f.cmd<{memberId:string}>('member.create',{projectId:p.project.id,displayName:'其他项目成员'})).memberId;}
+      const invalid=bad==='foreign-recipient'?[{...valid,toMemberId:foreignId}]:bad==='duplicate'?[valid,valid]:bad==='self-echo'?[{...valid,toMemberId:f.ids[0]}]:[{toMemberId:f.ids[0],purpose:'implement',message:'请修改项目文件。'}];
       const scripts=bad==='child-write-escalation'?[finish(),finish([valid]),finish(invalid)]:[finish(),finish(invalid)];let index=0;
       const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-invalid-message',appDataDir:f.dir});
       await worker.runOnce();await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
@@ -145,7 +160,7 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       await worker.runOnce();await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
       await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[]});
       await worker.runOnce();
-      const rootRun=f.db.prepare('SELECT run_id FROM coordination_runs').get() as {run_id:string};
+      const rootRun=f.db.prepare("SELECT run_id FROM coordination_runs WHERE task_id=? AND state IN ('planning','running','integrating') ORDER BY created_at DESC LIMIT 1").get(f.root.taskId) as {run_id:string};
       let opening:Promise<boolean>|undefined,release:(()=>void)|undefined;
       if(boundary==='opening-session'){
         const barrier=new Promise<void>(resolve=>{release=resolve;});const original=adapter.openSession.bind(adapter);let entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});
@@ -163,12 +178,12 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
     const f=await fixture();try{
       const sent=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'请两位一起看看',intent:'default',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId}))});
       const task=f.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(sent.taskId) as {route_json:string};
-      expect(JSON.parse(task.route_json)).toMatchObject({mode:'AUTO',participantScope:'selected',initialWakeMemberIds:f.ids.slice(0,2)});
+      expect(JSON.parse(task.route_json)).toMatchObject({mode:'AUTO',participantScope:'selected',initialWakeMemberIds:[f.ids[0]]});
       const children=f.db.prepare(`SELECT t.owner_member_id owner FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id
         JOIN coordination_runs c ON c.run_id=s.run_id WHERE c.task_id=? ORDER BY t.owner_member_id`).all(sent.taskId) as Array<{owner:string}>;
-      expect(children.map(row=>row.owner).sort()).toEqual(f.ids.slice(0,2).sort());
+      expect(children).toEqual([]);
       const parentInitial=f.db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key=?").get(`task:${sent.taskId}:initial`) as {n:number};
-      expect(parentInitial.n).toBe(0);
+      expect(parentInitial.n).toBe(1);
       const scope=f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(sent.taskId) as {roster_json:string};
       expect((JSON.parse(scope.roster_json) as Array<{memberId:string}>).map(m=>m.memberId).sort()).toEqual(f.ids.slice(0,2).sort());
       expect(scope.roster_json).not.toContain(f.ids[2]);
@@ -176,8 +191,8 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       const advanced=f.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(explicit.taskId) as {route_json:string};expect(JSON.parse(advanced.route_json)).toMatchObject({mode:'DELIBERATE'});
     }finally{f.db.close();}
   });
-  it('room explicit two-recipient message executes both selected members and no hidden coordinator',async()=>{
-    const f=await fixture();try{
+  it('V51 persisted: room explicit two-recipient message executes both selected members and no hidden coordinator',async()=>{
+    const f=await fixture(true);try{
       const answers=['根回复','第一位明确回复','第二位明确回复'];
       let index=0;
       const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:(input)=>{
@@ -208,8 +223,8 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect(f.db.prepare('SELECT 1 FROM agent_turns WHERE member_id=?').get(f.ids[2])).toBeUndefined();
     }finally{f.db.close();}
   });
-  it('explicit recipients accept a natural plain-text reply when there is no work evidence',async()=>{
-    const f=await fixture();try{
+  it('V51 persisted: explicit recipients accept a natural plain-text reply when there is no work evidence',async()=>{
+    const f=await fixture(true);try{
       const rootFinal:FakeTurnScript=[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'conversation',answer:'根回复',changeSummary:'根回复',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}];
       const scripts:FakeTurnScript[]=[rootFinal,successTurn('第一位自然回复'),successTurn('第二位自然回复')];
       const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:()=>scripts.shift()??successTurn('extra')}),leaseOwner:'r90-natural-child',appDataDir:f.dir});

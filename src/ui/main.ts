@@ -530,6 +530,7 @@ let dataOperationStarting = false;
   // senderFrame 来源（zsres://app/ 以外一律拒绝——不开放任意系统命令）。close 走 win.close()
   // → window-all-closed → shutdownDaemon() 既有优雅收口链（daemon.shutdown→有界等待→kill
   // 兜底→desktop-shutdown.json）——不为无边框改用 app.exit/直接销毁。
+  let closePrompt: Promise<{ ok: boolean }> | null = null;
   ipcMain.handle('zs:window', (event, action: unknown) => {
     assertTrustedSender(event);
     if (action === 'minimize') { win.minimize(); return { ok: true }; }
@@ -537,7 +538,17 @@ let dataOperationStarting = false;
       if (win.isMaximized()) win.unmaximize(); else win.maximize();
       return { ok: true, maximized: win.isMaximized() };
     }
-    if (action === 'close') { win.close(); return { ok: true }; }
+    if (action === 'close') {
+      closePrompt ??= dialog.showMessageBox(win, {
+        type: 'question', title: '退出众说', message: '要退出众说吗？',
+        detail: '退出后，正在执行的任务会停止。',
+        buttons: ['取消', '退出'], defaultId: 0, cancelId: 0, noLink: true,
+      }).then(({ response }) => {
+        if (response === 1 && !win.isDestroyed()) win.close();
+        return { ok: true };
+      }).finally(() => { closePrompt = null; });
+      return closePrompt;
+    }
     if (action === 'getState') {
       // Read the native Electron window rectangle; renderer screenX/Y and captured
       // image bounds have different DPI/frame semantics and cannot prove movement.

@@ -111,6 +111,7 @@ export type TaskNotificationAckResult = z.infer<typeof taskNotificationAckResult
 
 export const taskNotificationClickSchema = z.strictObject({
   notificationId: taskNotificationIdSchema,
+  kind: taskNotificationKindSchema.optional(),
   locator: taskNotificationLocatorSchema,
 });
 export type TaskNotificationClick = z.infer<typeof taskNotificationClickSchema>;

@@ -210,9 +210,9 @@ export function ExecutionStatus({
     >
       <div className="row tight" style={{ alignItems: 'center', gap: 7, minHeight: 22 }}>
         <Tag tone={presentation.tone} icon={presentation.icon}>{summary.label}</Tag>
-        <span className="small strong truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-summary>
+        {summary.main!==summary.label?<span className="small strong truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-summary>
           {summary.main}
-        </span>
+        </span>:null}
         {summary.detail != null ? (
           <span className="small faint truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-detail>
             {summary.detail}

@@ -110,6 +110,7 @@ export function registerTaskNotificationIpc(deps: TaskNotificationIpcDependencie
         win.focus?.();
         win.webContents.send(TASK_NOTIFICATION_IPC.click, {
           notificationId: delivery.notificationId,
+          kind: delivery.kind,
           locator: delivery.locator,
         });
       });

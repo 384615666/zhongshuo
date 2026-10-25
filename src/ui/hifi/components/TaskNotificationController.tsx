@@ -38,14 +38,15 @@ export async function showNextTaskNotification(
 
 export async function openTaskNotificationClick(
   input: unknown,
-  openDeepLink: (hash: string) => Promise<void> = async (hash) => {
+  openDeepLink: (hash: string, threadTab:'replies'|'delivery'|'run') => Promise<void> = async (hash,threadTab) => {
     const { openExternalDeepLink } = await import('../loader');
-    await openExternalDeepLink(hash);
+    await openExternalDeepLink(hash,threadTab);
   },
 ): Promise<TaskNotificationClick | null> {
   const parsed = taskNotificationClickSchema.safeParse(input);
   if (!parsed.success) return null;
-  await openDeepLink(parsed.data.locator.hash);
+  await openDeepLink(parsed.data.locator.hash,
+    parsed.data.kind==='task.needs_review'?'delivery':parsed.data.kind==='task.needs_attention'?'run':'replies');
   return parsed.data;
 }
 

@@ -6,6 +6,6 @@ describe('R108 actual Composer send recovery state',()=>{
     const module=await import(script) as {default:{runVerifier:()=>Promise<{ok:boolean;checks?:Array<{name:string;ok:boolean}>;error?:string}>}};
     const result=await module.default.runVerifier();
     expect(result,JSON.stringify(result)).toMatchObject({ok:true});
-    expect(result.checks).toHaveLength(7);
+    expect(result.checks).toHaveLength(9);
   });
 });

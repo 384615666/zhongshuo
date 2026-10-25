@@ -77,7 +77,7 @@ describe('R108 native task notification renderer controller', () => {
   it('routes only a daemon-validated locator and ignores arbitrary click payloads', async () => {
     const open = vi.fn(async () => {});
     await expect(openTaskNotificationClick(click, open)).resolves.toEqual(click);
-    expect(open).toHaveBeenCalledWith('#task=task1');
+    expect(open).toHaveBeenCalledWith('#task=task1','replies');
 
     const unsafeOpen = vi.fn(async () => {});
     await expect(openTaskNotificationClick({
@@ -89,6 +89,15 @@ describe('R108 native task notification renderer controller', () => {
 
   it('mounts as a side-effect-only controller', () => {
     expect(renderToStaticMarkup(createElement(TaskNotificationController))).toBe('');
+  });
+
+  it.each([
+    ['task.completed','replies'],['task.needs_input','replies'],
+    ['task.needs_review','delivery'],['task.needs_attention','run'],
+  ] as const)('opens %s at its existing task view',async(kind,tab)=>{
+    const open=vi.fn(async()=>{});
+    await openTaskNotificationClick({...click,kind},open);
+    expect(open).toHaveBeenCalledWith('#task=task1',tab);
   });
 });
 

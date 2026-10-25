@@ -466,7 +466,7 @@ export function quoteResource(
     const fd = res.formalDelivery;
     const revText = rev.content.kind === 'text' || rev.content.kind === 'markdown' || rev.content.kind === 'code' || rev.content.kind === 'csv'
       ? rev.content.text : '';
-    const body = revText.replace(/\s+/g, ' ').trim().slice(0, 160);
+    const body = excerpt?.trim() ?? revText.replace(/\s+/g, ' ').trim().slice(0, 160);
     const line = `> 引用交付「${fd.taskTitle || res.title}」v${fd.revision}（manifest ${fd.manifestHash.slice(0, 12)}…）${body.length > 0 ? `：${body}` : ''}`;
     const r = queueDraftInsert(targetDraftKey, line);
     if (r.ok) {
@@ -489,7 +489,7 @@ export function quoteResource(
     return false;
   }
   if (excerpt != null && excerpt.trim().length > 0) {
-    queueDraftInsert(targetDraftKey, `> 摘录「${res.title}」v${revision}：${excerpt.trim().slice(0, 400)}`);
+    queueDraftInsert(targetDraftKey, `> 摘录「${res.title}」v${revision}：${excerpt.trim()}`);
   }
   recordWrite('preview.quote', `resource=${resourceId} revision=${revision} → 目标草稿 ${targetDraftKey}（固定版本；正文保持用户文字）`);
   toast(r.existed === true

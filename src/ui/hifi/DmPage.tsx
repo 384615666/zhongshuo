@@ -23,7 +23,7 @@ import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setRea
 import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, type ReviewSnapshot } from './loader';
 import { openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './data/store';
 import { command, openExportDir } from './bridge';
-import { navigate, pathOf, useHashRoute } from './lib/router';
+import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
 import { useElementWidth } from './lib/useElementWidth';
 import { SIDEBAR_WIDTH } from './lib/layout';
 import { audienceAllows, resourceOf } from './lib/resource';
@@ -56,6 +56,21 @@ export function DmPage() {
   const dmProgress = st.threadProgress[`dm:${activeId}`]?.items ?? EMPTY;
   const readError = useStore((s) => s.readErrors[activeId]);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const highlightMessageId=parseQuery(route).message;
+  const highlighted=useRef('');
+  useEffect(()=>{
+    if(!highlightMessageId)return;
+    const key=activeId+':'+highlightMessageId;
+    if(highlighted.current===key)return;
+    const message=Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-zs-message-id]')??[])
+      .find(el=>el.dataset.zsMessageId===highlightMessageId);
+    if(!message)return;
+    highlighted.current=key;
+    message.scrollIntoView({block:'center'});
+    message.classList.add('msg-highlight');
+    const timer=setTimeout(()=>message.classList.remove('msg-highlight'),2600);
+    return()=>{clearTimeout(timer);message.classList.remove('msg-highlight');};
+  },[activeId,highlightMessageId,msgs]);
   /** 头部操作忙态（按动作名——同一时刻一个；失败原因走 toast 如实）。 */
   const [busy, setBusy] = useState<string | null>(null);
   /** ⋯ 菜单与新建私聊弹窗锚点（R66 P5：操作收进菜单，头部不铺满按钮）。 */
@@ -600,7 +615,7 @@ export function DmPage() {
                   ) : null}
                   {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
                   {msgs.map((m) => (
-                    <div key={m.id} className="msg-item">
+                    <div key={m.id} className="msg-item" data-zs-message-id={m.id}>
                       <MessageView
                         message={{ ...m, saved: savedRefs[m.id] === true }}
                         author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}

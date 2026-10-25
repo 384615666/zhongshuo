@@ -16,21 +16,20 @@ export function AnalysisContinueAction({failure,roomId}:{failure:PreDispatchFail
     if(pending.current?.key!==key)pending.current={key,commandId:crypto.randomUUID()};
     setBusy(true);
     try {
-      const outcome=await sendCommand(pending.current.commandId,'task.redispatch',{taskId:binding.taskId,analysisOnly:true,
+      const outcome=await sendCommand(pending.current.commandId,'task.redispatch',{taskId:binding.taskId,
         expectedTaskRevision:binding.expectedTaskRevision,expectedStopGeneration:binding.expectedStopGeneration,
-        reason:'read-only-analysis-after-preflight-failure'});
+        reason:'continue-original-after-preflight-failure'});
       if(outcome.status!=='ok'){
         if(outcome.status==='failed')pending.current=null;
         throw Error(outcome.error);
       }
       pending.current=null;
-      toast('已按原请求仅分析继续','success');
+      toast('已按原请求继续','success');
       await Promise.allSettled([loadRoomPool(roomId),...(failure.threadId?[refreshThreadTask(failure.threadId)]:[])]);
     }catch(error){toast(`未确认继续结果：${(error as Error).message}。可同号重试。`,'error');}
     finally{setBusy(false);}
   };
   return <div className="small" onClick={event=>event.stopPropagation()} data-zs-analysis-recovery="1">
-    <div className="faint">保留原消息、成员与协作方式，只读取项目及公开资料。</div>
-    <button type="button" className="btn sm" disabled={busy} onClick={()=>void continueAnalysis()}>{busy?'正在提交…':'仅分析继续'}</button>
+    <button type="button" className="btn sm" disabled={busy} onClick={()=>void continueAnalysis()}>{busy?'正在提交…':'按原请求继续'}</button>
   </div>;
 }

@@ -6,12 +6,19 @@ import MarkdownIt from 'markdown-it';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guideDir = join(repo, 'docs', 'user-guide');
 const sections = [
-  ['start', '打开与日常使用'],
-  ['status', '看懂执行状态'],
-  ['send', '找回刚才的发送'],
-  ['notifications', '桌面通知与静音'],
-  ['repair', '原答与补交版本'],
-  ['example', '完整使用示例'],
+  ['start', '打开与退出'],
+  ['projects', '项目与房间'],
+  ['members', '成员与AI设置'],
+  ['chat', '房间聊天与协作'],
+  ['dm', '私信'],
+  ['progress', '任务进展'],
+  ['find', '搜索、待办与看板'],
+  ['results', '成果与修改'],
+  ['files', '文件与附件'],
+  ['git', '文件与Git'],
+  ['settings', '通知和设置'],
+  ['optional', '其他已有工具'],
+  ['send', '发送异常'],
   ['help', '常见问题'],
 ];
 
@@ -28,14 +35,14 @@ export function renderUserGuide({ assetPrefix = '', markdownPath = 'README.md' }
   md.renderer.rules.table_open = () => '<div class="table-scroll"><table>\n';
   md.renderer.rules.table_close = () => '</table></div>\n';
   const body = md.render(readFileSync(join(guideDir, 'README.md'), 'utf8'));
-  const nav = sections.map(([id, label], index) => `<a href="#${id}"><span>0${index + 1}</span>${label}</a>`).join('\n');
+  const nav = sections.map(([id, label], index) => `<a href="#${id}"><span>${String(index + 1).padStart(2, '0')}</span>${label}</a>`).join('\n');
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>众说 V51 操作手册</title>
+<title>众说操作手册</title>
 <style>
 :root{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:#253549;background:#f3f6f9;font-size:16px;line-height:1.85;--accent:#087a70;--line:#dfe7ee}
 *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:90px}body{margin:0}a{color:#086f9b;text-underline-offset:3px}a:hover{color:var(--accent)}
@@ -52,7 +59,7 @@ img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var
 </style>
 </head>
 <body>
-<header class="topbar"><div class="brand">众说<span class="edition">V51 · 用户操作手册</span></div><a href="${markdownPath}">查看文字版</a></header>
+<header class="topbar"><div class="brand">众说<span class="edition">用户操作手册</span></div><a href="${markdownPath}">查看文字版</a></header>
 <div class="layout"><aside aria-label="章节导航"><p>按问题找操作</p>${nav}</aside><main>${body}</main></div>
 <footer class="footer">本手册可离线阅读 · 点击图片可看大图 · 浏览器 Ctrl + P 可打印或另存为 PDF</footer>
 </body>

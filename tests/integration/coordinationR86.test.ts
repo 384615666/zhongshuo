@@ -86,6 +86,50 @@ async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) 
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('R109 lets the model plan adjacent Chinese names and waits for the dependent review',async()=>{
+    const f=await fixture();
+    try{
+      f.db.prepare('UPDATE project_members SET display_name=? WHERE id=?').run('Claude',f.a);
+      f.db.prepare('UPDATE project_members SET display_name=? WHERE id=?').run('Codex',f.b);
+      const root=await f.cmd<{taskId:string;threadId:string}>('message.submit',{
+        target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},
+        body:'@Claude 比较方案，然后@Codex 核对这次结果',intent:'default',
+        mentions:[{kind:'member',memberId:f.a}],
+      });
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_steps').get()).toEqual({n:0});
+      await f.run(output('已理解先比较再核对',f.plan));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'ACTIVE'});
+      const steps=f.db.prepare('SELECT step_key,child_task_id FROM coordination_steps ORDER BY rowid').all() as Array<{step_key:string;child_task_id:string}>;
+      expect(steps).toHaveLength(2);
+      expect(f.db.prepare('SELECT depends_on_task_id FROM task_dependencies WHERE task_id=?').get(steps[1]!.child_task_id)).toEqual({depends_on_task_id:steps[0]!.child_task_id});
+      await f.run(output('MODEL_STEP_A'));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).not.toEqual({status:'DONE'});
+      expect(f.db.prepare('SELECT count(*) n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?').get(steps[1]!.child_task_id)).toEqual({n:0});
+      await f.run(output('MODEL_STEP_B_REVIEW'));
+      const review=f.db.prepare('SELECT handoff_json FROM coordination_steps WHERE child_task_id=?').get(steps[1]!.child_task_id) as {handoff_json:string};
+      expect(review.handoff_json).toContain('MODEL_STEP_A');
+      await f.run(output('两位成员已完成本次比较和核对'));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('R109 exposes room handoff for a single-recipient follow-up without another input setting',async()=>{
+    const f=await fixture();
+    try{
+      const root=await f.send([f.a]);
+      await f.run(output('先回答普通问题',undefined,{responseKind:'conversation'}));
+      await f.cmd('message.submit',{
+        target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:root.threadId},
+        body:'请先处理，再让另一位成员核对本次结果',intent:'default',mentions:[{kind:'member',memberId:f.a}],
+      });
+      const request=f.db.prepare('SELECT roster_json FROM thread_reply_requests ORDER BY rowid DESC LIMIT 1').get() as {roster_json:string};
+      expect(JSON.parse(request.roster_json).some((m:{memberId:string})=>m.memberId===f.b)).toBe(true);
+      await f.run(output('按新消息分工',f.plan));
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_steps').get()).toEqual({n:2});
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).not.toEqual({status:'DONE'});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
   it('explicitly continues with current member configurations without editing old scopes or adding members',async()=>{
     const f=await fixture(true);try{
       const root=await f.send([f.a,f.b]);await f.worker.runOnce();

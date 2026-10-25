@@ -7,7 +7,7 @@ import {requestRecoveryOpen} from '../lib/recovery';
 import {navigate} from '../lib/router';
 
 /** Bind the shared factual view to existing local actions; rendering never dispatches. */
-export function TaskExecutionStatusView({status,density='compact'}:{status:TaskExecutionStatus|null|undefined;density?:'compact'|'detail'}){
+export function TaskExecutionStatusView({status,density='compact',hideThreadNavigation=false}:{status:TaskExecutionStatus|null|undefined;density?:'compact'|'detail';hideThreadNavigation?:boolean}){
   const [error,setError]=useState<string|null>(null);
   const pending=useRef<{key:string;commandId:string}|null>(null);
   const busy=useRef(false);
@@ -22,7 +22,7 @@ export function TaskExecutionStatusView({status,density='compact'}:{status:TaskE
         if(pending.current?.key!==key)pending.current={key,commandId:crypto.randomUUID()};
         const result=await sendCommand(pending.current.commandId,'task.redispatch',{
           taskId:action.binding.taskId,expectedTaskRevision:action.binding.expectedTaskRevision,
-          expectedStopGeneration:action.binding.expectedStopGeneration,analysisOnly:true,reason:'execution-status-read-only-continue',
+          expectedStopGeneration:action.binding.expectedStopGeneration,reason:'execution-status-continue-original',
         });
         if(result.status!=='ok'){if(result.status==='failed')pending.current=null;throw Error(result.error);}
         pending.current=null;
@@ -31,15 +31,14 @@ export function TaskExecutionStatusView({status,density='compact'}:{status:TaskE
       }
       const target=action.target;
       if(target.kind==='recovery')requestRecoveryOpen();
-      else if(target.kind==='thread')navigate(`/thread/${target.id}?tab=run`);
+      else if(target.kind==='thread')navigate(`/thread/${target.id}`);
       else if(target.kind==='room')await openExternalDeepLink(`#task=${status.taskId}`);
       else await openExternalDeepLink(`#${target.kind==='delivery'?'delivery':target.kind==='dm'?'dm':'task'}=${target.id}`);
     }catch(reason){setError((reason as Error).message);}
     finally{busy.current=false;}
   };
   return <div>
-    <ExecutionStatus status={status} density={density} onAction={action=>void handle(action)}/>
-    {status.phase!=='COMPLETED'&&status.lastBusinessActivity?<div className="small faint" title={status.lastBusinessActivity.summary}>最近活动：{new Date(status.lastBusinessActivity.at).toLocaleTimeString('zh-CN')}</div>:null}
+    <ExecutionStatus status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} onAction={action=>void handle(action)}/>
     {error?<div className="small warning" role="alert">{error}</div>:null}
   </div>;
 }

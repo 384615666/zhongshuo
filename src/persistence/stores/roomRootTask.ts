@@ -174,15 +174,9 @@ export function createRoomRootTask(
       payload: { mode: input.route.mode, rootMessageId: input.ids.messageId },
     });
 
-    // Explicit multi-recipient messages seed one formal child task per selected member
-    // in the same transaction. The parent is a container, not another hidden responder.
-    const explicitGroup = input.route.mode === 'AUTO'
-      && input.route.participantScope === 'selected'
-      && input.route.frozenMemberIds.length > 1;
-    if (!explicitGroup) {
-      // 初始派发：outbox 与任务创建同事务（§11.2）。
-      enqueueOutbox(db, { dispatchKey: `task:${taskId}:initial`, stopGenerationAtEnqueue: stopGenerationOfTask(db, taskId) }); // 意图入队代次（迁移 034）
-    }
+    // The receiving model interprets ordinary multi-member requests and chooses
+    // dependencies before other members begin.
+    enqueueOutbox(db, { dispatchKey: `task:${taskId}:initial`, stopGenerationAtEnqueue: stopGenerationOfTask(db, taskId) });
     disposition = 'queued';
   }
 

@@ -10,6 +10,7 @@ import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { coordinationProgressHint } from '../../src/ui/hifi/lib/coordinationProgressHint.ts';
+import {seedExplicitRecipientCoordination} from '../../src/daemon/coordination.ts';
 import type { ThreadVisibleProgress } from '../../src/contracts/runtimeProgress.ts';
 
 it('hydrates live child facts in the cold room pool without opening a thread or fetching its history', async () => {
@@ -57,6 +58,10 @@ it('hydrates live child facts in the cold room pool without opening a thread or 
       body: '请分别核算，由方案主持统一交付。', intent: 'default',
       mentions: members.map(memberId => ({ kind: 'member', memberId })),
     });
+    // Persisted V51 child work must still hydrate after upgrade.
+    db.prepare("UPDATE outbox SET status='done' WHERE dispatch_key=?").run(`task:${sent.taskId}:initial`);
+    const anchor=db.prepare('SELECT root_message_id FROM tasks WHERE id=?').get(sent.taskId) as {root_message_id:string};
+    seedExplicitRecipientCoordination(db,sent.taskId,anchor.root_message_id,'请分别核算，由方案主持统一交付。',members);
     await worker.runOnce();
     await vi.waitFor(() => expect(db.prepare("SELECT count(*) n FROM domain_events WHERE kind='tool.started'").get()).toEqual({ n: 1 }));
     expect(store.getState().threadEntities[sent.threadId]).toBeUndefined();

@@ -61,7 +61,8 @@ const NAV: NavItem[] = [
 type SearchEntry = { section: AppSettingsSection; label: string; keywords: string; match: string };
 const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
-  { section: 'appearance', label: '主题（深色外观）', keywords: '外观 主题 深色 浅色 暗色', match: '深色外观' },
+  { section: 'appearance', label: '主题', keywords: '外观 主题 深色 浅色 暗色', match: 'appearance-theme' },
+  { section: 'appearance', label: '显示头像', keywords: '头像 显示 图片', match: 'appearance-avatars' },
   { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用 次数 预算 上限 DIRECT AUTO DELIBERATE', match: '启用调用次数预算' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
@@ -181,6 +182,8 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
 }
 
 function findByLabel(text: string): HTMLElement | null {
+  const exact = Array.from(document.querySelectorAll<HTMLElement>('[data-settings-row]')).find(el=>el.dataset.settingsRow===text);
+  if(exact)return exact;
   const all = document.querySelectorAll<HTMLElement>('.settings-body .row, .settings-body .pset-row, .settings-body .settings-row, .settings-body label');
   for (const el of all) {
     if ((el.textContent ?? '').includes(text)) return el;
@@ -296,13 +299,13 @@ function SectionAppearance() {
   return (
     <div>
       <SectionHead title="外观" sub={<>主题、头像显示与个人图片（本机偏好，随数据根保存）。</>} />
-      <SettingsRow label="主题" hint="浅色 / 深色">
+      <SettingsRow id="appearance-theme" label="主题" hint="浅色 / 深色">
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
           <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>深色</button>
         </div>
       </SettingsRow>
-      <SettingsRow label="显示头像" hint="默认关闭，姓名仍会显示；打开后使用你设置的个人或 AI 头像">
+      <SettingsRow id="appearance-avatars" label="显示头像" hint="默认关闭，姓名仍会显示；打开后使用你设置的个人或 AI 头像">
         <Switch
           checked={showAvatars}
           disabled={busy === 'visibility'}

@@ -161,7 +161,7 @@ describe('第五十二轮 H2：附件归属/字节合同/深链分列/信封冻�
       const dv = await h.raw('deepLink.resolve', { hash: `#delivery=${dlvId}` });
       expect((dv.data as { threadId: string | null }).threadId).toBe(th2.id); // DTO 补齐（此前缺→空私信）
       const stateRoute = h.bundle.store.getState();
-      expect(h.bundle.deepLink.routeForResolved(dv.data as Record<string, unknown>, stateRoute)).toBe(`/thread/${th2.id}?tab=task`);
+      expect(h.bundle.deepLink.routeForResolved(dv.data as Record<string, unknown>, stateRoute)).toBe(`/thread/${th2.id}?tab=delivery`);
       // 房间会话、无线程（异常形态）→ 按已装载房间落主池，不默认 DM。
       expect(h.bundle.deepLink.routeForResolved({ kind: 'task', projectId: projId, conversationId: 'convA', threadId: null, taskId: 't_x' }, stateRoute)).toBe('/room/roomA');
       // 完全未知会话 → null（如实报错，不静默跳转）。
