@@ -1,8 +1,10 @@
 # 众说正式工程 · 施工总账
 
-## R109 当前：精简7项已实施，V52装配中（2026-10-25）
+## R109 当前：精简7项已实施，V52已交付（2026-10-25）
 
 用户已批准 [精简范围](../design-proposals/usability-20261025/simplified-scope.md)。源码修改和14章手册已完成，相关19文件189项通过，主工程与hifi类型检查通过，lint无新增。权威结果与交付状态见 [R109实施记录](../reviews/r109-simple-implementation-20261025.md)。旧52项新增界面提案已撤回，不再按下方历史施工记录扩张范围。本轮未调用真实模型、未重跑用户原任务或改动原数据。
+
+V52：desktop-daily-win-v52-r109-simple-20261025，BUILD bld_801877b1549cd5e9，源码6a852d9，595项清单一致；整包Fake 1turn成功并正常退出。沿用原数据从新包start-existing-data.vbs进入，不搬旧V44 server-data。BUILD.dirty=true与原生手点未验边界见实施记录。
 
 ## R87 rc4 当前候选（2026-10-18），R86 历史候选在后
 

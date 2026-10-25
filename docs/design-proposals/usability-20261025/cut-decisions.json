@@ -1,6 +1,6 @@
 {
   "date": "2026-10-25",
-  "status": "implementation_authorized",
+  "status": "implemented",
   "authority": "latest_user_feedback",
   "supersedes": [
     "decisions.json",
@@ -331,5 +331,7 @@
       "group": null
     }
   ],
-  "implementationReport": "../../reviews/r109-simple-implementation-20261025.md"
+  "implementationReport": "../../reviews/r109-simple-implementation-20261025.md",
+  "sourceCommit": "6a852d9a37803593509e17c1e086ab1499a05488",
+  "buildId": "bld_801877b1549cd5e9"
 }
