@@ -18,4 +18,10 @@
 
 截图项目有3次进程内Fake示例执行、0真实模型调用，正常关窗后daemon退出0、pid移除；没有改用户原任务、原数据或任何真实模型配置。脚本为模型选项读取使用正式本机元数据命令，不进行真实模型派发。前期辅助脚本失败与截图修正保留在各ignored目录；未把辅助失败当产品验收成功。本轮未重跑全量、真实模型e2e或GitHub sandbox。
 
-V55源码与图文验证完成，包身份和推送在交付时补记。
+V55已构建：`dist/desktop/desktop-daily-win-v55-r112-illustrated-guide-20261026`。源码 `05f21aadcd54dd1988ccab186e30cc6cba009d81`，BUILD `bld_241fcc311cf698cb`；613项manifest独立重算一致。17张离线图片全部存在；统一内外版图片相对路径后，手册正文完全一致（离线为“操作手册/images/”，内置为“images/”）。
+
+新包的main/preload/renderer及随包Node/daemon隔离启动通过：帮助页独立、通用图文手册14章、17图全部加载成功、无手册应用桥；0新turn/0真实调用，正常关窗daemon退出0、无强杀/超时、pid移除。整包界面已截图核对，证据在ignored `dist/r112-guide-review/package-data-e2744ebf/`。
+
+包内通用README介绍首次使用和图文手册；另有“本机升级说明.md”，只为当前用户说明从新包start-existing-data.vbs沿用原数据，启动器与V54逐字节相同。专用旧目录没有进入通用手册。未实际替用户切换原数据。
+
+BUILD.dirty=true，差异哈希仍为 `454ea1ce9699825673ca8282921e6dc82471aa994870a87cb97bcf8fcc5befa4`（保留的既有debug删除及无关untracked），构建前本轮源码已提交。源码及交付记录推送origin/codex/full-implementation，实际远端结果另由Git核对。
