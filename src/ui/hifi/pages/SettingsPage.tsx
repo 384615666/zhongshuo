@@ -1,6 +1,7 @@
 /**
- * 应用设置（R64 原型还原）：**壳=已批准原型**（七项导航 + 搜索 + 分区副标题 + 设置行组件
- * §3.1/§3.4/§17.8）；**内容=真实能力**——已接命令的设置读写并回读核对（app.settings /
+ * 应用设置：既有设置导航 + 搜索，操作手册单独分区。
+ *
+ * 已接命令的设置读写并回读核对（app.settings /
  * 主题 / runtime 绑定 / 数据与草稿存储 / 远程监听事实 / BUILD 身份）；通知静音使用真实
  * thread_subscriptions 并回读。后端没有的能力在原型位置**禁用并说明**（托盘/自启、配对码、
  * MCP 接入），不用模拟值冒充实际值。
@@ -32,12 +33,12 @@ import {
 } from '../../../contracts/taskNotifications';
 
 export type AppSettingsSection =
-  | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
+  | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'guide' | 'help';
 
 /** 旧写法 → 现分区（§3.4 深链兼容）。 */
 const SECTION_ALIASES: Record<string, AppSettingsSection> = {
   general: 'general', appearance: 'appearance', notifications: 'notifications',
-  runtime: 'runtime', connections: 'connections', data: 'data', help: 'help',
+  runtime: 'runtime', connections: 'connections', data: 'data', guide: 'guide', manual: 'guide', help: 'help',
   app: 'general', lan: 'connections', archive: 'data', archived: 'data', diagnostics: 'help', errors: 'help',
 };
 
@@ -54,7 +55,8 @@ const NAV: NavItem[] = [
   { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: 'AI 成员的模型与权限' },
   { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
   { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
-  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '操作手册、版本与诊断' },
+  { key: 'guide', label: '操作手册', icon: 'file-text', hint: '完整使用说明' },
+  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '版本与诊断' },
 ];
 
 /** Search only real actions shown on this page. */
@@ -71,7 +73,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
   { section: 'data', label: '草稿快照健康与重试', keywords: '草稿 快照 保存 锁定 重试', match: '草稿快照' },
   { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
-  { section: 'help', label: '操作手册', keywords: '帮助 文档 使用 教程 手册', match: 'user-guide' },
+  { section: 'guide', label: '操作手册', keywords: '帮助 文档 使用 教程 手册', match: 'user-guide' },
   { section: 'help', label: '版本与构建身份', keywords: '版本 构建 build 关于', match: '版本与构建' },
 ];
 
@@ -91,9 +93,17 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
   const section = appSectionOf(q.section);
   const [search, setSearch] = useState('');
   const [jumpTo, setJumpTo] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
   const go = (next: AppSettingsSection) => navigate(`/settings?section=${next}`, { replace: true });
   useEffect(() => {
-    if (!jumpTo) return;
+    if (section !== 'guide' || search.trim()) return;
+    const reveal = () => navRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    reveal();
+    window.addEventListener('resize', reveal);
+    return () => window.removeEventListener('resize', reveal);
+  }, [section, search]);
+  useEffect(() => {
+    if (!jumpTo || section === 'guide') return;
     const el = findByLabel(jumpTo);
     if (!el) return;
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -109,9 +119,9 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
 
   return (
     <div className="main">
-      <div className="page">
-        <div className="settings-layout">
-          <nav className="settings-nav" aria-label="设置分区">
+      <div className={`page${section === 'guide' ? ' settings-guide-page' : ''}`}>
+        <div className={`settings-layout${section === 'guide' ? ' settings-guide-layout' : ''}`}>
+          <nav ref={navRef} className="settings-nav" aria-label="设置分区">
             <div className="settings-search">
               <div className="row tight">
                 <Icon name="search" size={13} className="faint" />
@@ -174,6 +184,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
             {section === 'runtime' ? <SectionRuntime /> : null}
             {section === 'connections' ? <SectionConnections /> : null}
             {section === 'data' ? <SectionData /> : null}
+            {section === 'guide' ? <SectionGuide /> : null}
             {section === 'help' ? <SectionHelp /> : null}
           </div>
         </div>
@@ -1047,6 +1058,21 @@ function SectionData() {
 
 /* ============================================================ 分区：帮助与关于 ============================================================ */
 
+function SectionGuide() {
+  const theme = useStore(s => s.ui.theme);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const syncTheme = useCallback(() => {
+    const doc = frame.current?.contentDocument;
+    if (doc) doc.documentElement.dataset.theme = theme;
+  }, [theme]);
+  useEffect(syncTheme, [syncTheme]);
+  return (
+    <section className="settings-guide" data-settings-row="user-guide" aria-label="操作手册">
+      <iframe ref={frame} title="众说操作手册" src="user-guide/index.html" sandbox="allow-same-origin" onLoad={syncTheme} />
+    </section>
+  );
+}
+
 function SectionHelp() {
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
   useEffect(() => {
@@ -1056,15 +1082,7 @@ function SectionHelp() {
   }, []);
   return (
     <div>
-      <SectionHead title="帮助与关于" sub={<>操作手册、版本与诊断。</>} />
-      <section data-settings-row="user-guide" aria-label="操作手册" style={{ marginBottom: 24 }}>
-        <iframe
-          title="众说操作手册"
-          src="user-guide/index.html"
-          sandbox="allow-same-origin"
-          style={{ display: 'block', width: '100%', height: '70vh', minHeight: 420, border: '1px solid var(--border)', borderRadius: 10, background: '#fff' }}
-        />
-      </section>
+      <SectionHead title="帮助与关于" sub={<>版本与诊断。</>} />
       <LocalDiagnostics />
       <ReadOnlyRow label="应用" value="众说 · 本地多成员协作工作台" />
       <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />

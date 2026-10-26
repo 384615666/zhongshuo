@@ -623,7 +623,7 @@ export default function App() {
               </button>
               <button
                 className={`side-item${navActive.settings ? ' active' : ''}`}
-                title="应用设置：七项导航（原型布局）——通用/外观/通知/AI 工具/连接与设备/数据与存储/帮助与关于"
+                title="应用设置与操作手册"
                 onClick={() => navigate('/settings?section=general')}
               >
                 <Icon name="settings" size={14} />

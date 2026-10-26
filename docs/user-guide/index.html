@@ -3,21 +3,300 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light">
 <title>众说操作手册</title>
 <style>
-:root{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:#253549;background:#f3f6f9;font-size:16px;line-height:1.85;--accent:#087a70;--line:#dfe7ee}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:90px}body{margin:0}a{color:#086f9b;text-underline-offset:3px}a:hover{color:var(--accent)}
-.topbar{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid var(--line);padding:12px 32px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-.brand{font-weight:800;font-size:20px;letter-spacing:.1em;color:#172d43}.edition{font-size:13px;letter-spacing:0;font-weight:500;color:#607488;margin-left:14px}.topbar a{font-size:13px}
-.layout{max-width:1360px;margin:0 auto;display:grid;grid-template-columns:230px minmax(0,1fr);gap:28px;padding:30px}
-aside{position:sticky;top:90px;align-self:start;padding:14px 0}aside p{font-size:12px;color:#6a7b8d;margin:0 12px 12px;letter-spacing:.1em}aside a{display:flex;gap:12px;text-decoration:none;color:#53657a;padding:9px 12px;border-radius:8px;font-size:14px}aside a:hover{background:#e4f1ee}aside span{color:#8b9aa9;font-size:12px;padding-top:2px}
-main{min-width:0;background:#fff;border:1px solid var(--line);border-radius:16px;padding:38px 46px;box-shadow:0 8px 30px #263f5910}h1,h2,h3{color:#19334b;line-height:1.45}h1{font-size:34px;letter-spacing:-.02em;margin:0 0 12px}h1+p{color:#607488;font-size:14px}h2{font-size:25px;margin:46px 0 18px;border-top:1px solid var(--line);padding-top:26px}h3{font-size:19px;margin:27px 0 12px}p{margin:12px 0 18px}li{padding-left:3px;margin:6px 0}strong{font-weight:700;color:#173a51}
-code{font-family:Consolas,monospace;font-size:.88em;overflow-wrap:anywhere;background:#eff3f7;padding:2px 5px;border-radius:4px}.table-scroll{overflow-x:auto;margin:20px 0 24px;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:12px 15px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;min-width:125px}th{background:#edf5f5;color:#24544f;font-weight:700}tr:last-child td{border-bottom:0}td:first-child{color:#23485a}tr:nth-child(even) td{background:#fafcfd}
-img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var(--line);margin:24px auto 8px}p:has(>em:only-child){color:#64768a;font-size:13px}hr{border:0;border-top:1px solid var(--line);margin:36px 0}summary{cursor:pointer;font-weight:600;color:#245c78}details{border:1px solid var(--line);border-radius:8px;padding:12px 16px}details p{margin:12px 0 0}.repair-example{background:#f7fafc;padding:18px;border:1px solid var(--line);border-radius:12px}.repair-current{margin-top:12px;background:#eaf7ef;border:1px solid #b6dfc7;border-radius:8px;padding:14px 16px}.repair-current p{margin:6px 0 0}.footer{max-width:1000px;margin:0 auto 30px;padding:0 30px;font-size:12px;text-align:center;color:#718195}
-@media(max-width:1000px){.layout{grid-template-columns:1fr;padding:18px;gap:10px}aside{position:static;padding:0 0 12px;display:flex;flex-wrap:wrap;gap:2px}aside p{width:100%;margin-bottom:4px}aside a{padding:5px 9px}main{padding:28px}h1{font-size:29px}.topbar{padding:12px 20px}}
-@media(max-width:580px){:root{font-size:15px}.layout{padding:10px}main{padding:22px 18px;border-radius:10px}.topbar{padding:10px 16px}.edition{display:block;margin:0;font-size:11px}.brand{font-size:18px}.topbar a{font-size:12px}h1{font-size:26px}h2{font-size:22px}aside a{font-size:12px;gap:5px}th,td{padding:10px;min-width:110px}.footer{padding:0 16px}}
-@media print{:root{background:#fff;color:#111;font-size:11pt}.topbar,aside,.footer{display:none}.layout{display:block;padding:0}main{border:0;border-radius:0;padding:0;box-shadow:none}h2{break-after:avoid}h3{break-after:avoid}table{font-size:10pt}tr,img,.repair-example{break-inside:avoid}img{max-height:150mm;object-fit:contain}.table-scroll{overflow:visible}a{color:inherit}details>p{display:block!important}summary::after{content:"（历史原文示意）";font-weight:normal}}
+/**
+ * 设计令牌。
+ *
+ * 视觉依据：[前端视觉实施规范 v1](../../../docs/zhongshuo-frontend-visual-implementation-v1.md)。
+ * 风格：干净、明亮、清爽的桌面工作台 —— 白底为主、浅蓝白分区、发丝级边框、文字灰度分层。
+ *
+ * 两条渐变分工唯一（规范 §2.0），**永不互换**：
+ *   --grad-soft  浅蓝→浅绿透明渐变：**选中态与主按钮**（导航项、页签、文件标签、发送等主操作）
+ *   --grad       深蓝→青渐变：只给**品牌标识与浮层操作**（新回复 pill）
+ *
+ * 状态色只作为辅助，所有状态必须同时有文字与图标（§17.5）。
+ * 本文件是唯一允许出现十六进制色值的地方（规范 §9.3）；组件样式一律引用令牌。
+ */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* ---------- 中性面（规范 §2.1）----------
+     层级原则：**面差分层优先于描边**。侧栏（#f2f8fb）与主区（白）靠底色分区，
+     不靠粗边框；开发大厅白底 + 白卡，与回复串的 --bg-surface-2 轻区分，两栏都明亮。 */
+  --bg-app: #f2f8fb;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f7fafc;
+  --bg-surface-3: #eef4f7;
+  --bg-sunken: #f3f8fa;
+  --bg-hover: rgba(31, 60, 90, 0.05);
+  --bg-active: rgba(31, 60, 90, 0.09);
+  --bg-scrim: rgba(20, 35, 50, 0.4);
+
+  /* ---------- 边框（三级，不混用；规范 §2.2）---------- */
+  --border-subtle: #e9f0f4;
+  --border: #dde7ee;
+  --border-strong: #c6d5df;
+
+  /* ---------- 文字（四级灰度；规范 §2.3）----------
+     --text-3 是"一切需要阅读的元信息"（时间、行号、版本、路径、状态、文件名），
+     --text-4 只给纯装饰与真正禁用的控件，不得以"弱提示"为由承载阅读内容。 */
+  --text: #1e2a38;
+  --text-2: #47586b;
+  --text-3: #626b75;
+  --text-4: #7d8b9d;
+  --text-inverse: #ffffff;
+
+  /* ---------- 主色与选中态（规范 §2.4）---------- */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #e8effd;
+  --accent-border: #b9cdfb;
+  --accent-text: #1d4ed8;
+
+  /**
+   * 选中态与主按钮背景：浅蓝→浅绿透明渐变。
+   * 直接依据 approved-selected-gradient.png（110×40 取样），
+   * 不得改端点、改方向或加第三色。
+   *
+   * **它是 CSS image，只能用于 background / background-image，
+   * 不能赋给 background-color。** 且必须垫主题 --bg-surface：
+   *   background: var(--grad-soft), var(--bg-surface);
+   * 禁止垫在灰槽（--bg-surface-3）或语义色 soft 底上 —— 那会混色、偏离基准图。
+   */
+  --grad-soft: linear-gradient(135deg,
+    rgba(37, 99, 235, 0.10) 0%,
+    rgba(52, 211, 153, 0.10) 100%);
+
+  /**
+   * 品牌标识与浮层操作（新回复 pill）专用（深蓝→青，白字）。永不用于选中态/页签/列表行。
+   * 主按钮已改用 --grad-soft（用户指定：浅蓝绿渐变 + 蓝字），此处仅保留色相说明备查。
+   *
+   * 色相取自 kimi-clean-layout-reference.png 发送按钮实测，明度均匀压暗至
+   * 白字对比度 ≥4.5:1（WCAG AA，13px 按钮文字）：
+   *   左端 #2678c7 → 中段 #1c7ea6 → 右端 #0e856a（白字 4.57 / 4.58 / 4.58）
+   * 实测原值 #2a86dd/#1e86b0/#0e896d 观感贴合参考图，但白字仅 3.78/4.12/4.36 不达标；
+   * 规范初版 #1d4ed8/#15649e/#0f766e 达标但偏暗偏靛、与参考图对不上。
+   * 现为折中：同色相（sRGB 均匀缩放保持色相）+ AA 达标。
+   */
+  --grad: linear-gradient(135deg, #2678c7 0%, #1c7ea6 55%, #0e856a 100%);
+
+  /** 头像字母色：浅色主题下成员色均为深色，用白字（四色对白字 ≥5.0:1）。 */
+  --avatar-fg: #ffffff;
+
+  /* ---------- 语义色（文字 + 图标成对；规范 §2.5）---------- */
+  --info: #2563eb;
+  --info-soft: #e8effd;
+  --info-border: #b9cdfb;
+
+  --success: #067647;
+  --success-soft: #e6f6ee;
+  --success-border: #a6e0c4;
+
+  --warning: #b54708;
+  --warning-soft: #fdf3e6;
+  --warning-border: #f2ce9a;
+
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --danger-border: #f3b4ad;
+
+  --neutral: #475467;
+  --neutral-soft: #eef0f4;
+  --neutral-border: #d5d9e2;
+
+  /* ---------- 成员识别色（只用于头像底与归属条，不表示状态；规范 §2.6）----------
+     人类识别色由原来的 #2563eb（与主色撞色）改为珊瑚橙。 */
+  --m-codex: #0f766e;
+  --m-claude: #7c3aed;
+  --m-codex2: #b45309;
+  --m-human: #c2410c;
+
+  /* ---------- 阴影与聚焦环（规范 §3.4）----------
+     静态卡片不用阴影；阴影只表达"浮起来了"。 */
+  --shadow-sm: 0 1px 2px rgba(30, 50, 70, 0.05);
+  --shadow-md: 0 6px 16px rgba(30, 50, 70, 0.08), 0 1px 4px rgba(30, 50, 70, 0.04);
+  --shadow-lg: 0 16px 44px rgba(30, 50, 70, 0.14), 0 3px 10px rgba(30, 50, 70, 0.06);
+  --ring: 0 0 0 3px rgba(37, 99, 235, 0.22);
+  --ring-danger: 0 0 0 3px rgba(180, 35, 24, 0.18);
+
+  /* ---------- 圆角（规范 §3.3）----------
+     刻度整体上移是本次最大的视觉杠杆，改完必须全页面走查。 */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-full: 999px;
+
+  --font: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Consolas', 'Sarasa Mono SC', ui-monospace, monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-17: 17px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+
+  /* ---------- 间距体系 ----------
+     审计发现原实现用了 14 种 gap、19 种 padding（4/5/6/7/8/9/10 混用），
+     肉眼分不出差别，叠起来却让版面"发毛"。这里收敛成 4 的倍数。
+     新代码一律用变量，不再写魔法数字。 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+
+  /* ---------- 交互控件（R90）----------
+     相同用途的按钮共用尺寸与状态合同。图标按钮另分标准/紧凑两档，
+     项目展开箭头、行尾菜单和弹层关闭键都落在紧凑档。 */
+  --control-height: 30px;
+  --control-height-sm: 26px;
+  --control-icon-size: 28px;
+  --control-icon-compact: 24px;
+  --control-radius: var(--r-sm);
+  --control-focus-width: 2px;
+  --control-focus-offset: 1px;
+  --control-focus-offset-inset: -3px;
+  --control-disabled-opacity: 0.46;
+
+  /* 自绘标题栏（React 版与最小壳共享尺寸；关闭态沿用 Windows 习惯）。 */
+  --titlebar-height: 38px;
+  --titlebar-window-button-width: 44px;
+  --titlebar-close-bg: #d92d20;
+  --titlebar-close-fg: #ffffff;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-app: #0d1117;
+  --bg-surface: #151a22;
+  --bg-surface-2: #1a2029;
+  --bg-surface-3: #212833;
+  --bg-sunken: #10151c;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-scrim: rgba(0, 0, 0, 0.6);
+
+  --border: #262e3a;
+  --border-strong: #38414f;
+  --border-subtle: #1e242e;
+
+  --text: #e8ecf2;
+  --text-2: #b3bccb;
+  --text-3: #8b95a5;
+  --text-4: #6b7484;
+  --text-inverse: #0d1117;
+
+  --accent: #6098ff;
+  --accent-hover: #7cabff;
+  --accent-soft: rgba(96, 152, 255, 0.14);
+  --accent-border: rgba(96, 152, 255, 0.36);
+  --accent-text: #93c5fd;
+
+  /* 深色下同样以面板色垫底，合成 ≈ #213045 → #233b3a，任何深色面板上观感一致 */
+  --grad-soft: linear-gradient(135deg,
+    rgba(96, 165, 250, 0.16) 0%,
+    rgba(110, 231, 183, 0.16) 100%);
+  /** 深色主按钮用**深字** #0b0d10（亮渐变上白字仅 1.86:1） */
+  --grad: linear-gradient(135deg, #60a5fa 0%, #2dd4bf 55%, #6ee7b7 100%);
+
+  /** 深色主题下成员色为亮色，头像字母改用深字（≥9.2:1） */
+  --avatar-fg: #0b0d10;
+
+  --info: #6098ff;
+  --info-soft: rgba(96, 152, 255, 0.14);
+  --info-border: rgba(96, 152, 255, 0.36);
+
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.13);
+  --success-border: rgba(74, 222, 128, 0.32);
+
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.13);
+  --warning-border: rgba(251, 191, 36, 0.32);
+
+  --danger: #ff6b60;
+  --danger-soft: rgba(255, 107, 96, 0.13);
+  --danger-border: rgba(255, 107, 96, 0.34);
+
+  --neutral: #9aa4b4;
+  --neutral-soft: rgba(255, 255, 255, 0.07);
+  --neutral-border: #38414f;
+
+  --m-codex: #2dd4bf;
+  --m-claude: #c4a2ff;
+  --m-codex2: #fbbf24;
+  --m-human: #fb923c;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.6);
+  --ring: 0 0 0 3px rgba(96, 152, 255, 0.3);
+  --ring-danger: 0 0 0 3px rgba(255, 107, 96, 0.25);
+}
+
+:root{font-family:var(--font);color:var(--text);background:var(--bg-surface);font-size:15px;line-height:1.85}
+*{box-sizing:border-box}
+html{scroll-padding-top:24px;scrollbar-gutter:stable}
+body{margin:0}
+a{color:var(--accent-text);text-underline-offset:3px}
+a:hover{color:var(--accent-hover)}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.topbar{position:sticky;top:0;z-index:2;background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.brand{font-weight:650;font-size:16px}.edition{font-size:12px;font-weight:400;color:var(--text-3);margin-left:12px}.topbar a{font-size:13px}
+.layout{max-width:1280px;margin:0 auto;display:grid;grid-template-columns:196px minmax(0,1fr);gap:40px;padding:28px}
+aside{position:sticky;top:84px;align-self:start;max-height:calc(100vh - 100px);overflow-y:auto;scrollbar-width:thin;border-right:1px solid var(--border-subtle);padding-right:16px}
+aside p{font-size:12px;font-weight:600;color:var(--text-3);margin:0 8px 10px}
+aside a{display:flex;align-items:baseline;gap:10px;text-decoration:none;color:var(--text-2);padding:7px 8px;border-radius:6px;font-size:13px;line-height:1.55}
+aside a:hover,aside a:focus-visible{background:var(--bg-hover);color:var(--accent-text)}
+aside span{color:var(--text-4);font-size:11px;font-variant-numeric:tabular-nums}
+main{min-width:0;overflow-wrap:anywhere}
+h1,h2,h3{color:var(--text);line-height:1.5;font-weight:650}
+h1{font-size:26px;margin:0 0 10px}
+h1+p{color:var(--text-3);font-size:12px}
+h2{font-size:21px;margin:36px 0 16px;border-top:1px solid var(--border-subtle);padding-top:24px}
+h3{font-size:16px;margin:24px 0 10px}
+p{margin:10px 0 16px}
+li{padding-left:2px;margin:6px 0}
+strong{font-weight:650}
+code{font-family:var(--font-mono);font-size:.88em;overflow-wrap:anywhere;background:var(--bg-surface-2);padding:2px 5px;border-radius:4px}
+.table-scroll{overflow-x:auto;margin:18px 0 24px}
+table{border-collapse:collapse;width:100%;font-size:13px;line-height:1.7}
+th,td{padding:10px 12px;border-bottom:1px solid var(--border-subtle);text-align:left;vertical-align:top;min-width:100px}
+th{background:var(--bg-surface-2);color:var(--text-2);font-weight:600}
+tr:last-child td{border-bottom:1px solid var(--border-subtle)}
+img{display:block;max-width:100%;height:auto;border:1px solid var(--border);border-radius:6px;margin:24px auto 8px}
+p:has(>em:only-child){color:var(--text-3);font-size:12px}
+hr{border:0;border-top:1px solid var(--border-subtle);margin:28px 0}
+summary{cursor:pointer;font-weight:600}
+details{border:1px solid var(--border);border-radius:6px;padding:12px 16px}
+details p{margin:12px 0 0}
+.repair-example{background:var(--bg-surface-2);padding:16px;border:1px solid var(--border);border-radius:6px}
+.repair-current{margin-top:12px;border-left:2px solid var(--accent);padding:10px 14px}.repair-current p{margin:6px 0 0}
+.footer{margin:0 auto 24px;padding:0 28px;font-size:12px;text-align:center;color:var(--text-3)}
+body.embedded .layout{max-width:none;margin:0;grid-template-columns:188px minmax(0,900px);padding:8px 24px 40px 0;gap:32px}
+body.embedded aside{top:8px;max-height:calc(100vh - 24px)}
+body.embedded .footer{display:none}
+@media(max-width:700px){
+ .layout,body.embedded .layout{grid-template-columns:minmax(0,1fr);padding:16px;gap:20px}
+ aside,body.embedded aside{position:static;max-height:none;overflow:visible;border:0;border-bottom:1px solid var(--border-subtle);padding:0 0 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 8px}
+ aside p{grid-column:1/-1;margin-bottom:6px}aside a{padding:5px 6px;font-size:12px}
+ h1{font-size:23px}h2{font-size:19px}.topbar{padding:12px 16px}.edition{display:none}
+}
+@media print{
+ :root{background:#fff;color:#111;font-size:11pt}.topbar,aside,.footer{display:none}
+ .layout,body.embedded .layout{display:block;padding:0}h2,h3{break-after:avoid}
+ table{font-size:10pt}tr,img,.repair-example{break-inside:avoid}img{max-height:150mm;object-fit:contain}
+ .table-scroll{overflow:visible}a{color:inherit}
+}
 </style>
 </head>
 <body>
@@ -36,81 +315,14 @@ img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var
 <a href="#optional"><span>12</span>其他已有工具</a>
 <a href="#send"><span>13</span>发送异常</a>
 <a href="#help"><span>14</span>常见问题</a></aside><main><h1>众说操作手册</h1>
-<p>适用版本：V53 / R110 · 更新日期：2026-10-26</p>
+<p>适用版本：V54 / R111 · 更新日期：2026-10-26</p>
 <p>众说把同一项目里的房间、AI成员、任务、私信和文件放在一起。你可以像聊天一样交代工作，在原对话里追问、看结果和要求修改。</p>
-<p><strong>随时查手册：点左侧设置入口，再点“帮助与关于”，即可在设置中阅读本手册。</strong> 也可以在设置搜索中输入“手册”直接找到。手册随程序版本一起更新，无需联网。</p>
-<h2>先找到你要做的事</h2>
-<div class="table-scroll"><table>
-<thead>
-<tr>
-<th>你想做什么</th>
-<th>看这里</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>第一次打开，或继续原来的聊天</td>
-<td><a href="#start">1. 打开与退出</a></td>
-</tr>
-<tr>
-<td>打开文件夹、切换项目或房间</td>
-<td><a href="#projects">2. 项目与房间</a></td>
-</tr>
-<tr>
-<td>添加AI、选模型、修改配置</td>
-<td><a href="#members">3. 成员与AI设置</a></td>
-</tr>
-<tr>
-<td>发消息、让两位AI接着做</td>
-<td><a href="#chat">4. 房间聊天与协作</a></td>
-</tr>
-<tr>
-<td>和一位AI单独聊一件事</td>
-<td><a href="#dm">5. 私信</a></td>
-</tr>
-<tr>
-<td>看进度、停止、继续任务</td>
-<td><a href="#progress">6. 任务进展</a></td>
-</tr>
-<tr>
-<td>找刚才的回复或旧任务</td>
-<td><a href="#find">7. 搜索、待办与看板</a></td>
-</tr>
-<tr>
-<td>看成果、提出修改、验收</td>
-<td><a href="#results">8. 成果与修改</a></td>
-</tr>
-<tr>
-<td>加附件、预览、引用文字</td>
-<td><a href="#files">9. 文件与附件</a></td>
-</tr>
-<tr>
-<td>看代码改动或使用Git</td>
-<td><a href="#git">10. 文件与Git</a></td>
-</tr>
-<tr>
-<td>完成提醒、静音、外观与设置</td>
-<td><a href="#settings">11. 通知和设置</a></td>
-</tr>
-<tr>
-<td>按需归档、备份或连接其他设备</td>
-<td><a href="#optional">12. 其他已有工具</a></td>
-</tr>
-<tr>
-<td>点过发送却不知道收到没有</td>
-<td><a href="#send">13. 发送异常</a></td>
-</tr>
-<tr>
-<td>AI不回、结果不对或找不到项目</td>
-<td><a href="#help">14. 常见问题</a></td>
-</tr>
-</tbody>
-</table></div>
+<p>在 <strong>设置 → 操作手册</strong> 阅读本手册，按章节目录找操作；也可以在设置搜索中输入“手册”。内容随程序版本更新，无需联网。</p>
 <p><a id="start"></a></p>
 <h2>1. 打开与退出</h2>
 <h3>继续你原来的项目和聊天</h3>
 <ol>
-<li>打开本次交付文件夹 <strong>desktop-daily-win-v53-r110-settings-guide-20261026</strong>。</li>
+<li>打开本次交付文件夹 <strong>desktop-daily-win-v54-r111-guide-tab-20261026</strong>。</li>
 <li>双击 <strong>start-existing-data.vbs</strong>。</li>
 <li>在左侧点项目下的房间；一对一会话从 <strong>私信</strong> 进入。</li>
 </ol>
@@ -369,10 +581,10 @@ img{display:block;width:100%;height:auto;border-radius:10px;border:1px solid var
 <h3>在设置中查看操作手册</h3>
 <ol>
 <li>点左侧 <strong>设置</strong> 入口。</li>
-<li>点 <strong>帮助与关于</strong>，页面上方就是完整操作手册。</li>
+<li>点独立的 <strong>操作手册</strong> 页签。</li>
 <li>点手册中的章节目录，跳到要查的操作；向下滚动继续阅读。</li>
 </ol>
-<p>也可以在设置搜索中输入“手册”或“教程”，点 <strong>操作手册</strong>。版本和诊断信息仍在手册下方。</p>
+<p>也可以在设置搜索中输入“手册”或“教程”，点 <strong>操作手册</strong>。版本和诊断信息在 <strong>帮助与关于</strong> 中查看。</p>
 <p>手册跟随当前程序一起提供；升级新版后，这里会显示随新版更新的内容。需要在程序外查看时，双击交付文件夹中的 <strong>众说操作手册.html</strong>，同样可以离线阅读。</p>
 <h3>完成通知和静音</h3>
 <p>任务完成或需要你处理时，原有桌面通知会提醒你。</p>

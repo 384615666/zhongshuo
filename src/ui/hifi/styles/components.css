@@ -1624,6 +1624,76 @@ button.composer-file-token-open:hover {
 }
 
 
+/* The manual owns the reading area; the surrounding settings page does not scroll. */
+.page.settings-guide-page {
+  display: flex;
+  padding-bottom: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.settings-layout.settings-guide-layout {
+  flex: 1;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding-top: var(--page-top-gap);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+}
+.settings-guide-layout > .settings-nav {
+  position: static;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.settings-guide-layout > .settings-body {
+  display: flex;
+  min-height: 0;
+  max-width: none;
+  overflow: hidden;
+}
+.settings-guide {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.settings-guide iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border: 0;
+  background: var(--bg-surface);
+}
+@media (max-width: 980px) {
+  .settings-layout.settings-guide-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--sp-3);
+  }
+  .settings-guide-layout > .settings-nav {
+    gap: var(--sp-2);
+    overflow: visible;
+    flex-direction: column;
+    flex-wrap: nowrap;
+  }
+  .settings-guide-layout .settings-search { flex: none; }
+  .settings-guide-layout .settings-nav-group {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    width: 100%;
+    min-width: 0;
+    padding-bottom: var(--sp-1);
+  }
+  .settings-guide-layout .settings-nav-item { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .settings-guide-layout .settings-nav-label { display: none; }
+}
+
 .method-chip {
   display: inline-flex;
   align-items: center;
