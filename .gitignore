@@ -34,5 +34,22 @@ docs/.qoder/
 .DS_Store
 Thumbs.db
 
+# 本机账号配置、凭据、会话与业务数据
+/.codex-*/
+/.codex/
+/.claude/
+/.env
+/.env.*
+!/.env.example
+/auth.json
+/credentials.json
+/secrets.json
+**/server-data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.pem
+*.key
+
 # 渲染器 vendored pdfjs 资产（build-ui 从 node_modules 同步——不入库）
 src/ui/renderer/assets/

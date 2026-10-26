@@ -1,6 +1,7 @@
 {
   "name": "zhongshuo",
   "version": "0.0.1",
+  "license": "MIT",
   "private": true,
   "description": "众说：本地项目群聊多 Agent 协同工作台（正式工程；hifi-prototype/ 为交互参照原型，各自独立 package.json）",
   "type": "module",
