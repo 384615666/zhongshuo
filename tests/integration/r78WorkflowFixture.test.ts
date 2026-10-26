@@ -54,7 +54,8 @@ describe('R78 persistent formal workflow and cross-page facts', () => {
       expect(JSON.stringify(board)).toContain(f.roomTaskId);
       expect(JSON.stringify(roomTask)).toContain('DONE');
       expect(JSON.stringify(dmTask)).toContain('DONE');
-      expect(JSON.stringify(progress)).toContain('DIRECT');
+      expect(JSON.stringify(progress)).toContain('AUTO');
+      expect(JSON.parse((db.prepare('SELECT route_json FROM tasks WHERE id=?').get(f.roomTaskId) as {route_json:string}).route_json).mode).toBe('DIRECT');
       expect(JSON.stringify(files)).toContain(f.roomDeliveries[1]);
       expect(JSON.stringify(files)).toContain(f.dmDeliveries[1]);
       expect(JSON.stringify(search)).toContain(f.roomTaskId);

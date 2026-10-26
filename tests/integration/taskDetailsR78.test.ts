@@ -173,7 +173,9 @@ describe('R78 task.details formal read projection', () => {
       expect(result.ok).toBe(true);
       const d = result.data as TaskDetailsResult;
       expect(d.task).toMatchObject({ id: taskId, projectId: 'p1', reviewPolicy: 'user_review', status: 'REVIEW' });
-      expect(d.runs[0]).toMatchObject({ mode: 'DIRECT', status: 'SUCCEEDED' });
+      // A room request now enters model planning even with one explicit recipient.
+      expect(d.runs[0]).toMatchObject({ mode: 'AUTO', status: 'SUCCEEDED' });
+      expect(JSON.parse((env.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as {route_json:string}).route_json).mode).toBe('DIRECT');
       const budgetRow = env.db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(d.runs[0]!.id) as { budget_json: string | null };
       expect(d.runs[0]!.budget).toEqual(budgetRow.budget_json == null ? null : JSON.parse(budgetRow.budget_json));
       expect(d.runs[0]!.turns).toEqual(expect.arrayContaining([expect.objectContaining({ memberId: 'mA', displayName: '执行甲', status: 'SUCCEEDED' })]));

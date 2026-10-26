@@ -12,6 +12,7 @@ import {pendingAutomaticRecovery,pumpAutomaticRecoveries} from '../../src/daemon
 import {applyRecovery} from '../../src/daemon/stopFlow.ts';
 import {registerTurnProcess} from '../../src/daemon/processRegistry.ts';
 import {DispatchAdmission} from '../../src/daemon/admission.ts';
+import {seedExplicitRecipientCoordination} from '../../src/daemon/coordination.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
 const complete=(extra:Record<string,unknown>={}):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'work',answer:'已完成核对',changeSummary:'已完成核对',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs:[],coordinationPlan:null,...extra})}}];
@@ -31,7 +32,14 @@ async function fixture(structured=true){
   for(const memberId of [a,b])await cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'bypassPermissions'});
   const revision=(db.prepare('SELECT revision FROM rooms WHERE id=?').get(room.id) as {revision:number}).revision;
   await cmd('room.update',{roomId:room.id,expectedRevision:revision,coordinatorMemberId:a});
-  const send=(both=false,direct=false)=>cmd<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'核对需求，保留成果并交给同伴复核',intent:'default',mentions:both?[a,b].map(memberId=>({kind:'member',memberId})):direct?[{kind:'member',memberId:a}]:[]});
+  const send=async(both=false,direct=false)=>{
+    const body='核对需求，保留成果并交给同伴复核';
+    const sent=await cmd<{taskId:string;threadId:string;messageId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body,intent:'default',mentions:both?[a,b].map(memberId=>({kind:'member',memberId})):direct?[{kind:'member',memberId:a}]:[]});
+    // Recovery cases exercise persisted pre-R109 queues, independently of new planning.
+    if(both){db.prepare("UPDATE outbox SET status='done' WHERE dispatch_key=? AND status='pending'").run(`task:${sent.taskId}:initial`);seedExplicitRecipientCoordination(db,sent.taskId,sent.messageId,body,[a,b]);}
+    if(direct)db.prepare('DELETE FROM coordination_scopes WHERE task_id=?').run(sent.taskId);
+    return sent;
+  };
   const run=async(value:FakeTurnScript=complete())=>{script=value;return worker.runOnce();};
   const advance=(ms:number)=>{now+=ms;};
   const count=(table:string,where='')=>(db.prepare(`SELECT count(*) n FROM ${table} ${where}`).get() as {n:number}).n;

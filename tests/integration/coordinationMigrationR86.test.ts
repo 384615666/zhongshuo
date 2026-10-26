@@ -21,7 +21,13 @@ describe('R86 additive schema 052 in owned complete-root copies',()=>{
     const projectId=(await cmd<{project:{id:string}}>('project.open',{path:project})).project.id;
     const memberId=(await cmd<{memberId:string}>('member.create',{projectId,displayName:'升级前成员',description:'保留身份'})).memberId;
     const room=(await cmd<{items:{id:string;conversationId:string}[]}>('room.list',{projectId})).items[0]!;
-    await cmd('message.submit',{target:{kind:'room_root',projectId,conversationId:room.conversationId,roomId:room.id},body:'升级前已提交但尚未派发的正式任务',mentions:[{kind:'member',memberId}],intent:'default'});
+    // Current dispatch uses schema 052+. Plant a real pre-052 queued task shape
+    // instead of invoking a newer dispatch command against the historical schema.
+    const saved=await cmd<{messageId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,conversationId:room.conversationId,roomId:room.id},body:'升级前已提交但尚未派发的正式任务',mentions:[],intent:'record_only'});
+    old.prepare(`INSERT INTO tasks(id,project_id,conversation_id,kind,room_id,conversation_thread_id,root_message_id,room_task_number,owner_member_id,title,status)
+      VALUES('task_pre052',?,?,'room_task',?,?,?,1,?,'升级前正式任务','OPEN')`).run(projectId,room.conversationId,room.id,saved.threadId,saved.messageId,memberId);
+    old.prepare("UPDATE conversation_threads SET root_task_id='task_pre052' WHERE id=?").run(saved.threadId);
+    old.prepare("INSERT INTO outbox(dispatch_key,status) VALUES('task:task_pre052:initial','pending')").run();
     const tables=['projects','project_members','messages','tasks','outbox','command_receipts'];
     const facts=()=>Object.fromEntries(tables.map(table=>[table,old.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
     const before=facts();old.close();

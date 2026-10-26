@@ -39,7 +39,8 @@ describe('R78 cold pool and thread projections contain authoritative task facts'
       await new DispatchWorker({db,adapter,leaseOwner:'r78-projection',appDataDir:app}).runOnce();
       await loader.loadThread(threadId,{markRead:false});const details=store.getState().threadTasks[threadId]!;expect(details.activeRun?.status).toBe('SUCCEEDED');
       expect(store.getState().runs).toEqual([]);expect(store.getState().taskDeliveries).toEqual([]);
-      const actual=await cmd('task.details',{projectId:pid,taskId});expect((actual.runs as Array<{mode:string}>)[0]!.mode).toBe('DIRECT');
+      const actual=await cmd('task.details',{projectId:pid,taskId});expect((actual.runs as Array<{mode:string}>)[0]!.mode).toBe('AUTO');
+      expect(JSON.parse((db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as {route_json:string}).route_json).mode).toBe('DIRECT');
       // Separate regression fault fixture: row revision is mutable, not creation order.
       const oldId=details.activeRun!.id;db.prepare('UPDATE workflow_runs SET revision=999 WHERE id=?').run(oldId);
       db.prepare("INSERT INTO workflow_runs (id,task_id,conversation_id,mode,status,revision) VALUES ('new-r78',?,?,'DIRECT','FAILED',0)").run(taskId,room.conversationId);

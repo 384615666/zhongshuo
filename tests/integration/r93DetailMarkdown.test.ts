@@ -796,7 +796,7 @@ describe('R93 complete Markdown detail and bounded downstream reading', () => {
       expect(latestTurn(f).status).toBe('FAILED');
       expect(f.db.prepare("SELECT count(*) n FROM artifacts WHERE id LIKE 'art_detail_%'").get()).toEqual({ n: 0 });
       expect(f.db.prepare("SELECT count(*) n FROM message_attachments WHERE id LIKE 'matt_detail_%'").get()).toEqual({ n: 0 });
-      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({ status: 'ACTIVE' });
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({ status: 'BLOCKED' });
     } finally {
       await adapter?.closeAllSessions();
       f.close();

@@ -8,6 +8,7 @@ import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
 import {simulateDeliberationTurn} from '../../src/adapter/fake/deliberationSim.ts';
+import {seedExplicitRecipientCoordination} from '../../src/daemon/coordination.ts';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllEnvs();});
@@ -54,6 +55,10 @@ describe('R98 budget policy through formal submission and real worker gates (syn
 
   it('explicit AUTO dispatches after more than 24 historical calls when disabled', async () => {
     const f = await fixture(), sent = await f.submit();
+    // Seed the legacy explicit-recipient queue this budget regression is about.
+    const root=f.db.prepare('SELECT root_message_id FROM tasks WHERE id=?').get(sent.taskId) as {root_message_id:string};
+    f.db.prepare("UPDATE outbox SET status='done' WHERE dispatch_key=? AND status='pending'").run(`task:${sent.taskId}:initial`);
+    seedExplicitRecipientCoordination(f.db,sent.taskId,root.root_message_id,'合成预算回归',f.members.slice(0,2));
     const child = f.db.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY rowid LIMIT 1').get(sent.taskId) as {id: string};
     const parentRun = f.db.prepare('SELECT budget_json FROM workflow_runs WHERE task_id=?').get(sent.taskId) as {budget_json: string};
     expect(JSON.parse(parentRun.budget_json).callBudget).toMatchObject({enforcement: 'disabled'});

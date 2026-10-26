@@ -291,7 +291,7 @@ describe('第五十一轮 H2：回复串/任务详情/附件/深链（真实链�
       const rTask = h.bundle.deepLink.routeForResolved({ kind: 'task', projectId: projIdRow.id, conversationId: convId, threadId: th.id, taskId: rootTaskId }, stateForRoute);
       expect(rTask).toBe(`/thread/${th.id}?tab=task`);
       const rDelivery = h.bundle.deepLink.routeForResolved({ kind: 'delivery', projectId: projIdRow.id, conversationId: convId, threadId: th.id, taskId: rootTaskId, deliveryId, revision: 1, manifestHash: 'a'.repeat(64) }, stateForRoute);
-      expect(rDelivery).toBe(`/thread/${th.id}?tab=task`);
+      expect(rDelivery).toBe(`/thread/${th.id}?tab=delivery`);
       const msgId = h.db.prepare('SELECT id FROM messages WHERE thread_id = ? ORDER BY thread_message_seq DESC LIMIT 1').get(th.id) as { id: string };
       const rMsg = h.bundle.deepLink.routeForResolved({ kind: 'msg', projectId: projIdRow.id, conversationId: convId, threadId: th.id, messageId: msgId.id }, stateForRoute);
       expect(rMsg).toBe(`/thread/${th.id}?message=${msgId.id}`);
