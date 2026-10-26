@@ -6,7 +6,9 @@
 
 用户嫌V53帮助关于中的手册排版难看，授权独立页签。已实现“设置 → 操作手册”，手册全高阅读、外层不滚动、扁平目录/正文，去灰底卡片/阴影/混排诊断。宽屏目录在左，正文有阅读行宽；窄窗设置导航一行且选中项可见，正文不裁切。使用同份正式tokens并同步主题，14章完整，移除重复导航表；用户手册与维护约定同步改入口、V54/R111。deepseek-flash/high子代理402余额不足未产出，已关闭，由统筹实现。
 
-双types、build、相关lint及12项隔离Electron正式组件检查通过，900/1440/3440无裁切/内外横溢出/外层纵滚动，深色通过。先前窄窗grid最小宽度问题已从截图发现修正；证据和边界见 [R111记录](../reviews/r111-guide-tab-20261026.md)。尚待V54封包与推送补记；不跑原任务/真实模型/远端sandbox，保留debug删除及无关untracked。
+双types、build、相关lint及12项隔离Electron正式组件检查通过，900/1440/3440无裁切/内外横溢出/外层纵滚动，深色通过。先前窄窗grid最小宽度问题已从截图发现修正；证据和边界见 [R111记录](../reviews/r111-guide-tab-20261026.md)。不跑原任务/真实模型/远端sandbox，保留debug删除及无关untracked。
+
+V54包desktop-daily-win-v54-r111-guide-tab-20261026，源码27e9a086d3eb38a7fee91cce8401fcdb1c86fd91，BUILD bld_4b727a5a3065e6d0，599项hash一致、内外手册正文一致。整包资产/随包daemon隔离启动通过，帮助页与手册分离，0turn/0real_call，正常关窗退出0、pid移除。实际界面截图在ignored dist/r111-guide-smoke/package-data-3d0beda7/package-settings.png。沿用原数据用新包start-existing-data.vbs，旧V44数据不搬；未实际切用户数据。dirty仍为原基线，不称clean；源码与交付记录按既有授权推送GitHub。
 
 ## 2026-10-26：R110 设置内完整手册已接入
 
