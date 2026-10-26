@@ -2,7 +2,7 @@
 
 本地项目群聊多 Agent 协同工作台：以文件夹为项目，在群聊中组织多个 CLI agent 完成工作；仿照 Raft 的协作体验，控制面与工作记录保存在本机。
 
-**日常使用可在“设置 → 操作手册”直接阅读完整操作手册**，也可查看 [众说操作手册](docs/user-guide/README.md)（[离线 HTML 版](docs/user-guide/index.html)）。涵盖项目与房间、AI设置、协作、私信、任务和成果、文件与Git、通知及常见问题。桌面包根目录也有 `众说操作手册.html`，双击即可阅读。下方早期原型与设计记录保留作历史参考。
+**日常使用可在“设置 → 操作手册”阅读图文教程**，也可查看 [众说操作手册](docs/user-guide/README.md)（[离线 HTML 版](docs/user-guide/index.html)）。用同一个示例项目，配带编号的截图说明点击位置、操作步骤和结果，涵盖项目与房间、AI设置、协作、私信、成果、文件及常见问题。桌面包根目录也有 `众说操作手册.html`，双击即可阅读。
 
 本目录承载设计资料（含 Obsidian 配置）与交互原型，**自 2026-09-25 起已在 `D:\zhongshuo` 初始化 Git 仓库**（分支 `main`，见下方「仓库」一节）；目录归属与迁移安排见[目录方案](docs/workspace-layout-proposal.md)，正式开发前的待办见 [docs/pre-development-checklist.md](docs/pre-development-checklist.md)。
 
@@ -48,6 +48,7 @@
 ### 正式工程（2026-09-27 起，分支 `codex/full-implementation`）
 
 - **操作手册同步维护**：新增或调整用户功能、按钮入口、交互及操作结果时，同步修改 `docs/user-guide/README.md` 中受影响的操作、适用版本、日期及仍在使用的相关截图；不把工程报告当用户手册。`pnpm build:ui` 从这份源码自动生成应用设置内的手册和离线HTML，日常打包同时附带离线版；交付前核对“设置 → 操作手册”与随包手册内容一致。只修改手册时可运行 `node scripts/package-user-guide.mjs` 生成离线版；已发布程序内的手册随下一次程序构建更新，不直接改写旧包的程序文件。
+- **手册读者与截图**：用户手册面向所有用户，用同一个通用示例，按“点击位置 → 操作步骤 → 可见结果”编写。个人目录、专用启动器和本机升级路径放在单独的交付说明中。界面变动同时更新截图与编号；运行 `node scripts/capture-user-guide.cjs` 可在独立示例项目中重新采集真实组件截图，随后生成HTML并打包。
 
 - **运行与验证**：仓库根 `pnpm install && pnpm check`（= `tsc --noEmit` + `eslint .`（六边界 import 规则）+ `vitest run`）。当前 **DEV-01—05 已完成并验证**（契约/路由、SQLite 事务与 outbox、fake adapter、目录/锁域/基线、daemon 派发/停止/恢复核心；192/192 测试；报告见 [docs/implementation/reports/](docs/implementation/reports/)）。
 - **结构**：`src/` 六边界（contracts / domain / persistence / adapter / daemon / ui，主设计 §8.4 C6）+ `tests/`。contracts 与 domain 已实装；persistence/adapter/daemon/ui 为骨架（分别由 DEV-02/03/04-05/07 起承载）。技术栈：Node ≥24、TypeScript 6.x strict、zod 4、Vitest 5、ESLint 10（依赖锁定见 `pnpm-lock.yaml`）。

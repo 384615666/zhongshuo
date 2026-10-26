@@ -6,19 +6,19 @@ import MarkdownIt from 'markdown-it';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guideDir = join(repo, 'docs', 'user-guide');
 const sections = [
-  ['start', '打开与退出'],
+  ['start', '第一次打开'],
   ['projects', '项目与房间'],
-  ['members', '成员与AI设置'],
-  ['chat', '房间聊天与协作'],
+  ['members', '添加AI'],
+  ['chat', '发消息与追问'],
   ['dm', '私信'],
-  ['progress', '任务进展'],
-  ['find', '搜索、待办与看板'],
+  ['progress', '进展与停止'],
+  ['find', '搜索与任务看板'],
   ['results', '成果与修改'],
-  ['files', '文件与附件'],
-  ['git', '文件与Git'],
-  ['settings', '通知和设置'],
-  ['optional', '其他已有工具'],
-  ['send', '发送异常'],
+  ['files', '附件与预览'],
+  ['git', '浏览项目文件'],
+  ['settings', '外观与通知'],
+  ['optional', '备份与恢复'],
+  ['send', '发送后看哪里'],
   ['help', '常见问题'],
 ];
 
@@ -76,6 +76,9 @@ th,td{padding:10px 12px;border-bottom:1px solid var(--border-subtle);text-align:
 th{background:var(--bg-surface-2);color:var(--text-2);font-weight:600}
 tr:last-child td{border-bottom:1px solid var(--border-subtle)}
 img{display:block;max-width:100%;height:auto;border:1px solid var(--border);border-radius:6px;margin:24px auto 8px}
+.guide-flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:20px 0}
+.guide-flow>div{display:flex;flex-direction:column;gap:8px;padding:16px;background:var(--bg-surface-2);border-radius:6px}
+.guide-flow strong{color:var(--accent-text)}.guide-flow span{font-size:13px;color:var(--text-2)}.guide-flow b{font-size:13px;font-weight:600}
 p:has(>em:only-child){color:var(--text-3);font-size:12px}
 hr{border:0;border-top:1px solid var(--border-subtle);margin:28px 0}
 summary{cursor:pointer;font-weight:600}
@@ -88,6 +91,7 @@ body.embedded .layout{max-width:none;margin:0;grid-template-columns:188px minmax
 body.embedded aside{top:8px;max-height:calc(100vh - 24px)}
 body.embedded .footer{display:none}
 @media(max-width:700px){
+ .guide-flow{grid-template-columns:minmax(0,1fr)}
  .layout,body.embedded .layout{grid-template-columns:minmax(0,1fr);padding:16px;gap:20px}
  aside,body.embedded aside{position:static;max-height:none;overflow:visible;border:0;border-bottom:1px solid var(--border-subtle);padding:0 0 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 8px}
  aside p{grid-column:1/-1;margin-bottom:6px}aside a{padding:5px 6px;font-size:12px}
@@ -104,7 +108,7 @@ body.embedded .footer{display:none}
 <body${embedded ? ' class="embedded"' : ''}>
 ${embedded ? '' : `<header class="topbar"><div class="brand">众说<span class="edition">用户操作手册</span></div><a href="${markdownPath}">查看文字版</a></header>`}
 <div class="layout"><aside aria-label="章节导航"><p>按问题找操作</p>${nav}</aside><main>${body}</main></div>
-<footer class="footer">${embedded ? '操作手册随当前程序版本提供 · 可离线阅读' : '本手册可离线阅读 · 点击图片可看大图 · 浏览器 Ctrl + P 可打印或另存为 PDF'}</footer>
+<footer class="footer">${embedded ? '操作手册随当前程序版本提供 · 可离线阅读' : '本手册可离线阅读 · 浏览器 Ctrl + P 可打印或另存为 PDF'}</footer>
 </body>
 </html>
 `;
@@ -134,9 +138,7 @@ export function packageUserGuide(packageDir) {
   const readmePath = join(out, 'README-DAILY.md');
   const previous = existsSync(readmePath) ? readFileSync(readmePath, 'utf8') : '';
   const history = previous.replace(/<!-- user-guide:start -->[\s\S]*?<!-- user-guide:end -->\s*/, '');
-  const launch = existsSync(join(out, 'start-existing-data.vbs'))
-    ? '**继续原来的聊天：双击 `start-existing-data.vbs`。** 普通 `start-desktop.vbs` 使用另一份数据。请保留原启动器指向的旧数据目录。'
-    : '首次使用：双击 `start-desktop.vbs`。已有数据请按手册中的数据入口说明核对，不要把空项目当成历史丢失。';
+  const launch = '首次使用便携版：双击 `start-desktop.vbs`。使用已有数据或备份：打开“设置 → 数据与存储”，选择“使用已有数据或从备份恢复”。';
   writeFileSync(readmePath, `<!-- user-guide:start -->
 # 先看操作手册
 
@@ -144,7 +146,7 @@ export function packageUserGuide(packageDir) {
 
 ${launch}
 
-手册包含：打开与日常使用、执行状态、找回刚才的发送、完成通知与静音、原答与补交版、完整示例及常见问题。适用版本和日期见手册首页。
+手册包含：带编号的界面截图、分步操作、操作结果和常见问题。从打开项目、添加AI到发送第一条消息，按图即可上手。
 
 下方保留的是历轮打包记录，可能包含旧入口和旧限制；当前操作请先按随包手册。
 <!-- user-guide:end -->
