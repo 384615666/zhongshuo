@@ -1932,6 +1932,8 @@ export function Composer({
    * （预算已用完 / 接近上限）才在输入区显式提示。
    */
   const budgetVisible = callBudgetEnabled === true && !modeInvalid && effectiveBudget != null;
+  const budgetReadFailed = callBudgetEnabled === null && callBudgetReadError != null;
+  const budgetDetailsVisible = callBudgetEnabled === true || budgetReadFailed;
   const budgetAlert = useMemo(() => {
     if (callBudgetEnabled !== true || !runBudget) return null;
     const { used, max } = runBudget;
@@ -2428,6 +2430,7 @@ export function Composer({
                 type="button"
                 className="composer-budget"
                 title="点击设置本次独立研讨的调用预算；发送时冻结进服务端信封"
+                data-zs-call-budget="enabled"
                 onClick={(event) => {
                   setBudgetInput(String(effectiveBudget));
                   setBudgetMenuAnchor(anchorFromElement(event.currentTarget));
@@ -2437,14 +2440,9 @@ export function Composer({
                 最多 {effectiveBudget} 次
               </button>
             ) : budgetVisible && effectiveBudget != null ? (
-              <span className="composer-budget" title={budgetPreview?.detail}>
+              <span className="composer-budget" title={budgetPreview?.detail} data-zs-call-budget="enabled">
                 <Icon name="activity" size={11} />
                 最多 {effectiveBudget} 次
-              </span>
-            ) : callBudgetEnabled === false ? (
-              <span className="composer-budget" title={budgetPreview?.detail} data-zs-call-budget="disabled">
-                <Icon name="activity" size={11} />
-                调用预算未启用
               </span>
             ) : null}
             {budgetAlert ? (
@@ -2632,18 +2630,24 @@ export function Composer({
               </div>
             ) : null}
           </div>
-          <div className="menu-note">
-            <div className="row tight"><Icon name="activity" size={12} /> 本次预算</div>
-            <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-              {callBudgetEnabled !== true
-                ? (budgetPreview?.detail ?? '调用次数预算设置尚未读取；服务端提交时会核对。')
-                : effectiveBudget != null
-                ? `最多 ${effectiveBudget} 次。${budgetPreview?.detail ?? ''}`
-                : target.kind === 'dm'
-                  ? '实际用量可在任务详情查看。'
-                  : '自然协作沿用既有预算；独立研讨可单独设置本次上限。'}
+          {budgetDetailsVisible ? (
+            <div
+              className="menu-note"
+              data-zs-call-budget-menu={budgetReadFailed ? 'read-error' : 'enabled'}
+              data-zs-call-budget-read-error={budgetReadFailed ? '1' : undefined}
+            >
+              <div className="row tight"><Icon name="activity" size={12} /> 本次预算</div>
+              <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                {callBudgetEnabled === true
+                  ? (effectiveBudget != null
+                    ? `最多 ${effectiveBudget} 次。${budgetPreview?.detail ?? ''}`
+                    : target.kind === 'dm'
+                      ? '实际用量可在任务详情查看。'
+                      : '自然协作沿用既有预算；独立研讨可单独设置本次上限。')
+                  : budgetPreview?.detail}
+              </div>
             </div>
-          </div>
+          ) : null}
           <div className="menu-note">
             <div className="row tight"><Icon name="shield" size={12} /> 权限档位</div>
             <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>

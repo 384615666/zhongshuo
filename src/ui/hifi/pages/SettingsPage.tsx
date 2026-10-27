@@ -52,7 +52,7 @@ const NAV: NavItem[] = [
   { key: 'general', label: '通用', icon: 'settings', hint: '启动与打开位置' },
   { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
   { key: 'notifications', label: '通知', icon: 'bell', hint: '按真实线程订阅管理桌面通知静音' },
-  { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: 'AI 成员的模型与权限' },
+  { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: '调用预算、AI 成员的模型与权限' },
   { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
   { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
   { key: 'guide', label: '操作手册', icon: 'file-text', hint: '完整使用说明' },
@@ -65,17 +65,26 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
   { section: 'appearance', label: '主题', keywords: '外观 主题 深色 浅色 暗色', match: 'appearance-theme' },
   { section: 'appearance', label: '显示头像', keywords: '头像 显示 图片', match: 'appearance-avatars' },
+  { section: 'appearance', label: '设置个人与 AI 头像', keywords: '我的头像 个人头像 AI头像 上传 更换 恢复默认 图片', match: 'appearance-avatar-images' },
   { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
-  { section: 'runtime', label: '启用调用次数预算', keywords: '调用 次数 预算 上限 DIRECT AUTO DELIBERATE', match: '启用调用次数预算' },
+  { section: 'runtime', label: '启用调用次数预算', keywords: '调用预算 调用次数 次数预算 启用 开启 关闭 上限 callBudget budget DIRECT AUTO DELIBERATE', match: 'call-budget' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
   { section: 'connections', label: '远程访问监听事实', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
   { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
   { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
   { section: 'data', label: '草稿快照健康与重试', keywords: '草稿 快照 保存 锁定 重试', match: '草稿快照' },
   { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
+  { section: 'data', label: '归档管理', keywords: '归档 项目 房间 恢复历史', match: '归档管理' },
+  { section: 'data', label: '已移除的项目', keywords: '移除 项目 重新关联', match: '已移除的项目' },
   { section: 'guide', label: '操作手册', keywords: '帮助 文档 使用 教程 手册', match: 'user-guide' },
   { section: 'help', label: '版本与构建身份', keywords: '版本 构建 build 关于', match: '版本与构建' },
 ];
+
+export function searchAppSettings(search: string): SearchEntry[] {
+  const kw = search.trim().toLowerCase();
+  if (!kw) return [];
+  return SEARCH_INDEX.filter((entry) => entry.label.toLowerCase().includes(kw) || entry.keywords.toLowerCase().includes(kw));
+}
 
 function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
   return (
@@ -111,11 +120,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
     const t = window.setTimeout(() => el.classList.remove('settings-jump-flash'), 1800);
     return () => window.clearTimeout(t);
   }, [jumpTo, section]);
-  const results = useMemo(() => {
-    const kw = search.trim().toLowerCase();
-    if (!kw) return [];
-    return SEARCH_INDEX.filter((e) => e.label.toLowerCase().includes(kw) || e.keywords.toLowerCase().includes(kw));
-  }, [search]);
+  const results = useMemo(() => searchAppSettings(search), [search]);
 
   return (
     <div className="main">
@@ -127,7 +132,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
                 <Icon name="search" size={13} className="faint" />
                 <input
                   className="input sm"
-                  placeholder="搜设置项：启动、草稿、通知…"
+                  placeholder="搜设置项：预算、启动、通知…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   aria-label="搜索设置项"
@@ -325,7 +330,7 @@ function SectionAppearance() {
           onChange={(next) => void save('visibility', { showAvatars: next })}
         />
       </SettingsRow>
-      <div className="card" style={{ marginTop: 14 }} data-zs-avatar-settings="1">
+      <div className="card" style={{ marginTop: 14 }} data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
         <div className="card-title">头像</div>
         <div className="small faint" style={{ padding: '0 14px 8px' }}>PNG、JPEG 或 WebP，文件不超过 256 KiB。预览始终可见，聊天中的头像遵循上方开关。</div>
         <AppearanceAvatarRow subject="user" name="我" color="var(--m-human)" busy={busy} onSave={save} />
@@ -605,8 +610,7 @@ function attemptStateLabel(attempt: TaskNotificationAttemptView): string {
 /* ============================================================ 分区：AI 工具 ============================================================ */
 
 /**
- * 应用级预算开关。正式命令面仍须由主任务把 CALL_BUDGET_ENABLED_SETTING_KEY
- * 加入 app.settings 白名单；这里只走现有 get/set 并做严格回读，不在 UI 侧伪造持久化。
+ * 应用级预算开关：使用 app.settings 白名单键读写并严格回读。
  */
 export function callBudgetSettingWrite(enabled: boolean): {
   key: typeof CALL_BUDGET_ENABLED_SETTING_KEY;
@@ -664,7 +668,7 @@ export function CallBudgetSettingsRow() {
       });
       const raw = result.values[CALL_BUDGET_ENABLED_SETTING_KEY];
       if (!callBudgetSettingReadBackMatches(raw, next)) {
-        const message = `保存后回读为 ${raw ?? '未设置'}，期望 ${write.value}；未显示为成功`;
+        const message = '保存后的设置与所选状态不一致，请重新读取后再试。';
         setReadError(message);
         toast(message, 'error');
         return;
@@ -673,7 +677,7 @@ export function CallBudgetSettingsRow() {
       setEnabled(readBack);
       setReadError(null);
       recordWrite('app.settings.set', `启用调用次数预算 = ${readBack ? '开启' : '关闭'}（已回读核对）`);
-      toast(readBack ? '调用次数预算已开启；新请求会冻结当次上限' : '调用次数预算已关闭；继续真实计数，但不按次数拦截', 'success');
+      toast(readBack ? '调用次数预算已开启，对新请求生效' : '调用次数预算已关闭，对新请求生效', 'success');
     } catch (error) {
       toast(`调用次数预算保存失败：${(error as Error).message}`, 'error');
     } finally {
@@ -681,7 +685,7 @@ export function CallBudgetSettingsRow() {
     }
   };
 
-  const status = loading ? '读取中…' : readError != null ? '无法确认设置' : enabled ? '已开启' : '默认关闭 · 仅计数';
+  const status = loading ? '读取中…' : readError != null ? '无法确认设置' : enabled ? '已开启' : '已关闭';
   return (
     <div
       data-zs-call-budget-setting={CALL_BUDGET_ENABLED_SETTING_KEY}
@@ -692,7 +696,7 @@ export function CallBudgetSettingsRow() {
       <SettingsRow
         id="call-budget"
         label="启用调用次数预算"
-        hint={<>默认关闭。关闭时继续记录真实调用次数，但不因次数停止。开启后默认 DIRECT {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次、AUTO（含明确多人收件）{DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次；独立研讨按人数推导，双人默认 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次。可在单次请求显式覆盖；新请求冻结当次设置。</>}
+        hint="默认关闭。开启后，AI 调用达到上限时暂停；关闭时只计数。更改对新请求生效。"
         control={(
           <div className="col" style={{ alignItems: 'flex-end', gap: 5 }}>
             <Switch
@@ -709,12 +713,12 @@ export function CallBudgetSettingsRow() {
           className="small faint"
           data-zs-call-budget-defaults={`DIRECT:${DEFAULT_CALL_BUDGET_LIMITS.DIRECT},AUTO:${DEFAULT_CALL_BUDGET_LIMITS.AUTO},DELIBERATE:${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}`}
         >
-          开启后的默认上限：DIRECT {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} · AUTO {DEFAULT_CALL_BUDGET_LIMITS.AUTO} · 双人独立研讨 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}（随人数调整）
+          默认上限：单人执行 {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次 · 自动协作 {DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次 · 双人独立研讨 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次（随人数调整）
         </div>
       </SettingsRow>
       {readError != null ? (
         <div className="panel warning" data-zs-call-budget-read-error="1">
-          调用次数预算设置读取失败：{readError}。为避免覆盖未知旧值，开关暂不可改。
+          暂时无法确认调用预算设置：{readError}
           <button className="btn sm" onClick={() => void reload()}>重试读取</button>
         </div>
       ) : null}
@@ -730,7 +734,7 @@ function SectionRuntime() {
   const projectId = useStore((s) => s.activeProjectId);
   return (
     <div>
-      <SectionHead title="AI 设置" sub={<>选择每位 AI 成员使用的程序、模型和权限。</>} />
+      <SectionHead title="AI 设置" sub={<>管理调用预算，以及每位 AI 成员使用的程序、模型和权限。</>} />
       <CallBudgetSettingsRow />
       {members.map((m) => {
         const rt = runtimes[m.id];
@@ -1044,12 +1048,12 @@ function SectionData() {
       </SettingsRow>
       {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
           「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}
-      <SettingsRow label="归档管理" hint="已归档项目与房间的查看历史 + 恢复（project.lifecycle / room.archive 正式命令；不动磁盘文件与历史）">
+      <SettingsRow id="归档管理" label="归档管理" hint="已归档项目与房间的查看历史 + 恢复（project.lifecycle / room.archive 正式命令；不动磁盘文件与历史）">
         <div style={{ marginTop: 6 }}>
           <ArchiveManager embedded />
         </div>
       </SettingsRow>
-      <SettingsRow label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同目录即恢复原 projectId">
+      <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同目录即恢复原 projectId">
         <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
       </SettingsRow>
     </div>

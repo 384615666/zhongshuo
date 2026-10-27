@@ -16,7 +16,7 @@ const sections = [
   ['results', '成果与修改'],
   ['files', '附件与预览'],
   ['git', '浏览项目文件'],
-  ['settings', '外观与通知'],
+  ['settings', '常用设置'],
   ['optional', '备份与恢复'],
   ['send', '发送后看哪里'],
   ['help', '常见问题'],

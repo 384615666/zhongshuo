@@ -30,6 +30,7 @@
     {name:'15-help',run:async()=>{await go('/settings?section=guide');await until(()=>q('iframe')?.contentDocument?.querySelector('main h1'));return {targets:[text('操作手册')],rect:{x:255,y:45,width:240,height:550}};}},
     {name:'16-attachments',run:async()=>{await go(room());await until(()=>q('[data-zs-file-input]'));const transfer=new DataTransfer();transfer.items.add(new File(['周六下午2点，10人，每人分享一本书。'],'活动资料.md',{type:'text/markdown'}));const file=q('[data-zs-file-input]');file.files=transfer.files;file.dispatchEvent(new Event('change',{bubbles:true}));await wait(700);return {targets:[q('button[title^="添加附件"]'),q('.composer-editor')],crop:q('.composer-editor').closest('.composer')};}},
     {name:'17-project-files',run:async()=>{await go(`/project/${m.projectId}/files`);await wait(600);return {targets:[text('活动安排.md')||q('[title="活动安排.md"]')],rect:{x:260,y:190,width:1070,height:470}};}},
+    {name:'18-call-budget',run:async()=>{await go('/settings?section=runtime');await until(()=>q('[data-zs-call-budget-setting] [role="switch"]')?.disabled===false);return {targets:[text('AI 设置'),q('[data-zs-call-budget-setting] [role="switch"]')],rect:{x:250,y:45,width:1100,height:260}};}},
   ];
   window.guideScenes=scenes;
   let ready=false;
