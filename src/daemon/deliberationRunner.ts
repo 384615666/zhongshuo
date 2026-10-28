@@ -1277,14 +1277,17 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       }
       if (decision.decision === 'blocked') {
         // 全员无有效输入：明确阻塞——不合成虚构研讨报告（§6.1）。
+        const startup=db.prepare("SELECT json_extract(payload_json,'$.message') message FROM domain_events WHERE run_id=? AND kind='turn.startupFailed' ORDER BY seq DESC LIMIT 1")
+          .get(run.id) as {message:string|null}|undefined;
+        const reason=startup?.message?`独立分析未完成：${startup.message}`:'本次未收到有效分析结果，请查看运行详情中的具体原因';
         db.prepare("UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?").run(run.id);
         db.prepare("UPDATE tasks SET status = 'BLOCKED' WHERE id = ? AND status NOT IN ('CANCELLED','DONE')").run(taskId);
-        settleThreadReplyForRun(db,run.id,'failed',decision.reason);
+        settleThreadReplyForRun(db,run.id,'failed',reason);
         appendDomainEvent(db, {
           schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversation_id,
-          threadId, taskId, runId: run.id, kind: 'run.deliberationBlocked', createdAt: now, payload: { reason: decision.reason },
+          threadId, taskId, runId: run.id, kind: 'run.deliberationBlocked', createdAt: now, payload: { reason },
         });
-        return { advanced: true, blocked: decision.reason };
+        return { advanced: true, blocked: reason };
       }
       return { advanced: false };
     }

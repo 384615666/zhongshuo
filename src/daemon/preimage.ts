@@ -15,8 +15,10 @@
  * 边界判定，不用裸前缀）；指向 root 外的符号链接/junction 不跟随——记 unknown（§3.3）。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import {homedir} from 'node:os';
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, lstatSync,writeFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, resolve, sep,dirname } from 'node:path';
 import { comparisonKey, isSameOrAncestorPath } from '../daemon/directoryIdentity.ts';
 
 export type PathState = 'present' | 'absent' | 'unknown';
@@ -57,13 +59,13 @@ export interface CaptureOptions {
   storeDir?: string;
   /** 单文件内容存储上限（字节，默认 8MB，env ZS_PREIMAGE_MAX_BYTES）。 */
   maxBytes?: number;
-  /** 目录扫描模式下的文件数上限（默认 5000，env ZS_PREIMAGE_MAX_FILES）。 */
+  /** 显式工程扫描上限；默认完整扫描，env ZS_PREIMAGE_MAX_FILES 可覆盖。 */
   maxFiles?: number;
   now?: number;
 }
 
 const DEFAULT_MAX_BYTES = envInt('ZS_PREIMAGE_MAX_BYTES', 8 * 1024 * 1024);
-const DEFAULT_MAX_FILES = envInt('ZS_PREIMAGE_MAX_FILES', 5_000);
+const DEFAULT_MAX_FILES = envInt('ZS_PREIMAGE_MAX_FILES', Number.POSITIVE_INFINITY);
 
 /** 目录扫描默认排除（.git 的内容基线由 Git 基线承担——ref+porcelain，§14.2）。 */
 export const DIRECTORY_SCAN_EXCLUDES = new Set(['.git']);
@@ -95,6 +97,9 @@ export function captureFilePreimage(root: string, paths: string[], options: Capt
 
 /** 目录扫描完整性状态：完整 / 截断（达上限）/ 有失败（readdir/stat 失败——不能称完整）。 */
 export interface ScanResult {
+  rootIdentity?: string;
+  /** Git path membership and ignore-rule identity, used only for absent inference. */
+  scopeSignature?: string;
   files: string[];
   truncated: boolean;
   /** 读取失败的具体范围（目录级）——受影响子树的基线缺失只能判 unknown，不能推导 absent。 */
@@ -119,14 +124,15 @@ export function scanDirectoryFiles(root: string, maxFiles = DEFAULT_MAX_FILES): 
   const rootReal = realpathSync(resolve(root));
   const relOf = (p: string): string => p.slice(resolve(root).length + 1).replaceAll('\\', '/') || '.';
   const visitedRealDirs = new Set<string>([comparisonKey(rootReal)]);
-  const walk = (dir: string): void => {
-    if (files.length >= maxFiles) { truncated = true; return; }
+  const pending = [resolve(root)];
+  while (pending.length > 0 && !truncated) {
+    const dir = pending.pop()!;
     let names: string[];
     try {
       names = readdirSync(dir);
     } catch (error) {
       failedDirs.push({ dir: relOf(dir), error: String(error).slice(0, 120) });
-      return; // 子树读取失败=完整性破口（如实记录——不称扫描完整）
+      continue; // 子树读取失败=完整性破口（如实记录——不称扫描完整）
     }
     for (const name of names) {
       if (DIRECTORY_SCAN_EXCLUDES.has(name)) continue;
@@ -158,15 +164,119 @@ export function scanDirectoryFiles(root: string, maxFiles = DEFAULT_MAX_FILES): 
           continue;
         }
         visitedRealDirs.add(realKey);
-        walk(full);
+        pending.push(full);
       } else if (st.isFile()) {
+        if (files.length >= maxFiles) { truncated = true; break; }
         files.push(full);
-        if (files.length >= maxFiles) { truncated = true; return; }
       }
     }
-  };
-  walk(root);
+  }
   return { files, truncated, failedDirs, rejectedEntries };
+}
+
+export type ProjectScanScope = 'git-files' | 'directory-scan';
+
+function gitScopeSignature(root:string):string {
+  const git=(args:string[],input?:string,allowUnset=false)=>{
+    const result=spawnSync('git',['-C',root,...args],{encoding:'utf8',input,maxBuffer:64*1024*1024});
+    if(result.error || result.status!==0 && !(allowUnset&&result.status===1))throw Error(String(result.error??result.stderr));
+    return result.stdout;
+  };
+  const tracked=git(['ls-files','--cached','-z','--','.']).split('\0').filter(Boolean).sort();
+  const rules=new Map<string,string|null>();
+  const record=(file:string,worktree=true)=>{
+    const entry=lstatSync(file,{throwIfNoEntry:false});
+    if(worktree && entry?.isSymbolicLink())return; // Git does not follow worktree .gitignore links.
+    const stat=entry?.isSymbolicLink()?statSync(file):entry;
+    if(stat && !stat.isFile())throw Error(`Git忽略规则不是普通文件：${file}`);
+    if(stat)rules.set(file,createHash('sha256').update(readFileSync(file)).digest('hex'));
+  };
+  record(resolve(root,git(['rev-parse','--git-path','info/exclude']).trim()),false);
+  const global=git(['config','--path','--get','core.excludesfile'],undefined,true).trim();
+  record(global?resolve(root,global):join(process.env.XDG_CONFIG_HOME??join(homedir(),'.config'),'git','ignore'),false);
+  const ignoreCase=git(['config','--get','core.ignorecase'],undefined,true).trim().toLowerCase();
+  const top=resolve(git(['rev-parse','--show-toplevel']).trim());
+  let ancestor=resolve(root);
+  while(ancestor!==top && dirname(ancestor)!==ancestor){ancestor=dirname(ancestor);record(join(ancestor,'.gitignore'));}
+  // Visit directory metadata, pruning whole ignored trees. A .gitignore itself
+  // may be ignored while still affecting visible files, so ls-files alone is
+  // insufficient to freeze the rules. Never descend through directory links.
+  let pending=[resolve(root)];
+  const physicalRoot=realpathSync(root);
+  while(pending.length){
+    const next:string[]=[];
+    for(const dir of pending){
+      if(!isSameOrAncestorPath(physicalRoot,realpathSync(dir)))throw Error('Git忽略规则所在目录越出项目边界');
+      record(join(dir,'.gitignore'));
+      if(dir!==resolve(root) && statSync(join(dir,'.git'),{throwIfNoEntry:false})!=null)continue;
+      for(const entry of readdirSync(dir,{withFileTypes:true})){
+        if(entry.name!=='.git' && entry.isDirectory() && !entry.isSymbolicLink())next.push(join(dir,entry.name));
+      }
+    }
+    if(!next.length)break;
+    const relative=next.map(dir=>normalizeWithinRoot(root,dir)+'/');
+    const ignored=new Set(git(['check-ignore','--no-index','-z','--stdin'],relative.join('\0')+'\0',true).split('\0').filter(Boolean));
+    pending=next.filter((_dir,index)=>!ignored.has(relative[index]!));
+  }
+  return createHash('sha256').update(JSON.stringify({tracked,ignoreCase,rules:[...rules].sort((a,b)=>a[0].localeCompare(b[0]))})).digest('hex');
+}
+
+/** Git's tracked + nonignored untracked list defines the source workspace.
+ * Persist the chosen scope so finalization cannot silently change its meaning. */
+export function scanProjectFiles(root: string, scope?: ProjectScanScope, ancestors = new Set<string>()): ScanResult & { scopeKind: ProjectScanScope } {
+  let rootIdentity:string|undefined;
+  const failure = (message:string): ScanResult & {scopeKind:ProjectScanScope} => ({
+    scopeKind:scope ?? 'git-files',rootIdentity,files:[],truncated:false,failedDirs:[{dir:'.',error:message}],rejectedEntries:[],
+  });
+  try {const real=realpathSync(root),stat=statSync(real);rootIdentity=JSON.stringify([comparisonKey(real),stat.dev,stat.ino]);}
+  catch(error){return failure(`项目目录无法读取：${String(error)}`);}
+  if (scope == null) {
+    try {
+      let dir=resolve(root);
+      while (true) {
+        if (statSync(join(dir,'.git'),{throwIfNoEntry:false}) != null) { scope='git-files';break; }
+        const parent=dirname(dir);if(parent===dir)break;dir=parent;
+      }
+    } catch(error) { return failure(`无法确定项目文件范围：${String(error)}`); }
+  }
+  if (scope !== 'git-files') return {...scanDirectoryFiles(root),rootIdentity,scopeKind:'directory-scan'};
+  // No fallback to a full-directory scan on Git failure: that would change the
+  // capture boundary and could traverse ignored runtimes and external links.
+  const listing=spawnSync('git',['-C',root,'ls-files','--cached','--others','--exclude-standard','-z','--','.'],{
+    encoding:'utf8',maxBuffer:64*1024*1024,
+  });
+  if(listing.error || listing.status!==0) return failure(`Git文件清单读取失败：${String(listing.error ?? listing.stderr).slice(0,500)}`);
+  const result: ScanResult & {scopeKind:ProjectScanScope}={scopeKind:'git-files',rootIdentity,files:[],truncated:false,failedDirs:[],rejectedEntries:[]};
+  try {result.scopeSignature=gitScopeSignature(root);} catch(error) {return failure(`Git文件范围核对失败：${String(error)}`);}
+  let realRoot:string;
+  try {realRoot=realpathSync(root);} catch(error) {return failure(`项目目录无法读取：${String(error)}`);}
+  if(ancestors.has(comparisonKey(realRoot))) return {...result,rejectedEntries:[{entry:'.',reason:'项目目录链接形成循环'}]};
+  const visited=new Set(ancestors).add(comparisonKey(realRoot));
+  const nestedSignatures:Array<[string,string|undefined]>=[];
+  for(const name of new Set(listing.stdout.split('\0').filter(Boolean))){
+    let full:string;
+    try {full=join(root,normalizeWithinRoot(root,name));} catch(error) {result.rejectedEntries.push({entry:name,reason:String(error)});continue;}
+    try {
+      const physical=realpathSync(full);
+      if(!isSameOrAncestorPath(realRoot,physical)) {result.rejectedEntries.push({entry:name,reason:'项目文件链接指向项目目录之外'});continue;}
+      const stat=statSync(full);
+      if(stat.isDirectory()) {
+        if(statSync(join(full,'.git'),{throwIfNoEntry:false})==null) {result.failedDirs.push({dir:name,error:'Git子项目尚未初始化，无法读取文件清单'});continue;}
+        const nested=scanProjectFiles(full,'git-files',visited);
+        nestedSignatures.push([name,nested.scopeSignature]);
+        result.files.push(...nested.files);result.truncated ||= nested.truncated;
+        result.failedDirs.push(...nested.failedDirs.map(item=>({dir:`${name}/${item.dir}`,error:item.error})));
+        result.rejectedEntries.push(...nested.rejectedEntries.map(item=>({entry:`${name}/${item.entry}`,reason:item.reason})));
+      } else if(stat.isFile()) result.files.push(full);
+      else result.rejectedEntries.push({entry:name,reason:'项目文件不是普通文件'});
+    } catch(error) {
+      // A tracked deletion is still part of the project and must become absent.
+      if((error as NodeJS.ErrnoException).code==='ENOENT')result.files.push(full);
+      else result.failedDirs.push({dir:name,error:String(error).slice(0,500)});
+    }
+  }
+  if(nestedSignatures.length)result.scopeSignature=createHash('sha256').update(JSON.stringify([result.scopeSignature,nestedSignatures])).digest('hex');
+  return result;
 }
 
 function captureOne(root: string, userPath: string, storeDir: string | undefined, maxBytes: number): PreimageEntry {

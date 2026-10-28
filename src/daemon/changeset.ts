@@ -25,7 +25,7 @@ import { appendDomainEvent } from '../persistence/events.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
 import {
-  captureFilePreimage, diffPreimages, readStoredContent, scanDirectoryFiles,
+  captureFilePreimage, diffPreimages, readStoredContent, scanProjectFiles,
   type PreimageCapture, type PreimageEntry,
 } from './preimage.ts';
 import { parsePorcelainEntries } from './gitStatus.ts';
@@ -131,6 +131,7 @@ export interface CaptureBaselineOk {
   fileCount: number;
   contentUnavailable: string[];
   truncated: boolean;
+  scanProblems: string[];
 }
 
 /** 基线捕获：Git 基线（HEAD+索引状态）+ before 内容前像（含未跟踪文件，不 stash/reset）。 */
@@ -141,7 +142,7 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
   const root = project.canonical_path;
   const storeDir = join(input.appDataDir, 'preimages', input.projectId);
   const explicit = input.paths != null && input.paths.length > 0;
-  const scanned = explicit ? null : scanDirectoryFiles(root);
+  const scanned = explicit ? null : scanProjectFiles(root);
   const paths = explicit ? input.paths! : scanned!.files.map((f) => f.slice(root.length + 1));
   const git = captureGitBaseline(root);
   const preimage = captureFilePreimage(root, paths, { storeDir, now, maxBytes: input.maxBytes });
@@ -161,7 +162,9 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
     ).run(changeSetId, input.projectId, input.taskId ?? null, beforeRef, JSON.stringify({
       git,
       preimageRoot: preimage.root,
-      scopeKind: explicit ? 'explicit-paths' : 'directory-scan',
+      scopeKind: explicit ? 'explicit-paths' : scanned!.scopeKind,
+      scanScopeSignature: scanned?.scopeSignature,
+      scanRootIdentity: scanned?.rootIdentity,
       truncated: scanIncomplete,
       scanFailedDirs: scanned?.failedDirs.length ?? 0,
       scanRejected: scanned?.rejectedEntries.length ?? 0,
@@ -184,6 +187,11 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
     fileCount: preimage.entries.length,
     contentUnavailable: preimage.entries.filter((e) => e.contentUnavailable != null).map((e) => e.path),
     truncated: scanIncomplete,
+    scanProblems: [
+      ...(scanned?.truncated ? ['文件清单超过显式设置的扫描数量'] : []),
+      ...(scanned?.failedDirs.map(item=>`${item.dir}：${item.error}`) ?? []),
+      ...(scanned?.rejectedEntries.map(item=>`${item.entry}：${item.reason}`) ?? []),
+    ],
   });
 }
 
@@ -206,9 +214,10 @@ export function finalizeChangeset(
   // - directory-scan（整目录语义）：重扫目录（任务新增文件须进捕获面）∪ before 路径
   //   （被删文件须仍被核对）——重扫截断与 before 截断同样如实记录；
   // - explicit-paths：变更面=基线声明的清单（含「将创建」的文件须在基线清单里声明）。
-  const manifest = safeParse(row.manifest_json ?? '{}') as { scopeKind?: string; truncated?: boolean; scanFailedDirs?: number; scanRejected?: number };
-  const isScan = manifest.scopeKind === 'directory-scan';
-  const scanNow = isScan ? scanDirectoryFiles(root) : null;
+  const manifest = safeParse(row.manifest_json ?? '{}') as { scopeKind?: string; scanScopeSignature?:string; scanRootIdentity?:string; truncated?: boolean; scanFailedDirs?: number; scanRejected?: number };
+  const isScan = manifest.scopeKind === 'directory-scan' || manifest.scopeKind === 'git-files';
+  const scanNow = isScan ? scanProjectFiles(root,manifest.scopeKind === 'git-files' ? 'git-files' : 'directory-scan') : null;
+  if(manifest.scanRootIdentity && manifest.scanRootIdentity!==scanNow?.rootIdentity)return domainErr('STALE_REVISION','项目目录身份已变化，未将替换后的目录写入原改动集');
   const afterPaths = isScan
     ? [...new Set([...scanNow!.files.map((f) => f.slice(root.length + 1).replaceAll('\\', '/')), ...beforeRows.map((r) => r.path)])]
     : beforeRows.map((r) => r.path);
@@ -218,14 +227,15 @@ export function finalizeChangeset(
   const beforeTruncated = manifest.truncated === true
     || (manifest.scanFailedDirs ?? 0) > 0 || (manifest.scanRejected ?? 0) > 0
     || scanNow?.truncated === true || (scanNow?.failedDirs.length ?? 0) > 0 || (scanNow?.rejectedEntries.length ?? 0) > 0;
+  const scopeChanged=manifest.scopeKind==='git-files' && manifest.scanScopeSignature!==scanNow?.scopeSignature;
   const beforeByPath = new Map(beforeRows.map((r) => [r.path, r]));
   const beforeEntries: PreimageEntry[] = beforeRows.map(rowToEntry);
   const synthesizedBefore: PreimageEntry[] = [];
   if (isScan) {
     for (const p of afterPaths) {
       if (!beforeByPath.has(p)) {
-        const entry: PreimageEntry = beforeTruncated
-          ? { path: p, state: 'unknown', error: '目录扫描截断——无法断定变更前状态' }
+        const entry: PreimageEntry = beforeTruncated || scopeChanged
+          ? { path: p, state: 'unknown', error: scopeChanged?'Git文件范围或忽略规则已变化——无法断定变更前状态':'目录扫描不完整——无法断定变更前状态' }
           : { path: p, state: 'absent' };
         beforeEntries.push(entry);
         synthesizedBefore.push(entry); // 持久化为 before 事实（撤销计划依据）
@@ -354,7 +364,7 @@ export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainRe
   } else {
     const before = loadFileRows(db, input.changeSetId, 'before');
     const after = loadFileRows(db, input.changeSetId, 'after');
-    if (after.length === 0 && (JSON.parse(row.manifest_json ?? '{}') as { scopeKind?: string }).scopeKind !== 'directory-scan') {
+    if (after.length === 0 && !['directory-scan','git-files'].includes((JSON.parse(row.manifest_json ?? '{}') as { scopeKind?: string }).scopeKind ?? '')) {
       return domainErr('STALE_REVISION', `改动集缺 after 前像行：${input.changeSetId}`);
     }
     steps = planUndoSteps(before, after);

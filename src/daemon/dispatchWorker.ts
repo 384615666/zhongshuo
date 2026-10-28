@@ -767,7 +767,7 @@ export class DispatchWorker {
         return;
       }
       if (baseline.value.truncated) {
-        const message = '写入基线不完整：目录扫描失败、路径被拒绝或文件清单超出安全范围，未启动模型';
+        const message = `写入基线不完整：${baseline.value.scanProblems.slice(0,3).join('；')}，未启动模型`;
         if (conversationRequest) setConversationReplyState(this.db, conversationRequest.messageId, 'blocked', message);
         if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,message);
         else this.transitionTask(task.id, 'BLOCKED');
@@ -1700,7 +1700,7 @@ export class DispatchWorker {
       if(writeAccess.modificationAuthorized){
         const baseline=captureBaseline(this.db,{projectId:task.project_id,taskId:task.id,runId:run.id,appDataDir:this.appDataDir});
         if(!baseline.ok)throw Error(`研讨写入基线失败：${baseline.error.message}`);
-        if(baseline.value.truncated)throw Error('研讨写入基线不完整：目录扫描失败、路径被拒绝或文件清单超出安全范围');
+        if(baseline.value.truncated)throw Error(`研讨写入基线不完整：${baseline.value.scanProblems.slice(0,3).join('；')}`);
         const baselineChangeSetId=baseline.value.changeSetId;
         const baselineContentUnavailable=baseline.value.contentUnavailable;
         this.kvSet(`write-changeset:${turnId}`,baselineChangeSetId);
