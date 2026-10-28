@@ -72,3 +72,12 @@
 - 采集更新手册中的工作区、首次发送与附件三张图，去掉旧控件。
 
 最终矩阵与截图在ignored `dist/r115-layout-review/accepted-all.json` 及同目录的`accepted-scale-*`；三档各66项，均complete、exit=0、issues为空、daemon.pid移除。原生窗口记录、先前辅助脚本诊断也保存在该目录。手册配图来自独立教程项目。
+
+## V58 实机测试包
+
+- clean源码：`a8f72c8450bcf0e259d1928535172ba74926e553`，BUILD `bld_7f3805d606847ecf`。
+- 目录：`dist/desktop/desktop-daily-win-v58-r115-high-resolution-20261028/`。
+- 通用ZIP：`dist/desktop/zhongshuo-v58-windows-x64-20261028.zip`，646文件、220611041字节，完整解码CRC通过。
+- ZIP SHA-256：`e34e60999a4339a1ac46bc8ddbf5d8d13ffb3d813926b1eb9434d130c9901c14`，同目录附校验文件。
+- 主代理另逐项核对614个程序文件hash；内外手册正文一致，14章18图在整包中加载正确。正式随包main/preload/renderer与随包Node/daemon隔离启动通过，正常退出0、pid文件移除，0turn、0real_call。
+- 通用包附简短说明和许可证；ZIP不含测试库、聊天数据或本机专用启动文件。生成ZIP后单独加入沿用数据入口，与V57逐字节相同；先正常退出旧版，再从V58的`start-existing-data.vbs`继续使用原数据。
