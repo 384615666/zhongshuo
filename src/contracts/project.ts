@@ -193,7 +193,7 @@ export const navigationPreferencesSchema = z.strictObject({
   revision: z.number().int().nonnegative(),
 }).refine(
   (p) => p.activeProjectId === null || p.visibleProjectIds.includes(p.activeProjectId),
-  { message: '当前项目必须包含在 visibleProjectIds 中（§17.7 当前项目不可取消勾选）' },
+  { message: '当前使用的项目不能隐藏' },
 ).refine(
   (p) => new Set(p.visibleProjectIds).size === p.visibleProjectIds.length,
   { message: 'visibleProjectIds 必须有序且去重' },

@@ -617,7 +617,7 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
     }
     const p = data.project;
     openedId = p.id;
-    recordWrite('project.open', `打开项目「${p.displayName}」${data.created === true ? '（新注册）' : '（已注册·幂等重开）'}`);
+    recordWrite('project.open', `打开项目「${p.displayName}」${data.created === true ? '（新注册）' : '（已打开）'}`);
     try {
       const defaults=await command<{created:Array<{displayName:string}>;existing:Array<{displayName:string}>;removedLegacyPlaceholder:boolean}>('member.discoverDefaults',{projectId:p.id});
       if(defaults.created.length>0||defaults.removedLegacyPlaceholder)recordWrite('member.discoverDefaults',`已从本机默认配置准备 ${defaults.created.length} 位 AI 成员${defaults.removedLegacyPlaceholder?'，并替换未使用的旧占位成员':''}（不自动派发）`);
@@ -764,7 +764,7 @@ export async function roomArchiveReal(roomId: string, expectedRevision: number, 
 export async function roomMembersSetReal(roomId: string, memberId: string, action: 'add' | 'remove'): Promise<{ ok: boolean; error?: string }> {
   try {
     await command('room.members.set', { roomId, memberId, action });
-    recordWrite('room.members.set', `${action === 'add' ? '加入' : '移出'}房间（新增只对后续新任务生效——运行中研讨名单冻结）`);
+    recordWrite('room.members.set', `${action === 'add' ? '加入' : '移出'}房间（新成员将参与之后开始的任务）`);
     await refreshRooms().catch(() => { /* 下次刷新 */ });
     return { ok: true };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
@@ -1042,7 +1042,7 @@ export async function toggleSavedMessage(m: { id: string; body: string }, projec
     }
     const r = await command<{ existed: boolean }>('saved.add', { kind: 'message', ref: m.id, title: m.body.slice(0, 60), ...(projectId != null ? { projectId } : {}) });
     setState((s) => ({ ...s, savedMessageRefs: { ...s.savedMessageRefs, [m.id]: true } }));
-    recordWrite('saved.add', `收藏消息 ${m.id.slice(0, 12)}…${r.existed === true ? '（已收藏——幂等）' : ''}`);
+    recordWrite('saved.add', `收藏消息 ${m.id.slice(0, 12)}…${r.existed === true ? '（已收藏）' : ''}`);
     return { ok: true, saved: true };
   } catch (e) {
     return { ok: false, saved: getState().savedMessageRefs[m.id] === true, error: (e as Error).message };
@@ -1807,7 +1807,7 @@ export async function sendEnvelope(env: PendingSendEnvelope): Promise<BridgeOutc
   if(!staged){const persisted=stageOutbound(draftKey,frozen);if(!persisted.ok)return{status:'failed',code:'SEND_REFERENCE_NOT_SAVED',error:persisted.error??'原发送引用未能保存，本次未发送'};}
   try{
     frozen.payloadHash=await sendRequestPayloadHash(frozen);
-    if(env.payloadHash&&env.payloadHash!==frozen.payloadHash)throw Error('原发送参数与冻结摘要不一致');
+    if(env.payloadHash&&env.payloadHash!==frozen.payloadHash)throw Error('本次发送记录不完整，请核对内容后重新发送');
     env.payloadHash=frozen.payloadHash;
     if(!updateSendReference(draftKey,frozen,'sending',{payloadHash:frozen.payloadHash}))throw Error('原请求引用未能耐久保存，本次未发送');
   }catch(error){return{status:'failed',code:'SEND_REFERENCE_NOT_SAVED',error:(error as Error).message};}
@@ -1867,7 +1867,7 @@ export async function querySubmittedSend(env:PendingSendEnvelope):Promise<SendLo
   const hash=await sendRequestPayloadHash(frozen);
   if(frozen.payloadHash&&frozen.payloadHash!==hash)throw Error('原请求引用摘要已损坏；未查询或重新发送');
   const result=await command<SendLookupResult>('message.lookupSubmission',{request:{commandId:frozen.commandId,method:frozen.method,params:frozen.params},payloadHash:hash});
-  if(result.commandId!==frozen.commandId||result.payloadHash!==hash)throw Error('查询返回了不同请求，原信封保留');
+  if(result.commandId!==frozen.commandId||result.payloadHash!==hash)throw Error('暂未查到这次发送，请稍后再查询');
   if(result.status==='found'){
     const key=sendDraftKey(frozen),state=getState(),reference=state.lastSendReferences[key];
     const unsettled=(state.outboundLedger[key]??[]).some(item=>item.commandId===frozen.commandId)

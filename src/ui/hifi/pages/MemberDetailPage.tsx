@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /** 成员详情：批准原型的单成员两列布局，字段来自明确项目的 member.list/member.runtime。 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
@@ -51,7 +52,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   }, [projectId, memberId]);
 
   useEffect(() => { mounted.current = true; setMember(null);setRuntime(null);setRuntimeError(null);setBindOpen(false);setEditOpen(false);setTemplateOpen(false);void reload(); return () => { mounted.current = false; seq.current += 1; }; }, [reload]);
-  useEffect(() => { if (project != null && activeId !== projectId && !(opening!=null&&opening.projectId!==projectId&&opening.urlSeqAtStart>=navSequence)) void switchFocusProject(projectId).catch((e: unknown) => toast(`聚焦项目失败：${(e as Error).message}`, 'error')); }, [project, projectId, activeId,opening,navSequence]);
+  useEffect(() => { if (project != null && activeId !== projectId && !(opening!=null&&opening.projectId!==projectId&&opening.urlSeqAtStart>=navSequence)) void switchFocusProject(projectId).catch((e: unknown) => toast(`聚焦项目失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); }, [project, projectId, activeId,opening,navSequence]);
 
   const toggle = async () => {
     if (member == null || member.principalType !== 'agent' || togglePending.current) return;
@@ -61,11 +62,11 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
       const version=seq.current;
       const outcome=await memberWrite(`member.setEnabled:${projectId}:${member.id}`,'member.setEnabled',{projectId,memberId:member.id,expectedRevision:member.revision,enabled:!member.enabled});
       if(!mounted.current||seq.current!==version)return;
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；请在未知成员操作区人工同号重放`:`${outcome.code}：${outcome.error}`);
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       recordWrite('member.setEnabled', `${member.displayName} → ${member.enabled ? '停用' : '启用'}（之后新派发）`);
       if (mounted.current) await reload();
       toast(`已${member.enabled ? '停用' : '启用'}「${member.displayName}」——只影响之后的新派发`, 'success');
-    } catch (e) { toast(`成员状态修改失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`成员状态修改失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { togglePending.current = false; if (mounted.current) setBusy(false); }
   };
 
@@ -98,7 +99,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
         </div>
 
         <UnknownMemberOperations/>
-        {error != null ? <div className="panel warning">成员读取失败：{error} <button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
+        {error != null ? <div className="panel warning">成员读取失败：{userFacingSystemText(error ?? '')} <button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
         {member == null && error == null ? <div className="panel info">正在读取成员身份…</div> : null}
         {member != null ? <>
           <div className="grid grid-2">
@@ -113,14 +114,14 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>类型</dt><dd>{member.principalType === 'agent' ? 'AI 成员' : '本地用户'}</dd>
                 <dt>状态</dt><dd>{member.enabled ? '启用' : '停用'}</dd>
                 <dt>AI 渠道</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已配置` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 使用默认配置` : '未配置'}</dd>
-                <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${runtime.executableStatus.reason}`:runtime?.executableStatus?.status==='found'?'已找到程序引用（未执行认证）':'尚未确认'}</dd>
+                <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${userFacingSystemText(runtime.executableStatus.reason ?? '')}`:runtime?.executableStatus?.status==='found'?'已找到程序引用（未执行认证）':'尚未确认'}</dd>
                 <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '（未获确认）'}</dd>
               </dl>
               <details className="small" style={{ marginTop: 10 }}>
                 <summary>高级身份信息</summary>
                 <div className="mono-sm faint" style={{ marginTop: 6, overflowWrap: 'anywhere' }}>成员 ID：{member.id}</div>
               </details>
-              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{runtimeError}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
+              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{userFacingSystemText(runtimeError ?? '')}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
             </div>
 
             <div className="card">
@@ -130,10 +131,10 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未解析'}</dd>
                 <dt>保存的权限模式</dt><dd>{runtimePermissionLabel(runtime?.binding?.permissionMode,effective?.kind)}</dd>
                 <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}<div className="small faint">按本机 CLI / 模型列表保存并传入；渠道未回报有效等级时不作已生效认证。</div></dd>
-                <dt>正式执行权限档</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{runtime.permissionExecution.reason}</div>:null}</dd>
+                <dt>文件访问权限</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{userFacingSystemText(runtime.permissionExecution.reason ?? '')}</div>:null}</dd>
                 <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>
-                <dt>项目编辑档历史证据</dt><dd>{runtime?.writeCapability?.status==='supported'?'匹配历史证据':'无匹配证据'}<div className="small faint">{runtime?.writeCapability?.reason??'未提供证据'}</div></dd>
-                <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}{runtime?.imageInput?.reason != null ? ` · ${runtime.imageInput.reason}` : ''}</dd>
+                <dt>项目编辑档历史证据</dt><dd>{runtime?.writeCapability?.status==='supported'?'匹配历史证据':'无匹配证据'}<div className="small faint">{userFacingSystemText(runtime?.writeCapability?.reason??'未提供证据')}</div></dd>
+                <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}{runtime?.imageInput?.reason != null ? ` · ${userFacingSystemText(runtime.imageInput.reason ?? '')}` : ''}</dd>
                 <dt>历史识图证据</dt><dd>{runtime?.imageInput?.evidence?'当前组合匹配历史证据':'本组合没有匹配的历史证据；不阻止自动输入'}</dd>
               </dl>
               {runtime?.imageInput != null ? <details style={{ marginTop: 8 }}><summary>识图配置依据</summary><div className="small mono" style={{ overflowWrap: 'anywhere' }}>配置 {runtime.imageInput.configuration} · 模型 {runtime.imageInput.model ?? '未指定'} · 权限 {runtime.imageInput.permissionMode} · 渠道 {runtime.imageInput.channel} · 协议 {runtime.imageInput.protocol}</div></details> : null}

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 归档管理（R66 P4——原型 ArchivePage 的正式接线版）：**一个页面、多个入口**（原型 §八/§九）：
  *  · 路由 /archive（项目 ⋯ 菜单「归档项目…」确认后的落点 / 项目设置归档入口）；
@@ -75,7 +76,7 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
         recordWrite('project.lifecycle', `恢复项目「${p.displayName}」（原单独归档的房间不跟着恢复）`);
         toast('项目已恢复（原单独归档的房间仍保持归档；不重放旧任务）', 'success');
         void index.load();
-      } else toast(`恢复未确认：${r.error}`, 'error');
+      } else toast(`恢复未确认：${userFacingSystemText(r.error ?? '')}`, 'error');
     } finally { inFlight.current=false;if(alive.current)setBusy(null); }
   };
   const restoreRoom = async (roomId: string) => {
@@ -90,9 +91,9 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
       if (r.ok) {
         const result=group?.project.archived?'已解除房间的单独归档；项目仍归档，恢复项目后才可写':'房间已恢复可写';
         recordWrite('room.archive', `恢复房间「${room.name}」：${result}`);
-        toast(result, 'success');
+        toast(result ?? '', 'success');
         void index.load();
-      } else toast(`恢复未确认：${r.error}`, 'error');
+      } else toast(`恢复未确认：${userFacingSystemText(r.error ?? '')}`, 'error');
     } finally { inFlight.current=false;if(alive.current)setBusy(null); }
   };
 
@@ -126,7 +127,7 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
         <span className="small faint">{index.data?`已读取 ${groups.length} 个项目 · ${totalRooms} 个房间${index.data.nextCursor?'（还有更早内容）':''}`:'尚未读取'}</span>
         <button className="btn sm" disabled={index.reading||busy!=null} onClick={()=>void index.load()}>{index.reading?'读取中…':'刷新归档'}</button>
       </div>
-      {index.error?<div className="panel warning" role="alert">归档读取失败：{index.error}。{index.data?'保留上次已确认内容。':'尚未取得归档清单。'}可点击刷新重试。</div>:null}
+      {index.error?<div className="panel warning" role="alert">归档读取失败：{userFacingSystemText(index.error ?? '')}。{index.data?'保留上次已确认内容。':'尚未取得归档清单。'}可点击刷新重试。</div>:null}
       {index.data?<div className="small faint">读取于 {fullTime(index.data.readAt)}；搜索只筛选已读取内容。刷新会重新读取首页，不切换当前项目。</div>:null}
       {!index.data?<div className="panel">{index.error?'归档尚未读取成功':'正在读取归档…'}</div>:groups.length === 0 ? (
         <EmptyState
@@ -212,7 +213,7 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
           ))}
         </div>
       )}
-      {index.data?.nextCursor?<div className="row" style={{marginTop:12}}><button className="btn" disabled={index.reading||index.capped} onClick={()=>void index.load(true)}>{index.reading?'读取中…':'加载更多归档'}</button><span className="small faint">{index.capped?'本次已读取1200条；请按项目缩小范围后继续。':'当前清单尚未读完，未把部分清单当作全部。'}</span></div>:null}
+      {index.data?.nextCursor?<div className="row" style={{marginTop:12}}><button className="btn" disabled={index.reading||index.capped} onClick={()=>void index.load(true)}>{index.reading?'读取中…':'加载更多归档'}</button><span className="small faint">{index.capped?'本次已读取1200条；请按项目缩小范围后继续。':'当前清单尚未读完，请继续加载。'}</span></div>:null}
     </>
   );
 }

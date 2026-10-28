@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../../contracts/userFacingText';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { readerStateOf, saveReaderState } from '../readerState';
 
@@ -51,7 +52,7 @@ export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, on
         onError={() => setError('图片字节已读取，但浏览器无法解码。文件可能损坏或格式不受支持；已保存原件保留。')}
         style={{ width: size.width > 0 ? size.width * scale : undefined, height: size.height > 0 ? size.height * scale : undefined,
           visibility: size.width > 0 && visibleLayout && error == null ? 'visible' : 'hidden', transform: `translate(${offset.x}px, ${offset.y}px)` }} />
-      {error != null ? <div className="zs-image-error" role="alert" data-zs-preview-error={error}>{error}<button className="btn sm" onClick={onRetry}>重试预览</button><button className="btn sm" onClick={onDownload}>另存原件</button></div> : null}
+      {error != null ? <div className="zs-image-error" role="alert" data-zs-preview-error={error}>{userFacingSystemText(error ?? '')}<button className="btn sm" onClick={onRetry}>重试预览</button><button className="btn sm" onClick={onDownload}>另存原件</button></div> : null}
     </div>
     <div className="small faint">{error != null ? '预览失败' : size.width > 0 && visibleLayout ? `${size.width} × ${size.height} · 拖动查看` : '正在解码和布局图片…'}</div>
   </div>;

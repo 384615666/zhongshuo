@@ -7,6 +7,7 @@
  *  - IntentTag：灰色意图标签，不用锁/盾（E8）
  */
 
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {createPortal} from 'react-dom';
 import { Icon, type IconName } from './Icon';
@@ -101,14 +102,13 @@ export function ErrorState({
 }) {
   const copy = errorCopy[code];
   return (
-    <div className="error-state">
+    <div className="error-state" data-zs-error-code={code}>
       <Icon name="alert-triangle" size={15} className="muted" />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="row tight baseline">
-          <span className="code">{code}</span>
           <span className="strong">{copy.title}</span>
         </div>
-        <div className="action">{detail ?? copy.action}</div>
+        <div className="action">{userFacingSystemText(detail ?? copy.action)}</div>
         {actions ? <div className="panel-actions">{actions}</div> : null}
       </div>
     </div>
@@ -141,9 +141,9 @@ export function EmptyState({
 /* ---------------- 灰色意图标签（E8） ---------------- */
 
 export function IntentTag({ intent }: { intent: 'analyze' | 'modify' }) {
-  const text = intent === 'analyze' ? '分析项目 · 只读意图' : '修改项目 · 写入意图';
+  const text = intent === 'analyze' ? '分析项目' : '修改项目';
   const title =
-    '这里显示的是本次任务的预期能力，不是安全保证。当前 CLI 拥有你的完整本机权限，v0.1 无法保证阻止它写文件；真正的写入拦截归 DEV-20（ADR-14）。';
+    '任务使用当前成员配置的文件访问权限。';
   return (
     <span className="intent-tag" title={title}>
       <Icon name="info" size={11} />
@@ -673,11 +673,11 @@ export function hostClass(host: DetailHost | undefined, base: 'main' | 'page') {
 
 /* ---------------- 原型标记 ---------------- */
 
-export function ProtoFlag({ note = '原型 · 内存数据' }: { note?: string }) {
+export function ProtoFlag({ note = '演示界面' }: { note?: string }) {
   return (
     <span
       className="proto-flag"
-      title="这是高保真原型：没有 daemon、SQLite 与 runtime 适配器，写操作只改内存，刷新即回seed。"
+      title="此界面使用演示数据，刷新后会重置。"
       onClick={() => recordLocalOnly('proto.flag.open', '查看了原型边界说明')}
     >
       <Icon name="sparkles" size={10} />

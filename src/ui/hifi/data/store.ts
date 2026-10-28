@@ -899,7 +899,7 @@ function persistSnapshot(): void {
     localStorage.setItem(persistKey, payload);
     if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote, legacyImport: s.draftPersist.legacyImport } }));
   } catch (e) {
-    const msg = `草稿持久化失败：${e instanceof Error ? e.message : String(e)}——本次进程内仍有效，刷新或崩溃会丢失未发送内容`;
+    const msg = `草稿保存失败：${e instanceof Error ? e.message : String(e)}。请释放存储空间后重试；关闭前请复制尚未发送的内容。`;
     setState((s) => (s.draftPersist.error === msg ? s : { ...s, draftPersist: { ...s.draftPersist, mode: 'on', error: msg } }));
   }
 }
@@ -932,7 +932,7 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
     hadKey = raw != null;
   } catch (e) {
     persistKey = null;
-    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效`, recoveryNote: null, legacyImport: s.draftPersist.legacyImport } }));
+    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿无法读取：${e instanceof Error ? e.message : String(e)}。本次编辑的内容尚未保存。`, recoveryNote: null, legacyImport: s.draftPersist.legacyImport } }));
     return false;
   }
   let recoveryNote: string | null = null;
@@ -989,19 +989,19 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
         // r63 P2：原件未成功保全→锁定主键（禁止任何后续写路径覆盖唯一原键），所有编辑仅
         // 内存态；发送（stageOutbound）拒绝——不冒充已耐久落账。释放存储后重启/显式重试。
         persistLocked = true;
-        recoveryNote = `草稿快照无法恢复且隔离写入失败（存储空间/配额不足？）——**主键原件已保全锁定**（逐字保持，含未确认发送账本，不覆盖）；本轮草稿与发送账本仅内存态，发送将被要求先恢复存储；释放空间后重启应用或到「设置 → 草稿存储」点重试`;
-        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, mode: 'locked', error: `草稿快照保全锁定：原件未隔离成功，主键保持原样（未覆盖）；新写入仅内存态`, recoveryNote: null } }));
+        recoveryNote = `草稿读取失败，存储空间可能不足。请释放空间后到「设置 → 数据与存储」重试。`;
+        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, mode: 'locked', error: `草稿无法保存，请释放存储空间后重试。`, recoveryNote: null } }));
         return hadKey; // 不 persistSnapshot——覆盖即销毁原件（review-r62 §3 反例）
       }
       if (wholeUnrecoverable) {
-        recoveryNote = `草稿快照无法恢复（${parseOk ? `版本 v${String((data as { v?: unknown })?.v ?? '?')} 不受本程序支持` : 'JSON 损坏'}）——原件已${quarantined ? `逐字隔离于 ${qKey}（含未确认发送账本，不自动派发；如需人工核对请勿编辑该键）` : '无法隔离（localStorage 拒写）——主键保留原样，本轮草稿仅内存态'}，新快照从空态开始`;
+        recoveryNote = `草稿无法恢复（${parseOk ? `版本 v${String((data as { v?: unknown })?.v ?? '?')} 不受本程序支持` : 'JSON 损坏'}）——原件已${quarantined ? `保存为恢复副本` : '无法另存副本，请释放存储空间后重试'}。`;
       } else {
         const parts: string[] = [];
         if (droppedDrafts > 0) parts.push(`损坏草稿 ${droppedDrafts} 条`);
-        if (droppedSends > 0) parts.push(`损坏未确认信封 ${droppedSends} 条（不自动派发）`);
+        if (droppedSends > 0) parts.push(`无法读取的发送记录 ${droppedSends} 条`);
         if (droppedUploads > 0) parts.push(`损坏/悬空上传项 ${droppedUploads} 项`);
-        if (expiredDrafts > 0) parts.push(`超过 24 小时过期草稿 ${expiredDrafts} 条（按约定不恢复）`);
-        recoveryNote = `草稿快照部分无法恢复：${parts.join('、')}——原件已${quarantined ? `隔离于 ${qKey}` : '无法隔离（主键保留原样）'}；有效部分（草稿 ${restoredDrafts} 条/未确认信封 ${restoredSends} 条）已恢复`;
+        if (expiredDrafts > 0) parts.push(`已过期草稿 ${expiredDrafts} 条`);
+        recoveryNote = `部分草稿无法恢复：${parts.join('、')}——原件已${quarantined ? `保存为恢复副本` : '保留'}；有效部分（草稿 ${restoredDrafts} 条/发送记录 ${restoredSends} 条）已恢复`;
       }
     }
   }
@@ -1108,8 +1108,8 @@ export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir:
   }
   persistSnapshot();
   recoverLedgerToPending();
-  const refused = out.refusedVersions.length > 0 ? `、拒收不支持版本来源 ${out.refusedVersions.length} 个（${out.refusedVersions.map((r) => `${r.sourceDir} v${r.v} 不受本程序支持——原件在旧键逐字保持，未消费未派发`).join('；')}）` : '';
-  const detail = `继承完成：草稿 ${out.mergedDrafts} 条、未确认信封 ${out.mergedSends} 条、账本 ${out.mergedLedger} 条${out.expired > 0 ? `、过期草稿 ${out.expired} 条（按 24h 约定不继承）` : ''}${out.dropped > 0 ? `、损坏条目 ${out.dropped} 条（不恢复不派发）` : ''}${refused}。${note}`;
+  const refused = out.refusedVersions.length > 0 ? `、无法读取的旧版记录 ${out.refusedVersions.length} 个（${out.refusedVersions.map((r) => `${r.sourceDir} v${r.v} 不受本程序支持`).join('；')}）` : '';
+  const detail = `已恢复：草稿 ${out.mergedDrafts} 条、发送记录 ${out.mergedSends} 条、待确认操作 ${out.mergedLedger} 条${out.expired > 0 ? `、过期草稿 ${out.expired} 条` : ''}${out.dropped > 0 ? `、损坏条目 ${out.dropped} 条` : ''}${refused}。${note}`;
   setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, mode: 'on', recoveryNote: detail } }));
   return out;
 }
@@ -1214,7 +1214,7 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
   if (persistLocked || getState().draftPersist.mode === 'locked') {
     // r63 P2：主键保全锁定中——发送前无法耐久落账原信封，若继续发送则崩溃窗口的重复发送
     // 防护失效。拒绝发送并给出恢复路径（不冒充已保存）。
-    return { ok: false, error: '草稿快照保全锁定中（原件未隔离成功，主键不可覆盖）——发送已取消；请先释放存储空间并到「设置 → 草稿存储」重试，恢复后再发送' };
+    return { ok: false, error: '发送记录无法保存，本次尚未发送。请释放存储空间后到「设置 → 数据与存储」重试。' };
   }
   const frozen=JSON.parse(JSON.stringify(env)) as PendingSendEnvelope;
   const previousReference=getState().lastSendReferences[draftKey];
@@ -1225,7 +1225,7 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
   if (err != null) {
     // 落盘失败=账本不可靠：回滚内存条目并取消发送（不冒充已保存原信封）。
     setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId) },lastSendReferences:Object.fromEntries(Object.entries({...s.lastSendReferences,[draftKey]:previousReference}).filter((entry):entry is [string,LastSendReference]=>entry[1]!=null)) }));
-    return { ok: false, error: `原信封未能耐久保存（${err}）——本次未发送；存储恢复后重试即自动可用` };
+    return { ok: false, error: `发送记录无法保存（${err}）。本次尚未发送，请释放存储空间后重试。` };
   }
   return { ok: true };
 }

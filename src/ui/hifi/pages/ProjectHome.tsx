@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 项目主页 / 欢迎页 / 打开文件夹弹窗（R65 原型还原·pages-secondary 同源）：
  * 数据=真实注册表（project.list）与已装载房间/成员/任务；打开文件夹=真实 pickFolder+
@@ -124,7 +125,7 @@ export function RelocateButton({ projectId }: { projectId: string }) {
           const r = await projectLifecycleReal(projectId, p?.revision ?? 0, 'relocate', d);
           setBusy(false);
           if (r.ok) toast('已重新定位（projectId 与历史保持不变）', 'success');
-          else toast(`重新定位失败：${r.error}`, 'error');
+          else toast(`重新定位失败：${userFacingSystemText(r.error ?? '')}`, 'error');
         })();
       }}
     >
@@ -268,7 +269,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
 
           <div>
             <div className="section-title">活跃任务<span className="count">{tasks?.length ?? '…'}</span><button className="btn ghost sm" onClick={() => refreshBoard.current()}>刷新</button></div>
-            {taskError != null ? <div className="panel warning">任务概况读取失败：{taskError}（保留本项目上次已确认的任务列表，可刷新重试）</div> : null}
+            {taskError != null ? <div className="panel warning">任务概况读取失败：{userFacingSystemText(taskError ?? '')}（保留本项目上次已确认的任务列表，可刷新重试）</div> : null}
             {tasks == null && taskError == null ? <div className="panel info">正在读取本项目任务概况…</div> : tasks != null && tasks.length === 0 ? (
               <div className="panel">当前没有活跃任务。房间里的任务看板会保留已完成与已取消的记录。</div>
             ) : tasks != null ? (

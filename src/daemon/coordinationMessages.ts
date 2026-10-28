@@ -41,7 +41,7 @@ export function communicationForTurn(db:ZhongshuoDatabase,taskId:string,memberId
   const ownerReply=scope.some(m=>m.memberId===parent.owner_member_id&&m.writeScope&&targetAvailable(db,parent,parent.owner_member_id))?parent.owner_member_id:null;
   const replyCandidate=phase==='child'?(reply?.source_member_id??runRequest?.member_id??ownerReply):null;
   const replyTo=replyCandidate&&replyCandidate!==memberId&&scope.some(m=>m.memberId===replyCandidate&&m.writeScope&&targetAvailable(db,parent,replyCandidate))?replyCandidate:null;
-  return{mentionEnabled:true,submitVia:'final-result',maxHandoffs:4,
+  return{mentionEnabled:true,submitVia:'final-result',
     members:scope.filter(m=>m.writeScope&&targetAvailable(db,parent,m.memberId)).map(m=>({memberId:m.memberId,displayName:m.displayName,description:m.description??null})),
     allowedPurposes:phase==='planning'?['ask','review','implement']:replyTo?['ask','review','implement','reply']:['ask','review','implement'],
     replyToMemberId:replyTo};
@@ -83,7 +83,6 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   const ignored=(list:readonly MemberHandoff[])=>list.map(message=>({toMemberId:message.toMemberId,purpose:message.purpose,bodyHash:hash(message.message)}));
   const ignoredMessages=ignored(messages.filter(message=>plannedTargets.has(message.toMemberId)));
   if(effectiveMessages.length===0)return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred:[],merged:[],additions:[],plan:null};
-  if(effectiveMessages.length>4)throw Error('单轮最多交接4条具体消息');
   const seen=new Set<string>();
   const inboundReplySource=(db.prepare('SELECT source_member_id FROM coordination_messages WHERE child_task_id=?').get(taskId) as {source_member_id:string}|undefined)?.source_member_id;
   const coordinatorReply=context.roster.some(m=>m.memberId===context.parent.owner_member_id&&m.writeScope)?context.parent.owner_member_id:null;

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../../contracts/userFacingText';
 /**
  * PDF 阅读视图（R69 建立 / R70 修 fit 观察器+DPR+阅读状态）：白纸单页居中、
  * **按真实面板 contain 适应**（观察器挂在真实渲染节点上——loading 态也先挂壳，宽度与
@@ -146,7 +147,7 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId
       <div className="preview-unsupported" data-zs-pdf-error={err.slice(0, 40)}>
         <Icon name="alert-triangle" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>PDF 渲染失败</div>
-        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{err}——原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}——原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
         <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
       </div>
     );

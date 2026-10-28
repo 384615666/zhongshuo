@@ -1,3 +1,4 @@
+import {userFacingSystemText} from '../../contracts/userFacingText.ts';
 /**
  * 正式命令桥（H1 首包，第四十七轮修订）：类型化包装 `window.zs.command`（preload
  * contextBridge——与既有 renderer 同一窄接口，不复制绕过规则的实现）。
@@ -55,7 +56,7 @@ export function bridgeErrorFacts(){return recentErrors.map(e=>({...e}));}
 export function bridge(): ZsBridge {
   const zs = (window as unknown as { zs?: ZsBridge }).zs;
   if (zs == null || typeof zs.command !== 'function') {
-    throw new Error('预加载桥不可用（window.zs 缺失）——正式命令面无法访问');
+    throw new Error('应用连接不可用，请重新打开众说');
   }
   return zs;
 }
@@ -64,7 +65,7 @@ export function bridge(): ZsBridge {
 export async function command<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   const r = await commandOutcome<T>(`rd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, method, params);
   if (r.status === 'ok') return r.data;
-  throw new Error(`${r.status === 'failed' ? `${r.code}: ${r.error}` : r.error}`);
+  throw Object.assign(new Error(userFacingSystemText(r.error)),r.status==='failed'?{code:r.code}:{});
 }
 
 /** 发送类命令：携带调用方 commandId，返回可判定回执（ok/failed/unknown）。 */
@@ -87,12 +88,12 @@ async function commandOutcome<T>(commandId: string, method: string, params: Reco
     const r = await wrapped;
     if (r === 'timeout') return finish({ status: 'unknown', error: '服务未在时限内回执' });
     if (r.ok) return { status: 'ok', data: r.data as T };
-    if (r.error?.operationPending === true) return finish({ status: 'unknown', error: `${r.error.code}：${r.error.message}。原操作仍待确认，保留原信封；不会自动重放。` });
-    if (r.error?.code === '__TRANSPORT__') return finish({ status: 'unknown', error: r.error.message });
-    return finish({ status: 'failed', code: r.error?.code ?? 'ERROR', error: r.error?.message ?? '未知错误', ...(r.error?.operationKnownRejected === true ? { operationKnownRejected: true as const } : {}) });
+    if (r.error?.operationPending === true) return finish({ status: 'unknown', error: `${userFacingSystemText(r.error.message)}。请先查询原操作的结果。` });
+    if (r.error?.code === '__TRANSPORT__') return finish({ status: 'unknown', error: userFacingSystemText(r.error.message) });
+    return finish({ status: 'failed', code: r.error?.code ?? 'ERROR', error: userFacingSystemText(r.error?.message ?? '未知错误'), ...(r.error?.operationKnownRejected === true ? { operationKnownRejected: true as const } : {}) });
   } catch (e) {
     // 桥本身抛错（断连/序列化）：结果未知——不是服务端拒绝。
-    return finish({ status: 'unknown', error: e instanceof Error ? e.message : String(e) });
+    return finish({ status: 'unknown', error: userFacingSystemText(e instanceof Error ? e.message : String(e)) });
   } finally {
     clearTimeout(timer);
   }

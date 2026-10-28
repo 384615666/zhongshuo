@@ -28,7 +28,7 @@ export interface DmRouteInput {
  */
 export function resolveDmRoute(input: DmRouteInput): DomainResult<DmRouteOutcome> {
   if (input.conversation.archived) {
-    return domainErr('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑，保留历史（开工契约 §2.1）');
+    return domainErr('CONVERSATION_ARCHIVED', '对话已归档，恢复后可以继续发送消息');
   }
   if (input.intent === 'record_only') {
     return domainOk({

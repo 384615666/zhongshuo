@@ -48,7 +48,7 @@ export function resolveTopLevelRoute(input: TopLevelRouteInput): DomainResult<To
       if (!input.room.enabledAgentMemberIds.includes(input.room.coordinatorMemberId)) {
         return domainErr(
           'MEMBER_UNAVAILABLE',
-          '默认协调者当前不可用；AUTO 模式需要可用的协调者（替代者选择见 §4.3，由后续调度包承载）',
+          '房间的默认 AI 当前不可用，请启用它或选择其他成员',
           { details: { coordinatorMemberId: input.room.coordinatorMemberId } },
         );
       }

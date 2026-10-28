@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../../contracts/userFacingText';
 /**
  * Excel 阅读视图（R69 建立 / R70 修重开+切表保持）：主渲染=@extend-ai/react-xlsx 0.16.0
  * （WASM 引擎：sheet 页签/行列标/合并/列宽/填充样式真实渲染），引擎不可用回退提取网格。
@@ -138,7 +139,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
     return (
       <div className="xlsx-view xlsx-fallback" data-zs-xlsx-view="fallback" data-zs-xlsx-fail={engineError?.slice(0, 40) ?? ''} data-zs-xlsx-sheet={sh?.name ?? ''}>
         <div className="xlsx-fallback-note panel info">
-          <div className="panel-title"><Icon name="alert-triangle" size={13} /> 高保真表格引擎不可用（{engineError ?? '未知'}）——以下为提取网格回退：字符串单元格、无样式/合并渲染。原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
+          <div className="panel-title"><Icon name="alert-triangle" size={13} /> 高保真表格引擎不可用（{userFacingSystemText(engineError ?? '未知')}）——以下为提取网格回退：字符串单元格、无样式/合并渲染。原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
           <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
         </div>
         {fallbackSheets.length > 1 ? (

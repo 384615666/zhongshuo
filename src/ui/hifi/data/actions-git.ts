@@ -59,7 +59,7 @@ export function gitOperationLabel(method: string): string {
   return ({ 'git.status':'读取仓库状态','git.stage':'暂存文件','git.unstage':'取消暂存','git.stageTask':'暂存任务改动','git.commit':'提交','git.push':'推送','git.pull':'拉取','git.checkout':'切换分支','git.branch.create':'创建分支','git.commit.undo':'软回退提交','git.conflict.resolve':'确认冲突内容' } as Record<string,string>)[method] ?? 'Git 操作';
 }
 class GitWriteFailure extends Error {
-  constructor(readonly outcome: BridgeFailed | BridgeUnknown) { super(outcome.status === 'failed' ? `${outcome.code}：${outcome.error}` : outcome.error); }
+  constructor(readonly outcome: BridgeFailed | BridgeUnknown) { super(outcome.error); }
 }
 async function writeCommand<T>(method: string, params: Record<string, unknown>): Promise<T> {
   const result = await gitWrite<T>(String(params.projectId ?? ''), method, params);

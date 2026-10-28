@@ -32,7 +32,7 @@ export function readChangeSnapshot(db:ZhongshuoDatabase,appDataDir:string,projec
         if(row.size==null||row.size>256*1024||statSync(join(store,row.content_ref)).size>256*1024)return{text:null,reason:'文本快照超过256 KiB；hash保留，未全量读取'};
         const content=readStoredContent(store,row.content_ref);if(!content.ok)return{text:null,reason:content.error};
         if(content.content.length!==row.size)return{text:null,reason:'前像长度与记录不一致，未显示内容'};
-        if(content.content.includes(0))return{text:null,reason:'二进制内容；hash保留，不冒充文本差异'};
+        if(content.content.includes(0))return{text:null,reason:'二进制文件，可保存原件查看'};
         return{text:new TextDecoder('utf-8',{fatal:true}).decode(content.content),reason:null};
       }catch(e){return{text:null,reason:`前像读取失败：${(e as Error).message}`};}
     };

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 应用设置：既有设置导航 + 搜索，操作手册单独分区。
  *
@@ -148,7 +149,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
               <div className="settings-search-results" role="list">
                 {results.length === 0 ? (
                   <div className="small faint" style={{ padding: '4px 8px' }}>
-                    没找到匹配的设置项。这里只索引已经做好的项——没做的不会用"即将支持"占位。
+                    没找到匹配的设置项，请换个关键词。
                   </div>
                 ) : (
                   results.map((r) => (
@@ -235,11 +236,11 @@ function SectionGeneral() {
       await command('app.settings.set', { key: 'ui.autoOpenProjectPath', value: autoOpen.trim() });
       const back = await command<{ values: Record<string, string | null> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
       const readBack = back.values['ui.autoOpenProjectPath'] ?? '';
-      if (readBack !== autoOpen.trim()) { toast(`保存后回读不一致（读到「${readBack}」）——未伪成功`, 'error'); return; }
+      if (readBack !== autoOpen.trim()) { toast(`保存后的值与输入不一致（当前为「${readBack}」），请刷新后重试`, 'error'); return; }
       recordWrite('app.settings.set', `启动项目 = ${readBack}（已回读核对）`);
       setAutoOpenSaved(readBack);
-      toast('已保存（回读一致，重启后生效）', 'success');
-    } catch (e) { toast(`保存失败：${(e as Error).message}`, 'error'); }
+      toast('已保存，重启后生效', 'success');
+    } catch (e) { toast(`保存失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(false); }
   };
   const openDeepLink = async () => {
@@ -247,7 +248,7 @@ function SectionGeneral() {
     const raw = deepLinkInput.trim();
     if (!isExternalDeepLink(raw)) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
     try { await openExternalDeepLink(raw); toast('已定位', 'success'); }
-    catch (e) { toast(`定位失败：${(e as Error).message}`, 'error'); }
+    catch (e) { toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
   };
   return (
     <div>
@@ -261,7 +262,7 @@ function SectionGeneral() {
             <button className="btn sm" disabled={busy || readError != null || autoOpenSaved == null || autoOpen.trim() === autoOpenSaved} onClick={() => void save()}>保存</button>
           </div>
         } />
-        {readError != null ? <div className="panel warning">启动项目设置读取失败：{readError}；保存已暂停，避免用未知旧值覆盖。<button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
+        {readError != null ? <div className="panel warning">启动项目设置读取失败：{userFacingSystemText(readError ?? '')}；保存已暂停，避免用未知旧值覆盖。<button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
       </div>
       <div className="card">
         <div className="card-title">打开一个定位链接</div>
@@ -292,13 +293,13 @@ function SectionAppearance() {
       await command('app.appearance.set', patch);
       const readBack = await command<{ showAvatars: boolean; avatars: Record<string, string> }>('app.appearance.get', {});
       if (patch.showAvatars !== undefined && readBack.showAvatars !== patch.showAvatars) {
-        toast('外观设置保存后回读不一致，未显示为成功', 'error');
+        toast('外观设置尚未保存成功，请重试', 'error');
         return;
       }
       if (patch.avatar !== undefined) {
         const expected = patch.avatar.dataUrl;
         if ((readBack.avatars[patch.avatar.subject] ?? null) !== expected) {
-          toast('头像保存后回读不一致，未显示为成功', 'error');
+          toast('头像尚未保存成功，请重试', 'error');
           return;
         }
       }
@@ -308,7 +309,7 @@ function SectionAppearance() {
         : `${patch.avatar.subject === 'user' ? '我的头像' : 'AI 头像'}${patch.avatar.dataUrl == null ? '已恢复默认' : '已更新'}（已回读）`);
       toast(patch.avatar === undefined ? `已${readBack.showAvatars ? '显示' : '隐藏'}头像` : patch.avatar.dataUrl == null ? '已恢复默认头像' : '头像已保存', 'success');
     } catch (error) {
-      toast(`外观保存失败：${(error as Error).message}`, 'error');
+      toast(`外观保存失败：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
     } finally {
       setBusy(null);
     }
@@ -506,14 +507,14 @@ export function SectionNotifications() {
       await command(write.method, write.params);
       const readBack = await command<{ items: NotificationSubscriptionItem[] }>('thread.subscriptions', {});
       if (!notificationMuteReadBackMatches(readBack.items, item.threadId, muted)) {
-        toast('线程通知设置保存后回读不一致，未显示为成功', 'error');
+        toast('通知设置尚未保存成功，请重试', 'error');
         return;
       }
       setItems(readBack.items);
       recordWrite(write.method, `${titles[item.taskId ?? ''] ?? item.threadId.slice(0, 12)} → ${muted ? '静音' : '通知'}（已回读）`);
       toast(muted ? '该线程已静音；任务仍会保留，系统通知不再弹出' : '该线程已恢复系统通知', 'success');
     } catch (writeError) {
-      toast(`线程通知设置保存失败：${(writeError as Error).message}`, 'error');
+      toast(`线程通知设置保存失败：${userFacingSystemText((writeError as Error).message ?? '')}`, 'error');
     } finally {
       setBusy(null);
     }
@@ -530,7 +531,7 @@ export function SectionNotifications() {
         {loading ? <div className="small faint" style={{ padding: '10px 14px' }}>正在读取真实线程静音状态…</div> : null}
         {error != null ? (
           <div className="panel warning" style={{ margin: 12 }}>
-            线程通知设置读取失败：{error}
+            线程通知设置读取失败：{userFacingSystemText(error ?? '')}
             <button className="btn sm" onClick={() => void reload()}>重试读取</button>
           </div>
         ) : null}
@@ -557,7 +558,7 @@ export function SectionNotifications() {
       <div className="card" style={{ marginTop: 14 }} data-zs-notification-delivery="1">
         <div className="card-title">桌面投递状态</div>
         {deliveryError != null ? (
-          <div className="panel warning" style={{ margin: 12 }}>投递状态读取失败：{deliveryError}</div>
+          <div className="panel warning" style={{ margin: 12 }}>投递状态读取失败：{userFacingSystemText(deliveryError ?? '')}</div>
         ) : delivery == null ? (
           <div className="small faint" style={{ padding: '10px 14px' }}>正在读取桌面投递记录…</div>
         ) : (
@@ -670,7 +671,7 @@ export function CallBudgetSettingsRow() {
       if (!callBudgetSettingReadBackMatches(raw, next)) {
         const message = '保存后的设置与所选状态不一致，请重新读取后再试。';
         setReadError(message);
-        toast(message, 'error');
+        toast(message ?? '', 'error');
         return;
       }
       const readBack = parseCallBudgetEnabledSetting(raw);
@@ -679,7 +680,7 @@ export function CallBudgetSettingsRow() {
       recordWrite('app.settings.set', `启用调用次数预算 = ${readBack ? '开启' : '关闭'}（已回读核对）`);
       toast(readBack ? '调用次数预算已开启，对新请求生效' : '调用次数预算已关闭，对新请求生效', 'success');
     } catch (error) {
-      toast(`调用次数预算保存失败：${(error as Error).message}`, 'error');
+      toast(`调用次数预算保存失败：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -718,7 +719,7 @@ export function CallBudgetSettingsRow() {
       </SettingsRow>
       {readError != null ? (
         <div className="panel warning" data-zs-call-budget-read-error="1">
-          暂时无法确认调用预算设置：{readError}
+          暂时无法确认调用预算设置：{userFacingSystemText(readError ?? '')}
           <button className="btn sm" onClick={() => void reload()}>重试读取</button>
         </div>
       ) : null}
@@ -825,15 +826,15 @@ function SectionConnections() {
       const applied = await readRemote(true);
       setPair(null);
       if (applied == null || applied.enabled !== enabled || applied.listenHost !== (enabled ? host : '127.0.0.1') || applied.port !== requestedPort || applied.running !== enabled) {
-        toast('远程命令已返回，但配置或实际监听回读未核实；请刷新事实后再操作', 'warn');
-      } else toast(enabled ? '远程访问已启用（配置与实际监听回读一致）' : '远程访问已停用（回读一致）', 'success');
-    } catch (e) { toast(`远程配置失败：${(e as Error).message}`, 'error'); void readRemote(); }
+        toast('远程访问状态尚未确认，请刷新后再操作', 'warn');
+      } else toast(enabled ? '远程访问已启用' : '远程访问已停用', 'success');
+    } catch (e) { toast(`远程配置失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); void readRemote(); }
     finally { setBusy(false); }
   };
   const createPair = async () => {
     setBusy(true); setPair(null);
     try { setPair(await command<PairCode>('remote.pairing.create', {})); }
-    catch (e) { toast(`配对码创建失败：${(e as Error).message}`, 'error'); }
+    catch (e) { toast(`配对码创建失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(false); }
   };
   const revokeDevice = async () => {
@@ -844,7 +845,7 @@ function SectionConnections() {
       setRevoke(null);
       await readRemote();
       toast('设备已吊销（该设备的凭据与连接立即失效）', 'success');
-    } catch (e) { toast(`吊销失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`吊销失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(false); }
   };
   return (
@@ -857,7 +858,7 @@ function SectionConnections() {
           <div className="small" style={{ lineHeight: 1.7 }}>
             <div>配置：{remote.enabled ? '启用' : '停用'} · {remote.listenHost}:{remote.port} · {remote.allowLan ? '局域网' : '仅本机'}</div>
             <div>实际：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
-            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'small'} style={{ color: remote.lanSelfCheck.ok ? undefined : 'var(--danger)' }}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.error ?? remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
+            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'small'} style={{ color: remote.lanSelfCheck.ok ? undefined : 'var(--danger)' }}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${userFacingSystemText(remote.lanSelfCheck.error ?? remote.lanSelfCheck.detail ?? '?')}）`}</div> : null}
             {configDirty ? <div className="small faint">下方有未应用的编辑</div> : null}
           </div>
         )}
@@ -873,8 +874,8 @@ function SectionConnections() {
       } />
       </div>
       <DetailFold summary="本机身份与证书详情">
-        <ReadOnlyRow label="本机用户" value={identityErr != null ? `读取失败：${identityErr}` : identity?.localUserId ?? '（读取中…）'} />
-        <ReadOnlyRow label="当前文件位置" value={identityErr != null ? `读取失败：${identityErr}` : identity?.appDataDir ?? '（读取中…）'} />
+        <ReadOnlyRow label="本机用户" value={identityErr != null ? `读取失败：${userFacingSystemText(identityErr ?? '')}` : identity?.localUserId ?? '（读取中…）'} />
+        <ReadOnlyRow label="当前文件位置" value={identityErr != null ? `读取失败：${userFacingSystemText(identityErr ?? '')}` : identity?.appDataDir ?? '（读取中…）'} />
         {remote?.fingerprint != null ? <ReadOnlyRow label="服务证书 SHA-256" value={remote.fingerprint} /> : null}
         {remote?.caFingerprint != null ? <ReadOnlyRow label="信任根 SHA-256" value={remote.caFingerprint} /> : null}
       </DetailFold>
@@ -892,7 +893,7 @@ function SectionConnections() {
       } />
       <SettingsRow label="已配对设备" hint="吊销后设备凭据、会话和事件流立即失效（remote.devices.list / remote.device.revoke）" wide control={
         <div className="col" style={{ gap: 6 }}>
-          {devicesErr != null ? <div className="panel warning">读取失败：{devicesErr}</div> : devices == null ? <span className="small faint">读取中…</span> : devices.length === 0 ? <span className="small faint">暂无设备</span> : devices.map((d) => (
+          {devicesErr != null ? <div className="panel warning">读取失败：{userFacingSystemText(devicesErr ?? '')}</div> : devices == null ? <span className="small faint">读取中…</span> : devices.length === 0 ? <span className="small faint">暂无设备</span> : devices.map((d) => (
             <div key={d.deviceId} className="row tight wrap small">
               <span>{d.deviceName} · <span className="mono">{d.deviceId.slice(0, 12)}…</span> · {d.revokedAt != null ? '已吊销' : `最近 ${d.lastSeenAt != null ? new Date(d.lastSeenAt).toLocaleString() : '未见'}`}</span>
               {d.revokedAt == null ? <button className="btn sm" disabled={busy} onClick={() => setRevoke(d)}>吊销</button> : null}
@@ -941,7 +942,7 @@ function SectionData() {
   };
   const clearDrafts = () => {
     const r = clearPersistedSnapshot();
-    if (!r.ok) { toast(r.error ?? '清理失败', 'error'); return; }
+    if (!r.ok) { toast(userFacingSystemText(r.error ?? '清理失败'), 'error'); return; }
     if (!r.hadKey) { setCleared('没有已保存的草稿快照（活动键不存在）'); toast('没有已保存的草稿快照', 'info'); return; }
     recordWrite('drafts.clear', `清空本地草稿快照键 ${r.key?.slice(0, 40)}…（未确认发送账本一并清除——当前页面内存态保留至关闭）`);
     setCleared(`${new Date().toLocaleTimeString()} 已清除活动命名空间键（重新写入将建立新快照）`);
@@ -952,10 +953,10 @@ function SectionData() {
     setImportBusy(key);
     try {
       const r = importLegacySnapshot(key, dir);
-      if (!r.ok) { toast(r.error ?? '导入失败', 'error'); return; }
+      if (!r.ok) { toast(userFacingSystemText(r.error ?? '导入失败'), 'error'); return; }
       const o = r.outcome;
       const refusedCount = o?.refusedVersions.length ?? 0;
-      toast(`已导入 ${dir} 的旧键：草稿 ${o?.mergedDrafts ?? 0} 条、未确认信封 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、拒收不支持版本来源 ${refusedCount} 个（原件保持）` : ''}——旧键原样保留`, 'success');
+      toast(`已导入 ${dir} 的旧键：草稿 ${o?.mergedDrafts ?? 0} 条、待确认发送 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、拒收不支持版本来源 ${refusedCount} 个（原件保持）` : ''}——旧键原样保留`, 'success');
       recordWrite('draft.inherit', `用户确认导入旧目录 ${dir}（结果见恢复说明；原件保留）`);
     } finally { setImportBusy(null); }
   };
@@ -980,13 +981,13 @@ function SectionData() {
         } />
         <SettingsRow label="最近一次数据操作" hint="完成事实会在这里重新读取；失败或中断不会自动重试" control={
           <div className="col" style={{alignItems:'flex-end',gap:5,minWidth:230}}>
-            {dataOpError != null ? <Tag tone="danger" icon="alert-triangle">无法读取：{dataOpError}</Tag> : dataOp?.latest == null ? <span className="small faint">还没有数据操作记录</span> : (
+            {dataOpError != null ? <Tag tone="danger" icon="alert-triangle">无法读取：{userFacingSystemText(dataOpError ?? '')}</Tag> : dataOp?.latest == null ? <span className="small faint">还没有数据操作记录</span> : (
               <Tag tone={dataOp.latest.state === 'succeeded' ? 'success' : dataOp.latest.state === 'failed' || dataOp.latest.state === 'unknown' ? 'warning' : 'info'} icon={dataOp.latest.state === 'succeeded' ? 'check-circle' : dataOp.latest.state === 'copying' || dataOp.latest.state === 'waiting-close' ? 'clock' : 'alert-triangle'}>
                 {dataOp.latest.state === 'succeeded' ? (dataOp.latest.action === 'import' ? '已使用新的数据副本' : '完整备份已完成') : dataOp.latest.state === 'copying' ? '正在复制' : dataOp.latest.state === 'waiting-close' ? '等待关闭' : dataOp.latest.state === 'failed' ? '未完成，原件保留' : '上次操作中断，未切换'}
               </Tag>
             )}
             {dataOp?.active?.running ? <span className="small faint">数据操作仍在进行；完成前不会打开这份数据。</span> : null}
-            {dataOp?.latest?.error != null ? <span className="small" style={{maxWidth:360,textAlign:'right',color:'var(--warning)'}}>{dataOp.latest.error}</span> : null}
+            {dataOp?.latest?.error != null ? <span className="small" style={{maxWidth:360,textAlign:'right',color:'var(--warning)'}}>{userFacingSystemText(dataOp.latest.error ?? '')}</span> : null}
             <button className="btn ghost sm" onClick={() => void reloadDataOp()}>刷新</button>
           </div>
         } />
@@ -995,8 +996,8 @@ function SectionData() {
         <div className="small" style={{ lineHeight: 1.7 }}>
           {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
           {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定（主键已保全不覆盖；发送暂不可用）</Tag> : null}
-          {draftPersist.mode === 'off' ? <Tag tone="warning" icon="alert-triangle">不可用（{draftPersist.error ?? '身份/存储未就绪'}）</Tag> : null}
-          {draftPersist.mode === 'on' && draftPersist.error != null ? <Tag tone="warning" icon="alert-triangle">写入失败（{draftPersist.error}）</Tag> : null}
+          {draftPersist.mode === 'off' ? <Tag tone="warning" icon="alert-triangle">不可用（{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}）</Tag> : null}
+          {draftPersist.mode === 'on' && draftPersist.error != null ? <Tag tone="warning" icon="alert-triangle">写入失败（{userFacingSystemText(draftPersist.error ?? '')}）</Tag> : null}
         </div>
       </SettingsRow>
       {draftPersist.recoveryNote != null ? (
@@ -1021,7 +1022,7 @@ function SectionData() {
             <div className="faint" style={{ marginTop: 4 }}>当前没有待确认的旧目录候选（自动继承通道：同目录升级/逻辑身份同根——无需人工确认）。</div>
           ) : (
             <div className="col" style={{ gap: 6, marginTop: 6 }} data-zs-legacy-candidates="1">
-              {legacy.error != null ? <div style={{ color: 'var(--warning,#b45309)' }}>上次扫描：{legacy.error}</div> : null}
+              {legacy.error != null ? <div style={{ color: 'var(--warning,#b45309)' }}>上次扫描：{userFacingSystemText(legacy.error ?? '')}</div> : null}
               {legacy.candidates.map((c) => (
                 <div key={c.key} className="row tight" style={{ padding: '4px 6px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }} data-zs-legacy-candidate={c.dir}>
                   <Icon name="folder" size={12} />
@@ -1034,7 +1035,7 @@ function SectionData() {
                       className="btn primary sm"
                       data-zs-legacy-import={c.dir}
                       disabled={importBusy === c.key}
-                      title={`导入该目录旧键的草稿与未确认发送账本（版本门同判；旧键原样保留；未确认信封导入后显示横幅——同号重试由你决定）`}
+                      title={`导入该目录的旧草稿和待确认发送记录。旧记录会保留；导入后可查看提示并决定是否重试发送。`}
                       onClick={() => void doImport(c.key, c.dir)}
                     >
                       {importBusy === c.key ? '导入中…' : '确认导入'}
@@ -1048,7 +1049,7 @@ function SectionData() {
       </SettingsRow>
       {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
           「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}
-      <SettingsRow id="归档管理" label="归档管理" hint="已归档项目与房间的查看历史 + 恢复（project.lifecycle / room.archive 正式命令；不动磁盘文件与历史）">
+      <SettingsRow id="归档管理" label="归档管理" hint="查看已归档项目和房间的历史，或恢复使用；已有文件与记录会保留">
         <div style={{ marginTop: 6 }}>
           <ArchiveManager embedded />
         </div>

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useMemo, useState } from 'react';
 import { runtimeProgressWaitLabel, type RuntimeActivityFact, type ThreadVisibleProgress } from '../../../contracts/runtimeProgress';
 import { stageLabel } from '../lib/format';
@@ -96,7 +97,7 @@ export function LiveProgressCard({
           </ol>
         </details>
       ) : null}
-      {readError ? <div className="small faint">进展刷新失败，保留上次事实 · {readAt ? new Date(readAt).toLocaleTimeString() : '时间未知'} · {readError}</div> : null}
+      {readError ? <div className="small faint">进展刷新失败，保留上次事实 · {readAt ? new Date(readAt).toLocaleTimeString() : '时间未知'} · {userFacingSystemText(readError ?? '')}</div> : null}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 成员管理（第五十四轮 H3 §4 → R66 P4 原型布局还原）：正式命令接线——`member.list`
  * （项目/房间两级：项目成员全量 vs 房间名单子集；协调者=房间 AUTO 路由依赖，不可停用）、
@@ -55,7 +56,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const projects = useStore((s) => s.projects);
   const opening=useStore(s=>s.openInFlightTarget);
   const navSequence=currentNavSeq();
-  useEffect(()=>{if(routeProjectId&&routeProjectId!==activeProjectId&&projects.some(p=>p.id===routeProjectId)&&!(opening!=null&&opening.projectId!==routeProjectId&&opening.urlSeqAtStart>=navSequence))void switchFocusProject(routeProjectId).catch((e:unknown)=>{if(getState().activeProjectId===routeProjectId)toast(`成员项目聚焦失败：${(e as Error).message}`,'error');});},[routeProjectId,activeProjectId,projects,opening,navSequence]);
+  useEffect(()=>{if(routeProjectId&&routeProjectId!==activeProjectId&&projects.some(p=>p.id===routeProjectId)&&!(opening!=null&&opening.projectId!==routeProjectId&&opening.urlSeqAtStart>=navSequence))void switchFocusProject(routeProjectId).catch((e:unknown)=>{if(getState().activeProjectId===routeProjectId)toast(`成员项目聚焦失败：${userFacingSystemText((e as Error).message ?? '')}`,'error');});},[routeProjectId,activeProjectId,projects,opening,navSequence]);
   // selector 必须返回稳定引用（useSyncExternalStore 契约——filter 新数组会造成快照死循环，
   // R46 实证）：先取整份 rooms，再按项目 memo 过滤。
   const allRooms = useStore((s) => s.rooms);
@@ -131,13 +132,13 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
     setBusyId(m.id);
     try {
       const outcome=await memberWrite(`member.setEnabled:${projectId}:${m.id}`,'member.setEnabled',{projectId,memberId:m.id,expectedRevision:m.revision,enabled:!m.enabled});
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；请在未知成员操作区同号重放`:`${outcome.code}：${outcome.error}`);
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       if(getState().activeProjectId!==projectId)return;
       recordWrite('member.setEnabled', `${m.displayName} → ${!m.enabled ? '启用' : '停用'}（作用=之后的派发；在途不受影响）`);
       toast(`已${!m.enabled ? '启用' : '停用'} ${m.displayName}（作用范围：之后的新派发）`, 'success');
       await reload();
     } catch (e) {
-      toast(`操作失败：${(e as Error).message}`, 'error'); // 协调者拒绝等真实原因上屏
+      toast(`操作失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); // 协调者拒绝等真实原因上屏
     } finally {
       setBusyId(null);
     }
@@ -247,8 +248,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         {projectId == null || projectId === '' ? (
           <div className="panel info">尚未打开项目——从侧栏项目菜单或顶栏「项目管理」进入（成员按项目分列）。</div>
         ) : null}
-        {err != null ? <div className="panel warning">成员装载失败：{err}（可刷新重试）</div> : null}
-        {workload.error ? <div className="panel warning">成员工作量读取失败：{workload.error}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的事实。` : '尚未取得工作量快照。'}</div> : null}
+        {err != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
+        {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的事实。` : '尚未取得工作量快照。'}</div> : null}
         {workload.updatedAt ? <div className="faint small">工作量更新于 {fullTime(workload.updatedAt)}；负责的任务与实际在途执行分开统计。</div> : null}
         {workload.data?.truncated ? <div className="faint small">工作量仅覆盖前 500 名成员；未读取的成员不推断为空。</div> : null}
         {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
@@ -308,10 +309,10 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                         配置：{runtimes[m.id]!.imageInput!.configuration} · 模型：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
                         渠道：{runtimes[m.id]!.imageInput!.channel}<br />
                         协议：{runtimes[m.id]!.imageInput!.protocol}<br />
-                        依据：{runtimes[m.id]!.imageInput!.reason}
+                        依据：{userFacingSystemText(runtimes[m.id]!.imageInput!.reason ?? '')}
                       </div> : null}
                       {runtimes[m.id]?.writeCapability != null ? <div data-zs-write-capability={m.id}>
-                        项目编辑档：{runtimes[m.id]!.writeCapability!.status === 'supported' ? '已有匹配证据' : '暂无匹配证据'} · {runtimes[m.id]!.writeCapability!.reason}
+                        项目编辑档：{runtimes[m.id]!.writeCapability!.status === 'supported' ? '已有匹配证据' : '暂无匹配证据'} · {userFacingSystemText(runtimes[m.id]!.writeCapability!.reason ?? '')}
                       </div> : null}
                     </div>
                   </details>
@@ -416,7 +417,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
         ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
         ...(form.effort?{effort:form.effort}:{}),
       });
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       if(!formGuard.valid())return;
       const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
       recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}——配置成功≠能力已认证`);
@@ -425,7 +426,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
     } catch (e) {
       if (!formGuard.valid())return;
       if (mounted.current) setSaveError((e as Error).message);
-      toast(`绑定失败：${(e as Error).message}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
+      toast(`绑定失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
     } finally { savePending.current = false; if (mounted.current) setBusy(false); }
   };
   return (
@@ -436,7 +437,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">{guard?.realDispatchGuard === true ? '当前为验收防护环境：真实渠道绑定会被拒绝' : '保存后回读显示能力状态'}</span>
+          <span className="small faint">{guard?.realDispatchGuard === true ? '当前为验收防护环境：真实渠道绑定会被拒绝' : '保存后显示 AI 的可用状态'}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn primary sm" disabled={busy||formGuard.invalid} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存 AI 设置'}</button>
@@ -445,7 +446,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
     >
       <div className="col" style={{ gap: 10 }}>
         {formGuard.invalid?<div className="panel warning">目标已切换，本表单作废；请关闭后重新配置。</div>:null}
-        {saveError != null ? <div className="panel warning">绑定失败：{saveError}。输入已保留，可调整后重试。</div> : null}
+        {saveError != null ? <div className="panel warning">绑定失败：{userFacingSystemText(saveError ?? '')}。输入已保留，可调整后重试。</div> : null}
         <label className="field" title="选择本机已有的 AI 渠道">
           <span className="field-label">渠道</span>
           <Select
@@ -502,13 +503,13 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
     inFlight.current=true;setBusy(true); setErr(null);
     try {
       const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}), runtime:{kind:runtime.kind,model:runtime.model.trim()||null,executable:runtime.executable.trim()||runtime.kind,permissionMode:runtime.permissionMode,effort:runtime.effort||null},useAsDefault });
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       const r=outcome.data;
       if(!formGuard.valid())return;
       recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间；不自动协调者）`);
       await onCreated(r.memberId);
     } catch (e) {
-      if(formGuard.valid())setErr(`添加未确认：${(e as Error).message}`); // 归档/移除守卫等真实原因上屏
+      if(formGuard.valid())setErr(`添加未确认：${userFacingSystemText((e as Error).message ?? '')}`); // 归档/移除守卫等真实原因上屏
     } finally { inFlight.current=false;if(formGuard.alive.current)setBusy(false); }
   };
   return (
@@ -549,7 +550,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
           <label className="field"><span className="field-label">执行权限</span><Select ariaLabel="新成员执行权限" value={runtime.permissionMode} disabled={busy} onChange={permissionMode=>setRuntime(f=>({...f,permissionMode}))} options={runtimePermissionOptions(runtime.permissionMode,runtime.kind)}/></label>
           <div className="field-hint">默认沿用 CLI 完整权限，可修改文件与执行命令；可改为只读。保存本身不调用模型。</div>
         </details>
-        {err != null ? <div className="panel warning">{err}</div> : null}
+        {err != null ? <div className="panel warning">{userFacingSystemText(err ?? '')}</div> : null}
       </div>
     </Modal>
   );

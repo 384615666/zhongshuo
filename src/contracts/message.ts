@@ -82,7 +82,7 @@ export const messageSchema = z.strictObject({
   status: z.enum(['saved', 'streaming', 'final', 'invalid']),
   createdAt: z.number().int().nonnegative(),
 }).refine((m) => m.viaConnectionId == null || m.authorType === 'human', {
-  message: 'via_connection_id 仅在 author_type=human 时标记直接代发（§31.8）',
+  message: '消息来源与作者类型不匹配',
 }).refine((m) => {
   // anchor：thread_id 为 NULL ⇔ thread_message_seq 为 NULL；线程回复两者皆非空。
   const isAnchor = m.threadId == null;

@@ -2,10 +2,10 @@
  * E4 调度解耦（detached turn 消费）集成验证（零额度、假时钟，用户令 2026-09-28 第六节）：
  * - 阶段泵与单个 turn 事件消费解耦：队首成员在途（stall）不阻塞 drain——后续成员照常派发
  *   （inline 语义下此处会被阻塞）；泵经**真实 runOnce 路径**（非测试直调 pumpDeliberation）
- *   在成员在途期间按 absenceGrace 推进屏障：标 absent、入队互评、不强杀成员；
+ *   在成员在途超过 absenceGrace 时仍等待，实际完成后才入队互评；
  * - 同成员在途互斥：该成员新步骤/任务放回 pending（skipIds 跳过、不阻塞其他成员），
  *   在途终态后解除并正常派发；
- * - 迟到规则：缺席成员迟到完成走 late（真实事件路径）；
+ * - 正常完成：慢成员完成仍正常计入，不误标 late；
  * - stop 收敛：awaitInFlightTurns 全部收敛后返回空剩余（不确定时如实返回剩余，不假装）。
  * 审批暂停/单轮截止/排队截止/用户停止语义在消费器与泵内部，未改（deliberationE4 既有用例覆盖）。
  */
@@ -36,7 +36,7 @@ async function waitUntil(cond: () => boolean, timeoutMs = 5_000, label = ''): Pr
 }
 
 describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟到（真实 runOnce 路径）', () => {
-  it('队首 m1 在途不阻塞 m2/m3 派发；泵按宽限标缺席并推进互评（不强杀）；m1 迟到完成=late', async () => {
+  it('队首 m1 在途不阻塞 m2/m3 派发；泵跨宽限仍等待；m1 完成正常计入', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2', 'm3']);
     const taskId = createDelibTask(db, 1, ['m1', 'm2', 'm3']);
@@ -76,31 +76,20 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
       return ['m2', 'm3'].every((m) => rows.find((r) => r.member_id === m)?.status === 'SUCCEEDED');
     }, 8_000, 'm2/m3 IND 完成');
 
-    // 泵经 runOnce（真实调度路径）：m1 在途（仍 RUNNING、stall 未结束）时按宽限标缺席并推进互评。
+    // 泵经 runOnce（真实调度路径）：m1 在途（仍 RUNNING、stall 未结束）时跨宽限仍等待。
     const started = db.prepare("SELECT exec_started_at FROM agent_turns WHERE stage_key = 'delib.independent' AND member_id = 'm1'").get() as { exec_started_at: number };
     expect(started.exec_started_at).not.toBeNull();
     fakeNow = started.exec_started_at + 250; // 宽限 200 + ε（假时钟；单轮截止 8s 未到）
     const runId = runIdOf(db);
-    // CR 载荷引用冻结清单内真实 artifact（m2 评 m3 稿、m3 评 m2 稿）。
-    // CR 阶段完成以**成果**计（首次载荷校验失败→一次格式修复成功=机制按设计自愈，
-    // 修复 turn 的 stage_key 带 .fx 后缀，不计入原键 turn 状态）。
-    await waitUntil(() => {
-      void worker.runOnce(fakeNow); // tick：泵→（屏障开）CR 入队→领取→后台消费
-      return listRunArtifacts(db, runId, 'cross_review').length >= 2;
-    }, 8_000, 'CR m2/m3 成果齐');
-
-    // 不强杀：m1 turn 仍 RUNNING（缺席推进≠杀成员）；屏障以 m2/m3 推进、冻结清单不含 m1。
-    expect(db.prepare("SELECT status FROM agent_turns WHERE member_id = 'm1' AND stage_key = 'delib.independent'").get()).toMatchObject({ status: 'RUNNING' });
-    expect(db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?', ).get(runId, 'm1')).toMatchObject({ status: 'absent' });
-    const manifest = frozenStageInputs(db, runId, 'CROSS_REVIEW', 0);
-    expect(manifest).not.toBeNull();
-    expect(manifest!.entries).toHaveLength(2);
-    expect(manifest!.entries.every((e) => !e.artifactId.includes('m1'))).toBe(true);
-
-    // m1 迟到完成（真实事件路径，stall 结束）：absent → late（纳入后续 SYNTHESIS 清单，不复活 IND）。
+    await worker.runOnce(fakeNow);
+    expect(db.prepare("SELECT status FROM agent_turns WHERE member_id='m1' AND stage_key='delib.independent'").get()).toMatchObject({status:'RUNNING'});
+    expect(db.prepare('SELECT status FROM run_participants WHERE run_id=? AND member_id=?').get(runId,'m1')).toMatchObject({status:'pending'});
+    expect(frozenStageInputs(db,runId,'CROSS_REVIEW',0)).toBeNull();
     const inFlight1 = await worker.awaitInFlightTurns(6_000);
     expect(inFlight1.remaining).toEqual([]);
-    await waitUntil(() => (db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?', ).get(runId, 'm1') as { status: string }).status === 'late', 3_000, 'm1 late');
+    expect(db.prepare('SELECT status FROM run_participants WHERE run_id=? AND member_id=?').get(runId,'m1')).toMatchObject({status:'completed'});
+    expect(frozenStageInputs(db,runId,'CROSS_REVIEW',0)!.entries).toHaveLength(3);
+    expect(listRunArtifacts(db,runId,'analysis_draft')).toHaveLength(3);
     expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId)).not.toMatchObject({ status: 'CANCELLED' }); // 未整run取消
     const settled = await worker.awaitInFlightTurns(1_000);
     expect(settled.remaining).toEqual([]); // stop 收敛：全部消费器已收口

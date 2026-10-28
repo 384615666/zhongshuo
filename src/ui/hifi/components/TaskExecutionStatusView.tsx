@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {useRef,useState} from 'react';
 import type {TaskExecutionAction,TaskExecutionStatus} from '../../../contracts/executionStatus.ts';
 import {ExecutionStatus} from './ExecutionStatus';
@@ -39,6 +40,6 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
   };
   return <div>
     <ExecutionStatus status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} onAction={action=>void handle(action)}/>
-    {error?<div className="small warning" role="alert">{error}</div>:null}
+    {error?<div className="small warning" role="alert">{userFacingSystemText(error ?? '')}</div>:null}
   </div>;
 }

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 恢复检查（r56 H4 §4——正式事实接线）：消费 `recovery.status` 只读聚合，四类动作**分列**：
  *  - 确认继续派发=dispatch.resume{confirm:true}（恢复门禁的用户显式确认——不接受空参数；
@@ -99,15 +100,15 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
     setBusy('gate');
     try {
       await command('dispatch.resume', { confirm: true });
-      recordWrite('dispatch.resume', '恢复门禁：用户显式确认继续派发（排队意图按合同继续）');
+      recordWrite('dispatch.resume', '已确认继续处理排队消息');
       toast('已允许排队消息继续；尚未确认结束的回复仍需检查。', 'success');
       await reload();
-    } catch (e) { toast(`确认继续失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`确认继续失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
   };
   const submitReconcile = async () => {
     if (recon == null) return;
-    if (recon.note.trim().length === 0) { toast('对账必须填写人工依据（note）——人工判断留痕，不冒充程序事实', 'warn'); return; }
+    if (recon.note.trim().length === 0) { toast('请填写判断依据，说明你如何确认这次执行的结果', 'warn'); return; }
     if (recon.verdict === 'notStarted' && !recon.manualRiskAck) { toast('notStarted（人工分离）需勾选风险确认：租约与准入会保留，不凭人工解除物理写入保护', 'warn'); return; }
     setBusy(`recon:${recon.turnId}`);
     try {
@@ -116,23 +117,23 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
       toast('核对结果已保存；只有确认上次处理已结束，等待中的请求才能继续。', 'success');
       setRecon(null);
       await reload();
-    } catch (e) { toast(`对账失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`对账失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
   };
   const submitRelease = async () => {
     if (relNote == null) return;
-    if (relNote.note.trim().length === 0) { toast('解除保护必须填写说明（note）', 'warn'); return; }
+    if (relNote.note.trim().length === 0) { toast('请填写解除保护的依据', 'warn'); return; }
     setBusy(`rel:${relNote.turnId}`);
     try {
       const r = await command<{ stateChanged: boolean; note?: string; releasedLeases: string[] }>('recovery.releaseProtection', { turnId: relNote.turnId, note: relNote.note.trim() });
-      recordWrite('recovery.releaseProtection', `解除保护 ${relNote.turnId.slice(0, 12)}…（${r.stateChanged ? `释放 ${r.releasedLeases.length} 租约` : '幂等 no-op'}）`);
-      toast(r.stateChanged ? `保护已解除（释放 ${r.releasedLeases.length} 项租约——按服务端取证）` : `未变化：${r.note ?? '无未释放租约且无保留保护'}`, r.stateChanged ? 'success' : 'info');
+      recordWrite('recovery.releaseProtection', `解除保护 ${relNote.turnId.slice(0, 12)}…（${r.stateChanged ? `释放 ${r.releasedLeases.length} 租约` : '已处理，无需重复操作'}）`);
+      toast(r.stateChanged ? `保护已解除（释放 ${r.releasedLeases.length} 项文件保护）` : `未变化：${r.note ?? '无未释放租约且无保留保护'}`, r.stateChanged ? 'success' : 'info');
       setRelNote(null);
       await reload();
-    } catch (e) { toast(`解除保护被拒：${(e as Error).message}（保护保留——alive/unknown/身份缺失不解除）`, 'error'); }
+    } catch (e) { toast(`解除保护被拒：${userFacingSystemText((e as Error).message ?? '')}（仍需确认执行已结束，文件保护已保留）`, 'error'); }
     finally { setBusy(null); }
   };
-  const locate = (link: string) => { void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error')); };
+  const locate = (link: string) => { void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); };
 
   const realAttention = data != null && (data.gateHeld || data.unknownTurns.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 || data.interruptedRuns.length > 0);
   /** 仅普通排队（无任何恢复类事项）——不是故障（R66 P5 三态分类之一）。 */
@@ -155,7 +156,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           <button className="btn ghost sm" onClick={onClose}>关闭</button>
         </div>
         <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
-          {err != null ? <div className="panel warning">恢复状态读取失败：{err}（可刷新重试）</div> : null}
+          {err != null ? <div className="panel warning">恢复状态读取失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
           {data == null && err == null ? <div className="panel info">正在检查上次回复状态…</div> : null}
           {data != null && !attention ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}
           {data != null && realAttention ? (
@@ -206,8 +207,8 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
             <div className="panel info" style={{ borderColor: 'var(--warning)' }}>
               <div className="row tight">
                 <Icon name="octagon" size={13} />
-                <strong>派发门禁已落下</strong>
-                <span className="faint small">上次退出存在不确定状态——新派发已暂停；排队意图 {data.pendingDispatchCount} 条保持 pending，等你确认后按合同继续。</span>
+                <strong>排队消息已暂停</strong>
+                <span className="faint small">上次退出时有执行尚未确认结束。新请求已暂停；当前 {data.pendingDispatchCount} 条消息仍在排队，确认后继续处理。</span>
               </div>
               {data.pendingDispatchKeys.length > 0 ? (
                 <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
@@ -215,22 +216,22 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                 </div>
               ) : null}
               <div className="row tight" style={{ marginTop: 8 }}>
-                <button className="btn sm" disabled={busy != null} title="dispatch.resume{confirm:true}——用户显式确认；不接受空参数直开" onClick={() => void resumeGate()}>
+                <button className="btn sm" disabled={busy != null} title="确认后继续处理排队消息" onClick={() => void resumeGate()}>
                   {busy === 'gate' ? '确认中…' : '确认继续派发'}
                 </button>
-                <span className="faint small">确认≠对账：UNKNOWN turn 仍需逐项对账；中断任务的恢复执行在任务自身上下文（详情/DM 头部）。</span>
+                <span className="faint small">允许继续后，结果不明的执行仍需逐项核对。要继续中断的任务，请打开任务详情或对应私信。</span>
               </div>
             </div>
           ) : null}
           {data != null && data.unknownTurns.length > 0 ? (
             <div className="panel info">
-              <div className="row tight"><strong>UNKNOWN turn（{data.unknownTurns.length}）——结局不确定，需逐项对账</strong></div>
+              <div className="row tight"><strong>待核对的执行（{data.unknownTurns.length}）——结果还未确认，请逐项核对</strong></div>
               {data.unknownTurns.map((t) => (
                 <div key={t.id} style={{ marginTop: 8, padding: 8, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
                   <div className="row tight wrap">
                     <Tag tone="warning" icon="alert-triangle">{t.status}</Tag>
                     <span className="mono small">{t.id.slice(0, 16)}…</span>
-                    <span className="faint small">stage {t.stageKey}</span>
+                    <span className="faint small">阶段 {userFacingSystemText(t.stageKey ?? '')}</span>
                     <span style={{ flex: 1 }} />
                     <button className="btn ghost sm" title="定位回原任务上下文（定位≠执行）" onClick={() => locate(`#task=${t.taskId}`)}>定位任务</button>
                     <button className="btn ghost sm" disabled={busy != null} onClick={() => setRecon(recon?.turnId === t.id ? null : { turnId: t.id, verdict: 'executed', note: '', manualRiskAck: false })}>对账…</button>
@@ -243,16 +244,16 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                           ariaLabel="对账判定"
                           onChange={(v) => setRecon({ ...recon, verdict: v as typeof recon.verdict })}
                           options={[
-                            { value: 'executed', label: 'executed（已执行——服务端自动做退出取证）' },
-                            { value: 'notStarted', label: 'notStarted（未启动——人工分离，预算退款但租约保留）' },
-                            { value: 'keepUnknown', label: 'keepUnknown（维持不确定）' },
+                            { value: 'executed', label: '已执行（将检查是否结束）' },
+                            { value: 'notStarted', label: '未启动（退回调用预算，保留文件保护）' },
+                            { value: 'keepUnknown', label: '暂时无法确认' },
                           ]}
                         />
                         {recon.verdict === 'notStarted' ? (
-                          <label className="row tight small"><input type="checkbox" checked={recon.manualRiskAck} onChange={(e) => setRecon({ ...recon, manualRiskAck: e.target.checked })} />风险确认：存在未收口进程可能时不凭人工解除写入保护</label>
+                          <label className="row tight small"><input type="checkbox" checked={recon.manualRiskAck} onChange={(e) => setRecon({ ...recon, manualRiskAck: e.target.checked })} />我已了解：仍有执行未确认结束时，文件保护会继续保留</label>
                         ) : null}
                       </div>
-                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="人工依据（必填——留痕，不冒充程序事实）" value={recon.note} onChange={(e) => setRecon({ ...recon, note: e.target.value })} />
+                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="判断依据（必填）" value={recon.note} onChange={(e) => setRecon({ ...recon, note: e.target.value })} />
                       <div className="row tight">
                         <button className="btn sm" disabled={busy != null} onClick={() => void submitReconcile()}>{busy === `recon:${t.id}` ? '提交中…' : '提交对账'}</button>
                         <button className="btn ghost sm" onClick={() => setRecon(null)}>取消</button>
@@ -277,7 +278,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                   </div>
                   {relNote?.turnId === p.turnId ? (
                     <div className="page-stack" style={{ marginTop: 8 }}>
-                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="解除说明（必填——只按服务端取证解除；alive/unknown/身份缺失会拒绝并保留保护）" value={relNote.note} onChange={(e) => setRelNote({ ...relNote, note: e.target.value })} />
+                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="请填写解除依据。只有确认执行已结束，且能识别对应进程时，才能解除保护。" value={relNote.note} onChange={(e) => setRelNote({ ...relNote, note: e.target.value })} />
                       <div className="row tight">
                         <button className="btn sm" disabled={busy != null} onClick={() => void submitRelease()}>{busy === `rel:${p.turnId}` ? '提交中…' : '提交解除'}</button>
                         <button className="btn ghost sm" onClick={() => setRelNote(null)}>取消</button>
@@ -290,7 +291,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           ) : null}
           {data != null && data.interruptedRuns.length > 0 ? (
             <div className="panel info">
-              <div className="row tight"><strong>中断的执行（{data.interruptedRuns.length}）</strong><span className="faint small">恢复执行=task.redispatch（在任务详情/DM 头部按来源 run 发起）；这里只定位</span></div>
+              <div className="row tight"><strong>中断的执行（{data.interruptedRuns.length}）</strong><span className="faint small">点击定位打开原任务；可在任务详情或私信中继续执行</span></div>
               {data.interruptedRuns.map((r) => (
                 <div key={r.id} className="row tight" style={{ marginTop: 6 }}>
                   <span className="mono small">{r.id.slice(0, 14)}…</span>
@@ -303,11 +304,11 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           ) : null}
           {data != null && (data.activeUndos.length > 0 || data.heldLeases.length > 0 || data.stopRecord != null) ? (
             <div className="panel info">
-              <div className="row tight"><strong>其它事实（只读）</strong></div>
+              <div className="row tight"><strong>其它恢复记录</strong></div>
               <div className="small" style={{ marginTop: 4, lineHeight: 1.8 }}>
-                {data.stopRecord != null ? <div>上次退出：{fmtAt(data.stopRecord.at)} · 阶段 {data.stopRecord.phase ?? '?'}{data.stopRecord.reason != null ? ` · ${data.stopRecord.reason}` : ''}{data.stopRecord.drainPending === true ? ' · 停止时仍有未收口项' : ''}</div> : null}
-                {data.activeUndos.length > 0 ? <div>未收口撤销 {data.activeUndos.length} 项——续跑走原界面 changeset.undo（三向判定，不清空占位后放行）</div> : null}
-                {data.heldLeases.length > 0 ? <div>未释放租约 {data.heldLeases.length} 项（expired 仍阻塞新写者——RT-07）</div> : null}
+                {data.stopRecord != null ? <div>上次退出：{fmtAt(data.stopRecord.at)} · 阶段 {data.stopRecord.phase ?? '?'}{data.stopRecord.reason != null ? ` · ${userFacingSystemText(data.stopRecord.reason ?? '')}` : ''}{data.stopRecord.drainPending === true ? ' · 停止时仍有执行未确认结束' : ''}</div> : null}
+                {data.activeUndos.length > 0 ? <div>未完成的撤销 {data.activeUndos.length} 项——请到原界面继续撤销；检查文件版本后才能继续修改</div> : null}
+                {data.heldLeases.length > 0 ? <div>未释放租约 {data.heldLeases.length} 项（过期的保护仍需确认后才能解除）</div> : null}
               </div>
             </div>
           ) : null}

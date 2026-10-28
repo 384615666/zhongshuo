@@ -33,7 +33,7 @@ export const conversationSchema = z.strictObject({
   revision: z.number().int().nonnegative(),
   lastMessageSeq: z.number().int().nonnegative(),
 }).refine((c) => (c.kind === 'room') !== (c.roomId == null), {
-  message: 'room 会话必须携带 roomId；dm 会话 roomId 必须为空（开工契约 §2.2）',
+  message: '对话的类型与所属房间信息不匹配',
 });
 
 /** DM 参与者：一对一恰两个不同主体；创建后不可追加第三人或替换对端。 */

@@ -282,7 +282,7 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
     const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
     const cLocal = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '本地提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
-    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: cLocal.commit, expectedRemoteHead: remoteNow, expectedRemoteUrl: git(f.root, 'remote', 'get-url', 'origin').trim() })).rejects.toThrow(/不是快进/);
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: cLocal.commit, expectedRemoteHead: remoteNow, expectedRemoteUrl: git(f.root, 'remote', 'get-url', 'origin').trim() })).rejects.toThrow(/远端包含本地没有的提交/);
     // pull 分叉（ff-only）→ 拒绝（不自动合并提交）。
     await expect(f.cmd('git.pull', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: cLocal.commit })).rejects.toThrow(/不是快进|分叉/);
     // 本地回到远端（撤销本地提交）→ pull 快进成功。

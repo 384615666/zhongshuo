@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * Git 的两个对话框：新建分支 / 冲突三方内容。
  *
@@ -33,7 +34,7 @@ export function NewBranchModal({
   // Git targets the explicit route project; an unrelated navigation focus is not its authority.
   const flight = useRef(false), guard = useFormGuard(), pending = usePendingGitOperation(projectId);
   const projectName = useStore(s => s.projects.find(p => p.id === projectId)?.displayName ?? projectId);
-  const reread = async () => { if (flight.current || !guard.valid()) return; flight.current = true; setBusy(true); await refreshGitState(projectId); if (guard.valid()) { const g = getGit(projectId), error = g?.readErrors?.status ?? g?.readErrors?.history; if (error) setError(`HEAD 回读失败：${error}`); else { setHead(g?.commits[0]?.hash ?? null); setError(null); } } flight.current = false; if (guard.alive.current) setBusy(false); };
+  const reread = async () => { if (flight.current || !guard.valid()) return; flight.current = true; setBusy(true); await refreshGitState(projectId); if (guard.valid()) { const g = getGit(projectId), error = g?.readErrors?.status ?? g?.readErrors?.history; if (error) setError(`当前提交读取失败：${userFacingSystemText(error ?? '')}`); else { setHead(g?.commits[0]?.hash ?? null); setError(null); } } flight.current = false; if (guard.alive.current) setBusy(false); };
   const submit = async () => {
     if (flight.current || !name.trim() || !guard.valid() || pending.item || pending.error) return;
     flight.current = true; setBusy(true); setError(null);
@@ -62,9 +63,9 @@ export function NewBranchModal({
       }
     >
       <p className="small">目标项目：{projectName}</p>
-      {error ? <div className="panel warning" role="alert">分支未确认完成：{error}。输入保留。</div> : null}
+      {error ? <div className="panel warning" role="alert">分支未确认完成：{userFacingSystemText(error ?? '')}。输入保留。</div> : null}
       {guard.invalid ? <div className="panel warning">项目或页面已切换，此表单已作废；不会改写新项目。</div> : null}
-      {pending.item && !busy ? <div className="panel warning">该项目有原 Git 操作待确认；请在页内查看事实或人工同号重放，不能用新身份重复创建。</div> : null}
+      {pending.item && !busy ? <div className="panel warning">该项目有 Git 操作结果待确认，请先查看原操作，或使用原记录重试。</div> : null}
       <label className="field">
         <span className="field-label">分支名</span>
         <input
@@ -134,9 +135,9 @@ export function ConflictModal({
     >
       <p className="small">目标项目：{projectName}</p>
       {guard.invalid ? <div className="panel warning">项目或页面已切换，此表单已作废；提案不会写入新目标。</div> : null}
-      {readError ? <div className="panel warning" role="alert">三方内容读取失败：{readError}。未当作空内容，可重读；编辑提案保留。</div> : null}
-      {saveError ? <div className="panel warning" role="alert">冲突未确认完成：{saveError}。提案保留；重新读取会保留你的编辑，再由你明确提交。</div> : null}
-      {pending.item && !busy ? <div className="panel warning">原操作待确认，暂不能以新身份提交；页内可查看原操作并人工同号重放。</div> : null}
+      {readError ? <div className="panel warning" role="alert">三方内容读取失败：{userFacingSystemText(readError ?? '')}。未当作空内容，可重读；编辑提案保留。</div> : null}
+      {saveError ? <div className="panel warning" role="alert">冲突未确认完成：{userFacingSystemText(saveError ?? '')}。提案保留；重新读取会保留你的编辑，再由你明确提交。</div> : null}
+      {pending.item && !busy ? <div className="panel warning">原操作结果待确认，请先查看原操作，或使用原记录重试。</div> : null}
       <button className="btn sm" disabled={reading || busy || guard.invalid} onClick={() => setReload(n => n + 1)}>{reading ? '正在读取三方…' : '重新读取三方内容'}</button>
       {tri ? <details className="small"><summary>已读取的冲突身份</summary><span className="mono">{tri.snapshotHash}</span></details> : null}
       <div className="panel warning" style={{ marginBottom: 12 }}>
@@ -197,8 +198,8 @@ export function UndoCommitModal({ projectId, approved, onClose }: { projectId: s
   return <Modal title="撤销当前 HEAD 提交" size="sm" onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn danger" disabled={busy || guard.invalid || !!pending.item || !!pending.error} onClick={() => void submit()}>{busy ? '正在确认…' : '确认软回退'}</button></>}>
     <p className="small">目标项目：{projectName}</p><p>{approved.subject}</p><p className="mono small">{approved.expectedBranch} · {approved.commitOid}</p>
     <p>仅撤销这份已确认的当前提交。内容保留在暂存区和工作区；不删除文件、不撤销任务验收。HEAD 或分支变化会被拒绝。</p>
-    {error ? <div className="panel warning" role="alert">未确认完成：{error}</div> : null}
+    {error ? <div className="panel warning" role="alert">未确认完成：{userFacingSystemText(error ?? '')}</div> : null}
     {guard.invalid ? <div className="panel warning">页面或项目已切换，本次批准作废。</div> : null}
-    {pending.item && !busy ? <div className="panel warning">原操作待确认；请使用页内的人工同号重放。</div> : null}
+    {pending.item && !busy ? <div className="panel warning">原操作结果待确认，请使用页内的重试操作。</div> : null}
   </Modal>;
 }

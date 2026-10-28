@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 搜索与收藏（r55 H3 真实接线——沿批准原型 /library 的「搜索/收藏」合页与筛选行布局）：
  *  - 搜索：search.query 正式命令（消息/线程锚文本/任务标题——附件只随所在消息检索；范围
@@ -158,7 +159,7 @@ export function LibraryPage() {
   // 范围/类型/筛选变化即回到第 1 页重新检索（依赖 runSearch 的变化触发）。
   const locate = (link: string | null) => {
     if (link == null) return;
-    void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
+    void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
   };
   const removeSaved = async (it: SavedItem) => {
     setBusyRef(`${it.kind}:${it.ref}`);
@@ -169,7 +170,7 @@ export function LibraryPage() {
       await loadSaved();
       // r61 G6：消息行书签按钮与收藏页同步——取消后线程/私信里的已收藏标记同批消失。
       if (it.kind === 'message') void refreshSavedMessageRefs();
-    } catch (e) { toast(`取消收藏失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`取消收藏失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { if (mountedRef.current) setBusyRef(null); }
   };
 
@@ -222,7 +223,7 @@ export function LibraryPage() {
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); searchNow(1); } }}
                 />
               </div>
-              <label className="field inline" title="按作者显示名过滤（跨项目同名都收——文本匹配如实）">
+              <label className="field inline" title="按作者名称筛选">
                 <span className="field-label">作者</span>
                 <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
               </label>
@@ -248,9 +249,9 @@ export function LibraryPage() {
 
       {tab === 'search' ? (
         <>
-          {visibleSearchErr != null ? <div className="panel warning">搜索失败：{visibleSearchErr}——同条件旧结果保持；其它条件的结果未冒充当前检索（可重试）</div> : null}
+          {visibleSearchErr != null ? <div className="panel warning">搜索失败：{userFacingSystemText(visibleSearchErr ?? '')}——同条件旧结果保持；其它条件的结果未冒充当前检索（可重试）</div> : null}
           {visibleResult == null && visibleSearchErr == null && q.trim().length === 0 && !searching ? (
-            <EmptyState icon="search" title="输入关键词开始搜索" detail="结果会标出来源项目与房间，点击回原处并聚焦该项目；附件按所在消息的文件名检索（正文提取未实施——如实）。" />
+            <EmptyState icon="search" title="输入关键词开始搜索" detail="点击结果回到原消息。附件可按文件名搜索。" />
           ) : null}
           {visibleResult == null && visibleSearchErr == null && (q.trim().length > 0 || searching) ? (
             <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
@@ -303,7 +304,7 @@ export function LibraryPage() {
           return (
             <>
               {scope === 'project' && projectId === '' ? <div className="panel info">尚未打开项目；请选择项目或切到其它范围。收藏事实仍保留。</div> : null}
-              {savedErr != null ? <div className="panel warning">收藏读取失败：{savedErr}——列表保持上次事实（可刷新重试）</div> : null}
+              {savedErr != null ? <div className="panel warning">收藏读取失败：{userFacingSystemText(savedErr ?? '')}——列表保持上次事实（可刷新重试）</div> : null}
               {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
               {saved != null && saved.length === 0 ? (
                 <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容；收藏本身不把内容共享给其他成员）。" />
@@ -338,7 +339,7 @@ export function LibraryPage() {
                   </div>
                 ))}
               </div>
-              {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>missing=收藏目标已被删除；forbidden=会话归属/可见性变化——均如实呈现，不伪装可点。</div> : null}
+              {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>部分收藏内容已删除或无法访问。</div> : null}
             </>
           );
         })()

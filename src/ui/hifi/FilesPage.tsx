@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 文件与 Git（第五十四轮 §4 收口版）：同页两标签。
  *  - 文件标签：files.view 只读四类分列（项目文件/托管附件→共享预览/Agent 草稿/交付成果→
@@ -101,7 +102,7 @@ export function FilesPage() {
 
   const locate = (link: string | null) => {
     if (link == null) return;
-    void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
+    void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
   };
   const openProjectFile = async (name: string) => {
     if (projectId == null || projectId === '') return;
@@ -111,7 +112,7 @@ export function FilesPage() {
       setSnapshot({ name, bytes: r.bytes, truncated: r.truncated, content: r.content });
     } catch (e) {
       setSnapshot(null);
-      setSnapshotErr(`${name}：${(e as Error).message}`); // 越界/二进制/超限/非 UTF-8 如实
+      setSnapshotErr(`${name}：${userFacingSystemText((e as Error).message ?? '')}`); // 越界/二进制/超限/非 UTF-8 如实
     } finally { setBusy(false); }
   };
   const loadHistory = useCallback(async () => {
@@ -144,7 +145,7 @@ export function FilesPage() {
       const r = await command<GitDiff>('git.diff', { projectId, staged });
       if (gen !== genRef.current) return;
       setDiff(r);
-    } catch (e) { toast(`diff 失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`diff 失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { if (gen === genRef.current) setBusy(false); }
   };
 
@@ -174,7 +175,7 @@ export function FilesPage() {
 
       {tab === 'files' ? (
         <>
-          {filesErr != null ? <div className="panel warning">Files 装载失败：{filesErr}</div> : null}
+          {filesErr != null ? <div className="panel warning">Files 装载失败：{userFacingSystemText(filesErr ?? '')}</div> : null}
           {group == null && filesErr == null ? <div className="panel info">正在装载…</div> : null}
           {group != null ? (
             <>
@@ -193,7 +194,7 @@ export function FilesPage() {
                   })}
                   {group.projectFiles.length === 0 ? <span className="faint small">（空目录）</span> : null}
                 </div>
-                {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>快照不可用：{snapshotErr}（只读预览拒绝——二进制/越界/超限不转码不执行）</div> : null}
+                {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>快照不可用：{userFacingSystemText(snapshotErr ?? '')}（只读预览拒绝——二进制/越界/超限不转码不执行）</div> : null}
                 {snapshot != null ? (
                   <div style={{ marginTop: 8 }}>
                     <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes}B{snapshot.truncated ? ' · 超预览预算已截断（完整内容看原文件）' : ''} · 只读快照</span></div>
@@ -233,13 +234,13 @@ export function FilesPage() {
                   {group.deliveries.map((d) => (
                     <button key={d.deliveryId} className="root-card" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }} onClick={() => locate(d.locate)}>
                       <span className="small" style={{ fontWeight: 600 }}>{d.title}</span>
-                      <span className="faint small"> · v{d.revision} · manifest {d.manifestHash.slice(0, 10)}…{d.reviewedAt != null ? ` · 已复核 ${new Date(d.reviewedAt).toLocaleString()}` : ' · 待验收'}{d.audience === 'dm' ? ' · dm' : ''}</span>
+                      <span className="faint small"> · v{d.revision} · 交付校验值 {d.manifestHash.slice(0, 10)}…{d.reviewedAt != null ? ` · 已复核 ${new Date(d.reviewedAt).toLocaleString()}` : ' · 待验收'}{d.audience === 'dm' ? ' · dm' : ''}</span>
                     </button>
                   ))}
                   {group.deliveries.length === 0 ? <span className="faint small">（暂无）</span> : null}
                 </div>
               </div>
-              <div className="faint small">{files?.note ?? ''}</div>
+              <div className="faint small">{userFacingSystemText(files?.note ?? '')}</div>
             </>
           ) : null}
         </>
@@ -308,7 +309,7 @@ export function FilesPage() {
                   <span className="spacer" style={{ flex: 1 }} />
                   <button className="btn ghost sm" disabled={busy} onClick={() => void loadHistory()}>刷新历史</button>
                 </div>
-                {historyErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>历史读取失败：{historyErr}（非 Git 目录如实分列，不伪空态）</div> : null}
+                {historyErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>历史读取失败：{userFacingSystemText(historyErr ?? '')}</div> : null}
                 {history == null && historyErr == null ? <div className="faint small" style={{ marginTop: 6 }}>正在读取历史…</div> : null}
                 {history != null && history.items.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>（空历史——尚无提交）</div> : null}
                 {history != null && history.items.length > 0 ? (
@@ -327,7 +328,7 @@ export function FilesPage() {
                   </div>
                 ) : null}
               </div>
-              {commitDiffErr != null ? <div className="panel warning" data-zs-git-cd-err="1">提交差异读取失败：{commitDiffErr}</div> : null}
+              {commitDiffErr != null ? <div className="panel warning" data-zs-git-cd-err="1">提交差异读取失败：{userFacingSystemText(commitDiffErr ?? '')}</div> : null}
               {commitDiff != null ? (
                 <div className="panel info" data-zs-git-commitdiff="hifi">
                   <div className="row tight">
@@ -338,7 +339,7 @@ export function FilesPage() {
                   </div>
                   {(commitDiff.parentsMeta ?? []).length > 1 ? (
                     <div className="row tight wrap" style={{ marginTop: 6 }} data-zs-git-parents="1">
-                      <span className="faint small">合并提交——选择比较父（差异与所选父 OID 绑定，不虚构单一「合并 diff」总览）：</span>
+                      <span className="faint small">合并提交：选择要比较的父提交，查看对应差异：</span>
                       {(commitDiff.parentsMeta ?? []).map((pm) => (
                         <button
                           key={pm.oid}
@@ -360,7 +361,7 @@ export function FilesPage() {
                         <Tag tone="neutral">{p.change}</Tag>
                         <span className="mono small" style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.oldPath != null ? `${p.oldPath} → ${p.path}` : p.path}</span>
                         {p.binary ? <Tag tone="info">二进制（无文本差异）</Tag> : null}
-                        {p.truncated ? <Tag tone="warning">截断/超限占位</Tag> : null}
+                        {p.truncated ? <Tag tone="warning">内容过长，未完整显示</Tag> : null}
                       </div>
                       {!p.binary && p.text.length > 0 ? (
                         <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 240, overflow: 'auto', marginTop: 4, border: '1px solid var(--border,#dbe2ea)', padding: 6, background: '#fff' }}>{p.text.slice(0, DIFF_DISPLAY_CAP)}</pre>
@@ -370,7 +371,7 @@ export function FilesPage() {
                   {commitDiff.patches.length === 0 && commitDiff.mergeNote == null ? <div className="faint small" style={{ marginTop: 6 }}>（无差异条目）</div> : null}
                 </div>
               ) : null}
-              <div className="faint small">Git 诊断与历史只读（RT-24：不改工作区，保留未提交内容）；提交/推送在原界面仓库区执行（上方直达按钮）。Git 提交不等同任务验收（RT-25）。</div>
+              <div className="faint small">这里可查看 Git 状态与历史，未提交的内容会保留。提交或推送请点击上方按钮进入原界面；任务成果需另行验收。</div>
             </>
           )}
         </>

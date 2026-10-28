@@ -22,14 +22,14 @@
       <nav id="room-list" class="rooms"></nav>
       <button id="room-create" class="chip" title="新建房间（本项目成员默认全加入）">+ 建房</button>
       <div class="sidebar-sec">私信（1 对 1）</div>
-      <button id="dm-create" class="chip" title="与本项目 Agent 成员新建一对一私信（每个请求创建独立会话——同成员可有多条；打开已有会话点下方列表）">+ 新私信</button>
+      <button id="dm-create" class="chip" title="与项目 AI 成员新建独立私信；已有会话可从下方打开">+ 新私信</button>
       <nav id="dm-list" class="rooms"></nav>
       <div class="sidebar-sec">待我处理</div>
-      <nav id="pending-list" class="rooms" title="待我验收任务与未读私信（权威业务状态汇总——读卡片≠完成事项）"></nav>
+      <nav id="pending-list" class="rooms" title="待验收任务、未读私信与待确认提醒"></nav>
       <details id="reminder-panel" class="help-panel">
         <summary>提醒管理</summary>
         <div class="help-body">
-          <div class="meta">一次/每日/每周计划、下次触发、暂停原因与历史触发（最近 5 条）；编辑/贪睡/取消/恢复。服务端按 audience 过滤——只显示可操作提醒。到点默认**待确认**（在「待我处理」确认后经正式执行链派发）；通知面=**桌面系统通知**（新待确认触发恰一次、点击定位、关闭/静音不再重复；权限被拒或送达失败退页内提示且不影响执行）+会话内系统消息+待我处理。Web Push 等远程通知属后续范围。</div>
+          <div class="meta">查看和修改提醒计划、下次提醒时间及最近记录。到点后在「待我处理」确认执行；系统通知不可用时仍可在应用内查看。</div>
           <nav id="reminder-list" class="rooms"></nav>
         </div>
       </details>
@@ -53,13 +53,13 @@
             <span id="search-page-info" class="meta"></span>
             <button id="search-next" class="chip">下一页</button>
           </div>
-          <div class="meta">他人私信不进入任何结果；附件按所在消息的文件名检索（正文提取未实施）；点击结果定位原消息/原串。</div>
+          <div class="meta">仅搜索有权限的内容；附件按文件名搜索。点击结果打开原消息或线程。</div>
         </div>
       </details>
       <details id="saved-panel" class="help-panel">
         <summary>收藏</summary>
         <div class="help-body">
-          <div class="meta">消息/任务/交付/链接引用（独立保存——取消收藏不删原内容；目标删除或权限变化如实标注）。</div>
+          <div class="meta">收藏消息、任务、交付或链接。取消收藏不会删除原内容。</div>
           <nav id="saved-list" class="rooms"></nav>
         </div>
       </details>
@@ -68,21 +68,21 @@
         <details id="project-settings" class="help-panel">
           <summary>项目设置</summary>
           <div class="help-body">
-            <div><b>任务验收</b>（§10.5，项目级开关）：开启后，任务交付需要你确认；关闭后，满足交付要求即完成。不会自动提交或推送 Git。</div>
-            <button id="task-review-toggle" class="chip" title="只影响之后创建的任务；已有任务保持创建时的策略快照">任务验收：关</button>
+            <div><b>任务验收</b>（当前项目）：开启后，任务交付需要你确认；关闭后，满足交付要求即完成。不会自动提交或推送 Git。</div>
+            <button id="task-review-toggle" class="chip" title="仅影响之后创建的任务">任务验收：关</button>
             <div id="task-review-note" class="meta"></div>
-            <div><b>成员 runtime 绑定</b>（成员级设置）：为各 agent 成员选择 runtime 与模型（claude/codex 必须显式模型）；作用范围=该成员<b>之后派发</b>的任务（在途不变）；绑定持久化，重开生效。配置成功≠已认证——支持能力与认证状态分列显示，保存不触发探活、不读写凭据。</div>
+            <div><b>成员运行设置</b>：为每位 AI 选择运行渠道与模型，对该成员<b>之后派发</b>的任务生效。保存配置不会验证连接或权限。</div>
             <div id="member-runtime-list"></div>
-            <div><b>协作限制</b>（§17.8：缺席等待与单轮运行时限，项目级）：NULL/清空=回落 daemon 全局默认；<b>新派发任务起生效</b>（在途任务保持派发时的时限）。数字单位=分钟。</div>
+            <div><b>运行时限</b>：默认不限制单轮运行时长；可自行设置，之后开始的执行使用新设置。</div>
             <div id="collab-settings" class="meta"></div>
-            <div><b>文件修改</b>（只读呈现）：当前有效策略=<b>单写者</b>（同一物理目录同时只安排一个受管理写入任务——只减少并发冲突，不宣称撤销一定可靠）；并行写入/工作树增强按 §14.7 <b>延期未开放</b>，不是可切换开关——保存任何设置都不会改变该边界，未认证权限档也不因配置开放实际写入。</div>
-            <div><b>写入并发</b>：单写者（同一物理目录同时只安排一个受管理写入任务；并行写入增强已延期，§14.7——未开放，不是可点开关）。</div>
+            <div><b>文件修改</b>：当前采用<b>单写者</b>，同一目录同时只安排一个写入任务。并行写入<b>暂不可用</b>；实际修改文件仍需相应权限。</div>
+            <div><b>写入并发</b>：同一目录同时只安排一个写入任务。</div>
           </div>
         </details>
         <details id="remote-settings" class="help-panel">
-          <summary>远程访问（DEV-25）</summary>
+          <summary>远程访问</summary>
           <div class="help-body">
-            <div><b>远程访问</b>（本机/LAN 浏览器）：默认<b>关闭</b>。启用后强制 HTTPS/WSS（自签证书）；配对设备与本机同等权限；吊销立即生效。LAN 需显式选择监听地址；地址与证书 SHA-256 指纹在配对码中一并给出，设备端核对后完成信任（不降级 HTTP）。</div>
+            <div><b>远程访问</b>：默认<b>关闭</b>。启用后通过 HTTPS 访问；局域网访问需选择对应地址。配对前请核对证书指纹，配对设备拥有与本机相同的权限。</div>
             <div id="remote-config-row" class="meta"></div>
             <div>
               <select id="remote-host-sel" title="监听地址：仅本机（127.0.0.1）或 LAN（0.0.0.0=所有网卡，需设备能访问本机）">
@@ -95,39 +95,39 @@
             </div>
             <div>
               <button id="remote-pair-btn" class="chip" title="生成 5 分钟内一次有效的配对码（仅本机可信入口）">生成配对码</button>
-              <button id="remote-pair-selfcheck-btn" class="chip" title="在服务进程内执行机械负例自检（错码/伪造 Host/Origin/无 token/同号恰一次/审计核对/吊销清理）——仅隔离验收模式开放；结果不含任何凭据">自检（机械负例）</button>
+              <button id="remote-pair-selfcheck-btn" class="chip" title="检查远程连接保护，仅测试环境可用">连接自检</button>
               <div id="remote-pair-result" class="meta"></div>
             </div>
-            <div><b>已配对设备</b>（吊销=凭据/会话/票据/事件流全部立即失效）：</div>
+            <div><b>已配对设备</b>（吊销后立即断开并禁止访问）：</div>
             <div id="remote-device-list" class="meta"></div>
           </div>
         </details>
         <details id="help-panel" class="help-panel">
-          <summary>帮助与故障引导（START-07/09 首版）</summary>
+          <summary>帮助与故障引导</summary>
           <div class="help-body">
-            <div><b>发送与路由</b>：主池留空 @＝自动路由；@成员＝DIRECT 指派；「仅记录」＝一次性只保存不派发；线程内跟进不新建根任务。</div>
-            <div><b>研讨（@全体）</b>：成员独立分析→互评→（争议则讨论）→整合→逐结论确认；缺席成员如实标注，不用一句总结覆盖分歧。</div>
-            <div><b>验收</b>：策略为「人工验收」的任务完成后进入待验收；按钮绑定展示时的交付版本（防错稿）；「要求修改」的说明会注入返工输入；Git 提交不等同验收。</div>
-            <div><b>恢复与保护</b>：崩溃/截止后的「状态未知」不自动重跑；对账前先「服务端取证」；人工声明保留写入保护；周期快照只证明「未观察到存活后代」，不构成完整退出证明——有子进程 runtime 的自动解除路径已关闭。</div>
-            <div><b>迟到成果</b>：截止后到达的输出经服务端事件通道接收（幂等、不复活已停止任务、不覆盖新交付）；回执与业务效果同事务。</div>
-            <div><b>仓库与变更</b>：主池顶部为仓库状态只读视图（暂存/未暂存/未跟踪区分，不改动你的工作区）；Git 操作区支持暂存/取消暂存/按任务批量暂存（自动跳过任务开始前的用户原有改动，混合文件列为冲突不自动分离）与提交（预览绑定 HEAD 与暂存区，变化即拒绝）；提交不等同任务验收，也不会自动提交或推送；任务串变更记录含撤销进度与冲突原因；撤销续跑走恢复中心。</div>
-            <div><b>未开放能力（如实）</b>：AUTO 自动分工未过价值闸门暂不开放；真实 CLI 迟到回放待补证（显示 unsupported）；并行写档增强延期中；恢复解除对有子进程 runtime 暂时只保留保护。</div>
+            <div><b>发送与路由</b>：主池留空 @ 自动安排成员；@成员直接指派；「仅记录」只保存消息；在线程内补充要求可继续当前任务。</div>
+            <div><b>研讨（@全体）</b>：成员独立分析、互评、讨论、整合并确认结论；报告中可查看分歧与缺席成员。</div>
+            <div><b>验收</b>：开启人工验收后，可通过当前版本或填写修改意见。Git 提交不会自动通过验收。</div>
+            <div><b>恢复与保护</b>：中断后结果未知时不会自动重跑。请先检查执行进程；确认相关进程退出前会保留写入保护。</div>
+            <div><b>迟到成果</b>：中断后收到的结果仍会保留，已停止的任务不会因此恢复，新交付也不会被覆盖。</div>
+            <div><b>仓库与变更</b>：查看仓库状态、暂存文件并预览提交。按任务暂存会跳过原有改动，混合改动需手动处理。提交前内容有变化时需重新预览。任务变更与撤销进度可在线程中查看，中断的撤销可在恢复中心继续。</div>
+            <div><b>暂不可用</b>：自动分工、部分渠道的迟到结果恢复与并行写入暂不可用。执行进程退出未确认时，写入保护会保留。</div>
           </div>
         </details>
         <button id="repo-status-toggle" class="chip" title="显示/隐藏仓库状态区块（设置持久化，重开生效）">仓库状态：开</button>
-        <button id="board-toggle" class="chip" title="看板视图（DEV-19 首包）：只读聚合当前/全部可访问项目的任务状态——打开不唤醒成员、不创建运行">看板</button>
-        <button id="files-toggle" class="chip" title="Files 集合（DEV-19）：项目文件/托管附件/Agent 草稿/交付成果四类分列——只读，逐项保留来源/版本/hash 与定位">Files</button>
-          <button id="activity-toggle" class="chip" title="Activity 流（DEV-18）：domain_events 只读聚合（DM 事件仅本人可见）——零运行零唤醒">动态</button>
+        <button id="board-toggle" class="chip" title="查看当前或全部可访问项目的任务状态">看板</button>
+        <button id="files-toggle" class="chip" title="查看项目文件、附件、AI 草稿与交付成果">Files</button>
+          <button id="activity-toggle" class="chip" title="查看可访问项目的活动记录；私信活动仅参与者可见">动态</button>
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
         <div id="resume-info" class="resume-info hidden"></div>
         <div id="recovery-help" class="resume-info recovery-help hidden">
-          <b>恢复与保护帮助（START-07 首版）</b>
-          <div>·「状态未知」＝上次执行截止/崩溃时没等到终态回执，结果不确定——不自动重跑、不伪造成功/失败。</div>
-          <div>· 对账前请先「服务端取证」：由 daemon 按登记的进程身份做 OS 核对（父进程＋其派生进程树＋活跃期快照的孙进程归属核对）。</div>
-          <div>· 「人工声明未启动」会退款但<b>保留写入保护</b>：程序未确认执行结束前，保护不解除。</div>
-          <div>· 周期快照只能「未观察到存活后代」，<b>不构成完整退出证明</b>（快照间隔内派生且父链已断的执行载体不可排除）：有子进程 runtime 的服务端自动解除路径已关闭，保护保留并说明原因；仅无子进程模型（程序事实）可解除。</div>
-          <div>· 截止后到达的迟到成果经「服务端事件通道」接收（recovery.pumpLateEvents）：合同校验通过才交付；任务已停止/已有更新交付时不复活、不覆盖；回执与业务效果同事务、按事件源+turn 幂等。</div>
-          <div>· 运行能力只显示实测结论：未验证项如实标注「unverified/待补证」，不用成功回复推断整体能力。</div>
+          <b>恢复与保护帮助</b>
+          <div>·「状态未知」表示执行结果尚未确认，不会自动重跑。</div>
+          <div>· 请先点击「检查执行进程」，再核对执行结果。</div>
+          <div>· 「声明未启动」会退还额度，但会<b>保留写入保护</b>，直到确认执行进程已结束。</div>
+          <div>· 暂未发现运行进程时，仍可能<b>无法确认所有进程已退出</b>，此时会保留写入保护。</div>
+          <div>· 迟到结果通过检查后可交付；不会恢复已停止的任务或覆盖更新的交付。</div>
+          <div>· 运行能力中未验证的项目仍需验证。</div>
         </div>
         <div id="runtime-status" class="resume-info hidden" data-section="runtime"></div>
         <div id="recovery-panel" class="resume-info hidden" data-section="recovery"></div>
@@ -144,7 +144,7 @@
         <div class="board-toolbar">
           <select id="board-scope"><option value="project">当前项目</option><option value="all">全部可访问项目</option></select>
           <button id="board-refresh" class="chip">刷新</button>
-          <span class="meta">只读看板——不拖动改状态；动作走正式命令（卡片行内：停止/通过验收；返工需意见走线程内）。卡片点击定位原串/交付。</span>
+          <span class="meta">点击卡片查看原线程或交付；可停止任务或通过验收，修改意见请在线程内填写。</span>
         </div>
         <div id="board-groups"></div>
       </section>
@@ -152,7 +152,7 @@
         <div class="board-toolbar">
           <select id="files-scope"><option value="project">当前项目</option><option value="all">全部可访问项目</option></select>
           <button id="files-refresh" class="chip">刷新</button>
-          <span class="meta">Files 集合（只读四类分列：项目文件/托管附件/Agent 草稿/交付成果——逐项保留来源/版本/hash；私信资源仅本人可见）。</span>
+          <span class="meta">查看项目文件、附件、AI 草稿和交付成果；私信资源仅本人可见。</span>
         </div>
         <div id="files-groups"></div>
       </section>
@@ -160,7 +160,7 @@
         <div class="board-toolbar">
           <select id="activity-scope"><option value="all">全部可访问项目</option><option value="project">当前项目</option></select>
           <button id="activity-refresh" class="chip">刷新</button>
-          <span class="meta">Activity 流（只读聚合——DM 事件仅本人参与可见；定位走深链）。</span>
+          <span class="meta">查看活动记录，点击可打开原内容；私信活动仅参与者可见。</span>
         </div>
         <div id="activity-list"></div>
       </section>
@@ -171,15 +171,15 @@
           <select id="thread-export-format" class="export-format" title="导出本线程（范围快照——附件按 hash 拷入导出包）"><option value="md">Markdown</option><option value="html">HTML（离线包）</option><option value="docx">DOCX</option></select>
           <button id="thread-export-btn" class="chip">⬇ 导出线程</button>
           <span id="thread-status" class="thread-status"></span>
-          <button id="thread-follow-btn" class="chip" title="关注=我的阅读订阅（不改变任务执行与冻结参与者）；有新回复进「待我处理」">☆ 关注</button>
+          <button id="thread-follow-btn" class="chip" title="关注后，新回复会出现在「待我处理」">☆ 关注</button>
           <button id="thread-mute-btn" class="chip" title="静音=不进未读与通知聚合（卡片仍可见；可再取消静音）">静音</button>
           <button id="stop-btn" class="danger hidden">停止任务</button>
-          <button id="redispatch-btn" class="hidden" title="对当前任务追加一轮执行（经正式派发链；返工意见会注入输入）：适用于跟进消息已记录、任务无在途执行时">追加执行</button>
-          <button id="review-accept-btn" class="primary hidden" title="通过验收：交付记 accepted，任务转 DONE（Git 提交不等同验收）">验收通过</button>
-          <button id="review-reject-btn" class="hidden" title="要求修改：交付记 changes_requested，任务回 ACTIVE 可追加跟进；意见必填并注入返工输入">要求修改</button>
+          <button id="redispatch-btn" class="hidden" title="继续执行当前任务并带上补充要求；需等待当前执行结束">追加执行</button>
+          <button id="review-accept-btn" class="primary hidden" title="通过当前版本的交付，完成任务">验收通过</button>
+          <button id="review-reject-btn" class="hidden" title="填写修改意见后，成员将据此继续修改">要求修改</button>
         </div>
         <div id="rework-note-row" class="git-ops hidden">
-          <div class="meta">要求修改（第 <span id="rework-note-revision">?</span> 版）——请填写意见（必填；将进入正式任务记录并注入返工输入）：</div>
+          <div class="meta">要求修改（第 <span id="rework-note-revision">?</span> 版）——请填写意见（必填，成员将据此修改）：</div>
           <div class="git-row">
             <input id="rework-note-input" class="git-input" placeholder="例如：清单缺少风险一节" maxlength="500" />
             <button id="rework-note-confirm" class="danger">提交返工意见</button>
@@ -195,20 +195,20 @@
         <div class="thread-back">
           <button id="dm-back-btn">← 返回主池</button>
           <span id="dm-title" class="thread-status"></span>
-          <button id="dm-remind-btn" class="chip" title="设置每日提醒（DEV-23 首版：每天此刻唤醒该成员——经 reminder.schedule 正式命令）">⏰ 提醒</button>
+          <button id="dm-remind-btn" class="chip" title="设置每天此刻的提醒，到点后确认执行">⏰ 提醒</button>
       <button id="dm-rename-btn" class="chip hidden" title="重命名会话（不换项目/对端、不重置历史或 session）">✏️ 重命名</button>
-          <select id="dm-export-format" class="export-format hidden" title="导出本私信会话（范围快照——audience 逐项校验，不扩大范围）"><option value="md">Markdown</option><option value="html">HTML（离线包）</option><option value="docx">DOCX</option></select>
+          <select id="dm-export-format" class="export-format hidden" title="导出本私信会话（仅导出当前有权限查看的内容）"><option value="md">Markdown</option><option value="html">HTML（离线包）</option><option value="docx">DOCX</option></select>
           <button id="dm-export-btn" class="chip hidden" title="导出本私信会话">⬇ 导出会话</button>
           <button id="export-open-last" class="chip hidden" title="在系统资源管理器打开上次导出目录">📂 打开导出目录</button>
           <span id="dm-state" class="thread-status"></span>
           <button id="dm-stop-btn" class="danger hidden" title="停止当前运行（排队消息转暂停，需显式继续）">停止</button>
           <button id="dm-resume-btn" class="hidden" title="继续被停止后挂起的排队消息">继续队列</button>
-          <button id="dm-recover-btn" class="hidden" title="恢复中断的任务（经正式重派链 task.redispatch：核对停止代次/在途/终态后重新执行——不自动重放、不复活已取消任务）">恢复执行</button>
+          <button id="dm-recover-btn" class="hidden" title="按原输入重新执行中断的任务；已取消的任务不能恢复">恢复执行</button>
           <button id="dm-archive-btn" class="chip hidden" title="归档：禁止新发/新派发，活动运行按停止流程收尾，队列暂停，历史只读">归档</button>
           <button id="dm-restore-btn" class="chip hidden" title="取消归档（不自动续跑）">取消归档</button>
         </div>
         <div id="dm-review-row" class="git-ops hidden">
-          <div class="meta">本次交付待验收（第 <span id="dm-review-revision">?</span> 版）——验收绑定该版本；「要求修改」的意见必填并注入返工输入（Git 提交不等同验收）。</div>
+          <div class="meta">本次交付待验收（第 <span id="dm-review-revision">?</span> 版）——请核对当前版本；如需修改，请填写意见。</div>
           <div class="git-row">
             <button id="dm-review-accept" class="primary">验收通过</button>
             <button id="dm-review-reject" class="danger">要求修改</button>

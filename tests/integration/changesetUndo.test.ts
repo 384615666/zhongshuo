@@ -162,7 +162,7 @@ describe('DEV-12 非 Git 目录：基线/差异/非破坏撤销', () => {
     const base = await cmd<BaselineOk>(db, 'changeset.captureBaseline', { projectId: 'p5', paths: ['f.txt'] });
     writeFileSync(join(dir, 'f.txt'), 'v2', 'utf8');
     await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
-    await expect(cmd(db, 'changeset.undo', { changeSetId: base.changeSetId })).rejects.toThrow(/被占用/);
+    await expect(cmd(db, 'changeset.undo', { changeSetId: base.changeSetId })).rejects.toThrow(/其他任务正在修改此目录/);
     db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE owner_turn_id = 'turn5'`).run();
     const undo = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
     expect(undo.status).toBe('succeeded'); // 租约释放后可执行

@@ -1425,7 +1425,7 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
     if (remote != null) {
       const ff = await captureGit(['-C', loc.worktreeRoot, 'merge-base', '--is-ancestor', remote, input.expectedHead], { capBytes: 4096 });
       if (ff.exitCode !== 0) {
-        throw new GitWriteError('VALIDATION_INVALID', '推送不是快进（远端含本地没有的提交）——产品内不做强推（§14.6/RT-24）；请先拉取合并');
+        throw new GitWriteError('VALIDATION_INVALID', '远端包含本地没有的提交，请先拉取并合并后再推送');
       }
     }
     // 执行对象绑定（第十二轮二）：refspec 源=用户确认的**不可变提交 OID**（不是可变本地分支）；

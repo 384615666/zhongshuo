@@ -121,7 +121,7 @@ describe('hifi 草稿/未知信封持久化与文件引用（r61）', () => {
     stub.failing = true; // localStorage 突然不可写（配额尽）
     s.setDraftFull('dm:c1', { body: '输入中的正文', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
     expect(s.getDraftFull('dm:c1').body).toBe('输入中的正文'); // 内存不丢
-    expect(s.getState().draftPersist.error).toContain('持久化失败');
+    expect(s.getState().draftPersist.error).toContain('草稿保存失败');
     stub.failing = false;
     s.setDraftFull('dm:c1', { body: '再改一次', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
     expect(s.getState().draftPersist.error).toBeNull(); // 恢复可写→状态位转清
@@ -132,7 +132,7 @@ describe('hifi 草稿/未知信封持久化与文件引用（r61）', () => {
     stub.failing = true; // 初始化期首次快照即抛——按写入失败处理（内存态仍可用，不冒充已持久化）
     s.initDraftPersistence('ns|u');
     expect(s.getState().draftPersist.mode).toBe('on');
-    expect(s.getState().draftPersist.error).toContain('持久化失败');
+    expect(s.getState().draftPersist.error).toContain('草稿保存失败');
     s.setDraftFull('dm:c9', { body: '仍可输入', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
     expect(s.getDraftFull('dm:c9').body).toBe('仍可输入');
     // identity 不可用（服务未起/浏览器宿主）：显式降级 off
@@ -162,7 +162,7 @@ describe('快照防护与 TTL（r62 P2——review-r61 §3）', () => {
     expect(s1.getState().pendingSends['thread:t9']).toBeUndefined(); // 不解析不派发
     const note = s1.getState().draftPersist.recoveryNote ?? '';
     expect(note).toContain('不受本程序支持');
-    expect(note).toContain('隔离');
+    expect(note).toContain('恢复副本');
     expect(s1.getState().draftPersist.error).toBeNull(); // 写入本身正常——与恢复说明分列
   });
 
@@ -216,7 +216,7 @@ describe('快照防护与 TTL（r62 P2——review-r61 §3）', () => {
     expect(s1.getDraftFull('dm:noStamp').body).toBe('fallback-stamp');
     expect(s1.getState().pendingSends['dm:old']?.commandId).toBe('cmd_old_unconfirmed'); // 未确认账本不受 TTL
     expect((s1.getState().uploadItems['dm:old'] ?? []).length).toBe(0); // 过期草稿的上传项不复活
-    expect((s1.getState().draftPersist.recoveryNote ?? '')).toContain('24 小时过期草稿 1 条');
+    expect((s1.getState().draftPersist.recoveryNote ?? '')).toContain('已过期草稿 1 条');
   });
 
   it('setDraftFull 盖 updatedAt 戳（新快照可判龄）', async () => {
@@ -302,7 +302,7 @@ describe('出站信封账本（r62 P1——review-r61 §2 早崩重复发送）'
     const env = mkEnv('cmd_stg_fail', 'x');
     const st = s.stageOutbound('thread:t3', env);
     expect(st.ok).toBe(false);
-    expect(st.error).toContain('未能耐久保存');
+    expect(st.error).toContain('发送记录无法保存');
     stub.failing = false;
     expect((s.getState().outboundLedger['thread:t3'] ?? []).length).toBe(0); // 内存回滚
   });
@@ -380,14 +380,14 @@ describe('主键保全锁定（r63 P2——review-r62 §3 分离负例：隔离�
     expect(Array.from(stub.store.keys()).some((k: string) => k.includes('.quarantine-'))).toBe(false);
     const st = s.getState().draftPersist;
     expect(st.mode).toBe('locked');
-    expect(st.error).toContain('保全锁定');
+    expect(st.error).toContain('无法保存');
     // 内存态仍可编辑，但主键不被覆盖
     s.setDraftFull('room:r9', { body: '锁定期编辑', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
     expect(stub.store.get('zs.hifi.persist.nsK|u')).toBe(original);
     // 发送拒绝（不冒充已耐久落账）——调用方据此取消，服务命令零误发
     const staged = s.stageOutbound('room:r9', { commandId: 'cmd_locked_send', method: 'message.submit', params: { target: { kind: 'room_root', roomId: 'r9' }, body: 'x', intent: 'default', mentions: [] }, targetLabel: 'room:r9', at: Date.now() });
     expect(staged.ok).toBe(false);
-    expect(staged.error ?? '').toContain('保全锁定');
+    expect(staged.error ?? '').toContain('无法保存');
     expect((s.getState().outboundLedger['room:r9'] ?? []).length).toBe(0); // 未入账
   });
 

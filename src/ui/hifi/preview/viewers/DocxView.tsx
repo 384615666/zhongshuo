@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../../contracts/userFacingText';
 /**
  * Word 阅读视图（R69 建立 / R70 修 wrapper 灰底+滚动位置）：docx-preview 分页纸张排版、
  * 只缩不放 fit、**全白连续文档流**。
@@ -125,7 +126,7 @@ export function DocxView({ bytes, filename, revisionLabel, onDownload, resourceI
       <div className="preview-unsupported" data-zs-docx-error={err?.slice(0, 40)}>
         <Icon name="alert-triangle" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>文档渲染失败</div>
-        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{err}——原件已保存（{revisionLabel}），可下载后用系统工具打开；提取文本见「文件信息」。</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}——原件已保存（{revisionLabel}），可下载后用系统工具打开；提取文本见「文件信息」。</div>
         <div className="panel-actions">
           <button className="btn sm" onClick={() => setNonce((n) => n + 1)}>重试渲染</button>
           <button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button>

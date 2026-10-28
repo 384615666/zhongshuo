@@ -1,3 +1,4 @@
+import {userFacingSystemText} from '../../contracts/userFacingText.ts';
 /* 众说正式 renderer 逻辑（DEV-07 修复轮 6：R1–R5 用户操作链路完整接通）。
  * 全部数据经 zs.command 命令面——无 SQLite 直读、无 runtime 拉起、无种子数据回退；
  * 失败如实展示（错误横幅/连接状态），不弹假成功。
@@ -94,7 +95,7 @@ const currentView = () => (state.openDmId != null ? 'dm' : state.openThreadId ==
 async function command(method, params) {
   const result = await zs.command({ protocolVersion: 1, commandId: uuid(), method, params });
   if (!result.ok) {
-    const err = new Error(`${method}: ${result.error?.message ?? '未知错误'}`);
+    const err = new Error(userFacingSystemText(result.error?.message ?? '未知错误'));
     err.code = result.error?.code;
     throw err;
   }
@@ -154,7 +155,7 @@ async function loadProject(path, opts) {
   // 本次却返回空——数据矛盾，保留旧列表+标注（不清空、不冒充空项目）；跨项目切换不受限。
   if (rooms.items.length === 0 && prevProjectId === state.projectId && list.children.length > 0) {
     navAuditPush({ what: 'loadProject.emptyRoomsRetained', gen, path, projectId: state.projectId, kept: list.children.length });
-    el('project-name').textContent = `${data.project.displayName} · ${path}（房间列表读取异常返回空——已保留原列表）`;
+    el('project-name').textContent = `${data.project.displayName} · ${path}（房间列表读取异常，已保留原列表）`;
   } else {
     list.innerHTML = '';
     for (const room of rooms.items) {
@@ -510,7 +511,7 @@ function loadVendorScript(rel) {
     if (existing.dataset.loaded === 'true') return Promise.resolve();
     return new Promise((resolve, reject) => {
       existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () => reject(new Error(`vendor 脚本加载失败：${rel}`)));
+      existing.addEventListener('error', () => reject(new Error(`预览组件加载失败：${rel}`)));
     });
   }
   return new Promise((resolve, reject) => {
@@ -518,7 +519,7 @@ function loadVendorScript(rel) {
     s.src = new URL(rel, document.baseURI).href;
     s.dataset.zsVendor = rel;
     s.onload = () => { s.dataset.loaded = 'true'; resolve(); };
-    s.onerror = () => reject(new Error(`vendor 脚本加载失败：${rel}`));
+    s.onerror = () => reject(new Error(`预览组件加载失败：${rel}`));
     document.head.append(s);
   });
 }
@@ -528,7 +529,7 @@ function loadRendererDocxPreview() {
     rendererDocxPreviewPromise = (async () => {
       await loadVendorScript('assets/vendor/jszip.min.js');
       await loadVendorScript('assets/vendor/docx-preview.min.js');
-      if (window.docx == null) throw new Error('docx-preview 全局未就绪');
+      if (window.docx == null) throw new Error('文档预览组件未就绪');
       return window.docx;
     })();
   }
@@ -552,7 +553,7 @@ async function projectFilePreview(projectId, name) {
   showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `🗂 项目文件 · ${r.baseName} · ${r.bytes}B${r.truncated ? `（超 64KB 截断）` : ''} · 只读快照（非托管副本——源文件变化不追溯；不进模型输入）`;
+  head.textContent = `🗂 项目文件 · ${r.baseName} · ${r.bytes}B${r.truncated ? `（超 64KB 截断）` : ''} · 文件预览（不会发送给 AI）`;
   const close = document.createElement('button');
   close.className = 'chip';
   close.textContent = '关闭预览';
@@ -899,7 +900,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const getPdfDoc = async () => {
       if (pdfDocPromise == null) {
         const b64 = pdfBytesCache.get(bytesKey);
-        if (b64 == null) throw new Error('原件字节不可用（includeBytes 未取到——重新打开预览）');
+        if (b64 == null) throw new Error('原文件读取失败，请重新打开预览');
         const lib = await loadRendererPdfjs();
         const bin = atob(b64);
         const u8 = new Uint8Array(bin.length);
@@ -967,10 +968,10 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       void renderVisual(pg.page, canvas); // 视觉层异步（文本层先呈现——不互相阻塞）
       const pre = document.createElement('pre');
       pre.className = 'attach-preview-text';
-      pre.textContent = pg.text.length === 0 ? '（本页无文本层——可能是扫描件；OCR 未实现，如实空页；页面像素见上方视觉渲染）' : pg.text;
+      pre.textContent = pg.text.length === 0 ? '（本页无可提取文字，请查看上方页面预览）' : pg.text;
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `视觉渲染：浏览器 canvas（受限预览侧——服务端零像素解码） · OCR：未实现 · 截断：${pg.truncated ? '本页提取文本超 64KB 已截断' : '无'} · 解析器：${pdf.parser ?? '?'} · 提取时刻：${new Date(pdf.extractedAt).toLocaleString()}`;
+      note.textContent = `页面预览 · 文字识别不可用 · 文本截断：${pg.truncated ? '本页提取文本超 64KB 已截断' : '无'} · 解析器：${pdf.parser ?? '?'} · 提取时刻：${new Date(pdf.extractedAt).toLocaleString()}`;
       wrapP.append(head2, nav, canvas, pre, note);
       pbox.replaceChildren(wrapP);
     };
@@ -1016,14 +1017,14 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         iel2.dataset.decodeError = String(e?.message ?? e).slice(0, 120);
         const failNote = document.createElement('div');
         failNote.className = 'meta img-decode-failed';
-        failNote.textContent = `像素解码失败（浏览器）——原件完整保存且 sha256 已核对，但格式头通过不等于像素可解码（截断/损坏体）；OCR 与模型图片输入均不可用`;
+        failNote.textContent = `图片无法显示，可能已损坏。原文件已保存，无法提取文字或发送图片给 AI`;
         iel2.replaceWith(failNote);
       },
     );
     iel2.onerror = () => { iel2.dataset.decode = 'failed'; };
     const inote = document.createElement('div');
     inote.className = 'meta';
-    inote.textContent = 'OCR 提取正文：未实现（明确不可用）· 模型图片输入：未认证（发送需明确选择仅发送文字——程序不悄悄省略图片冒充已读）· 图片评论：随分批归属后续开放';
+    inote.textContent = '图片文字识别与评论暂不可用；发送时需选择仅发送文字，图片不会发送给 AI';
     const iwrap = document.createElement('div');
     iwrap.append(ihead, iclose, iel2, inote);
     ibox.replaceChildren(iwrap);
@@ -1072,17 +1073,17 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           if (!alive()) { dvBox.remove(); return; }
           const dvHead = document.createElement('div');
           dvHead.className = 'meta';
-          dvHead.textContent = `🖼 视觉预览（docx-preview 渲染器侧本地渲染·Shadow DOM 隔离）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
+          dvHead.textContent = `🖼 文档预览· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}`;
           // 如实分列（第四十二轮 §4）：嵌入 HTML 首版不支持、外部资源不加载——呈现给用户，
           // 不在验证报告里替产品声明未验证的能力。
           const dvNote = document.createElement('div');
           dvNote.className = 'meta';
-          dvNote.textContent = '嵌入 HTML（altChunks）首版不支持（renderAltChunks:false）· 外部图片/资源不加载（仅包内媒体）· 页眉页脚尽力还原';
+          dvNote.textContent = '嵌入网页及外部资源不显示，部分页眉页脚可能与原文件不同';
           owrap.append(dvHead, dvNote, dvBox);
         } catch (e) {
           const w = document.createElement('div');
           w.className = 'meta warn';
-          w.textContent = `视觉预览不可用（${String(e?.message ?? e).slice(0, 160)}）——下方净化排版近似仍可用（分列）`;
+          w.textContent = `视觉预览不可用（${String(e?.message ?? e).slice(0, 160)}）；可查看下方文字预览`;
           owrap.append(w);
         }
       }
@@ -1096,7 +1097,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `净化排版近似（白名单标记——上方视觉预览失败时的回退通道）· 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文本超预算已截断（注入同口径）' : ''} · 外部关系不加载、嵌入图片不解码、宏不执行 · 版式丢失如实说明（不虚构分页） · 模型输入=提取文本`;
+      note.textContent = `文字预览 · 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文字过长，已截断' : ''} · 排版可能与原文件不同，外部资源、嵌入图片和宏不加载；发送给 AI 的内容为提取文字`;
       owrap.append(htmlBox, note);
     } else if (doc.kind === 'sheet_file') {
       const tabs = document.createElement('div');
@@ -1107,7 +1108,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         tbl.className = 'sheet-grid';
         const win = document.createElement('div');
         win.className = 'meta';
-        win.textContent = `工作表「${sheet.name}」· 实际 ${sheet.rowCount}×${sheet.colCount} · 预览窗口 ${sheet.cells.length}×${sheet.cells[0]?.length ?? 0}${sheet.rowTruncated || sheet.colTruncated ? '（窗口外未呈现——不虚构成空表）' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 存在无缓存值的公式格（公式不执行——如实占位）' : ''}`;
+        win.textContent = `工作表「${sheet.name}」· 实际 ${sheet.rowCount}×${sheet.colCount} · 预览窗口 ${sheet.cells.length}×${sheet.cells[0]?.length ?? 0}${sheet.rowTruncated || sheet.colTruncated ? '（仅显示部分内容）' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 部分公式无可用结果，预览不会计算公式' : ''}`;
         const cap = Math.ceil(sheet.colCount / 26) > 1 ? 'A' : 'A';
         void cap;
         for (let r = 0; r < sheet.cells.length; r += 1) {
@@ -1138,10 +1139,10 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       rangeRow.className = 'sheet-range-row';
       const rangeInput = document.createElement('input');
       rangeInput.id = 'sheet-range-input';
-      rangeInput.placeholder = '注入范围，如 Sheet1!A1:D20（留空=有界默认窗口）';
+      rangeInput.placeholder = '发送范围，如 Sheet1!A1:D20（留空使用默认范围）';
       const rangeBtn = document.createElement('button');
       rangeBtn.className = 'chip';
-      rangeBtn.textContent = '设为注入范围';
+      rangeBtn.textContent = '设为发送范围';
       const rangeNote = document.createElement('span');
       rangeNote.className = 'meta';
       rangeNote.id = 'sheet-range-note';
@@ -1153,19 +1154,19 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         return null;
       };
       const existing = currentDraftEntry();
-      if (existing != null && existing.range != null) { rangeInput.value = existing.range; rangeNote.textContent = `当前注入范围：${existing.range}`; }
+      if (existing != null && existing.range != null) { rangeInput.value = existing.range; rangeNote.textContent = `当前发送范围：${existing.range}`; }
       rangeBtn.onclick = () => {
         const entry = currentDraftEntry();
         const spec = rangeInput.value.trim();
         if (entry == null) { rangeNote.textContent = '该附件不在当前草稿（已发送/其他会话）——范围仅对随消息发送的草稿附件生效'; return; }
-        if (spec.length === 0) { delete entry.range; rangeNote.textContent = '已清除范围（发送按有界默认窗口注入）'; }
-        else { entry.range = spec; rangeNote.textContent = `注入范围已设：${spec}（提交时服务端校验边界）`; }
+        if (spec.length === 0) { delete entry.range; rangeNote.textContent = '已清除范围，发送时使用默认范围'; }
+        else { entry.range = spec; rangeNote.textContent = `发送范围已设：${spec}`; }
         renderAttachChips(state.openDmId != null && currentView() === 'dm' ? 'dm' : 'composer');
       };
       rangeRow.append(rangeInput, rangeBtn, rangeNote);
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `公式不执行（仅缓存值，缺失如实占位）· 注入=范围窗口（默认首表 50×16——不把全部工作表无界发送）${doc.truncatedTotal ? ' · 提取超预算已截断' : ''}`;
+      note.textContent = `仅显示已保存的公式结果，不重新计算；默认发送首张工作表前 50 行、16 列${doc.truncatedTotal ? ' · 提取超预算已截断' : ''}`;
       owrap.append(tabs, gridBox, rangeRow, note);
     } else {
       // PPTX 双通道（第三十七轮四）：**提取文本**卡片列表（previewOffice——模型输入真源）+
@@ -1192,7 +1193,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `按页保留文字与备注（顺序=幻灯片编号）· 提取文本=模型输入真源 · 模型输入=提取文本`;
+      note.textContent = `按页显示文字与备注；发送给 AI 的内容为提取文字`;
       owrap.append(listBox, note);
       // ---- 视觉页预览（第四十轮·选型决定 A）：pptx-renderer 渲染器侧本地渲染 ----
       // 原件字节经 previewOffice includeBytes（audience+实根+sha256 核验+20MiB 前置上限）；
@@ -1213,7 +1214,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           vwrap.className = 'slides-pages';
           const vhead = document.createElement('div');
           vhead.className = 'meta';
-          vhead.textContent = `🖼 视觉页预览（pptx-renderer 渲染器侧本地渲染）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
+          vhead.textContent = `🖼 幻灯片预览· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}`;
           const zoomRow = document.createElement('div');
           zoomRow.className = 'git-row';
           const prevBtn = document.createElement('button');
@@ -1263,7 +1264,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           zoomRow.append(prevBtn, nextBtn, pageLabel, zoomSel);
           const vnote = document.createElement('div');
           vnote.className = 'meta';
-          vnote.textContent = '视觉=渲染器侧（版面/图表/表格尽力还原——图表几何与 Office 渲染存在已知近似）· SmartArt/EMF 内嵌 PDF 回退未启用（如实分列）· 外部关系不加载 · 宏不执行（宏容器在保存入口已拒）· 提取文本=模型输入真源（与视觉分列）';
+          vnote.textContent = '预览排版可能与原文件不同，部分图形不支持，外部资源和宏不加载；发送给 AI 的内容为提取文字';
           vwrap.append(vhead, zoomRow, stage, vnote);
           owrap.append(vwrap);
           await show(1);
@@ -1275,13 +1276,13 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         } catch (e) {
           const pnote = document.createElement('div');
           pnote.className = 'meta warn';
-          pnote.textContent = `视觉页预览不可用（${String(e?.message ?? e).slice(0, 200)}）——提取文本卡片不受影响（分列）`;
+          pnote.textContent = `视觉页预览不可用（${String(e?.message ?? e).slice(0, 200)}）；可查看提取文字`;
           owrap.append(pnote);
         }
       } else {
         const pnote = document.createElement('div');
         pnote.className = 'meta warn';
-        pnote.textContent = `视觉页预览不可用（${doc.visualBytesReason ?? '未取到原件字节'}）——提取文本卡片不受影响（分列）`;
+        pnote.textContent = `视觉页预览不可用（${doc.visualBytesReason ?? '原文件读取失败'}）；可查看提取文字`;
         owrap.append(pnote);
       }
     }
@@ -1319,7 +1320,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     mdBox.innerHTML = mdToSafeHtml(r.text);
     const mdNote = document.createElement('div');
     mdNote.className = 'meta';
-    mdNote.textContent = 'Markdown 安全预览（markdown-it html:false + DOMPurify 白名单——脚本/事件属性/远程图片不加载；代码只展示）';
+    mdNote.textContent = 'Markdown 预览：不执行代码，不加载远程图片';
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'chip';
     toggleBtn.textContent = '看原文';
@@ -1452,7 +1453,7 @@ function wireAttach(kind) {
       } else {
         let content;
         try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-        catch { showError(`「${file.name}」不是有效 UTF-8 文本——文本按明确规则拒绝（图片选 PNG/JPEG/GIF/WebP；Office 选 .docx/.xlsx/.pptx；表格文本选 .csv）`); return; }
+        catch { showError(`「${file.name}」不是有效 UTF-8 文本——请另存为 UTF-8 后重试（图片选 PNG/JPEG/GIF/WebP；Office 选 .docx/.xlsx/.pptx；表格文本选 .csv）`); return; }
         r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
         kindHint = 'text_file';
       }
@@ -1460,7 +1461,7 @@ function wireAttach(kind) {
       draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: kindHint });
       if (attachDraftKey(kind) === targetKey) renderAttachChips(kind); // 仍在发起目标才重绘
       const extra = r.pages != null ? `（${r.pages} 页——提取文本已缓存）` : r.width != null ? `（${r.width}×${r.height}）` : r.slides != null ? `（${r.slides} 页幻灯片）` : r.sheets != null ? `（${r.sheets} 个工作表${r.sourceFormat === 'csv' ? ` · ${r.encoding}` : ''}）` : r.paragraphCount != null ? `（${r.paragraphCount} 段）` : '';
-      showError(`附件已保存副本：${file.name}${r.truncated ? '（超预算——预览/注入将按口径截断）' : extra}`);
+      showError(`附件已保存副本：${file.name}${r.truncated ? '（内容过长，预览和发送时仅保留部分内容）' : extra}`);
     } catch (e) { showError(`附件上传失败：${e.message}`); }
   })().catch(() => {});
 }
@@ -1526,12 +1527,12 @@ async function renderBoard() {
               const stop = document.createElement('button');
               stop.className = 'chip';
               stop.textContent = '停止';
-              stop.title = `task.stop（run=${c.runId.slice(0, 8)}…，停止代次 ${c.stopGeneration ?? 0}）`;
+              stop.title = `停止当前运行（${c.runId.slice(0, 8)}…，停止次数 ${c.stopGeneration ?? 0}）`;
               stop.onclick = () => void (async () => {
                 stop.disabled = true;
                 try {
                   await command('task.stop', { taskId: c.taskId, targetRunId: c.runId, expectedStopGeneration: c.stopGeneration ?? 0 });
-                  showError('停止请求已提交（终态由轮询推进）');
+                  showError('停止请求已提交，正在等待执行结束');
                 } catch (e) { showError(`停止失败：${e.message}`); stop.disabled = false; }
                 await renderBoard().catch(() => {});
               })().catch(() => {});
@@ -1541,7 +1542,7 @@ async function renderBoard() {
               const accept = document.createElement('button');
               accept.className = 'chip';
               accept.textContent = '通过验收';
-              accept.title = `task.review accept（交付 ${c.pendingDelivery.deliveryId.slice(0, 8)}… v${c.pendingDelivery.revision}；返工需意见——线程内）`;
+              accept.title = `验收当前交付（${c.pendingDelivery.deliveryId.slice(0, 8)}… v${c.pendingDelivery.revision}；如需修改，请在线程内填写意见）`;
               accept.onclick = () => void (async () => {
                 accept.disabled = true;
                 try {
@@ -1669,7 +1670,7 @@ async function renderCollaborators() {
   if (box == null || state.openThreadId == null) return;
   let data;
   try { data = await command('thread.collaborators', { threadId: state.openThreadId }); } catch { return; }
-  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · Agent 跟进 ${(data.agentFollowers ?? []).map((a) => `${a.memberId.slice(0, 6)}（${a.status}）`).join('、') || '无'} · 冻结参与 ${(data.frozenParticipants ?? []).map((m) => m.slice(0, 6)).join('、') || '无'} · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).map((p) => `${p.memberId.slice(0, 6)}/${p.role}/${p.status}`).join('、') : '无'}`;
+  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · Agent 跟进 ${(data.agentFollowers ?? []).map((a) => `${a.memberId.slice(0, 6)}（${a.status}）`).join('、') || '无'} · 本次参与 ${(data.frozenParticipants ?? []).map((m) => m.slice(0, 6)).join('、') || '无'} · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).map((p) => `${p.memberId.slice(0, 6)}/${p.role}/${p.status}`).join('、') : '无'}`;
   box.classList.remove('hidden');
 }
 
@@ -1685,8 +1686,8 @@ async function renderPendingList() {
       rows.push({
         label: `【${p.displayName}】待验收：${t.task_kind === 'dm_turn' ? '私信任务' : '任务'}${t.revision != null ? `（v${t.revision}）` : ''}${t.actionable === false ? '（无待验收交付——需检查状态）' : ''}`,
         title: t.actionable === false
-          ? `任务处于 REVIEW 但无可验收交付（当前绑定=null）——诊断入口，验收将被拒绝`
-          : `验收绑定当前交付（revision=${t.revision}）`,
+          ? `暂无可验收交付，请打开任务查看状态`
+          : `验收当前交付（版本 ${t.revision}）`,
         projectId: p.projectId, conversationId: t.conversation_id, taskId: t.task_id,
         deliveryId: t.delivery_id, revision: t.revision, manifestHash: t.manifest_hash, kind: 'review',
       });
@@ -1697,7 +1698,7 @@ async function renderPendingList() {
     for (const b of p.blockedTasks ?? []) {
       // 受阻原因（第三十八轮 #4：无解释的「被阻塞」行——用户无法自助诊断；原因来自服务端
       // 事件映射，null=无事件如实不显示）。
-      rows.push({ label: `【${p.displayName}】被阻塞：${b.title}${b.reason != null ? `——${b.reason}` : ''}`, title: '可见≠审批——处理入口为线程本身', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
+      rows.push({ label: `【${p.displayName}】被阻塞：${b.title}${b.reason != null ? `——${userFacingSystemText(b.reason)}` : ''}`, title: '打开任务查看并处理', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
     }
     // 待确认提醒触发（第二十四轮四）：正式确认入口——点击=reminder.confirm（经正式执行链派发）。
     // 桌面系统通知（第二十五轮五）：新出现的待确认触发通知恰一次（去重/点击定位/失败退页内）。
@@ -1705,7 +1706,7 @@ async function renderPendingList() {
     for (const w of p.reminderAwaits ?? []) {
       rows.push({
         label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminderId}${(w.missedCount ?? 0) > 0 ? `（合并 ${w.missedCount} 次错过）` : ''} → 确认执行`,
-        title: '点击确认后经正式执行链派发（system 来源，不伪装人类发言）；不确认=暂不执行',
+        title: '点击确认后执行提醒任务',
         projectId: p.projectId, conversationId: w.conversationId, kind: 'reminder-await', reminderId: w.reminderId, scheduledAt: w.scheduledAt,
       });
     }
@@ -1749,7 +1750,7 @@ async function renderPendingList() {
         void (async () => {
           try {
             await command('reminder.confirm', { reminderId: r.reminderId, scheduledAt: r.scheduledAt });
-            showError('已确认执行——经正式执行链派发（完成后回复落在目标会话）');
+            showError('已确认执行，完成后会回复到对应会话');
           } catch (e) { showError(`确认执行失败：${e.message}`); }
           await renderPendingList();
         })().catch(() => {});
@@ -1841,7 +1842,7 @@ async function renderSaved() {
     label.className = 'chip';
     label.style.marginRight = '6px';
     label.textContent = it.status === 'ok' && it.locate != null ? `${KIND_LABEL[it.kind] ?? it.kind}：${it.title ?? it.ref}` : `${KIND_LABEL[it.kind] ?? it.kind}：${it.title ?? String(it.ref).slice(0, 48)}${STATUS_LABEL[it.status] ?? ''}`;
-    label.title = it.kind === 'link' ? '链接收藏（点击复制地址）' : it.locate != null ? '点击定位（正式深链）' : '目标不可达——仅呈现';
+    label.title = it.kind === 'link' ? '链接收藏（点击复制地址）' : it.locate != null ? '打开原内容' : '目标不可达——仅呈现';
     label.disabled = !(it.status === 'ok');
     label.onclick = () => {
       if (it.kind === 'link') { void navigator.clipboard?.writeText(it.ref).then(() => showError('链接已复制')).catch(() => showError(`链接：${it.ref}`)); return; }
@@ -1865,14 +1866,14 @@ function attachSaveButton(div, message) {
   const star = document.createElement('button');
   star.className = 'msg-star';
   star.textContent = '☆';
-  star.title = '收藏此消息（saved.add——独立保存，不改动原内容）';
+  star.title = '收藏此消息';
   star.onclick = () => void (async () => {
     let text = '';
     try { text = (JSON.parse(message.body_json) ?? {}).text ?? ''; } catch { text = ''; }
     try {
       const r = await command('saved.add', { kind: 'message', ref: message.id, title: text.slice(0, 60), ...(state.projectId != null ? { projectId: state.projectId } : {}) });
       star.textContent = r.existed === true ? '★' : '★';
-      showError(r.existed === true ? '已在收藏中（幂等——不重复）' : '已收藏');
+      showError(r.existed === true ? '已在收藏中' : '已收藏');
       await renderSaved();
     } catch (e) { showError(`收藏失败：${e.message}`); }
   })().catch(() => {});
@@ -1990,7 +1991,7 @@ async function renderReminderPanel() {
       actions.append(mkBtn('贪睡1天', 'chip', async () => {
         try { await command('reminder.snooze', { reminderId: it.reminderId, until: (it.nextAt ?? Date.now()) + 86_400_000 }); } catch (e) { showError(`贪睡失败：${e.message}`); }
         await refresh();
-      }, '下次触发推迟一天（revision+1）'));
+      }, '下次提醒推迟一天'));
     }
     if (it.status === 'paused') {
       actions.append(mkBtn('恢复', 'chip', async () => {
@@ -2050,7 +2051,7 @@ async function renderReminderPanel() {
     autoLabel.append(autoChk, document.createTextNode('自动执行（不勾选=到点待我确认）'));
     const saveBtn = document.createElement('button');
     saveBtn.className = 'primary';
-    saveBtn.textContent = '保存（revision CAS）';
+    saveBtn.textContent = '保存';
     saveBtn.onclick = () => void (async () => {
       const kind = kindSel.value;
       let schedule;
@@ -2330,7 +2331,7 @@ async function renderToolCalls(box) {
   section.dataset.section = 'tool-audit';
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `工具调用记录（程序侧实录 ${items.length} 条）`;
+  head.textContent = `工具调用记录（${items.length} 条）`;
   section.appendChild(head);
   for (const t of items) {
     const row = document.createElement('div');
@@ -2440,7 +2441,7 @@ async function renderChangeSets() {
   block.className = 'changeset-block';
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `变更记录 ${data.items.length} 组（只读；撤销经恢复面/命令续跑，不在此操作）`;
+  head.textContent = `变更记录 ${data.items.length} 组（可在恢复中心继续撤销）`;
   block.appendChild(head);
   for (const cs of data.items) {
     const row = document.createElement('div');
@@ -2461,7 +2462,7 @@ async function renderChangeSets() {
       const available = beforeFiles.filter((f) => f.state === 'present').length;
       const pre = document.createElement('div');
       pre.className = 'recovery-facts';
-      pre.textContent = `前像可用：${available}/${beforeFiles.length}${available < beforeFiles.length ? '（部分改前内容不可得=unknown——对应文件撤销时将按冲突处理，不猜测恢复）' : ''}`;
+      pre.textContent = `改前内容可用：${available}/${beforeFiles.length}${available < beforeFiles.length ? '（部分改前内容未知，对应文件无法自动撤销）' : ''}`;
       row.appendChild(pre);
     }
     // 撤销详情（第八轮）：恢复进度/冲突原因（不可撤销的具体说明）——只读呈现，续跑走撤销命令。
@@ -2470,7 +2471,7 @@ async function renderChangeSets() {
       undoDetail.className = 'recovery-facts';
       const lines = [`撤销进度：${cs.undo.doneSteps}/${cs.undo.totalSteps} 步（${UNDO_LABEL[cs.undo.status] ?? cs.undo.status}）`];
       if (cs.undo.failure != null) lines.push(`不可继续原因：${cs.undo.failure}`);
-      if (cs.undo.resumable) lines.push('恢复方式：中断后可续跑（逐步幂等重验，不覆盖用户改动）');
+      if (cs.undo.resumable) lines.push('可在恢复中心继续撤销；遇到冲突会停止');
       undoDetail.textContent = lines.join(String.fromCharCode(10));
       row.appendChild(undoDetail);
     }
@@ -2497,7 +2498,7 @@ function updateStopUi(snapshot) {
   const runText = run != null ? ` · 运行 ${run.status}` : '';
   const stopping = run != null && run.status === 'STOPPING';
   // 启动失败原因如实上屏（第十六轮四：验收防护拒绝等——「待处理」无解释=用户不可知）。
-  const failNote = snapshot.lastStartupFailureMessage != null ? ` · ${snapshot.lastStartupFailureMessage}` : '';
+  const failNote = snapshot.lastStartupFailureMessage != null ? ` · ${userFacingSystemText(snapshot.lastStartupFailureMessage)}` : '';
   // 验收回执是用户操作的确认（第十九轮八：1.5s 轮询重绘不得瞬间抹掉）——保留展示，
   // 换线程/新发送时清除。
   const confirmNote = state.reviewConfirmFor === snapshot.taskId && state.reviewConfirm != null ? ` · ${state.reviewConfirm}` : '';
@@ -2578,7 +2579,7 @@ function showSendError(message, envelope) {
   box.appendChild(text);
   if (envelope != null) {
     const retry = document.createElement('button');
-    retry.textContent = '重试（同命令号，不会重复执行）';
+    retry.textContent = '重试发送（不会重复执行）';
     retry.onclick = () => { void retrySend(); };
     box.appendChild(retry);
   }
@@ -2603,10 +2604,10 @@ function showImageGate(kind, onConfirm) {
   box.classList.remove('hidden');
   box.innerHTML = '';
   const text = document.createElement('span');
-  text.textContent = '模型图片输入能力未认证——图片不会发送给模型。请明确选择：';
+  text.textContent = '当前无法向 AI 发送图片，请选择：';
   const okBtn = document.createElement('button');
   okBtn.id = 'image-gate-confirm';
-  okBtn.textContent = '仅发送文字（图片不发送，注入如实注明）';
+  okBtn.textContent = '仅发送文字（不发送图片）';
   okBtn.onclick = () => { box.classList.add('hidden'); box.innerHTML = ''; onConfirm(); };
   const cancel = document.createElement('button');
   cancel.id = 'image-gate-cancel';
@@ -2743,7 +2744,7 @@ async function renderRuntimeStatus() {
   box.classList.remove('hidden');
   box.innerHTML = '';
   const head = document.createElement('div');
-  head.innerHTML = '<b>运行能力（当前 daemon·实测口径）</b>';
+  head.innerHTML = '<b>运行能力</b>';
   box.appendChild(head);
   const facts = document.createElement('div');
   facts.className = 'recovery-facts';
@@ -2751,7 +2752,7 @@ async function renderRuntimeStatus() {
   for (const b of data.memberBindings ?? []) {
     lines.push(`${b.displayName}：${b.kind}${b.model ? ` · ${b.model}` : ''}`);
   }
-  lines.push(`进程树取证：${data.daemonRecovery?.processTreeEvidence ?? '?'}`);
+  lines.push(`进程检查：${data.daemonRecovery?.processTreeEvidence ?? '?'}`);
   lines.push(`迟到成果接收：${data.daemonRecovery?.lateEventPump ?? '?'}`);
   const claudeCap = data.capabilities?.claude?.keyAbilities;
   if (claudeCap != null) {
@@ -2829,7 +2830,7 @@ async function renderRepoStatus() {
     const b = document.createElement('button');
     b.className = 'chip';
     b.textContent = `未跟踪内容：${entry.path}`;
-    b.title = '按新增文件语义查看内容（二进制/超限如实标注）';
+    b.title = '查看新增文件内容';
     b.onclick = () => void togglePathDiff(box, entry.path, b);
     box.appendChild(b);
   }
@@ -2988,7 +2989,7 @@ async function renderGitOps(force = false) {
   // 普通按文件：暂存（未暂存/未跟踪）、取消暂存（已暂存）。
   const stagedTop = status.staged.slice(0, 15);
   for (const entry of stagedTop) {
-    mkBtn(`取消暂存 ${wrapPath(entry.path)}`, '只改索引：该文件回到未暂存/未跟踪（工作区内容不动）', async () => {
+    mkBtn(`取消暂存 ${wrapPath(entry.path)}`, '取消该文件暂存，保留文件内容', async () => {
       const r = await command('git.unstage', { projectId: state.projectId, paths: [entry.path] });
       await refreshGitViews();
       say(`已取消暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}（${s.reason}）`).join('、')}` : ''}`);
@@ -3060,7 +3061,7 @@ async function renderGitOps(force = false) {
   const previewBtn = document.createElement('button');
   previewBtn.className = 'chip';
   previewBtn.textContent = '预览提交';
-  previewBtn.title = '展示真实索引内容与提交前置检查（冲突/身份/保护）；提交时绑定本次预览的 HEAD 与暂存区摘要';
+  previewBtn.title = '查看待提交内容并检查冲突、身份与写入保护';
   const doBtn = document.createElement('button');
   doBtn.className = 'chip';
   doBtn.textContent = '提交';
@@ -3078,7 +3079,7 @@ async function renderGitOps(force = false) {
       `将提交（分支 ${p.branch ?? '（detached）'}，HEAD ${p.head == null ? '空仓库' : p.head.slice(0, 8)}，索引内容 tree ${p.indexTree == null ? '—' : p.indexTree.slice(0, 8)}）：`,
       stagedLines || '（暂存区为空）',
       p.staged.length > 10 ? `（另 ${p.staged.length - 10} 个）` : '',
-      p.canCommit ? '前置检查通过：可提交（提交内容绑定预览时的索引 tree；变化即拒绝）。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
+      p.canCommit ? '检查通过，可以提交。内容变化后需重新预览。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
       ...p.notes.map((n) => `· ${n}`),
     ].filter((s) => s !== '').join('\n');
   })().catch((error) => { previewBox.textContent = `预览失败：${error.message}`; });
@@ -3101,7 +3102,7 @@ async function renderGitOps(force = false) {
     const verifyNote = r.consistent === false
       ? `（警告：提交后核对不一致——本次提交对象 ${r.commit.slice(0, 8)} 已落库，但仓库当前 HEAD 为 ${(r.headAfterActual ?? '?').slice(0, 8)}（外部又推进）；不自动回滚，请人工核对）`
       : '';
-    say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（崩溃恢复：核对到已存在的提交，未重复执行）' : r.replayed === true ? '（重放原回执）' : ''}${verifyNote}`);
+    say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（已恢复已有提交）' : r.replayed === true ? '（已处理，显示原结果）' : ''}${verifyNote}`);
     msgInput.value = '';
   })().catch((error) => { previewBox.textContent = `提交失败：${error.message}`; });
   commitRow.append(previewBtn, doBtn);
@@ -3149,7 +3150,7 @@ async function renderGitOps(force = false) {
     say(`已创建分支 ${r.name}（未切换）`);
     branchNameInput.value = '';
   });
-  mkRowBtn('切换分支', '切换到所选分支；未提交改动随行（不自动 stash，冲突时 git 拒绝并如实报错）', async () => {
+  mkRowBtn('切换分支', '切换到所选分支；未提交改动随行（不自动 stash，有冲突时停止切换）', async () => {
     const target = branchSelect.value;
     if (target === '') { say('请选择目标分支。'); return; }
     const b = await command('git.branch.list', { projectId: state.projectId });
@@ -3186,7 +3187,7 @@ async function renderGitOps(force = false) {
     const r = await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
     say(`已推送 ${b.current}：${(r.from ?? '（空）').slice(0, 8)} → ${r.to.slice(0, 8)}（远端 ${remote}）`);
   });
-  remoteBtn('拉取', '快进拉取当前分支（分叉时不自动合并——如实拒绝，请人工处理）', async () => {
+  remoteBtn('拉取', '快进拉取当前分支（分叉时需手动合并）', async () => {
     const remote = remoteInput.value.trim();
     const b = await command('git.branch.list', { projectId: state.projectId });
     const head = await currentHeadOfRepo();
@@ -3377,7 +3378,7 @@ async function renderGitOps(force = false) {
           const undoBtn = document.createElement('button');
           undoBtn.className = 'chip';
           undoBtn.textContent = '撤销此提交（软回退）';
-          undoBtn.title = '仅限当前 HEAD 提交：内容回工作区、文件不删（reset --mixed 语义；不做任何历史改写/强推）';
+          undoBtn.title = '仅撤销最新提交，保留文件内容并取消暂存';
           undoBtn.onclick = () => void (async () => {
             const r = await command('git.commit.undo', { projectId: state.projectId, commitOid: item.oid, expectedHead: item.oid });
             await refreshGitViews();
@@ -3457,7 +3458,7 @@ function renderRecoveryPanel(panel, data) {
   el('recovery-help').classList.remove('hidden'); // START-07 首版：恢复场景可读帮助随恢复面出现
   panel.innerHTML = '';
   const head = document.createElement('div');
-  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项` : ''}${retainedOnly.length > 0 ? `；保留保护 ${retainedOnly.length} 项（无租约）` : ''}`;
+  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未完成撤销 ${undos.length} 项` : ''}${retainedOnly.length > 0 ? `；保留保护 ${retainedOnly.length} 项（无租约）` : ''}`;
   panel.appendChild(head);
   // 未收口撤销行（第九轮）：in_progress/failed 可续跑（changeset.undo 逐步幂等重验，不覆盖
   // 用户改动；conflict 不可自动继续——展示冲突原因，人工处置后重新发起）。
@@ -3466,11 +3467,11 @@ function renderRecoveryPanel(panel, data) {
     row.className = 'recovery-row recovery-undo-row';
     row.dataset.changeSetId = u.changeSetId;
     const meta = document.createElement('span');
-    meta.textContent = `未收口撤销：${u.changeSetId}（${u.status === 'failed' ? '中断——待恢复续跑' : '进行中'}；执行前逐文件重验 当前==改后，冲突不覆盖）`;
+    meta.textContent = `未完成撤销：${u.changeSetId}（${u.status === 'failed' ? '中断——待恢复续跑' : '进行中'}；遇到文件冲突会停止）`;
     row.appendChild(meta);
     if (u.status !== 'conflict') {
       const b = document.createElement('button');
-      b.textContent = '继续撤销（幂等续跑）';
+      b.textContent = '继续撤销';
       b.onclick = () => void resumeUndo(u.changeSetId);
       row.appendChild(b);
     }
@@ -3488,12 +3489,12 @@ function renderRecoveryPanel(panel, data) {
       const facts = document.createElement('div');
       facts.className = 'recovery-facts';
       const conflictHint = mark?.budgetMark === 'refunded'
-        ? String.fromCharCode(10) + '（该 turn 已按未启动退款；若后来取得执行证据（账单/迟到产物），走 recovery.correctToExecuted 纠正账目——不自动改写）'
+        ? String.fromCharCode(10) + '（本次执行已按未启动退还额度；如有账单或迟到结果，需核对后更正）'
         : '';
-      facts.textContent = `遗留保护：${l.owner_turn_id} 的写入租约仍持有（预算处置=${mark?.budgetMark ?? '已完成'}·${mark?.turnStatus ?? '?'}）——人工声明不解除物理保护；需服务端确认执行已结束（父进程+子进程）后按条件解除${conflictHint}`;
+      facts.textContent = `遗留保护：${l.owner_turn_id} 的写入租约仍持有（预算处置=${mark?.budgetMark ?? '已完成'}·${mark?.turnStatus ?? '?'}）——写入保护保留，确认相关进程已结束后才能解除${conflictHint}`;
       row.appendChild(facts);
       const b = document.createElement('button');
-      b.textContent = '继续核对并解除（服务端取证）';
+      b.textContent = '检查并解除保护';
       b.onclick = () => void releaseRetainedProtection(l.owner_turn_id);
       row.appendChild(b);
       panel.appendChild(row);
@@ -3505,10 +3506,10 @@ function renderRecoveryPanel(panel, data) {
     row.dataset.turnId = r.turnId;
     const facts = document.createElement('div');
     facts.className = 'recovery-facts';
-    facts.textContent = `保留保护：${r.turnId}（状态=${r.turnStatus ?? '?'}·预算处置=${r.budgetMark ?? '?'}·无未释放租约——无租约不等于退出已确认）——须服务端程序证据解除（recovery.releaseProtection）后任务才可恢复执行`;
+    facts.textContent = `保留保护：${r.turnId}（状态=${r.turnStatus ?? '?'}·预算处置=${r.budgetMark ?? '?'}·仍需确认执行已结束）；检查并解除保护后才能恢复执行`;
     row.appendChild(facts);
     const b = document.createElement('button');
-    b.textContent = '继续核对并解除（服务端取证）';
+    b.textContent = '检查并解除保护';
     b.onclick = () => void releaseRetainedProtection(r.turnId);
     row.appendChild(b);
     panel.appendChild(row);
@@ -3529,16 +3530,16 @@ function renderRecoveryPanel(panel, data) {
     facts.className = 'recovery-facts';
     const factLines = [];
     if (reg == null) {
-      factLines.push('程序观测：无进程身份登记（身份缺失——退出事实无从 OS 核对，只能维持保护）');
+      factLines.push('无法检查执行进程，写入保护保留');
     } else {
-      factLines.push(`程序观测：${reg.processModel === 'per-turn' ? '该 turn 专属子进程' : reg.processModel === 'shared' ? '共享常驻进程（PID 不专属本 turn）' : '无子进程模型（内联执行）'}${reg.pid != null ? ` PID ${reg.pid}` : ''}${reg.startedAtMs != null ? '（登记含启动时刻，可测复用）' : ''}`);
+      factLines.push(`执行进程：${reg.processModel === 'per-turn' ? '本次执行进程' : reg.processModel === 'shared' ? '共享进程' : '无独立子进程'}${reg.pid != null ? ` PID ${reg.pid}` : ''}${reg.startedAtMs != null ? '（已记录启动时间）' : ''}`);
       if (reg.lastProbeResult != null) {
-        factLines.push(`最近取证：${reg.lastProbeResult}${reg.lastProbeDetail ? `——${reg.lastProbeDetail}` : ''}`);
+        factLines.push(`最近检查：${reg.lastProbeResult}${reg.lastProbeDetail ? `——${reg.lastProbeDetail}` : ''}`);
       } else {
-        factLines.push('无法确认：退出事实尚未取证（点「服务端取证」）');
+        factLines.push('尚未确认进程退出，请点击「检查执行进程」');
       }
     }
-    factLines.push(leases.length > 0 ? `保留保护：写入租约 ${leases.length} 条（未确认退出/无程序事实前不解除）` : '保留保护：无本 turn 租约（预算/准入占位仍按对账结果处理）');
+    factLines.push(leases.length > 0 ? `保留保护：写入租约 ${leases.length} 条（确认进程退出后才能解除）` : '未持有写入锁，仍需核对执行结果');
     facts.textContent = factLines.join('\n');
     row.appendChild(facts);
 
@@ -3553,7 +3554,7 @@ function renderRecoveryPanel(panel, data) {
 
     const noteOf = () => {
       const v = noteInput.value.trim();
-      if (v.length === 0) throw new Error('人工依据说明必填（人工判断留痕，不冒充程序事实）');
+      if (v.length === 0) throw new Error('请填写人工判断依据');
       return v;
     };
     const mkBtn = (label, action) => {
@@ -3562,11 +3563,11 @@ function renderRecoveryPanel(panel, data) {
       b.onclick = () => { try { void action(); } catch (error) { showRecoveryError(error.message); } };
       return b;
     };
-    row.appendChild(mkBtn('服务端取证', () => probeTurn(t.id)));
-    row.appendChild(mkBtn('对账：已执行（按服务端取证收口）', () => reconcileTurn(t.id, { verdict: 'executed', note: noteOf() })));
-    row.appendChild(mkBtn('人工声明未启动（退款·保留租约）', () => {
+    row.appendChild(mkBtn('检查执行进程', () => probeTurn(t.id)));
+    row.appendChild(mkBtn('确认已执行（需先检查进程）', () => reconcileTurn(t.id, { verdict: 'executed', note: noteOf() })));
+    row.appendChild(mkBtn('声明未启动（退还额度，保留保护）', () => {
       const note = noteOf();
-      if (!window.confirm('程序无法确认未启动。人工声明将退款并把 turn 记为 FAILED，但写入租约保护保留（不解除）。确认继续？')) return;
+      if (!window.confirm('尚无法确认是否启动。声明未启动后将退还额度并记为失败，写入保护仍保留。继续？')) return;
       void reconcileTurn(t.id, { verdict: 'notStarted', manualRiskAck: true, note });
     }));
     row.appendChild(mkBtn('维持不确定', () => reconcileTurn(t.id, { verdict: 'keepUnknown', note: noteOf() })));
@@ -3583,7 +3584,7 @@ async function probeTurn(turnId) {
   try {
     r = await command('recovery.probeProcess', { turnId });
   } catch (error) {
-    failure = `取证失败：${error.message}`;
+    failure = `进程检查失败：${error.message}`;
   }
   await refreshGate();
   if (failure != null) { showRecoveryError(failure); return; }
@@ -3591,7 +3592,7 @@ async function probeTurn(turnId) {
   if (row != null) {
     const el = document.createElement('div');
     el.className = 'recovery-probe-result';
-    el.textContent = `服务端取证结果：${r.result}${r.detail ? `——${r.detail}` : ''}（观测时刻 ${new Date(r.observedAt).toLocaleTimeString()}）`;
+    el.textContent = `进程检查结果：${r.result}${r.detail ? `——${r.detail}` : ''}（检查时间 ${new Date(r.observedAt).toLocaleTimeString()}）`;
     row.appendChild(el);
   }
 }
@@ -3728,7 +3729,7 @@ el('dm-create').onclick = () => void (async () => {
   }
   const agents = state.members.filter((x) => x.principalType === 'agent' && x.enabled);
   box.replaceChildren();
-  if (agents.length === 0) { box.textContent = '（本项目没有启用的 Agent 成员）'; box.classList.remove('hidden'); return; }
+  if (agents.length === 0) { box.textContent = '（本项目没有启用的 AI 成员）'; box.classList.remove('hidden'); return; }
   for (const a of agents) {
     const btn = document.createElement('button');
     btn.className = 'chip';
@@ -3894,7 +3895,7 @@ el('dm-review-reject').onclick = () => {
   const input = document.createElement('input');
   input.id = 'dm-review-note-input';
   input.className = 'git-input';
-  input.placeholder = '要求修改的意见（必填——将注入返工输入）';
+  input.placeholder = '修改意见（必填，成员将据此修改）';
   input.maxLength = 500;
   const confirmBtn = document.createElement('button');
   confirmBtn.className = 'danger';
@@ -3933,7 +3934,7 @@ el('dm-resume-btn').onclick = () => void (async () => {
   try {
     const r = await command('dm.resume', { conversationId: state.openDmId });
     const n = r?.enqueued ?? 0;
-    el('dm-state').textContent = n > 0 ? `已继续队列（泵出 ${n} 条排队消息——串行执行）` : '已继续：当前无待处理的排队消息';
+    el('dm-state').textContent = n > 0 ? `已继续队列（${n} 条消息将依次执行）` : '已继续：当前无待处理的排队消息';
   } catch (e) { el('dm-state').textContent = `继续失败：${e.message}`; }
   await renderDm();
   void renderDmSidebar().catch(() => {});
@@ -4014,7 +4015,7 @@ el('redispatch-btn').onclick = () => void (async () => {
   if (snap == null) return;
   try {
     await command('task.redispatch', { taskId: snap.taskId, reason: '返工跟进（UI 追加执行）' });
-    el('thread-status').textContent = '已追加执行（经正式派发链；返工意见随输入注入）';
+    el('thread-status').textContent = '已追加执行，成员将收到修改意见';
   } catch (error) {
     el('thread-status').textContent = `追加执行失败：${error.message}`;
   }
@@ -4038,7 +4039,7 @@ async function renderMemberRuntimeSettings() {
   if (state.projectId == null) { box.textContent = '（未打开项目）'; return; }
   const members = state.members ?? [];
   const agents = members.filter((m) => m.principalType === 'agent');
-  if (agents.length === 0) { box.textContent = '（本项目无 agent 成员）'; return; }
+  if (agents.length === 0) { box.textContent = '（本项目暂无 AI 成员）'; return; }
   for (const m of agents) {
     const row = document.createElement('div');
     row.className = 'meta';
@@ -4052,8 +4053,8 @@ async function renderMemberRuntimeSettings() {
     const caps = binding?.installation?.capabilities_json != null
       ? (() => { try { return JSON.parse(binding.installation.capabilities_json); } catch { return null; } })()
       : null;
-    const current = kind == null ? '未绑定（派发回落全局 runtime）' : `${kind}${model != null ? ` · ${model}` : ''}`;
-    const capNote = caps == null ? '' : ` ｜ 模型可用性：${caps.modelAvailability ?? '未记录'} · 权限认证：${caps.permissionAuth ?? '未记录'}（配置≠已认证，不自动探活）`;
+    const current = kind == null ? '未设置（使用默认运行渠道）' : `${kind}${model != null ? ` · ${model}` : ''}`;
+    const capNote = caps == null ? '' : ` ｜ 模型可用性：${caps.modelAvailability ?? '未记录'} · 权限认证：${caps.permissionAuth ?? '未记录'}（保存配置不会验证连接或权限）`;
     const label = document.createElement('span');
     label.textContent = `${m.displayName ?? m.id}：${current}${capNote}${m.enabled === false ? ' ｜ 已停用（不参与之后派发）' : ''}`;
     row.appendChild(label);
@@ -4074,7 +4075,7 @@ async function renderMemberRuntimeSettings() {
     const editBtn = document.createElement('button');
     editBtn.className = 'chip';
     editBtn.textContent = '绑定…';
-    editBtn.title = '成员 runtime 绑定：作用范围=该成员之后派发的 turn；claude/codex 必须显式模型';
+    editBtn.title = '为成员设置运行渠道和模型，对之后派发的任务生效';
       editBtn.onclick = () => {
       // 编辑行（每次一个成员）：kind 下拉+模型输入+保存/取消；错误就地显示。
       // 验收防护包（第三十八轮 #2）：真实渠道被拒绑——提供 fake 正路径（用户不再需要脚本自救）；
@@ -4084,7 +4085,7 @@ async function renderMemberRuntimeSettings() {
       const edit = document.createElement('div');
       edit.className = 'member-runtime-edit meta';
       const kinds = [['claude', 'claude（CLI 渠道）'], ['codex', 'codex（App Server）']];
-      if (runtimeEnv.realDispatchGuard === true && runtimeEnv.allowFake === true) kinds.push(['fake', 'fake（模拟——验收防护包唯一可绑定渠道）']);
+      if (runtimeEnv.realDispatchGuard === true && runtimeEnv.allowFake === true) kinds.push(['fake', 'fake（模拟渠道）']);
       const sel = document.createElement('select');
       for (const [v, text] of kinds) {
         const o = document.createElement('option');
@@ -4110,7 +4111,7 @@ async function renderMemberRuntimeSettings() {
         const nextKind = sel.value;
         const nextModel = modelInput.value.trim();
         if (nextKind === 'claude' || nextKind === 'codex') {
-          if (nextModel.length === 0) { err.textContent = '校验失败：该 runtime 必须显式模型（不默认、不猜测）'; return; }
+          if (nextModel.length === 0) { err.textContent = '请选择该渠道使用的模型'; return; }
           if (!/^[a-zA-Z0-9._-]+$/.test(nextModel)) { err.textContent = '校验失败：模型名含不接受的字符'; return; }
         }
         try {
@@ -4148,7 +4149,6 @@ async function renderCollabSettings() {
   }
   const revision = data.revision;
   const fields = [
-    { key: 'absenceToleranceMs', label: '成员无响应后继续（分钟；只影响之后开始的等待）', value: data.absenceToleranceMs },
     { key: 'turnDeadlineMs', label: '单轮运行时限（秒，留空=继承；0=关闭；只对之后开始的执行生效）', value: data.turnDeadlineMs },
   ];
   for (const f of fields) {
@@ -4203,7 +4203,7 @@ function renderProjectSettings() {
   const on = state.project.taskReviewEnabled === true;
   btn.textContent = `任务验收：${on ? '开' : '关'}`;
   note.textContent = on
-    ? '当前开启：新任务交付进入待验收（创建时快照）。已有任务保持创建时的策略。'
+    ? '当前开启：新任务交付进入待验收。已有任务保持创建时的策略。'
     : '当前关闭：新任务满足交付要求即完成（无需验收）。关闭不授权自动提交或推送。';
 }
 
@@ -4291,7 +4291,7 @@ async function renderRemoteSettings() {
     // 已应用配置事实行（与上方编辑下拉分列——下拉是「待应用编辑」，本行是服务端已生效值）。
     const appliedNote = document.createElement('div');
     appliedNote.className = 'meta';
-    appliedNote.textContent = `已应用配置：监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}${cfg.running ? '（运行中——上方下拉为待应用编辑，点「启用」生效）' : '（当前停用）'}${remoteEditDirty ? '；检测到未应用的编辑' : ''}`;
+    appliedNote.textContent = `已应用配置：监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}${cfg.running ? '（运行中；修改后点「启用」应用）' : '（当前停用）'}${remoteEditDirty ? '；检测到未应用的编辑' : ''}`;
     row.replaceChildren(appliedNote);
     if (cfg.running) {
       const addr = document.createElement('button');
@@ -4346,7 +4346,7 @@ async function renderRemoteSettings() {
       lanNote.className = 'meta';
       if (cfg.allowLan) {
         const sc = cfg.lanSelfCheck;
-        lanNote.textContent = sc == null ? 'LAN 自检未取得（服务运行中稍候刷新）' : (sc.ok ? `LAN 自检通过（${sc.checkedUrl}——本机经实际 LAN IP 的 HTTPS/TLS 可达）` : `LAN 自检失败：${sc.error}（本机绑定/TLS 层——先修本机，再查跨机防火墙；跨机问题需客户端具体错误码定位）`);
+        lanNote.textContent = sc == null ? 'LAN 自检未取得（服务运行中稍候刷新）' : (sc.ok ? `LAN 自检通过（${sc.checkedUrl}——本机经局域网地址连接正常）` : `LAN 自检失败：${sc.error}（请检查监听地址、证书和防火墙）`);
       } else {
         lanNote.textContent = '仅本机模式：仅 127.0.0.1 可访问——其它设备无法连接；需要客户端访问请切换「局域网」并启用';
       }
@@ -4409,7 +4409,7 @@ function wireRemoteSettings() {
         d.className = 'meta';
         d.textContent = (r.items ?? []).map((i) => `${i.ok ? '✓' : '✗'} ${i.name}`).join('；') + (r.resultsFile ? `——结果文件 ${r.resultsFile}` : '');
         out.append(s, d);
-      } catch (e) { showError(`自检失败：${e.message}（仅隔离验收模式开放——正式入口不带）`); }
+      } catch (e) { showError(`自检失败：${e.message}（仅测试环境可用）`); }
     })();
   }
   el('remote-pair-btn').onclick = () => void (async () => {

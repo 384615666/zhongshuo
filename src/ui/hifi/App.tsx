@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 import {TaskNotificationController} from './components/TaskNotificationController';
 /**
  * 正式外壳（H1 首包，第四十七轮修订）：原型侧栏三段式（§17.1/第十五批）+ 主区路由 房间/私信。
@@ -368,7 +369,7 @@ export default function App() {
     if (!isExternalDeepLink(`#${route}`)) return;
     if (document.body.classList.contains('legacy-on')) return;
     let cancelled = false;
-    void openExternalDeepLink(`#${route}`).catch((e: unknown) => { if (!cancelled) toast(`深链打开失败：${(e as Error).message}`, 'error'); });
+    void openExternalDeepLink(`#${route}`).catch((e: unknown) => { if (!cancelled) toast(`深链打开失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); });
     return () => { cancelled = true; };
   }, [route]);
 
@@ -378,7 +379,7 @@ export default function App() {
     const btn = document.createElement('button');
     btn.className = 'btn ghost sm zs-legacy-exit';
     btn.textContent = '⌂ 返回新界面';
-    btn.title = '回到换装壳（原型还原界面）——恢复样式并刷新数据';
+    btn.title = '返回主界面并刷新数据';
     btn.onclick = () => {
       takeoverToken += 1;
       document.body.classList.remove('legacy-on');
@@ -454,7 +455,7 @@ export default function App() {
               </button>
               <button
                 className={`side-item${navActive.members ? ' active' : ''}`}
-                title="成员管理：成员名单与 runtime 绑定（正式命令）"
+                title="管理成员与 AI 配置"
                 onClick={() => navigate(project != null ? `/project/${project.id}/members` : '/members')}
               >
                 <Icon name="users" size={14} />
@@ -542,7 +543,7 @@ export default function App() {
                       ) : null}
                       {expanded && roomIndex?.status === 'error' ? (
                         <div className="side-empty small" role="alert">
-                          房间加载失败：{roomIndex.error ?? '未知原因'}
+                          房间加载失败：{userFacingSystemText(roomIndex.error ?? '未知原因')}
                           <button
                             className="btn ghost sm"
                             onClick={() => setSidebarRooms((prev) => {
@@ -586,7 +587,7 @@ export default function App() {
               <button
                 className="side-item"
                 data-zs-open-project="hifi"
-                title="打开/注册项目：选择一个文件夹（已注册则幂等重开并切换焦点；其它项目保留在侧栏）"
+                title="选择项目文件夹；已打开的项目会切换到前台，其它项目保留在侧栏"
                 onClick={() => { void chooseFolder(); }}
                 aria-busy={folderPickerBusy}
                 disabled={folderPickerBusy}
@@ -615,7 +616,7 @@ export default function App() {
               </button>
               <button
                 className={`side-item${navActive.pending ? ' active' : ''}`}
-                title="待我处理：权威业务状态汇总"
+                title="查看需要你处理的事项"
                 onClick={() => navigate('/pending')}
               >
                 <Icon name="inbox" size={14} />
@@ -648,14 +649,14 @@ export default function App() {
             <MenuItem icon="pin" hint={pinned ? '已置顶' : undefined} title={pinned ? '取消置顶：恢复按侧栏顺序排列' : '置顶：排到项目列表前部'} onClick={() => { toggleProjectPinned(p.id); close(); }}>
               {pinned ? '取消置顶' : '置顶项目'}
             </MenuItem>
-            <MenuItem icon="edit" title="编辑显示名称与描述（project.update 乐观锁——不重命名磁盘目录）" onClick={() => { setEditInfoFor(p.id); close(); }}>编辑项目信息…</MenuItem>
+            <MenuItem icon="edit" title="编辑项目显示名称与描述" onClick={() => { setEditInfoFor(p.id); close(); }}>编辑项目信息…</MenuItem>
             <div className="menu-sep" />
             <MenuItem icon="folder" title="打开项目主页（房间/成员/活跃任务概览）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}`); close(); }}>项目主页</MenuItem>
             <MenuItem icon="users" title="成员管理（含 runtime 绑定）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/members`); close(); }}>成员管理</MenuItem>
             <MenuItem icon="settings" title="项目设置（信息/交付/协作限制/高级操作）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/settings`); close(); }}>项目设置</MenuItem>
             <div className="menu-sep" />
             {p.archivedAt != null ? (
-              <MenuItem icon="refresh" title="恢复为日常项目（原归档房不跟着恢复）" onClick={() => { void projectLifecycleReal(p.id, p.revision, 'unarchive').then((r) => { toast(r.ok ? '项目已恢复' : `恢复失败：${r.error}`, r.ok ? 'success' : 'error'); }); close(); }}>恢复项目</MenuItem>
+              <MenuItem icon="refresh" title="恢复为日常项目（原归档房不跟着恢复）" onClick={() => { void projectLifecycleReal(p.id, p.revision, 'unarchive').then((r) => { toast(r.ok ? '项目已恢复' : `恢复失败：${userFacingSystemText(r.error ?? '')}`, r.ok ? 'success' : 'error'); }); close(); }}>恢复项目</MenuItem>
             ) : (
               <MenuItem icon="archive" title="归档：退出日常列表、历史保留只读（有未结束工作会被拒绝）" onClick={() => { setArchiveProjFor(p.id); close(); }}>归档项目…</MenuItem>
             )}
@@ -865,7 +866,7 @@ function ProjectAlign({ projectId }: { projectId: string }) {
         await ensureProjectActive(projectId, intent);
       } catch (e) {
         if (!navIntentActive(intent)) return; // 已取消：不弹旧错误
-        toast(`打开所属项目失败：${(e as Error).message}`, 'error');
+        toast(`打开所属项目失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
         navigate('/', { replace: true });
       }
     })();
@@ -906,7 +907,7 @@ function LocateThread({ threadId, messageId, tab,focusedTaskId,focusedDeliveryId
       } catch (e) {
         if (!navIntentActive(intent)) return; // 已取消：不弹旧错误
         // 真实原因分列（review-r72 §1）：不存在/权限/装载失败按服务端与链路原话，不用「不可访问」覆盖一切。
-        toast(`打开回复串失败：${(e as Error).message}`, 'error');
+        toast(`打开回复串失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
         navigate('/', { replace: true });
       }
     })();
@@ -932,7 +933,7 @@ function ProjectLifecycleButton({ projectId, revision, action, danger, onDone }:
           setBusy(false);
           onDone();
           if (r.ok) toast(action === 'archive' ? '项目已归档（历史保留只读）' : '项目已移除关联（磁盘与历史不动；重新打开同目录即恢复）', 'success');
-          else toast(`${action === 'archive' ? '归档' : '移除'}被拒：${r.error}`, 'error');
+          else toast(`${action === 'archive' ? '归档' : '移除'}被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
         });
       }}
     >
@@ -965,8 +966,8 @@ function EditProjectInfoModal({ projectId, onClose }: { projectId: string; onClo
               setBusy(true); setErr(null);
               void updateProjectReal(projectId, p.revision, { displayName: name.trim(), description: desc }).then((r) => {
                 setBusy(false);
-                if (r.ok) { toast('已保存（revision 乐观锁通过，回读一致）', 'success'); onClose(); }
-                else { setErr(r.error ?? '未知错误'); toast(`保存失败：${r.error}（输入保留）`, 'error'); }
+                if (r.ok) { toast('已保存', 'success'); onClose(); }
+                else { setErr(r.error ?? '未知错误'); toast(`保存失败：${userFacingSystemText(r.error ?? '')}（输入保留）`, 'error'); }
               });
             }}
           >
@@ -985,7 +986,7 @@ function EditProjectInfoModal({ projectId, onClose }: { projectId: string; onClo
           <label className="field-label">描述（可选）</label>
           <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="例如：订单表回填与数据修复" />
         </div>
-        {err != null ? <div className="panel warning">保存失败：{err}（若项目已被他端修改请刷新重试）</div> : null}
+        {err != null ? <div className="panel warning">保存失败：{userFacingSystemText(err ?? '')}（若项目已被他端修改请刷新重试）</div> : null}
         <div className="small faint">目录：{p.rootPath} · revision {p.revision}</div>
       </div>
     </Modal>

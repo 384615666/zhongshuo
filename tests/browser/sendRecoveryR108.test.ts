@@ -710,6 +710,6 @@ describe('R108 browser send recovery store + loader', () => {
     });
     expect(calls).toEqual([]);
     expect(fx.store.getState().outboundLedger['thread:thread1']).toEqual([]);
-    expect(fx.store.getState().draftPersist.error).toContain('持久化失败');
+    expect(fx.store.getState().draftPersist.error).toContain('草稿保存失败');
   });
 });

@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 待我处理（第五十四轮 H3 §4）：消费 `mine.pending` **权威业务状态汇总**（纯读——零新增
  * 运行/零预算；读卡片≠完成事项）。分列保持原有区别：
@@ -5,7 +6,7 @@
  *    置灰说明——不把已处理/被替代交付伪装成可批准；**定位与验收分离**：本页只定位到线程
  *    详情（验收在详情内按冻结三重身份执行）。
  *  - DM 未读 / 线程未读 / 关注线程（人的阅读订阅，与 Agent 执行名单分列）。
- *  - 阻塞任务（可见≠审批——处理入口=线程本身）。
+ *  - 阻塞任务（打开对话串处理）。
  *  - 待确认提醒：**确认执行**走正式 reminder.confirm（状态/授权/预算事务内重读核对——同号
  *    重放恰一条获准）；与「定位」分列两个按钮。
  * 失败反馈真实：装载失败整页可见，不伪清待办；确认失败原因上屏。
@@ -79,7 +80,7 @@ export function PendingPage() {
   }, [reload]);
 
   const locate = (link: string) => {
-    void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
+    void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
   };
   /** occurrence 身份键：同 reminderId 不同 scheduledAt 是两行待确认——key/忙锁同键。 */
   const occKey = (r: { reminderId: string; scheduledAt: number }): string => `${r.reminderId}:${r.scheduledAt}`;
@@ -88,10 +89,10 @@ export function PendingPage() {
     try {
       await command('reminder.confirm', { reminderId: r.reminderId, scheduledAt: r.scheduledAt });
       recordWrite('reminder.confirm', `确认提醒「${r.title ?? r.reminderId}」→ 正式执行派发`);
-      toast('已确认：经正式执行链派发（任务+预占，author=system）', 'success');
+      toast('已确认执行', 'success');
       if (mountedRef.current) await reload();
     } catch (e) {
-      toast(`确认失败：${(e as Error).message}`, 'error');
+      toast(`确认失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
     } finally {
       if (mountedRef.current) setConfirming(null);
     }
@@ -114,14 +115,14 @@ export function PendingPage() {
         {/* 筛选行（R66 P4：范围显式呈现 + seg 分段控件——与其他页同套）。 */}
         <div className="page-filters">
           <div className="seg" role="group" aria-label="范围" data-zs-pending-scope={scope}>
-            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')} title="§17.7：汇总当前用户全部可访问项目——项目隐藏只收起导航，不清待办">
+            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')} title="查看你有权访问的全部项目；隐藏项目后，其待办仍会保留">
               全部可访问项目{data != null ? `（${totalCount(data.projects)}）` : ''}
             </button>
             <button className={scope === 'project' ? 'on' : ''} onClick={() => setScope('project')} title="只看当前项目——其它项目的待办仍在（切回全部可见）">
               当前项目{scope === 'project' && data != null ? `（${totalCount(sections)}）` : ''}
             </button>
           </div>
-          <span className="filter-note">权威业务状态汇总（mine.pending 纯读）——读卡片≠完成事项；确认执行/验收与定位分开</span>
+          <span className="filter-note">点击卡片查看详情；需要执行或验收的事项，请在详情页确认。</span>
           <div className="spacer" />
           <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
         </div>
@@ -129,9 +130,9 @@ export function PendingPage() {
           <div className="faint small" style={{ marginBottom: 6 }}>范围=当前项目——另有 {omittedProjects.length} 个项目的待办未显示（切「全部可访问项目」可见，不会因此清掉）。</div>
         ) : null}
         {projectMissing ? <div className="panel info">尚未打开项目；请选择项目或切回「全部可访问项目」。全部待办仍保留。</div> : null}
-        {err != null ? <div className="panel warning">装载失败：{err}——列表保持上次事实，不伪清（可刷新重试）</div> : null}
+        {err != null ? <div className="panel warning">装载失败：{userFacingSystemText(err ?? '')}。当前显示上次读取的列表，可刷新重试。</div> : null}
         {data != null && empty && !projectMissing ? (
-          <EmptyState icon="check-circle" title="没有需要你处理的事情" detail={scope === 'project' ? '当前项目没有待处理事项。' : '全部可访问项目都没有待处理事项——这里安静意味着确实没有待办，而不是漏了通知。'} />
+          <EmptyState icon="check-circle" title="没有需要你处理的事情" detail={scope === 'project' ? '当前项目没有待处理事项。' : '全部可访问项目都没有待处理事项。'} />
         ) : null}
         {sections.map((p) => (
           <div key={p.projectId} style={{ marginBottom: 18 }}>
@@ -145,8 +146,8 @@ export function PendingPage() {
                   <Icon name="package" size={13} />
                   <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>待验收{t.title != null ? `：${t.title}` : `任务 ${t.task_id.slice(0, 12)}…`}</span>
                   {t.actionable && t.revision != null ? <Tag tone="info">交付 v{t.revision} · {String(t.manifest_hash ?? '').slice(0, 8)}…</Tag> : <Tag tone="neutral" >无可批准交付</Tag>}
-                  <button className="btn ghost sm" disabled={!t.actionable} title={t.actionable ? '定位到线程详情（验收在详情内按冻结三重身份执行）' : '没有 pending 交付（已处理/被替代）——不可批准，进线程查看事实'} onClick={() => locate(`#task=${t.task_id}`)}>定位</button>
-                  {!t.actionable ? <span className="faint small">已处理/被替代交付不因聚合成为可批准对象</span> : null}
+                  <button className="btn ghost sm" disabled={!t.actionable} title={t.actionable ? '打开对话串详情并验收当前成果' : '这份成果已处理或已有新版本，打开对话串查看'} onClick={() => locate(`#task=${t.task_id}`)}>定位</button>
+                  {!t.actionable ? <span className="faint small">这份成果已处理或已有新版本</span> : null}
                 </Row>
               ))}
               {p.reminderAwaits.map((r) => (
@@ -154,7 +155,7 @@ export function PendingPage() {
                   <Icon name="clock" size={13} />
                   <span style={{ flex: 1 }}>待确认提醒{r.title != null ? `：「${r.title}」` : ''}<span className="faint small">（{new Date(r.scheduledAt).toLocaleString()}{r.missedCount > 0 ? ` · 错过 ${r.missedCount} 次` : ''}{r.notifyMuted ? ' · 通知已静音（待办保留）' : ''}）</span></span>
                   <button className="btn ghost sm" onClick={() => locate(r.locate)}>定位</button>
-                  <button className="btn sm" disabled={confirming === occKey(r)} title="确认执行：经正式执行链派发（状态/授权/预算事务内核对——author=system）；同提醒多次待确认按本次时间分别确认" onClick={() => void confirmReminder(r)}>{confirming === occKey(r) ? '确认中…' : '确认执行'}</button>
+                  <button className="btn sm" disabled={confirming === occKey(r)} title="执行本次提醒" onClick={() => void confirmReminder(r)}>{confirming === occKey(r) ? '确认中…' : '确认执行'}</button>
                 </Row>
               ))}
               {p.dmUnread.map((d) => (
@@ -170,13 +171,13 @@ export function PendingPage() {
                   <Icon name="message-circle" size={13} />
                   <span style={{ flex: 1 }}>线程有新回复</span>
                   <Tag tone="warning">{t.unread} 条</Tag>
-                  <button className="btn ghost sm" title="打开线程（贴底后推进阅读水位）" onClick={() => navigate(`/thread/${t.thread_id}`)}>定位</button>
+                  <button className="btn ghost sm" title="打开对话串查看回复" onClick={() => navigate(`/thread/${t.thread_id}`)}>定位</button>
                 </Row>
               ))}
               {p.followedThreads.map((t) => (
                 <Row key={t.thread_id}>
                   <Icon name="star" size={13} />
-                  <span style={{ flex: 1 }}>关注的线程有新回复<span className="faint small">（我的阅读订阅——与 Agent 执行名单分列）</span></span>
+                  <span style={{ flex: 1 }}>关注的线程有新回复<span className="faint small"></span></span>
                   <Tag tone="warning">{t.unread} 条</Tag>
                   <button className="btn ghost sm" onClick={() => navigate(`/thread/${t.thread_id}`)}>定位</button>
                 </Row>
@@ -185,14 +186,14 @@ export function PendingPage() {
                 <Row key={b.task_id}>
                   <Icon name="alert-triangle" size={13} />
                   <span style={{ flex: 1 }}>受阻：{b.title}</span>
-                  {b.reason != null ? <span className="faint small" style={{ maxWidth: '40vw', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.reason}</span> : null}
-                  <button className="btn ghost sm" title="可见≠审批——处理入口=线程本身" onClick={() => locate(`#task=${b.task_id}`)}>定位</button>
+                  {b.reason != null ? <span className="faint small" style={{ maxWidth: '40vw', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userFacingSystemText(b.reason ?? '')}</span> : null}
+                  <button className="btn ghost sm" title="打开对话串处理" onClick={() => locate(`#task=${b.task_id}`)}>定位</button>
                 </Row>
               ))}
             </div>
           </div>
         ))}
-        {data != null ? <div className="faint small" style={{ marginTop: 10 }}>汇总时间 {new Date(data.generatedAt).toLocaleTimeString()} · 纯读聚合（零运行零预算）；确认执行经 reminder.confirm 正式链（并发争用恰一条获准——失败原因如实上屏）。</div> : null}
+        {data != null ? <div className="faint small" style={{ marginTop: 10 }}>汇总时间 {new Date(data.generatedAt).toLocaleTimeString()}</div> : null}
       </div>
     </div>
   );

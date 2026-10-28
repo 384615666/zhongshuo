@@ -172,8 +172,8 @@ export const memberWorkCopy: Record<string, { label: string; icon: string; tone:
 
 export const routeModeCopy: Record<RouteMode, { label: string; detail: string }> = {
   AUTO: { label: '自动', detail: '无 @：默认协调者接单，可自行决定是否分工' },
-  DELIBERATE: { label: '共同研讨', detail: '@全体 或多个 @：冻结名单、阶段推进' },
-  DIRECT: { label: '指定成员', detail: '单个 @：仅该成员被调用，其他成员零调用' },
+  DELIBERATE: { label: '共同研讨', detail: '@全体或多位 AI：各自分析，再互评和整合' },
+  DIRECT: { label: '指定成员', detail: '@一位 AI：由这位 AI 处理' },
 };
 
 /* ---------- 19 个错误码（§16.5） ---------- */
@@ -182,15 +182,15 @@ export const errorCopy: Record<ErrorCode, { title: string; action: string }> = {
   RUNTIME_NOT_FOUND: { title: '找不到该 CLI', action: '指定 CLI 路径，或安装后重新检测' },
   AUTH_REQUIRED: { title: '需要登录', action: '按 CLI 官方方式登录后重试' },
   CAPABILITY_UNSUPPORTED: { title: '能力不支持', action: '本模式所需能力不支持，已列出可用方案' },
-  PROVIDER_LIMITED: { title: 'provider 限流或额度受限', action: '任务已保留，稍后重试' },
+  PROVIDER_LIMITED: { title: '模型服务限流或额度不足', action: '任务已保留，稍后重试' },
   PROJECT_MISSING: { title: '项目目录不存在', action: '重新定位项目目录' },
   // v1.9 §14.1 / E20：并行模式下要显示写入者名单、策略与上限，而非笼统说"被占用"
   WORKSPACE_BUSY: {
     title: '写入目录被占用',
-    action: '单写者策略：显示锁持有者与排队位置；并行策略：显示当前写入者名单、策略与写入者上限，超出上限的任务排队',
+    action: '其他任务正在修改同一目录，请等待它完成',
   },
   BASELINE_CHANGED: { title: '基线已变化', action: '重新生成分析基线或整合' },
-  OUTPUT_INVALID: { title: '输出格式无效', action: '查看原始报告，有限修复或重试' },
+  OUTPUT_INVALID: { title: '输出格式无效', action: '查看运行详情中的格式错误，再继续原任务' },
   STALE_REVISION: { title: '版本已过期', action: '获取最新状态再提交修改' },
   STORAGE_UNAVAILABLE: { title: '存储不可用', action: '已停止新派发，修复磁盘或数据库后恢复' },
   WORKER_STILL_RUNNING: { title: '仍在停止中', action: '不能释放写入锁' },
@@ -200,9 +200,9 @@ export const errorCopy: Record<ErrorCode, { title: string; action: string }> = {
   THREAD_SCOPE_MISMATCH: { title: '回复目标与任务不一致', action: '已拒绝提交，草稿保留' },
   CONTEXT_NOT_GRANTED: { title: '未获准读取该引用', action: '不能自动扩大范围' },
   ROOM_ARCHIVED: { title: '房间已归档', action: '不能新增任务，可查看既有记录' },
-  IDEMPOTENCY_CONFLICT: { title: '命令重复冲突', action: '同一 commandId 以不同内容重复提交，请用新 commandId' },
-  SNAPSHOT_REQUIRED: { title: '事件游标过旧', action: '重新拉取快照与读取水位后再订阅' },
-  PROJECT_NOT_FOUND: { title: '项目不存在或不可访问', action: '检查链接里的项目 ID；不会回退到当前项目的同号对象' },
+  IDEMPOTENCY_CONFLICT: { title: '发送记录冲突', action: '本次内容与原发送记录不一致，请核对后重新发送' },
+  SNAPSHOT_REQUIRED: { title: '活动记录需要刷新', action: '请刷新页面以读取最新记录' },
+  PROJECT_NOT_FOUND: { title: '项目不存在或不可访问', action: '请检查项目是否仍可访问' },
 };
 
 /* ---------- 研讨阶段：内部枚举 → 面向用户的中文名 ---------- */

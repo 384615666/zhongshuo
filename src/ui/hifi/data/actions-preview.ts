@@ -470,8 +470,8 @@ export function quoteResource(
     const line = `> 引用交付「${fd.taskTitle || res.title}」v${fd.revision}（manifest ${fd.manifestHash.slice(0, 12)}…）${body.length > 0 ? `：${body}` : ''}`;
     const r = queueDraftInsert(targetDraftKey, line);
     if (r.ok) {
-      recordWrite('preview.quote', `交付 ${fd.deliveryId} v${fd.revision} → 目标草稿 ${targetDraftKey}（文字引用：版本+manifest 绑定；交付非会话附件，不伪造附件引用）`);
-      toast(r.queued === false ? '相同交付引用已在待插入队列（不重复）' : `已引用交付 v${fd.revision}（manifest ${fd.manifestHash.slice(0, 8)}…）到「${targetLabel}」——文字引用带版本绑定`, 'success');
+      recordWrite('preview.quote', `已将交付 v${fd.revision} 引用到目标输入框`);
+      toast(r.queued === false ? '这条引用已加入输入框' : `已引用交付 v${fd.revision} 到「${targetLabel}」`, 'success');
     }
     return r.ok;
   }
@@ -494,7 +494,7 @@ export function quoteResource(
   recordWrite('preview.quote', `resource=${resourceId} revision=${revision} → 目标草稿 ${targetDraftKey}（固定版本；正文保持用户文字）`);
   toast(r.existed === true
     ? `「${res.title}」已在「${targetLabel}」引用（同文件同版本不重复）`
-    : `已引用「${res.title}」到「${targetLabel}」的输入区（发送时按正式附件合同携带版本/hash）`, 'success');
+    : `已引用「${res.title}」到「${targetLabel}」的输入区`, 'success');
   return true;
 }
 
@@ -652,11 +652,11 @@ export async function createFileCommentBridge(resourceId: string, body: string):
   }
   const draftKey = `comment:${resourceId}`;
   const staged = stageOutbound(draftKey, env);
-  if (staged.ok !== true) return { ok: false, error: staged.error ?? '原信封未能耐久保存' };
+  if (staged.ok !== true) return { ok: false, error: staged.error ?? '发送记录无法保存' };
   const { sendEnvelope } = await import('../loader');
   const r = await sendEnvelope(env);
   if (r.status === 'ok') { settleOutbound(draftKey, env, { recordThread: true }); return { ok: true }; }
-  if (r.status === 'failed') { dropOutbound(draftKey, env); return { ok: false, error: `${r.code}: ${r.error}` }; }
+  if (r.status === 'failed') { dropOutbound(draftKey, env); return { ok: false, error: r.error }; }
   confirmOutboundUnknown(draftKey, env);
   return { ok: false, error: `结果未知（${r.error ?? ''}）——可在输入区横幅人工确认，评论不会重复提交` };
 }

@@ -42,7 +42,7 @@ export const conversationThreadSchema = z.strictObject({
   lastMessageSeq: z.number().int().nonnegative(),
   revision: z.number().int().nonnegative(),
 }).refine((t) => t.roomId.length > 0, {
-  message: 'thread 只属于房间会话；DM 不创建 thread（开工契约 §2.2）',
+  message: '回复串只能属于房间对话',
 });
 
 /** 主池卡片聚合视图（§12.6 ThreadSummary）。 */

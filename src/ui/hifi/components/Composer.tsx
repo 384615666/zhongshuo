@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 输入条（§4.1 / §4.2 / E6 / E8 / E3）
  *
@@ -93,7 +94,7 @@ export async function prepareUploadFiles(
  * 这里只讲实际能力，不给安全承诺——不画锁，也不写"受保护"。
  */
 const INTENT_HINT =
-  '当前为交互原型，尚未连接实际执行服务。正式运行时，各档位仅在对应成员的权限能力验证通过后开放；确认的范围取决于实际执行工具。';
+  '当前为演示界面，未连接 AI。';
 
 /**
  * 权限模式（四档，下拉选择）。
@@ -582,7 +583,7 @@ function createInlineTokenElement(token: InlineAttachmentToken, uploads: UploadI
   if (token.uploadId != null) host.dataset.zsUploadId = token.uploadId;
   if (token.fileKind != null) host.dataset.zsFileKind = token.fileKind;
   const detail = status === 'preparing' ? '准备中…' : status === 'uploading' ? '上传中…' : status === 'failed' ? '上传失败' : token.fileKind === 'image_file' ? '图片' : '文件';
-  host.title = status === 'failed' ? `${token.name}：${upload?.error ?? '上传失败'}` : status === 'preparing' ? `${token.name}：正在计算内容身份，完成前不会发送` : status === 'uploading' ? `${token.name}：上传中，可移除` : `${token.name} · ${detail}${token.revision != null ? ` · v${token.revision}` : ''}`;
+  host.title = status === 'failed' ? `${token.name}：${userFacingSystemText(upload?.error ?? '上传失败')}` : status === 'preparing' ? `${token.name}：正在计算内容身份，完成前不会发送` : status === 'uploading' ? `${token.name}：上传中，可移除` : `${token.name} · ${detail}${token.revision != null ? ` · v${token.revision}` : ''}`;
 
   const icon = document.createElement('span');
   icon.className = 'composer-file-token-icon';
@@ -960,7 +961,7 @@ export function Composer({
         file,
         uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`,
         cls,
-        ...(cls.cls === 'unsupported' ? { error: `${cls.reason ?? '不支持的附件类型'}（${file.name} · ${file.size}B）——可换支持类型重选` } : {}),
+        ...(cls.cls === 'unsupported' ? { error: `${userFacingSystemText(cls.reason ?? '不支持的附件类型')}（${file.name} · ${file.size}B）——可换支持类型重选` } : {}),
       };
     });
     if (planned.length === 0) return;
@@ -1038,7 +1039,7 @@ export function Composer({
         if (r.extractionFailed != null) settleUpload(startDraftKey, item.uploadId, { warning: r.extractionFailed });
       } catch (e) {
         // R69 P1-C：失败原因就地可见（文件/阶段/可行操作），不再只藏 title。
-        settleUpload(startDraftKey, item.uploadId, { status: 'failed', error: `${item.file.name}（${item.file.size}B）：${(e as Error).message}` });
+        settleUpload(startDraftKey, item.uploadId, { status: 'failed', error: `${item.file.name}（${item.file.size}B）：${userFacingSystemText((e as Error).message ?? '')}` });
         syncDraftBodyToEditor(startDraftKey);
       }
     }
@@ -1115,7 +1116,7 @@ export function Composer({
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
       try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,...(collaboration?{collaboration}:{}),mentions:effectiveMentionIds.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
-      catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
+      catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${userFacingSystemText((e as Error).message ?? '')}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
     void read();const timer=window.setInterval(()=>void read(),5000),visible=()=>void read();document.addEventListener('visibilitychange',visible);
@@ -1133,7 +1134,7 @@ export function Composer({
       try {
         const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: effectiveMentionIds.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
         if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.length&&c.members.every(m=>m.status==='supported')?'图片会随消息发送给所选 AI。':'部分 AI 暂不能接收图片，可换成员或移除图片。' : '图片会保存到本机，可点击预览。'});
-      } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览，发送前可重试`}); }
+      } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${userFacingSystemText((e as Error).message ?? '')}；仍可本地预览，发送前可重试`}); }
       finally { reading = false; }
     };
     void read(); const timer = setInterval(() => void read(), 5000);
@@ -1181,7 +1182,7 @@ export function Composer({
       } catch (error) {
         if (!cancelled) {
           setMentionDocs([]);
-          setMentionDocsError(`文档候选读取失败：${(error as Error).message}`);
+          setMentionDocsError(`文档候选读取失败：${userFacingSystemText((error as Error).message ?? '')}`);
         }
       } finally {
         if (!cancelled) setMentionDocsLoading(false);
@@ -1497,7 +1498,7 @@ export function Composer({
       // 旧只读信封仍须同号同参恢复；撤掉开关不能让相同内容换号扩大权限。
       pendingEnv.params.analysisOnly === true,
     )) {
-      setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先查询刚才的发送，或点「重发原内容」（同号幂等）',pendingEnv.commandId);
+      setSendErrorFor(draftKey, '上次发送结果还未确认，内容未改。请先查询发送状态，或点击「重发原内容」，避免重复发送。',pendingEnv.commandId);
       return;
     }
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
@@ -1521,7 +1522,7 @@ export function Composer({
         if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
         if (!capability.supported) { setImageGate({ names: imageNames, reason: '当前所选 AI 尚不能确认接收图片' }); return; }
       } catch (error) {
-        setSendErrorFor(draftKey, `图片发送能力读取失败：${(error as Error).message}。草稿与原件保留，可重试、换成员或移除图片。`);
+        setSendErrorFor(draftKey, `图片发送能力读取失败：${userFacingSystemText((error as Error).message ?? '')}。草稿与原件保留，可重试、换成员或移除图片。`);
         return;
       } finally { imageCheckingKeys.delete(draftKey); }
 
@@ -1610,16 +1611,16 @@ export function Composer({
           commandIdRef.current = newId(); // 成功后下一次是新的命令
         } else if (r.status === 'failed') {
           commandIdRef.current = newId(); // 确定失败：新命令号重发
-          setSendErrorFor(keyAtSend, `发送失败：${r.error}——内容已保留，修正后可重发`,commandIdAtSend);
+          setSendErrorFor(keyAtSend, `发送失败：${userFacingSystemText(r.error ?? '')}——内容已保留，修正后可重发`,commandIdAtSend);
         } else {
           // 页面已在发送前用正式 builder 冻结完整信封并按 unknown 入库（park）——此处只换新号。
           commandIdRef.current = newId();
-          setSendErrorFor(keyAtSend, `发送结果未知（${r.error}）——原信封已保留，可「重发原内容」（同命令号不重复）`,commandIdAtSend);
+          setSendErrorFor(keyAtSend, `发送结果未知（${userFacingSystemText(r.error ?? '')}）——上次发送记录已保留，可「重发原内容」（保留原发送编号，避免重复）`,commandIdAtSend);
         }
       }).catch((e: unknown) => {
         // 无明确业务回执的异常：页面按 unknown 已冻结原信封——此处只换新号。
         commandIdRef.current = newId();
-        setSendErrorFor(keyAtSend, `发送结果未知（${e instanceof Error ? e.message : String(e)}）——原信封已保留，可「重发原内容」`,commandIdAtSend);
+        setSendErrorFor(keyAtSend, `发送结果未知（${e instanceof Error ? e.message : String(e)}）——上次发送记录已保留，可「重发原内容」`,commandIdAtSend);
       }).finally(() => {
         sendingKeys.delete(keyAtSend); // 只清发起键（不清其它在途目标——r48 §4）
         setSending(false);
@@ -1642,7 +1643,7 @@ export function Composer({
     if (onRetrySend == null) return;
     const busyAttachments = (getState().uploadItems[draftKey] ?? []).filter((item) => item.removed !== true && (item.status === 'preparing' || item.status === 'uploading'));
     if (busyAttachments.length > 0) {
-      setSendErrorFor(draftKey, `仍有 ${busyAttachments.length} 个文件正在准备或上传；本目标完成后才能重发未知信封`);
+      setSendErrorFor(draftKey, `仍有 ${busyAttachments.length} 个文件正在准备或上传；本目标完成后才能重发待确认的发送`);
       return;
     }
     if (sendingKeys.has(draftKey)) return;
@@ -1668,12 +1669,12 @@ export function Composer({
       }
       if (r.status === 'failed') {
         clearUnknownEnvelope(keyAtSend); // 原信封被服务明确拒绝：信封作废
-        setSendErrorFor(keyAtSend, `重发失败：${r.error}`,env.commandId);
+        setSendErrorFor(keyAtSend, `重发失败：${userFacingSystemText(r.error ?? '')}`,env.commandId);
         return;
       }
-      setSendErrorFor(keyAtSend, `重发仍未知（${r.error}）——原信封继续保留，可再重试`,env.commandId);
+      setSendErrorFor(keyAtSend, `重发仍未知（${userFacingSystemText(r.error ?? '')}）——上次发送记录继续保留，可再重试`,env.commandId);
     }).catch((e: unknown) => {
-      setSendErrorFor(keyAtSend, `重发仍未知（${e instanceof Error ? e.message : String(e)}）——原信封继续保留`,env.commandId);
+      setSendErrorFor(keyAtSend, `重发仍未知（${e instanceof Error ? e.message : String(e)}）——上次发送记录继续保留`,env.commandId);
     }).finally(() => {
       sendingKeys.delete(keyAtSend);
       setSending(false);
@@ -1835,7 +1836,7 @@ export function Composer({
       setMentionOpen(false);
     } catch (error) {
       if (insertionContextIsCurrent()) {
-        setMentionDocsError(`引用「${doc.name}」失败：${(error as Error).message}。输入与已选内容保留。`);
+        setMentionDocsError(`引用「${doc.name}」失败：${userFacingSystemText((error as Error).message ?? '')}。输入与已选内容保留。`);
         setMentionOpen(true);
       }
     } finally {
@@ -1865,7 +1866,7 @@ export function Composer({
       return {
         calls: null as number | null,
         detail: callBudgetReadError != null
-          ? `调用次数预算设置读取失败：${callBudgetReadError}。服务端仍会在提交时核对；草稿保留。`
+          ? `调用次数预算设置读取失败：${userFacingSystemText(callBudgetReadError ?? '')}。服务端仍会在提交时核对；草稿保留。`
           : '调用次数预算已关闭：真实记账，但不按次数拦截。可在应用设置开启。',
       };
     }
@@ -1875,13 +1876,13 @@ export function Composer({
       return {
         calls: core,
         // 公式与推导明细收进 tooltip：主界面只显示"最多 N 次调用"
-        detail: `默认按冻结名单 ${n} 人、一次检查点及一次整合修订推导 7N+3=${core}；整合与确认预留 ${1+n} 次。实际预算以正式运行快照为准。`,
+        detail: `默认按本次参与成员 ${n} 人、一次检查点及一次整合修订推导 7N+3=${core}；整合与确认预留 ${1+n} 次。实际预算以任务开始时的设置为准。`,
       };
     }
     if (route.mode === 'DIRECT') {
       return { calls: DEFAULT_CALL_BUDGET_LIMITS.DIRECT, detail: 'DIRECT：用户最初输入引发的模型调用；额外输入创建新的预算段。' };
     }
-    return { calls: DEFAULT_CALL_BUDGET_LIMITS.AUTO, detail: `AUTO 本轮共用最多${DEFAULT_CALL_BUDGET_LIMITS.AUTO}次，规划、全部子任务、修复和整合计入，预留2次整合；遵守更小任务预算。实际以正式运行快照为准。` };
+    return { calls: DEFAULT_CALL_BUDGET_LIMITS.AUTO, detail: `AUTO 本轮共用最多${DEFAULT_CALL_BUDGET_LIMITS.AUTO}次，规划、全部子任务、修复和整合计入，预留2次整合；遵守更小任务预算。以任务开始时的设置为准。` };
   }, [callBudgetEnabled, callBudgetReadError, route.mode, route.resolvedMemberIds.length, budgetBounds.rosterSize]);
 
   const effectiveBudget = callBudgetEnabled === true
@@ -2072,7 +2073,7 @@ export function Composer({
       ) : null}
 
       {/* 发送前说明真实协作路由；不更改草稿中的提及或发送意图。 */}
-      {writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip composer-info-chip">{writeHint.error}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
+      {writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip composer-info-chip">{userFacingSystemText(writeHint.error ?? '')}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
       {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-runtime-hint="1">
           <span className="chip composer-info-chip" title={runtimeHint.text}>
@@ -2105,8 +2106,8 @@ export function Composer({
         <div className="composer-mentions">
           <span className="chip composer-info-chip" title="当前目标未能确认图片输入能力；图片默认不会作为模型输入">
             <Icon name="image" size={11} />
-            {imageGate.reason ?? '当前目标图片输入尚未认证'}：{imageGate.names.join('、')}
-            <button disabled={stripInlineAttachmentTokens(body).trim().length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片随消息保存给用户看，但注入文本会如实注明图片未送给模型" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
+            {userFacingSystemText(imageGate.reason ?? '当前目标图片输入尚未认证')}：{imageGate.names.join('、')}
+            <button disabled={stripInlineAttachmentTokens(body).trim().length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片保留在聊天中，本次只把文字发送给 AI" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
             <button title="移除本草稿图片引用；已保存原件保留，其余内容可继续发送" onClick={() => { for (const a of attachments) if (a.kind === 'image_file') removeAttachment(a.uploadId); setImageGate(null); }}>移除图片继续</button>
             {showMentions ? <button title="重新选择已认证图片输入的成员后发送" onClick={() => { setImageGate(null); setMentionTrigger(null); setMentionOpen(true); }}>换可用成员</button> : <button onClick={navigateToMembers}>成员配置</button>}
             <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
@@ -2127,8 +2128,8 @@ export function Composer({
           <span className="chip composer-info-chip" title={`结果未知的发送：${pendingEnvSummary(pendingEnv)}（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>
             <Icon name="alert-triangle" size={11} />
             上次发送结果未知：{pendingEnvSummary(pendingEnv).slice(0, 24)}…
-            <button title="严格重发原信封（同命令号——服务幂等，不会重复）" onClick={() => retryUnknown(pendingEnv)}>重发原内容</button>
-            <button title="放弃该信封（若服务实际已保存，消息会在下次刷新出现）" onClick={() => clearUnknownEnvelope(draftKey)}>放弃</button>
+            <button title="按上次的内容重试发送，保留原发送编号以避免重复" onClick={() => retryUnknown(pendingEnv)}>重发原内容</button>
+            <button title="放弃重试；如果消息已经保存，下次刷新时仍会显示" onClick={() => clearUnknownEnvelope(draftKey)}>放弃</button>
           </span>
         </div>
       ) : null}
@@ -2273,7 +2274,7 @@ export function Composer({
             <div className="menu-sep" />
             <div className="menu-label">文件</div>
             {mentionDocsLoading ? <div className="small faint" style={{ padding: '4px 8px' }}>正在读取工作区与已上传文档…</div> : null}
-            {mentionDocsError != null ? <div className="small" role="alert" style={{ padding: '4px 8px', color: 'var(--warning)' }}>{mentionDocsError}</div> : null}
+            {mentionDocsError != null ? <div className="small" role="alert" style={{ padding: '4px 8px', color: 'var(--warning)' }}>{userFacingSystemText(mentionDocsError ?? '')}</div> : null}
             {mentionDocumentCandidates.map((doc, docIndex) => {
               const candidateIndex = (showAllCandidate ? 1 : 0) + mentionMemberCandidates.length + docIndex;
               return (
@@ -2326,7 +2327,7 @@ export function Composer({
                   ? `${inputDisabledReason}（只读中不能添加附件）`
                   : attachmentUpload != null
                     ? '添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）'
-                    : '附件通道未接入本页'
+                    : '此处暂不支持添加附件'
             }
             onClick={() => fileInputRef.current?.click()}
           >
@@ -2405,7 +2406,7 @@ export function Composer({
               <button
                 type="button"
                 className="composer-budget"
-                title="点击设置本次独立研讨的调用预算；发送时冻结进服务端信封"
+                title="设置本次独立研讨的调用预算，发送后仅用于本次任务"
                 data-zs-call-budget="enabled"
                 onClick={(event) => {
                   setBudgetInput(String(effectiveBudget));
@@ -2473,7 +2474,7 @@ export function Composer({
                   className={`access-trigger${accessOpen ? ' open' : ''}`}
                   disabled={Boolean(inputDisabledReason) || Boolean(formalLimits?.access)}
                   onClick={() => setAccessOpen((v) => !v)}
-                  title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
+                  title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${userFacingSystemText(writeHint.error ?? '')}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务使用的文件访问权限'}
                 >
                   <Icon name={currentMode.icon} size={13} />
                   {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 成员权限':'多人研讨 · 成员权限' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'仅保存草稿':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
@@ -2559,7 +2560,7 @@ export function Composer({
           {draftPersist.error != null ? (
             <span
               className="composer-draft failed"
-              title={draftPersist.error}
+              title={userFacingSystemText(draftPersist.error ?? '')}
             >
               <Icon name="alert-triangle" size={11} /> 草稿未持久化
             </span>
@@ -2578,7 +2579,7 @@ export function Composer({
           {sendError != null ? (
             <span
               className="composer-draft failed"
-              title={sendError}
+              title={userFacingSystemText(sendError ?? '')}
               style={{ cursor: 'pointer' }}
               onClick={() => setSendErrorState(null)}
             >
@@ -2693,7 +2694,7 @@ export function Composer({
               }}
               autoFocus
             />
-            <div className="small faint">范围 {budgetBounds.minimum}–{budgetBounds.maximum} 次。发送时冻结进本次独立研讨信封；已结果未知的原信封不会被改动。</div>
+            <div className="small faint">范围 {budgetBounds.minimum}–{budgetBounds.maximum} 次。发送后用于本次独立研讨；上次待确认的发送保持原设置。</div>
             <div className="composer-budget-editor-actions">
               <button type="button" className="btn ghost sm" onClick={() => setBudgetMenuAnchor(null)}>取消</button>
               <button type="button" className="btn primary sm" onClick={saveBudget} disabled={!isValidDeliberationBudget(Number(budgetInput), effectiveMentionIds, availableDeliberateIds)}>保存</button>

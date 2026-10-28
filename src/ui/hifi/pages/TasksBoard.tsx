@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 任务看板（R65 原型还原·TasksBoardPage 同源）：范围（侧栏可见/单项目/全部）+房间筛选+
  * 项目分组×状态分组卡片。数据=board.view 权威只读聚合（业务状态 taskStatus 与执行状态
@@ -147,7 +148,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
         </div>
 
         {err != null ? (
-          <div className="panel warning">看板读取失败：{err}。{data != null ? '保留上次已确认的任务；可点击刷新重试。' : '可点击刷新重试。'}</div>
+          <div className="panel warning">看板读取失败：{userFacingSystemText(err ?? '')}。{data != null ? '保留上次已确认的任务；可点击刷新重试。' : '可点击刷新重试。'}</div>
         ) : null}
         {data == null ? (
           <div className="panel info">{err?'尚未取得这个范围的看板。':'正在读取看板…'}</div>
@@ -189,7 +190,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                 style={{ cursor: 'pointer' }}
                                 onClick={() => {
                                   if (c.threadId == null) { toast('该任务无线程（异常形态）——不定位', 'warn'); return; }
-                                  void openExternalDeepLink(c.locate).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
+                                  void openExternalDeepLink(c.locate).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
                                 }}
                               >
                                 <div className="row tight wrap">
@@ -197,7 +198,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                   <TaskStatusTag status={c.taskStatus as 'OPEN'} />
                                   {c.runStatus != null && c.runStatus !== c.taskStatus ? <Tag plain icon="activity">{({ QUEUED: '运行已排队', RUNNING: '运行中', WAITING: '运行等待中', FAILED: '本轮运行失败', SUCCEEDED: '本轮运行成功', STOPPING: '正在停止', INTERRUPTED: '运行中断', CANCELLED: '运行已停止' } as Record<string, string>)[c.runStatus] ?? c.runStatus}</Tag> : null}
                                   {c.exitUnconfirmed ? <Tag tone="warning" icon="help-circle" title="运行中断且存在结果未知的 turn（恢复中心/详情取证）">退出未确认</Tag> : null}
-                                  {c.pendingDelivery != null ? <Tag tone="warning" icon="eye" title={`待验收交付 v${c.pendingDelivery.revision}（manifest ${c.pendingDelivery.manifestHash.slice(0, 8)}…）——在线程详情按冻结三重身份验收`}>待验收 v{c.pendingDelivery.revision}</Tag> : null}
+                                  {c.pendingDelivery != null ? <Tag tone="warning" icon="eye" title={`待验收交付 v${c.pendingDelivery.revision}（交付校验值 ${c.pendingDelivery.manifestHash.slice(0, 8)}…）——在对话串详情验收当前交付`}>待验收 v{c.pendingDelivery.revision}</Tag> : null}
                                 </div>
                                 <div className="strong" style={{ marginTop: 6, fontSize: 12.5 }}>{c.title || '（标题未装载——进线程查看）'}</div>
                                 {c.statusReason != null ? <div className="small faint clamp-2" style={{ marginTop: 3 }}>{c.statusReason}</div> : null}

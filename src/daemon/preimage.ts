@@ -15,7 +15,7 @@
  * 边界判定，不用裸前缀）；指向 root 外的符号链接/junction 不跟随——记 unknown（§3.3）。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import {captureCommandOutput} from './commandOutput.ts';
 import {homedir} from 'node:os';
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, lstatSync,writeFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep,dirname } from 'node:path';
@@ -178,7 +178,7 @@ export type ProjectScanScope = 'git-files' | 'directory-scan';
 
 function gitScopeSignature(root:string):string {
   const git=(args:string[],input?:string,allowUnset=false)=>{
-    const result=spawnSync('git',['-C',root,...args],{encoding:'utf8',input,maxBuffer:64*1024*1024});
+    const result=captureCommandOutput('git',['-C',root,...args],input);
     if(result.error || result.status!==0 && !(allowUnset&&result.status===1))throw Error(String(result.error??result.stderr));
     return result.stdout;
   };
@@ -242,9 +242,9 @@ export function scanProjectFiles(root: string, scope?: ProjectScanScope, ancesto
   if (scope !== 'git-files') return {...scanDirectoryFiles(root),rootIdentity,scopeKind:'directory-scan'};
   // No fallback to a full-directory scan on Git failure: that would change the
   // capture boundary and could traverse ignored runtimes and external links.
-  const listing=spawnSync('git',['-C',root,'ls-files','--cached','--others','--exclude-standard','-z','--','.'],{
-    encoding:'utf8',maxBuffer:64*1024*1024,
-  });
+  let listing:ReturnType<typeof captureCommandOutput>;
+  try {listing=captureCommandOutput('git',['-C',root,'ls-files','--cached','--others','--exclude-standard','-z','--','.']);}
+  catch(error){return failure(`Git文件清单读取失败：${String(error).slice(0,500)}`);}
   if(listing.error || listing.status!==0) return failure(`Git文件清单读取失败：${String(listing.error ?? listing.stderr).slice(0,500)}`);
   const result: ScanResult & {scopeKind:ProjectScanScope}={scopeKind:'git-files',rootIdentity,files:[],truncated:false,failedDirs:[],rejectedEntries:[]};
   try {result.scopeSignature=gitScopeSignature(root);} catch(error) {return failure(`Git文件范围核对失败：${String(error)}`);}
@@ -317,7 +317,7 @@ function captureOne(root: string, userPath: string, storeDir: string | undefined
   const sha256 = createHash('sha256').update(content).digest('hex');
   const entry: PreimageEntry = { path: rel, state: 'present', sha256, size: content.length };
   if (content.length > maxBytes) {
-    entry.contentUnavailable = `超出内容存储上限（${content.length} > ${maxBytes} 字节）——该文件不可内容级撤销（§14.2）`;
+    entry.contentUnavailable = `超出内容存储上限（${content.length} > ${maxBytes} 字节），未保存可恢复的文件副本`;
     return entry;
   }
   if (storeDir != null) {

@@ -126,7 +126,7 @@ export function TitleBar() {
   const connectionDetail = [
     connectionLabel,
     connInfo != null && connInfo.length > 0 ? connInfo : null,
-    '打开设置查看本地诊断；未知结果信封会保留，不自动重发。',
+    '打开设置查看本地诊断；结果待确认的发送记录会保留，请检查后决定是否重试。',
   ].filter((part): part is string => part != null).join(' · ');
   return createPortal(
     <TitleBarBoundary>
@@ -186,7 +186,7 @@ export function TitleBar() {
         <button type="button" className="zs-winbtn" title={state.maximized ? '还原' : '最大化'} aria-label={state.maximized ? '还原窗口' : '最大化窗口'} onClick={() => { void d?.toggleMaximize().then((r) => { if (r.ok && typeof r.maximized === 'boolean') setState((s) => ({ ...s, maximized: r.maximized as boolean })); }); }}>
           <Icon name={state.maximized ? 'copy' : 'maximize'} size={11} />
         </button>
-        <button type="button" className="zs-winbtn close" title="关闭窗口（经既有优雅停机链：daemon 收拢后退出）" aria-label="关闭窗口" onClick={() => { void d?.close(); }}>
+        <button type="button" className="zs-winbtn close" title="关闭众说" aria-label="关闭窗口" onClick={() => { void d?.close(); }}>
           <Icon name="x" size={12} />
         </button>
         {pmAt != null ? (

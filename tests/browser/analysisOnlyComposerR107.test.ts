@@ -116,7 +116,7 @@ describe('R107 analysis-only Composer request scope', () => {
     expect(store.getDraftFull('dm:bad-null').body).toBe('');
     expect(store.getState().pendingSends['room:bad-envelope']).toBeUndefined();
     expect(store.getState().draftPersist.recoveryNote ?? '').toContain('损坏草稿 2 条');
-    expect(store.getState().draftPersist.recoveryNote ?? '').toContain('损坏未确认信封 1 条');
+    expect(store.getState().draftPersist.recoveryNote ?? '').toContain('无法读取的发送记录 1 条');
     expect([...storage.store.keys()].some((key) => key.includes('.quarantine-'))).toBe(true);
   });
 

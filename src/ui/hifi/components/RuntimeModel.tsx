@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {useEffect,useRef,useState} from 'react';
 import {command} from '../bridge';
 import {runtimeModelPickerOptions,type RuntimeModelMetadata} from '../lib/format';
@@ -23,7 +24,7 @@ export function RuntimeModel({projectId,kind,executable,value,onChange,disabled}
       {value:'',label:catalog?'选择模型':'正在读取模型清单…'},
       ...options,
     ]}/>
-    <div className="field-hint">{error?`模型清单读取失败：${error}；保存值保留。`:catalog?.warning??(catalog?`${catalog.source}${catalog.truncated?'（部分列表）':''}`:'读取元数据，不发送任务。')}{savedOutsideCatalog?' 当前保存的模型不在本次清单中，保存值未改写。':null}
+    <div className="field-hint">{error?`模型清单读取失败：${userFacingSystemText(error ?? '')}；保存值保留。`:catalog?.warning??(catalog?`${catalog.source}${catalog.truncated?'（部分列表）':''}`:'读取元数据，不发送任务。')}{savedOutsideCatalog?' 当前保存的模型不在本次清单中，保存值未改写。':null}
       <button className="btn ghost sm" disabled={disabled} onClick={()=>setRefresh(n=>n+1)}>重新读取</button>
     </div>
     {catalog?.program.status==='missing'?<div className="panel warning">当前未找到执行程序，可在高级设置选择程序后再使用。</div>:null}

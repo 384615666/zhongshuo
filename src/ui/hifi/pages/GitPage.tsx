@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * Git 页（用户要求「加 git」，完整客户端口径）。
  *
@@ -260,7 +261,7 @@ export function GitPage({
         <EmptyState
           icon={branchReadError != null ? 'alert-triangle' : 'folder'}
           title={branchReadError != null ? '分支列表读取失败' : project?.isGit === false ? '尚未初始化 Git' : '没有 Git 数据'}
-          detail={branchReadError != null ? `${branchReadError}；当前分支/工作区仍按 git.status 显示。` : '众说不自动 git init，也不会替你在项目里插入配置。你可以自行初始化后回到这里。'}
+          detail={branchReadError != null ? `${userFacingSystemText(branchReadError ?? '')}；当前分支/工作区仍按 git.status 显示。` : '众说不自动 git init，也不会替你在项目里插入配置。你可以自行初始化后回到这里。'}
         />
         {branchReadError != null ? <div className="panel-actions"><button className="btn sm" onClick={() => void refreshGitState(projectId)}>重试读取</button></div> : <div className="panel">
           <div className="panel-title"><Icon name="info" size={13} /> 非 Git 目录下的改动记录仍然完整</div>
@@ -317,7 +318,7 @@ export function GitPage({
     git.branches.find((b) => b.name === sel) ?? git.branches.find((b) => b.isCurrent) ?? git.branches[0];
 
   const goTask = (taskId: string) => {
-    void openExternalDeepLink(`#task=${encodeURIComponent(taskId)}`).catch((e: unknown) => toast(`任务定位失败：${(e as Error).message}`, 'error'));
+    void openExternalDeepLink(`#task=${encodeURIComponent(taskId)}`).catch((e: unknown) => toast(`任务定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
   };
 
   /** 左栏选中：窄窗口同时切到详情栏 */
@@ -670,7 +671,7 @@ export function GitPage({
                     <div className="spacer" />
                     <button className="btn ghost sm" disabled={entryRead?.key === entryReadKey && entryRead.loading} onClick={() => entryReload.current()}>刷新差异</button>
                   </div>
-                  {entryReadError ? <div className="panel warning" role="alert">差异读取失败：{entryReadError}。{entryDiff ? '保留上次确认的差异。' : '尚未取得该版本差异。'}可点「刷新差异」重试。</div> : null}
+                  {entryReadError ? <div className="panel warning" role="alert">差异读取失败：{userFacingSystemText(entryReadError ?? '')}。{entryDiff ? '保留上次确认的差异。' : '尚未取得该版本差异。'}可点「刷新差异」重试。</div> : null}
                   {entryRead?.key === entryReadKey && entryRead.at != null ? <div className="small faint">差异更新于 {fullTime(entryRead.at)}{entryRead.loading ? ' · 正在刷新…' : ''}</div> : null}
                   {activeEntry.staged ? (
                     <div className="git-note" style={{ margin: '0 0 6px' }}>
@@ -797,7 +798,7 @@ export function GitPage({
                         </>
                       ) : null}
                     </div>
-                    {commitError ? <div className="panel warning" role="alert">提交差异读取失败：{commitError}。{commitData ? '保留上次确认内容。' : '尚未取得该提交差异。'}</div> : null}
+                    {commitError ? <div className="panel warning" role="alert">提交差异读取失败：{userFacingSystemText(commitError ?? '')}。{commitData ? '保留上次确认内容。' : '尚未取得该提交差异。'}</div> : null}
                     <button className="btn ghost sm" disabled={commitRead?.key === commitReadKey && commitRead.loading} onClick={() => commitReload.current()}>刷新提交差异</button>
                     {(commitData?.parentsMeta?.length ?? 0) > 1 ? <div className="row wrap" data-zs-git-parents>
                       <span className="small faint">合并提交 · 选择比较父</span>
@@ -914,7 +915,7 @@ export function GitPage({
                     </div>
                     {!activeBranch.isCurrent ? (
                       <div className="small faint" style={{ marginTop: 8 }}>
-                        切换分支不会替你 stash 未提交改动——它们会跟着过去。这是如实反映 Git 行为，不是保护你。
+                        未提交的改动会保留；若与目标分支冲突，Git 会拒绝切换。
                       </div>
                     ) : null}
                   </div>

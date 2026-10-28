@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 线程视图（第五十一轮 H2 首版；r55 增「成果与附件」真实标签页）：主池线程卡 → 回复串页面
  * ——回复 / 详情（任务概况/交付验收）/ 成果与附件 三个可达视图；活动/成员/运行/研讨未换装，
@@ -30,8 +31,8 @@ import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
 const FORMAL_LIMITS = {
-  method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链（H3）——线程内按任务既有方式跟进',
-  access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——按成员默认权限执行',
+  method: '对话串内继续使用任务原有的执行方式',
+  access: '当前使用成员的默认权限',
 } as const;
 
 const STATUS_LABEL: Record<string, string> = {
@@ -102,7 +103,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       setSub({ followed: r.followed, muted: r.muted });
       recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
       toast(patch.mute === true ? '已静音（未读/通知聚合排除；待办保留）' : patch.follow === true ? '已关注（有新回复进「待我处理」）' : '订阅已更新', 'success');
-    } catch (e) { toast(`订阅更新失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`订阅更新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setSubBusy(false); }
   };
   // 线程标读门注册（review-r51 §4 修复）：当前线程+**当前回复视图**+前台+非接管+贴底——
@@ -240,7 +241,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     return (
       <div className="page-stack" style={{ padding: 16 }}>
         {readError != null ? (
-          <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照——可返回主池重进）</div>
+          <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照——可返回主池重进）</div>
         ) : (
           <div className="panel info">正在打开回复串…</div>
         )}
@@ -281,15 +282,15 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       openedFrom: target,
     });
     openPreviewTab(rid, d.revision, { target });
-    recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（manifest ${d.manifestHash.slice(0, 8)}…）`);
+    recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（交付校验值 ${d.manifestHash.slice(0, 8)}…）`);
   };
 
   const doStop = async () => {
     setStopping(true);
     const r = await stopThreadTask(threadId);
     setStopping(false);
-    if (r.ok) toast('停止请求已提交（等活跃 turn 结束——详情状态会刷新）', 'success');
-    else toast(`停止失败：${r.error}`, 'error');
+    if (r.ok) toast('停止请求已提交，正在等待执行结束', 'success');
+    else toast(`停止失败：${userFacingSystemText(r.error ?? '')}`, 'error');
   };
 
   /** 收藏切换（r61 G6：按钮按正式收藏事实显示已收藏状态——再次点击取消；连点互斥由
@@ -301,7 +302,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       return;
     }
     if (r.busy === true) return; // 快速连点：忽略后到点击——第一笔在途，回执后再看状态
-    toast(`收藏操作失败：${r.error ?? '未知错误'}（状态未变）`, 'error');
+    toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}（状态未变）`, 'error');
   };
 
   /** 消息引用（r56：插入草稿——只改变草稿，不直接派发）。 */
@@ -315,7 +316,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     try {
       await command('message.react', { messageId: m.id, emoji });
       void loadThread(threadId).catch(() => { /* 刷新失败另有呈现 */ });
-    } catch (e) { toast(`表情失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { toast(`表情失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
   };
   /** 导出本线程（r56：export.create thread 目标——快照事务固定消息+附件；打开导出目录走白名单）。 */
   const exportThread = async (format: 'md' | 'html' | 'docx') => {
@@ -324,8 +325,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       const r = await command<{ exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number } }>('export.create', { target: { kind: 'thread', projectId: projectIdOfRoom, conversationId, threadId }, format });
       recordWrite('export.create', `导出线程 ${format}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
       toast(`已导出 ${format.toUpperCase()}（${r.stats.messages} 消息 · ${r.files.length} 文件）`, 'success');
-      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${(e as Error).message}（目录 ${r.dir}）`, 'error'));
-    } catch (e) { toast(`导出失败：${(e as Error).message}`, 'error'); }
+      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${userFacingSystemText((e as Error).message ?? '')}（目录 ${r.dir}）`, 'error'));
+    } catch (e) { toast(`导出失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
   };
 
   const openReview = (mode: 'accept' | 'rework') => {
@@ -338,12 +339,12 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     if (reviewBox == null) return;
     if (reviewBox.threadId !== threadId) { toast('验收目标已切换（框属其它线程）——作废零提交', 'warn'); setReviewBox(null); return; }
     if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) {
-      toast('要求修改必须填写意见（意见进入正式任务记录并注入返工输入）', 'warn');
+      toast('请填写修改意见，AI 会据此继续修改。', 'warn');
       return;
     }
     const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined, threadId);
     if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过（任务完成）' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success'); setReviewBox(null); void loadThread(threadId); }
-    else { toast(`提交失败：${r.error}——意见已保留可修正重提；若交付已变化本框将作废`, 'error'); }
+    else { toast(`提交失败：${userFacingSystemText(r.error ?? '')}——意见已保留可修正重提；若交付已变化本框将作废`, 'error'); }
   };
   /** 执行返工（r58 验收与执行分离；r59 完整身份）：点击时冻结 reworkPending 快照——
    * 服务端核对当前返工事实，旧引用 STALE 拒绝不改绑。 */
@@ -355,7 +356,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     void (async () => {
       try {
         const r = await executeTaskRework(snapshot, threadId);
-        if (!r.ok) { toast(`执行返工被拒：${r.error}——已刷新为当前返工事实`, 'error'); void loadThread(threadId); return; }
+        if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前返工事实`, 'error'); void loadThread(threadId); return; }
         toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
         void loadThread(threadId);
       } finally { setBusyRework(false); }
@@ -417,7 +418,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           : statusLabel != null ? <Tag tone={statusTone} icon="activity">{taskNo} {statusLabel}</Tag> : null}
       </div>
 
-      {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
+      {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
 
       {tab === 'replies' ? (
         <>
@@ -425,9 +426,9 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             {/* 根消息（房间级锚消息——不在 thread 历史内；thread.get anchor 提供） */}
             <div className="panel info" style={{ marginBottom: 8 }} id={`msg-${anchor?.id ?? 'anchor'}`}>
               <div className="row tight">
-                <span className="small faint">原消息 · {anchor != null ? new Date(anchor.createdAt).toLocaleString() : '正文缺失（如实标注）'}</span>
+                <span className="small faint">原消息 · {anchor != null ? new Date(anchor.createdAt).toLocaleString() : '正文无法读取'}</span>
               </div>
-              <div style={{ marginTop: 4 }}>{anchor?.body || '（根消息正文不可得——不虚构）'}</div>
+              <div style={{ marginTop: 4 }}>{anchor?.body || '暂时无法读取原消息正文'}</div>
               {(anchor?.formalAttachments ?? []).length > 0 ? (
                 <div className="msg-inline-attachments" data-zs-inline-attachments="1">
                   {(anchor?.formalAttachments ?? []).map((a) => (
@@ -466,7 +467,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             insertText={insertText ?? undefined}
             attachmentUpload={conversationId !== '' ? { conversationId } : undefined}
             onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-              if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（原信封）', 'success'); }
+              if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（上次发送记录）', 'success'); }
               return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
             })}
             onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -486,7 +487,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               // r62 P1：完整信封在交给 bridge 之前耐久落账；ok/failed/unknown 三态收口
               //（unknown→pendingSends 横幅=人工同号确认；崩溃窗口见 store 出站账本注释）。
               const staged = stageOutbound(draftKey, env);
-              if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
+              if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
               const r = await sendEnvelope(env);
               if (r.status === 'ok') settleOutbound(draftKey, env);
               else if (r.status === 'failed') dropOutbound(draftKey, env);
@@ -516,17 +517,17 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                 {detail.lastStartupFailureMessage != null ? <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div> : null}
                 <div className="row tight" style={{ marginTop: 8 }}>
                   {stoppable ? (
-                    <button className="btn ghost sm" disabled={stopping || runStopping} title="停止当前 run（绑定装载的 run+停止代次——过时会被服务端拒绝）" onClick={() => void doStop()}>
+                    <button className="btn ghost sm" disabled={stopping || runStopping} title="停止当前执行；如果任务状态已更新，请刷新后再试" onClick={() => void doStop()}>
                       {stopping || runStopping ? '停止中…' : '停止任务'}
                     </button>
                   ) : null}
-                  <button className="btn ghost sm" title="刷新任务详情（绑定服务端当前事实）" onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${(e as Error).message}`, 'error'))}>刷新详情</button>
+                  <button className="btn ghost sm" title="刷新任务详情（绑定服务端当前事实）" onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'))}>刷新详情</button>
                   {/* 定位链接（r53 §5/T6）：桌面端没有地址栏——给用户一个**可复制**的正式定位符
                       （外部深链 #task=<实体ID>——不是房间任务序号 #N）。粘贴入口（打开定位）随
                       H3 设置页归位；当前跳转核验由工程验证器执行，用户项只核对复制格式。 */}
                   <button
                     className="btn ghost sm"
-                    title={`复制本任务的正式定位链接（#task=${detail.id}——实体 ID，非房间序号；应用内深链，不是公网分享链接）`}
+                    title="复制可在众说中打开的任务链接"
                     onClick={() => {
                       const link = `#task=${detail.id}`;
                       void navigator.clipboard?.writeText(link).then(
@@ -557,7 +558,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                       <div style={{ marginTop: 8 }}>
                         {pendingDeliveryStale ? (
                           <div className="panel warning">
-                            交付已更新（打开时冻结的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{detail.pendingDelivery?.revision ?? '?'}）——本框已作废，请对新版本重新操作。
+                            交付已更新（打开时查看的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{detail.pendingDelivery?.revision ?? '?'}）——本框已作废，请对新版本重新操作。
                             <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setReviewBox(null)}>关闭</button>
                           </div>
                         ) : (
@@ -664,7 +665,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     <span className="faint small">{d.reviewedAt != null ? `已确认 ${new Date(d.reviewedAt).toLocaleString()}` : '等你确认'}{d.audience === 'dm' ? ' · 私信' : ''}</span>
                     <button
                       className="btn ghost sm"
-                      title="在共享预览打开交付文档（delivery.document——正文 hash 与 manifest 核对；阅读/源码切换、另存、引用均可用）"
+                      title="打开交付文档，可切换阅读或源码视图、另存和引用"
                       onClick={() => openDeliveryDoc(d)}
                     >打开/保存文件</button>
                     {d.deliveryId === detail?.pendingDelivery?.id ? <>

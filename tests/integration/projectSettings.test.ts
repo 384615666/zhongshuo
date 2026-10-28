@@ -119,8 +119,8 @@ describe('第十轮·三：项目设置任务验收开关', () => {
       `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
        VALUES (?, ?, NULL, 1, 'manifest-h-1', '[]', '[]', '[]', 'pending')`,
     ).run(deliveryId, taskId);
-    await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'changes_requested' })).rejects.toThrow(/必须填写意见/);
-    await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'changes_requested', note: '   ' })).rejects.toThrow(/必须填写意见/);
+    await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'changes_requested' })).rejects.toThrow(/请填写需要修改的内容/);
+    await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'changes_requested', note: '   ' })).rejects.toThrow(/请填写需要修改的内容/);
     const ok = await cmd<{ reviewStatus: string; taskStatusAfter: string }>('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'changes_requested', note: '清单缺少风险一节' });
     expect(ok.reviewStatus).toBe('changes_requested');
     expect(ok.taskStatusAfter).toBe('ACTIVE');

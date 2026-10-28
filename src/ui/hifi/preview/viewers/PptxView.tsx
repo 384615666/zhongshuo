@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../../contracts/userFacingText';
 /**
  * PPT 阅读视图（R69 建立 / R70 补阅读状态）：左缩略图列（懒渲染+页码+选中描边）+
  * 主舞台（fit×zoom 居中白页）+ 底部控制条「‹ [页码] / 总数 ›｜− 缩放% ＋｜下载原件」。
@@ -186,13 +187,13 @@ export function PptxView({ bytes, filename, revisionLabel, onDownload, resourceI
       <div className="preview-unsupported" data-zs-pptx-error={err.slice(0, 40)}>
         <Icon name="alert-triangle" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>幻灯片渲染失败</div>
-        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{err}——原件已保存（{revisionLabel}），可下载后用系统工具打开；提取文本见「文件信息」。</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}——原件已保存（{revisionLabel}），可下载后用系统工具打开；提取文本见「文件信息」。</div>
         <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
       </div>
     );
   }
   if (doc == null) return <div className="panel info" data-zs-pptx-loading="1">正在打开幻灯片（解析 {filename}）…</div>;
-  if (doc.pageCount === 0) return <div className="panel info">这份演示文稿没有任何幻灯片（0 页——如实呈现）。</div>;
+  if (doc.pageCount === 0) return <div className="panel info">这份演示文稿没有幻灯片。</div>;
 
   return (
     <div className="pptx-view" data-zs-pptx-view="1" data-zs-pptx-pages={doc.pageCount} data-zs-pptx-page={pageNumber}>

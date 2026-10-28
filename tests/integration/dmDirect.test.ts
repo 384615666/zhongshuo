@@ -82,7 +82,7 @@ describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
     // 跨项目对端拒绝。
     await expect(cmd('conversation.create', { projectId: 'p1', peerMemberId: '不存在' })).rejects.toThrow(/不存在/);
     // ③ 无 @ 派工：mentions 非空整笔拒绝。
-    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] })).rejects.toThrow(/mentions 必须为空/);
+    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] })).rejects.toThrow(/请移除其他成员的 @/);
     // 首条发送：立即派发（disposition=dispatched）。
     const s1 = await cmd<{ messageId: string; taskId: string | null; disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: '第一个问题', intent: 'default', mentions: [] });
     expect(s1.disposition).toBe('dispatched');

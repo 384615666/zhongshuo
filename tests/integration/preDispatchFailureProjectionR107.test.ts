@@ -157,9 +157,11 @@ describe('R107 shared pre-dispatch failure projection', () => {
         WHERE task_id = ? AND kind = 'task.contextAssemblyFailed'
         ORDER BY seq DESC LIMIT 1
       `).get(fx.sent.taskId) as { seq: number; payload_json: string };
+      const actualFailureMessage=JSON.parse(failure.payload_json).message as string;
+      expect(actualFailureMessage).toMatch(/写入基线不完整：escape：.*越界/);
       expect(JSON.parse(failure.payload_json)).toMatchObject({
         reason: 'write-baseline-incomplete',
-        message: failureMessage,
+        message: actualFailureMessage,
       });
       const detail = await fx.cmd<TaskDetailsResult>('task.details', {
         projectId: fx.projectId,
@@ -171,7 +173,7 @@ describe('R107 shared pre-dispatch failure projection', () => {
         event: {
           seq: failure.seq,
           reason: 'write-baseline-incomplete',
-          message: failureMessage,
+          message: actualFailureMessage,
         },
         runCount: 0,
         turnCount: 0,

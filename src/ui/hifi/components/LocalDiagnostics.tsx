@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useRef, useState } from 'react';
 import { command, bridgeErrorFacts } from '../bridge';
 import { getState, useStore } from '../data/store';
@@ -30,7 +31,7 @@ export function LocalDiagnostics(){
       <div>草稿存储：{draft.mode}{draft.error?' · 保存失败，输入保留在当前窗口；恢复存储后明确重试':' ' } · 未知发送：{unknownCount()}</div>
       <div>恢复保护：{service?service.protection.dispatchGateHeld?'继续派发需显式确认':'未持有派发门':'未读取'} · 未知执行：{service?.protection.unknownTurns??'未读取'}</div>
       {readingStorageCode?<div className="panel warning">阅读位置存储不可用（{readingStorageCode}）；当前窗口的位置仍保留，旧键不覆盖。恢复存储后再保存位置。</div>:null}
-      {service?.runtime.map((r,i)=><div key={r.memberId} className="small">成员 {i+1}：{r.kind??'未配置'} · 渠道 {r.channel??'无法确定'} · 模型ID {r.model??'未指定'} · 配置 {r.configuration} / {r.source} · 图片 {r.status}（{r.reason}）</div>)}{service?.truncated?<div>只读前20位成员；其他成员未读取。</div>:null}
+      {service?.runtime.map((r,i)=><div key={r.memberId} className="small">成员 {i+1}：{r.kind??'未配置'} · 渠道 {r.channel??'无法确定'} · 模型ID {r.model??'未指定'} · 配置 {r.configuration} / {r.source} · 图片 {r.status}（{userFacingSystemText(r.reason ?? '')}）</div>)}{service?.truncated?<div>只读前20位成员；其他成员未读取。</div>:null}
       <DetailFold summary="脱敏技术详情"><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{JSON.stringify(report(),null,2)}</pre></DetailFold></>:null}
   </div>;
 }

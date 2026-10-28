@@ -902,7 +902,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'run.baselineContentUnavailable', {
             paths: baselineContentUnavailable,
             changeSetId: baselineChangeSetId,
-            note: '路径与 hash 已冻结，但这些文件没有内容级前像；不伪造可撤销，也不覆盖用户明确选择的执行权限',
+            note: '已记录这些文件的版本，但没有可恢复的原文件副本',
           });
         }
         // 修复工作项原子消费：与 run/turn 创建同事务（崩溃时二者一致——要么都成、要么
@@ -2936,7 +2936,7 @@ export class DispatchWorker {
         this.audit(task, null, turnId, 'dm.sessionIdentityConflict', {
           conversationId: task.conversation_id, resumeRequested: resumeRef?.providerSessionId ?? null,
           observedSessionIds: observedDistinct, lastReported: reported, nativeResume: false,
-          note: '同轮 provider 上报多个不同 session_id（协议异常）——按受限重放落行，不冒充原生续接',
+          note: '渠道返回的会话信息不一致，已重新建立会话并保留历史内容',
         });
         return;
       }

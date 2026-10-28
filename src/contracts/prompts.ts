@@ -333,8 +333,8 @@ export const turnBundleEnvelopeSchema = z.strictObject({
   }),
   communicationContract: z.discriminatedUnion('mentionEnabled',[
     z.strictObject({mentionEnabled:z.literal(false),disabledReason:z.string()}),
-    z.strictObject({mentionEnabled:z.literal(true),submitVia:z.literal('final-result'),maxHandoffs:z.number().int().min(1).max(4),
-      members:z.array(z.strictObject({memberId:z.string(),displayName:z.string(),description:z.string().nullable()})).max(12),
+    z.strictObject({mentionEnabled:z.literal(true),submitVia:z.literal('final-result'),maxHandoffs:z.number().int().min(1).optional(),
+      members:z.array(z.strictObject({memberId:z.string(),displayName:z.string(),description:z.string().nullable()})),
       allowedPurposes:z.array(z.enum(['ask','review','implement','reply'])).max(4),replyToMemberId:z.string().nullable()}),
   ]),
   /**

@@ -96,7 +96,6 @@ export function selectThreadRecipients(
           : '本回复串至少需要两位可用 AI 才能独立研讨；请添加成员后重试，输入保留',
       );
     }
-    if(frozen.length>12)throw new DaemonCommandError('VALIDATION_INVALID','一次最多请求12位 AI');
     const roomCoordinator=(db.prepare('SELECT coordinator_member_id FROM rooms WHERE id=?').get(snapshot.roomId) as {coordinator_member_id:string|null})?.coordinator_member_id;
     const memberId=owner&&frozen.includes(owner)?owner:roomCoordinator&&frozen.includes(roomCoordinator)?roomCoordinator:frozen[0]!;
     const route:TopLevelRouteOutcome={
@@ -110,7 +109,6 @@ export function selectThreadRecipients(
   }
   const recipientIds=resumeChild?[resumeChild.owner_member_id]:all?[...snapshot.eligibleMemberIds]:explicit.length?explicit:[owner&&snapshot.eligibleMemberIds.includes(owner)?owner:snapshot.eligibleMemberIds[0]].filter((id):id is string=>Boolean(id));
   if(!recipientIds.length)throw new DaemonCommandError(snapshot.memberIds.length?'MEMBER_DISABLED':'MEMBER_UNAVAILABLE',snapshot.memberIds.length?'本串没有可用的 AI，请启用成员或添加其他 AI':'请先为本串添加一位可用的 AI');
-  if(recipientIds.length>12)throw new DaemonCommandError('VALIDATION_INVALID','一次最多请求12位 AI');
   const roomCoordinator=(db.prepare('SELECT coordinator_member_id FROM rooms WHERE id=?').get(snapshot.roomId) as {coordinator_member_id:string|null})?.coordinator_member_id;
   const memberId=owner&&recipientIds.includes(owner)?owner:roomCoordinator&&recipientIds.includes(roomCoordinator)?roomCoordinator:recipientIds[0]!;
   const inviteIds=all?[]:explicit.filter(id=>!snapshot.memberIds.includes(id));

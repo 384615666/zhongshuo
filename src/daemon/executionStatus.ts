@@ -1083,7 +1083,7 @@ export function readTaskExecutionStatus(
     || latestStatus === 'FAILED' || task.status === 'BLOCKED' || latestStatus === 'RUNNING') {
     const durableMessage = failureReasonFromEvent(durableFailure)
       ?? (latestStatus === 'RUNNING'
-        ? '运行标记为执行中，但没有任何可确认的在途 turn；不伪造进度。'
+        ? '尚未找到当前执行记录，请刷新运行详情。'
         : latestStatus === 'INTERRUPTED'
           ? '运行被中断，结果尚不能视为完成。'
           : '最近执行未成功完成。');

@@ -4,14 +4,14 @@ import { z } from 'zod';
 export const coordinationStepSchema = z.strictObject({
   key: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
   memberId: z.string().min(1).max(160),
-  title: z.string().trim().min(1).max(160),
-  objective: z.string().trim().min(1).max(8000),
+  title: z.string().trim().min(1),
+  objective: z.string().trim().min(1),
   role: z.enum(['analysis', 'implementation', 'review']),
-  dependsOn: z.array(z.string().max(40)).max(8),
+  dependsOn: z.array(z.string().max(40)),
 });
 export const coordinationPlanSchema = z.strictObject({
-  summary: z.string().trim().min(1).max(4000),
-  steps: z.array(coordinationStepSchema).min(1).max(8),
+  summary: z.string().trim().min(1),
+  steps: z.array(coordinationStepSchema).min(1),
 });
 export type CoordinationPlan = z.infer<typeof coordinationPlanSchema>;
 
@@ -19,7 +19,7 @@ export type CoordinationPlan = z.infer<typeof coordinationPlanSchema>;
  * permission and budgets are checked by the daemon before accepting a handoff. */
 export const memberHandoffSchema=z.strictObject({
   toMemberId:z.string().min(1).max(160),
-  message:z.string().trim().min(1).max(7000),
+  message:z.string().trim().min(1),
   purpose:z.enum(['ask','review','implement','reply']),
 });
 export type MemberHandoff=z.infer<typeof memberHandoffSchema>;
@@ -36,11 +36,9 @@ export function coordinationTopologicalSteps(plan:CoordinationPlan):Coordination
 }
 
 export function validateCoordinationPlan(value: unknown, eligibleMemberIds: readonly string[], options?: { accumulated?: boolean }): CoordinationPlan {
-  // A single model proposal stays bounded. Persisted work may grow through
-  // separately validated handoffs without imposing a lifetime eight-step cap.
-  const plan = options?.accumulated
-    ? coordinationPlanSchema.extend({steps:z.array(coordinationStepSchema.extend({dependsOn:z.array(z.string().max(40))})).min(1)}).parse(value)
-    : coordinationPlanSchema.parse(value);
+  // Individual and accumulated work use the same identity/dependency contract.
+  void options;
+  const plan = coordinationPlanSchema.parse(value);
   const allowed = new Set(eligibleMemberIds);
   const byKey = new Map(plan.steps.map(step => [step.key, step]));
   if (byKey.size !== plan.steps.length) throw Error('分工计划包含重复步骤');

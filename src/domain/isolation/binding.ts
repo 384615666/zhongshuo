@@ -24,10 +24,10 @@ export function validateExecutionBinding(refs: BindingEntityRefs): DomainResult<
     return domainErr('THREAD_SCOPE_MISMATCH', 'turn 不属于目标运行');
   }
   if (refs.run.conversationId !== refs.task.conversationId || refs.turn.conversationId !== refs.task.conversationId) {
-    return domainErr('CONVERSATION_SCOPE_MISMATCH', 'run/turn 与任务会话不一致（开工契约 §2.2）');
+    return domainErr('CONVERSATION_SCOPE_MISMATCH', '执行记录与当前对话不匹配');
   }
   if (refs.run.threadId !== refs.task.threadId || refs.turn.threadId !== refs.task.threadId) {
-    return domainErr('THREAD_SCOPE_MISMATCH', 'run/turn 线程与任务线程不一致（§4.5 输出归属）');
+    return domainErr('THREAD_SCOPE_MISMATCH', '执行记录与当前回复串不匹配');
   }
   if (refs.thread != null) {
     if (refs.thread.id !== refs.task.threadId) {

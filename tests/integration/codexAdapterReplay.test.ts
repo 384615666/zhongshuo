@@ -180,7 +180,10 @@ describe('回放：轮次归属（两轮/迟到/通知先于响应）', () => {
           await expect(adapter.respondApproval(first, approval.approvalId, 'deny')).rejects.toThrow();
           await adapter.respondApproval(second, approval.approvalId, 'deny');
         }
-        expect(rpcLogEntries().find(e => e['id'] === 9000)).toMatchObject({ result: { decision: 'deny' } });
+        // The adapter write completes before the child has necessarily consumed
+        // stdin and appended its receipt. Wait for that evidence, not a timer.
+        await expect.poll(() => rpcLogEntries().find(e => e['id'] === 9000), {timeout:2000,interval:10})
+          .toMatchObject({ result: { decision: 'deny' } });
         const late = await firstReader.next(500);
         expect(late).toMatchObject({ value: { kind: 'message.completed', text: 'late first', sessionId: first.id, turnId: 'first' } });
       } finally {

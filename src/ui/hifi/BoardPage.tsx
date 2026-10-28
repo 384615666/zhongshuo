@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 任务看板（H3 第一批，第五十三轮）：正式 `board.view` 只读聚合（不建新表、不改任务状态——
  * 动作走正式命令：卡片定位到线程详情后停止/验收）。列位按服务端 column 事实（第二十七轮五
@@ -54,7 +55,7 @@ export function BoardPage() {
   useEffect(() => { void reload(); }, [reload]);
 
   const openCard = (card: BoardCard) => {
-    void openExternalDeepLink(card.locate).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
+    void openExternalDeepLink(card.locate).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
   };
 
   const group = data?.groups.find((g) => g.projectId === projectId) ?? data?.groups[0];
@@ -69,10 +70,10 @@ export function BoardPage() {
           <option value="project">当前项目</option>
           <option value="all">全部可访问项目</option>
         </select>
-        <span className="faint small">只读聚合（board.view）——动作在卡片定位的线程详情里（停止/验收/追加）</span>
+        <span className="faint small">点击任务卡片，查看回复、补充要求或验收成果</span>
         <button className="btn ghost sm" onClick={() => void reload()} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
       </div>
-      {err != null ? <div className="panel warning">看板装载失败：{err}（可刷新重试）</div> : null}
+      {err != null ? <div className="panel warning">看板装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
       {group == null && err == null ? <div className="panel info">{loading ? '正在装载…' : '当前项目没有任务。'}</div> : null}
       {groups.map((group) => group.rooms.map((room) => {
         const byColumn = new Map<BoardCard['column'], BoardCard[]>(COLUMN_ORDER.map((c) => [c, []]));
@@ -121,7 +122,7 @@ export function BoardPage() {
           </div>
         );
       }))}
-      <div className="faint small" style={{ marginTop: 10 }}>{data?.note ?? ''} · 停止/验收等动作经卡片进入线程详情执行（绑定 run/代次/三重身份——过时会被服务端拒绝）。</div>
+      <div className="faint small" style={{ marginTop: 10 }}>{userFacingSystemText(data?.note ?? '')} · 点击任务卡片，进入详情停止任务或验收成果。</div>
     </div>
   );
 }

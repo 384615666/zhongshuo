@@ -110,6 +110,6 @@ describe('R99 queued work and non-final evidence presentation', () => {
     expect(html).toContain('value="10"');
     expect(html).toContain('disabled=""');
     expect(html).toContain('aria-busy="true"');
-    expect(html).toContain('正在保存并回读，完成后可继续编辑');
+    expect(html).toContain('正在保存，完成后可继续编辑');
   });
 });

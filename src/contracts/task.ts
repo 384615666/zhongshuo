@@ -94,7 +94,7 @@ export const taskSchema = z.strictObject({
   }
   return true;
 }, {
-  message: 'dm_turn 无 room/thread/房间任务号（开工契约 §2.2）',
+  message: '私信任务包含了房间任务信息',
 });
 
 // ---------- 交付与验收（§10.5） ----------
@@ -129,7 +129,7 @@ export const taskDeliverySchema = z.strictObject({
   reviewedAt: z.number().int().nonnegative().nullable().optional(),
   reviewNote: z.string().nullable().optional(),
 }).refine((d) => (d.reviewStatus === 'not_required') === (d.reviewedBy == null && d.reviewedAt == null), {
-  message: '关闭验收时 reviewed_by/at 为空；已验收必有人工记录（§10.5）',
+  message: '验收记录不完整或与当前设置不一致',
 });
 
 /** task.delivery.review：仅人类可提交，携带目标版本；request_changes 必填意见（§15.2）。 */
@@ -150,7 +150,7 @@ export const taskDeliveryReviewParamsSchema = z.strictObject({
   decision: z.enum(['accept', 'request_changes']),
   note: z.string().optional(),
 }).refine((p) => p.decision !== 'request_changes' || (p.note != null && p.note.length > 0), {
-  message: '要求修改必须填写意见（§10.5 第 4 条）',
+  message: '请填写需要修改的内容',
 });
 
 // ---------- 改动集 ----------

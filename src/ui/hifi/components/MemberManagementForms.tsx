@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Select, memberShortId } from './ui';
 import { command } from '../bridge';
@@ -30,7 +31,7 @@ export async function refreshMemberIdentity(projectId: string) {
   const state=getState();
   if(state.activeProjectId===projectId) {
     const failed=state.rooms.find(r=>r.projectId===projectId&&state.readErrors[`roster:${r.id}`]);
-    if(failed)throw Error(`房间名单回读失败：${state.readErrors[`roster:${failed.id}`]}；成员已保存，原名单保留，请重试读取`);
+    if(failed)throw Error(`房间成员读取失败：${state.readErrors[`roster:${failed.id}`]}；成员已保存，原名单保留，请重试读取`);
   }
   window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));
 }
@@ -41,7 +42,7 @@ function useWriteForm(scope: string, projectId?: string) {
   const retryRead=async()=>{
     if(pending.current||!guard.valid()||!readBack.current)return;
     pending.current=true;setBusy(true);setError(null);
-    try{await readBack.current(guard.valid);}catch(e){if(guard.valid())setError(`已提交；回读失败：${(e as Error).message}。只重试读取，不会重新创建或修改。`);}
+    try{await readBack.current(guard.valid);}catch(e){if(guard.valid())setError(`已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}。只重试读取，不会重新创建或修改。`);}
     finally{pending.current=false;if(guard.alive.current)setBusy(false);}
   };
   const save=async(method:string,params:Record<string,unknown>,done:(isCurrent:()=>boolean)=>void|Promise<void>)=>{
@@ -51,15 +52,15 @@ function useWriteForm(scope: string, projectId?: string) {
     if(guard.valid()){
       if(result.status==='ok'){
         setCommitted(true);readBack.current=done;
-        try{await done(guard.valid);}catch(e){if(guard.valid())setError(`已提交；回读失败：${(e as Error).message}。只重试读取，不会重新创建或修改。`);}
-      }else setError(result.status==='unknown'?`结果未知：${result.error}。原信封已保留，可在成员页「未知成员操作」人工同号重放。`:`${result.code}：${result.error}。输入已保留。`);
+        try{await done(guard.valid);}catch(e){if(guard.valid())setError(`已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}。只重试读取，不会重新创建或修改。`);}
+      }else setError(result.status==='unknown'?`结果未知：${userFacingSystemText(result.error ?? '')}。原操作请求已保留，可在成员页「未知成员操作」中重试。`:`${result.code}：${userFacingSystemText(result.error ?? '')}。输入已保留。`);
     }
     pending.current=false;if(guard.alive.current)setBusy(false);
   };
   return{save,retryRead,busy,committed,error,invalid:guard.invalid};
 }
 function FormFeedback({state:f}:{state:ReturnType<typeof useWriteForm>}){
-  return f.error?<div className="panel warning">{f.error}{f.committed?<button className="btn sm" data-zs-member-readretry disabled={f.busy||f.invalid} onClick={()=>void f.retryRead()}>重试读取已提交结果</button>:null}</div>:null;
+  return f.error?<div className="panel warning">{userFacingSystemText(f.error ?? '')}{f.committed?<button className="btn sm" data-zs-member-readretry disabled={f.busy||f.invalid} onClick={()=>void f.retryRead()}>重试读取已提交结果</button>:null}</div>:null;
 }
 export function EditMemberModal({ projectId, member, onClose, onSaved }: {
     projectId: string;
@@ -103,11 +104,11 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <FormFeedback state={f}/>{f.invalid ? <div className="panel warning">页面已切换，表单作废。</div> : null}
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} maxLength={60} value={form.name} onChange={e => setForm(s => ({ ...s, name: e.target.value }))}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={form.description} onChange={e => setForm(s => ({ ...s, description: e.target.value }))}/></label>
     <label className="field"><span className="field-label">模板状态</span><Select disabled={f.busy||f.committed} value={form.enabled ? 'enabled' : 'disabled'} ariaLabel="模板状态" options={[{ value: 'enabled', label: '启用 · 可创建' }, { value: 'disabled', label: '停用 · 已有成员不变' }]} onChange={v => setForm(s => ({ ...s, enabled: v === 'enabled' }))}/></label>
-    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[{ value: 'claude', label: 'claude' }, { value: 'codex', label: 'codex' }, ...(fake ? [{ value: 'fake', label: 'fake · 工程夹具' }] : [])]} onChange={v => config(runtimeChannelPatch(v as ConfigTemplate['config']['kind']))}/></label>
+    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[{ value: 'claude', label: 'claude' }, { value: 'codex', label: 'codex' }, ...(fake ? [{ value: 'fake', label: '测试 AI' }] : [])]} onChange={v => config(runtimeChannelPatch(v as ConfigTemplate['config']['kind']))}/></label>
     {projectId&&form.config.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.config.kind} executable={form.config.executable} value={form.config.model??''} disabled={f.busy||f.committed} onChange={model=>config({model:model||null,effort:null})}/>:<label className="field"><span className="field-label">模型 ID</span><input className="input" disabled={f.busy||f.committed} value={form.config.model??''} onChange={e=>config({model:e.target.value||null})}/></label>}
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
     {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}；打开项目后可读取真实选项。</div>}
-    <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">从模板创建时复制此权限快照，不改变已有成员。项目内编辑档另需目标项目授权；旧只读配置不自动提权。程序不可用仍可保存，创建后需回读实际可用性。</div>
+    <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">新成员使用模板中的权限配置。选择项目内编辑时，还需授权目标项目。创建后可查看 AI 是否可用。</div>
   </Modal>;
 }
 export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {
@@ -156,7 +157,7 @@ export function TemplatePanel({ projectId, readOnly, onChanged }: {
     } };
     useEffect(() => { alive.current=true;void load(); const changed = () => void load(); window.addEventListener('zs-member-changed', changed); return () => { alive.current=false;queued.current=false;seq.current++; window.removeEventListener('zs-member-changed', changed); }; }, []);
     return <><div className="section-title" style={{ marginTop: 22 }}>可复用的成员模板 <button className="btn ghost sm" onClick={() => void load()}>刷新模板</button></div>
-    <div className="small faint">从选定成员的「保存配置模板」建立；模板在此数据根内跨项目复用，创建时取快照。列表按页显示；“刷新模板”回到首批。</div>{error ? <div className="panel warning">模板读取失败：{error}（保留已确认事实）</div> : null}
+    <div className="small faint">从选定成员的「保存配置模板」建立；模板在此数据根内跨项目复用，创建时取快照。列表按页显示；“刷新模板”回到首批。</div>{error ? <div className="panel warning">模板读取失败：{userFacingSystemText(error ?? '')}（保留已确认事实）</div> : null}
     {rows === null && !error ? <div className="panel info">正在读取模板…</div> : rows?.length === 0 ? <div className="panel">暂无配置模板。先配置成员，再从该成员保存模板。</div> : null}
     <div className="grid grid-3" data-zs-template-list>{rows?.map(t => <div className="card tight" key={t.id} data-zs-template={t.id}><div className="strong">{t.name} · {t.enabled ? '启用' : '停用'}</div><div className="small faint">{t.description}</div><div className="small" style={{ marginTop: 8 }}>{t.config.kind} · {t.config.model ?? '渠道默认模型'} · {t.config.permissionMode ?? '渠道默认权限'}</div><details><summary>配置快照</summary><div className="small mono">{t.config.executable}</div><div className="small faint">第 {t.revision + 1} 个版本 · 未复制认证结论</div></details><div className="row tight wrap" style={{ marginTop: 10 }}><button className="btn ghost sm" data-zs-template-edit={t.id} onClick={() => setEdit(t)}>编辑 / 停用</button><button className="btn primary sm" data-zs-template-create={t.id} disabled={!t.enabled || readOnly || !projectId} onClick={() => setCreate({ projectId, template: t })}>在本项目创建…</button></div></div>)}</div>
     {cursor ? <button className="btn sm" onClick={() => void load(true)}>加载下一页模板（每页最多 50 项）</button> : null}
@@ -186,9 +187,9 @@ export function UnknownMemberOperations() {
                 window.dispatchEvent(new CustomEvent('zs-member-changed'));
         }
         else
-            setError(r.status === 'failed' ? `${r.code}：${r.error}` : `结果仍未知：${r.error}`);
+            setError(r.status === 'failed' ? `${r.code}：${userFacingSystemText(r.error ?? '')}` : `结果仍未知：${userFacingSystemText(r.error ?? '')}`);
     } };
     if (!items.length && !error)
         return null;
-    return <div className="panel warning" data-zs-member-unknown><div className="strong">待确认与未知成员操作</div><div className="small">待确认或未知结果保留在此；重连、重开不会自动执行或换新身份。人工重放使用原 commandId 与原参数。</div>{error ? <div>{error}</div> : null}{memberWriteStorageError?<div>{memberWriteStorageError}</div>:null}{items.map(p => <div className="row tight wrap" key={p.commandId}><span className="small">{memberWriteState(p)==='pending'?'等待回执':memberWriteState(p)==='ok'?'已成功 · 本地账本未收口':memberWriteState(p)==='failed'?'服务端明确拒绝 · 本地账本未收口':'结果未知'} · {p.method} · {String(p.params.displayName ?? p.params.name ?? p.params.templateId ?? (typeof p.params.memberId==='string'?`#${memberShortId(p.params.memberId)}`:'成员操作'))} · 项目 {String(p.params.projectId ?? '全局模板')}</span><details className="small faint"><summary>原操作与目标</summary><div className="mono-sm">{p.commandId}</div><div>项目：{String(p.params.projectId??'全局模板')} · 成员：{String(p.params.memberId??'创建新身份')} · 模板：{String(p.params.templateId??'未引用模板')} · 基线版本：{String(p.params.expectedRevision??'原合同未提供')}</div>{p.method==='member.setRuntime'?<div>渠道 {String(p.params.kind)} · 模型 {String(p.params.model??'渠道默认')} · 权限 {String(p.params.permissionMode??'渠道默认')} · 程序 {String(p.params.executable??'渠道默认')}</div>:null}{p.method==='member.setEnabled'?<div>原意图：{p.params.enabled===true?'启用':'停用'}</div>:null}</details><button className="btn sm" data-zs-member-replay={p.commandId} disabled={busy !== null||memberWriteState(p)==='pending'} onClick={() => void replay(p)}>同号重放原操作</button></div>)}</div>;
+    return <div className="panel warning" data-zs-member-unknown><div className="strong">待确认与未知成员操作</div><div className="small">这里保留结果待确认的成员操作。重新连接或打开页面后，可查看原操作记录并决定是否重试。</div>{error ? <div>{userFacingSystemText(error ?? '')}</div> : null}{memberWriteStorageError?<div>{userFacingSystemText(memberWriteStorageError ?? '')}</div>:null}{items.map(p => <div className="row tight wrap" key={p.commandId}><span className="small">{memberWriteState(p)==='pending'?'等待回执':memberWriteState(p)==='ok'?'已成功 · 记录待更新':memberWriteState(p)==='failed'?'已拒绝 · 记录待更新':'结果未知'} · {({ 'project.writeAccess.set': '修改项目授权', 'member.create': '添加成员', 'member.update': '修改成员资料', 'member.setRuntime': '修改 AI 配置', 'member.setEnabled': '更改成员启用状态', 'memberTemplate.saveFromMember': '保存成员模板', 'memberTemplate.update': '修改成员模板', 'memberTemplate.createMember': '从模板添加成员' } as Record<string, string>)[p.method] ?? '成员操作'} · {String(p.params.displayName ?? p.params.name ?? p.params.templateId ?? (typeof p.params.memberId==='string'?`#${memberShortId(p.params.memberId)}`:'成员操作'))} · 项目 {String(p.params.projectId ?? '全局模板')}</span><details className="small faint"><summary>原操作与目标</summary><div className="mono-sm">{p.method} · {p.commandId}</div><div>项目：{String(p.params.projectId??'全局模板')} · 成员：{String(p.params.memberId??'创建新身份')} · 模板：{String(p.params.templateId??'未引用模板')} · 基线版本：{String(p.params.expectedRevision??'未记录')}</div>{p.method==='member.setRuntime'?<div>渠道 {String(p.params.kind)} · 模型 {String(p.params.model??'渠道默认')} · 权限 {String(p.params.permissionMode??'渠道默认')} · 程序 {String(p.params.executable??'渠道默认')}</div>:null}{p.method==='member.setEnabled'?<div>原操作：{p.params.enabled===true?'启用':'停用'}</div>:null}</details><button className="btn sm" data-zs-member-replay={p.commandId} disabled={busy !== null||memberWriteState(p)==='pending'} onClick={() => void replay(p)}>使用原记录重试</button></div>)}</div>;
 }

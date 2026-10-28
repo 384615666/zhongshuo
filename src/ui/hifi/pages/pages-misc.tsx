@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 成果预览 / 文件与改动 / 成员设置 / Runtime / 应用设置 / 私信
  *
@@ -230,7 +231,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
               <>
                 <button
                   className="btn sm"
-                  title={`真实 git.pull（origin/${git?.currentBranch ?? ''}——expectedHead 绑定，非快进/身份缺失如实失败）`}
+                  title={`真实 git.pull（origin/${git?.currentBranch ?? ''}）`}
                   onClick={() => void pull(projectId)}
                   disabled={!curBranch}
                 >
@@ -238,7 +239,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                 </button>
                 <button
                   className="btn sm"
-                  title={`真实 git.push（仅快进、不强推；expectedHead+远端头+URL 三重绑定）${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
+                  title={`推送到所选远端；推送前检查版本，保留远端已有提交${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
                   onClick={() => void push(projectId)}
                   disabled={!curBranch}
                 >
@@ -374,7 +375,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   <span className="count">{fileCount}</span>
                   <div className="spacer" />
                   {/* 真实目录标注：来自用户项目磁盘（project.files.list 安全根内只读列举）。 */}
-                  <span className="small faint" title="真实项目目录（只读列举；内容预览经 project.file.read 安全快照）">
+                  <span className="small faint" title="项目目录，点击文件可预览">
                     <Icon name="info" size={11} /> 真实目录
                   </span>
                 </div>
@@ -400,7 +401,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   />
                 ) : tree.error != null ? (
                   <div className="panel warning" style={{ margin: 8 }}>
-                    目录读取失败：{tree.error}（project.files.list 只读投影；重试=刷新按钮）
+                    目录读取失败：{userFacingSystemText(tree.error ?? '')}（点击刷新可重新读取）
                     <div className="panel-actions">
                       <button className="btn sm" onClick={() => tree.reload()}>重试</button>
                     </div>
@@ -411,7 +412,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   <div className="small faint" style={{ padding: 8 }}>
                     {project.status === 'missing'
                       ? '目录失效，无法读取文件列表。'
-                      : '这个项目目录为空（project.files.list 未返回条目）。'}
+                      : '这个项目目录为空。'}
                   </div>
                 ) : (
                   <div className="file-tree">
@@ -639,7 +640,7 @@ export function ChangeSetDetail({ projectId, setId }: { projectId: string; setId
         </div>
 
         <div className="panel-actions">
-          <button className="btn ghost sm" onClick={() => toast('原型不实际打开外部编辑器', 'info')}>
+          <button className="btn ghost sm" onClick={() => toast('演示界面无法打开外部编辑器', 'info')}>
             <Icon name="external-link" size={12} /> 用外部编辑器打开
           </button>
           {/* 指向所属任务交付（唯一验收入口）。无交付时不显示，不伪造入口。 */}
@@ -820,7 +821,7 @@ export function ChangeSetDetail({ projectId, setId }: { projectId: string; setId
                 <button
                   className="btn"
                   disabled
-                  title="改动集撤销命令尚未接入本页（真实能力限制）——Git 页提供提交级软撤销（git.commit.undo）"
+                  title="本页暂不支持撤销文件改动。已提交的改动可到 Git 页撤销提交。"
                 >
                   <Icon name="corner-up-left" size={12} /> 确认撤销（未接入）
                 </button>
@@ -873,7 +874,7 @@ export function ChangesPage({ projectId, embedded }: { projectId: string; embedd
               {/* 标题已按用户要求删除（2026-09-26），保留路径与下面的锁域/分支标签。 */}
               <div className="page-sub mono">{s.projects.find((p) => p.id === projectId)?.canonicalPath}</div>
               <div className="row tight wrap" style={{ marginTop: 8 }}>
-                <Tag plain icon="lock">同一物理目录最多 1 个受管理写入者</Tag>
+                <Tag plain icon="lock">同一目录中的文件修改依次执行</Tag>
                 {s.projects.find((p) => p.id === projectId)?.isGit
                   ? <Tag plain icon="git-branch">{s.projects.find((p) => p.id === projectId)?.gitBranch}</Tag>
                   : <Tag plain icon="folder">非 Git 目录</Tag>}

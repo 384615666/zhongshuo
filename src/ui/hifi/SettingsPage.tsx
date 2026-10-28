@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 设置与帮助（第五十四轮 §4 重组）：按批准原型的「应用 / 项目」分区组织，**用户能理解的
  * 名称**承载操作；底层设置键/命令细节收进「诊断信息」折叠层（工程键不进操作面）。
@@ -52,7 +53,7 @@ export function SettingsPage() {
       setAutoOpen(r.values['ui.autoOpenProjectPath'] ?? '');
       setAutoOpenSaved(r.values['ui.autoOpenProjectPath'] ?? '');
       setRepoVisible(r.values['repoStatus.visible'] ?? '');
-    } catch (e) { if (gen === genRef.current) toast(`应用设置读取失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { if (gen === genRef.current) toast(`应用设置读取失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     try {
       const rc = await command<RemoteCfg>('remote.config.get');
       if (gen !== genRef.current) return;
@@ -71,21 +72,21 @@ export function SettingsPage() {
       await command('app.settings.set', { key, value });
       const back = await command<{ values: Record<string, string | null> }>('app.settings.get', { keys: [key] });
       const readBack = back.values[key] ?? '';
-      if (readBack !== value) { toast(`${label}：保存后回读不一致（读到「${readBack}」）——未伪成功`, 'error'); return; }
+      if (readBack !== value) { toast(`${label}：保存后的值与输入不一致（当前为「${readBack}」），请刷新后重试`, 'error'); return; }
       recordWrite('app.settings.set', `${label} = ${value}（已回读核对）`);
       // 成功即同步页面状态：显示文字与按钮可用性当场反映新值，不需要用户刷新。
       if (key === 'ui.autoOpenProjectPath') setAutoOpenSaved(readBack);
       if (key === 'repoStatus.visible') setRepoVisible(readBack);
-      toast(`${label}已保存（回读一致${key === 'ui.autoOpenProjectPath' ? '，重启后生效' : ''}）`, 'success');
+      toast(`${label}已保存（已生效${key === 'ui.autoOpenProjectPath' ? '，重启后生效' : ''}）`, 'success');
     } catch (e) {
-      toast(`${label}保存失败：${(e as Error).message}`, 'error');
+      toast(`${label}保存失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
     } finally { setBusy(false); }
   };
   const openDeepLink = async () => {
     const raw = deepLinkInput.trim();
     if (!isExternalDeepLink(raw)) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
     try { await openExternalDeepLink(raw); toast('已定位', 'success'); }
-    catch (e) { toast(`定位失败：${(e as Error).message}`, 'error'); }
+    catch (e) { toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
   };
 
   const dirty = autoOpen.trim() !== (autoOpenSaved ?? '');
@@ -104,7 +105,7 @@ export function SettingsPage() {
           <div className="faint small">启动时打开的项目（留空=上次状态；填写项目文件夹的完整路径）</div>
           <div className="row tight" style={{ marginTop: 4 }}>
             <input className="composer-input" style={{ flex: 1, minWidth: 160 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\\项目\\我的项目（保存后重启生效）" />
-            <button className="btn ghost sm" disabled={busy || !dirty} title={dirty ? '保存并回读核对' : '没有修改'} onClick={() => void saveSetting('ui.autoOpenProjectPath', autoOpen.trim(), '「启动时打开的项目」')}>保存</button>
+            <button className="btn ghost sm" disabled={busy || !dirty} title={dirty ? '保存' : '没有修改'} onClick={() => void saveSetting('ui.autoOpenProjectPath', autoOpen.trim(), '「启动时打开的项目」')}>保存</button>
           </div>
           <div className="faint small" style={{ marginTop: 4 }}>当前生效值：{autoOpenSaved != null && autoOpenSaved !== '' ? autoOpenSaved : '（未设置）'}</div>
         </div>
@@ -126,8 +127,8 @@ export function SettingsPage() {
           <div style={{ marginTop: 4 }}>草稿快照：
             {draftPersist.mode === 'on' && draftPersist.error == null ? <span className="faint small">正常（刷新/崩溃后草稿与未确认发送保留；普通草稿 24 小时过期）</span> : null}
             {draftPersist.mode === 'locked' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>保全锁定——快照无法恢复且原件未能隔离：主键已保全（不覆盖），新写入仅内存态，发送暂不可用</span> : null}
-            {draftPersist.mode === 'off' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>不可用（{draftPersist.error ?? '身份/存储未就绪'}）——草稿仅本次进程内有效</span> : null}
-            {draftPersist.mode === 'on' && draftPersist.error != null ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>写入失败（{draftPersist.error}）——内存仍有效</span> : null}
+            {draftPersist.mode === 'off' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>不可用（{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}）——草稿仅本次进程内有效</span> : null}
+            {draftPersist.mode === 'on' && draftPersist.error != null ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>写入失败（{userFacingSystemText(draftPersist.error ?? '')}）——内存仍有效</span> : null}
           </div>
           {draftPersist.recoveryNote != null ? <div className="faint small" data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div> : null}
           {draftPersist.mode !== 'on' || draftPersist.error != null || draftPersist.recoveryNote != null ? (
@@ -152,7 +153,7 @@ export function SettingsPage() {
 
       <div className="panel info">
         <div className="row tight"><strong>远程访问</strong><span className="faint small">（实际监听事实——只读）</span></div>
-        {remoteErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>远程配置读取失败：{remoteErr}</div> : remote == null ? <div className="faint small" style={{ marginTop: 4 }}>读取中…</div> : (
+        {remoteErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>远程配置读取失败：{userFacingSystemText(remoteErr ?? '')}</div> : remote == null ? <div className="faint small" style={{ marginTop: 4 }}>读取中…</div> : (
           <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
             <div>模式：{remote.allowLan ? '局域网' : '仅本机'} · 状态：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
             {remote.fingerprint != null ? <div className="mono faint small">服务证书指纹 {remote.fingerprint.slice(0, 24)}…{remote.caFingerprint != null ? ` · CA ${remote.caFingerprint.slice(0, 16)}…` : ''}</div> : null}
@@ -172,20 +173,20 @@ export function SettingsPage() {
           <input className="composer-input" style={{ flex: 1, minWidth: 160 }} placeholder="如 #task=task_ab12…（线程详情 →「复制定位链接」）" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
           <button className="btn ghost sm" onClick={() => void openDeepLink()}>打开定位</button>
         </div>
-        <div className="faint small" style={{ marginTop: 4 }}>经正式 deepLink.resolve 服务端定位（跨项目自动打开）——未知归属如实报错，不静默跳转。</div>
+        <div className="faint small" style={{ marginTop: 4 }}>粘贴任务链接后，可直接打开对应的项目和对话。</div>
       </div>
 
       <details className="panel info" open={diagOpen} onToggle={(e) => setDiagOpen((e.target as HTMLDetailsElement).open)}>
-        <summary style={{ cursor: 'pointer' }}><strong>诊断信息</strong><span className="faint small">（工程键名与底层事实——排障用，不是操作面）</span></summary>
+        <summary style={{ cursor: 'pointer' }}><strong>诊断信息</strong><span className="faint small">（排查问题时查看）</span></summary>
         <div className="mono faint small" style={{ marginTop: 6, lineHeight: 1.8 }}>
           <div>app.settings 键：ui.autoOpenProjectPath={autoOpenSaved ?? ''} · repoStatus.visible={repoVisible === '' ? '(未设置)' : repoVisible}</div>
           <div>projectId={projectId ?? '（未打开）'}</div>
-          <div>命令面：app.settings.get/set · remote.config.get · deepLink.resolve · mine.pending · board.view · files.view · git.status/diff</div>
+          <div>设置、远程连接和页面读取的诊断信息</div>
         </div>
       </details>
 
       <div className="panel info">
-        <div className="row tight"><strong>未换装项（如实）</strong></div>
+        <div className="row tight"><strong>其他设置</strong></div>
         <div className="row tight wrap" style={{ marginTop: 6 }}>
           <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>远程访问变更（原界面）</button>
         </div>

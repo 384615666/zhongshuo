@@ -33,7 +33,7 @@ export function validateMessageConversationBinding(
     if (message.roomId != null || message.threadId != null || message.threadMessageSeq != null) {
       return domainErr(
         'CONVERSATION_SCOPE_MISMATCH',
-        'DM 消息的 room_id/thread_id/thread_message_seq 必须为空（开工契约 §2.2）',
+        '私信消息包含了不属于当前对话的信息',
       );
     }
     return domainOk({ conversationKind: 'dm' });

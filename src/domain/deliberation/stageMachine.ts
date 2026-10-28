@@ -64,7 +64,7 @@ export function decideIndependentBarrier(roster: FrozenRoster, participants: Rea
   const withOutput = facts.filter((p) => p.hasStageOutput);
   if (withOutput.length === 0) {
     if (facts.every(terminatedForBarrier)) {
-      return { decision: 'blocked', reason: '全员无有效输入（§6.1 INDEPENDENT 终结规则；不合成虚构研讨报告）' };
+      return { decision: 'blocked', reason: '所有 AI 都未返回有效分析结果，请查看运行详情中的原因' };
     }
     return { decision: 'wait', reason: `独立初稿 0/${expected.length}，等待或按 E4 缺席推进` };
   }

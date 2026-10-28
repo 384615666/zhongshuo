@@ -7,5 +7,5 @@ export interface AttachmentDescriptor { name: string; size: number; note: string
 
 /** 兼容原型调用形态（index 忽略）；正式侧 attach 按钮经 formalLimits 禁用，不产生该描述符。 */
 export function mockAttachmentDescriptor(_index: number): AttachmentDescriptor {
-  return { name: '', size: 0, note: '附件上传尚未接入正式链（H2）——本包只支持纯文本与仅记录发送' };
+  return { name: '', size: 0, note: '当前界面暂不支持上传附件' };
 }

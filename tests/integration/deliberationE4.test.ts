@@ -1,7 +1,7 @@
 /**
  * E4 执行语义 + 输入冻结边界 + 迟到真实接收路径（M1 收口轮二，零额度假时钟）。
  * 反例清单（用户指定）：
- * ① 只到缺席宽限未到单轮截止 → 按缺席推进、不强杀在途成员；
+ * ① 超过观察宽限仍等待活跃成员，完成后正常计入；
  * ② 审批暂停期间不累计缺席时间；
  * ③ 排队成员不被记成已运行超时（只记排队观察线）；
  * ④ 两个截止同时发生 → 单一确定结局、无双标记；
@@ -61,8 +61,8 @@ function deferIndStep(db: ZhongshuoDatabase, taskId: string, runId: string, memb
   db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(key);
 }
 
-describe('① 宽限到期未到单轮截止：按缺席推进、不杀在途成员', () => {
-  it('m1 在途（stall）、m2/m3 已完成 → 泵按宽限标 m1 缺席并推进；m1 turn 仍 RUNNING 未被杀', async () => {
+describe('① 宽限到期未到单轮截止：等待活跃成员', () => {
+  it('m1 在途跨宽限、m2/m3 已完成：屏障等待，m1 完成后冻结全部三份稿', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2', 'm3']);
     const r = await rig(db, 1, ['m1', 'm2', 'm3'], { grace: 200, deadline: 8_000 });
@@ -72,25 +72,24 @@ describe('① 宽限到期未到单轮截止：按缺席推进、不杀在途成
     r.scripts.push(done(draft('丙', [{ claimId: 'c1', statement: '丙稿' }])));
     await step(r.worker, r.scripts); // IND m3 ✓
     // m1 在途（stall 1.2s < deadline 8s）。
-    r.scripts.push([{ kind: 'stall', ms: 1_200 }]);
+    r.scripts.push([{ kind: 'stall', ms: 1_200 }, ...done(draft('甲', [{ claimId: 'c1', statement: '甲稿' }]))]);
     const m1Run = r.worker.runOnce();
     await new Promise((res) => setTimeout(res, 150)); // 等 turn.started 落库
     const started = db.prepare("SELECT exec_started_at FROM agent_turns WHERE stage_key = 'delib.independent' AND member_id = 'm1'").get() as { exec_started_at: number | null };
     expect(started.exec_started_at).not.toBeNull();
     // 泵：假时钟推到 started+grace+ε（未到 deadline）。
     pumpDeliberation(db, r.taskId, opts(200), started.exec_started_at! + 250);
-    expect(db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(r.runId, 'm1')).toMatchObject({ status: 'absent' });
-    // 不强杀：turn 仍 RUNNING、run 仍 RUNNING、任务未取消。
+    expect(db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(r.runId, 'm1')).toMatchObject({ status: 'pending' });
+    // 活跃成员继续等待：turn/run 仍 RUNNING、任务未取消。
     expect(db.prepare("SELECT status FROM agent_turns WHERE member_id = 'm1' AND stage_key = 'delib.independent'").get()).toMatchObject({ status: 'RUNNING' });
     expect(db.prepare('SELECT status FROM workflow_runs WHERE id = ?').get(r.runId)).toMatchObject({ status: 'RUNNING' });
     expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(r.taskId)).not.toMatchObject({ status: 'CANCELLED' });
-    // 屏障以 m2/m3 推进：CR 已入队且冻结清单不含 m1。
-    const manifest = frozenStageInputs(db, r.runId, 'CROSS_REVIEW', 0);
-    expect(manifest).not.toBeNull();
-    expect(manifest!.entries).toHaveLength(2);
-    expect(manifest!.entries.every((e) => !e.artifactId.includes('m1'))).toBe(true);
-    expect((db.prepare('SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ?').get(`%${r.runId}:CR:%`) as { c: number }).c).toBe(2);
-    await m1Run; // 收尾（stall 结束，见⑥续用）
+    expect(frozenStageInputs(db, r.runId, 'CROSS_REVIEW', 0)).toBeNull();
+    expect((db.prepare('SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ?').get(`%${r.runId}:CR:%`) as { c: number }).c).toBe(0);
+    await m1Run;
+    expect(db.prepare('SELECT status FROM run_participants WHERE run_id=? AND member_id=?').get(r.runId,'m1')).toMatchObject({status:'completed'});
+    expect(frozenStageInputs(db, r.runId, 'CROSS_REVIEW', 0)!.entries).toHaveLength(3);
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE run_id=? AND kind='run.lateArrivalRecorded'").get(r.runId) as {c:number}).c).toBe(0);
     await r.adapter.closeAllSessions();
     db.close();
   }, 30_000);
@@ -136,7 +135,7 @@ describe('③ 排队成员：不记执行缺席；超独立排队截止按 unava
 });
 
 describe('④ 两个截止同时发生：单一结局、无双标记', () => {
-  it('宽限与单轮截止同时刻：先泵标缺席，截止中断后不再产生第二次缺席标记', async () => {
+  it('观察宽限不标缺席，显式单轮截止仍由终态路径处理', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2']);
     const r = await rig(db, 4, ['m1', 'm2'], { grace: 300, deadline: 300 });
@@ -144,12 +143,12 @@ describe('④ 两个截止同时发生：单一结局、无双标记', () => {
     const m1Run = r.worker.runOnce();
     await new Promise((res) => setTimeout(res, 120));
     const turn = db.prepare("SELECT id, exec_started_at FROM agent_turns WHERE member_id = 'm1' AND stage_key = 'delib.independent'").get() as { id: string; exec_started_at: number };
-    // 宽限期到：泵标记（open-execution 路径）。
+    // 观察宽限到：活跃执行仍等待。
     pumpDeliberation(db, r.taskId, opts(300), turn.exec_started_at + 320);
-    expect(db.prepare('SELECT status FROM run_participants WHERE member_id = ?').get('m1')).toMatchObject({ status: 'absent' });
+    expect(db.prepare('SELECT status FROM run_participants WHERE member_id = ?').get('m1')).toMatchObject({ status: 'pending' });
     await m1Run; // 单轮截止（300ms）中断到点：终态路径
     const absentEvents = db.prepare("SELECT count(*) c FROM domain_events WHERE kind = 'run.participantAbsent'").get() as { c: number };
-    expect(absentEvents.c).toBe(1); // 终态路径对已 absent 成员 no-op（无双标记）
+    expect(absentEvents.c).toBe(0); // 耗时观察不生成缺席事件；截止终态另行处理
     expect(db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turn.id)).toMatchObject({ status: 'FAILED' }); // 截止中断分支（非用户停止）
     expect(db.prepare('SELECT status FROM workflow_runs WHERE id = ?').get(r.runId)).toMatchObject({ status: 'RUNNING' });
     await r.adapter.closeAllSessions();
@@ -187,7 +186,7 @@ describe('⑤ 睡眠/重启后：时钟与恢复状态正确（RT-03 不重派�
 });
 
 describe('⑥⑦ 迟到真实接收路径 + 冻结边界（甲乙不串材料）', () => {
-  it('在途 m1 宽限缺席→m2 互评已派发（材料=m2/m3）；m1 迟到完成（真实事件路径）→m1=late；m3 同轮互评材料不变；SYNTHESIS 清单含迟到稿', async () => {
+  it('历史已记缺席的 m1→m2 互评已派发（材料=m2/m3）；m1 迟到完成（真实事件路径）→m1=late；m3 同轮互评材料不变；SYNTHESIS 清单含迟到稿', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2', 'm3']);
     const r = await rig(db, 6, ['m1', 'm2', 'm3'], { grace: 200, deadline: 8_000 });
@@ -196,12 +195,14 @@ describe('⑥⑦ 迟到真实接收路径 + 冻结边界（甲乙不串材料）
     await step(r.worker, r.scripts); // IND m2
     r.scripts.push(done(draft('丙', [{ claimId: 'c1', statement: '丙稿语句' }])));
     await step(r.worker, r.scripts); // IND m3
-    // m1 在途：先静默 900ms（>宽限 200、<截止 8s）后产出完成事件——迟到经真实 adapter 事件路径。
+    // 历史缺席兼容：仍在途的 m1 稍后经真实 adapter 事件路径返回结果。
     r.scripts.push([{ kind: 'stall', ms: 900 }, { kind: 'event', event: { kind: 'turn.completed', finalText: JSON.stringify(draft('甲迟到稿', [{ claimId: 'c1', statement: '甲迟到语句' }])) } }]);
     const m1Run = r.worker.runOnce();
     await new Promise((res) => setTimeout(res, 150));
     const m1Turn = db.prepare("SELECT id, exec_started_at FROM agent_turns WHERE member_id = 'm1' AND stage_key = 'delib.independent'").get() as { id: string; exec_started_at: number };
-    pumpDeliberation(db, r.taskId, opts(200), m1Turn.exec_started_at + 250); // m1 缺席推进（不杀）
+    // Compatibility fixture: a historical absent seat, not a new elapsed-time verdict.
+    db.prepare("UPDATE run_participants SET status='absent' WHERE run_id=? AND member_id='m1'").run(r.runId);
+    pumpDeliberation(db, r.taskId, opts(200), m1Turn.exec_started_at + 250);
 void frozenStageInputs(db, r.runId, 'CROSS_REVIEW', 0); // 冻结清单存在性由⑥断言覆盖
     const m3Art = listRunArtifacts(db, r.runId, 'analysis_draft').find((a) => a.author_id === 'm3')!;
     // m2 的互评（目标=冻结清单里的 m3 稿）。
@@ -237,4 +238,47 @@ void frozenStageInputs(db, r.runId, 'CROSS_REVIEW', 0); // 冻结清单存在性
     await r.adapter.closeAllSessions();
     db.close();
   }, 30_000);
+});
+
+
+describe('R119 活跃执行不因观察时长失败', () => {
+  it.each([undefined, 10])('全员在途跨默认20min及显式宽限 %s：仍等待，完成后正常进入互评', async (absenceToleranceMs) => {
+    const db = openDatabase(':memory:');
+    seed(db,['m1','m2']);
+    const taskId = createDelibTask(db,119,['m1','m2']);
+    const adapter = new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:()=>[
+      {kind:'stall',ms:800},...done(draft('正常慢稿',[{claimId:'c1',statement:'待核对结论'}])),
+    ]});
+    const worker = new DispatchWorker({db,adapter,leaseOwner:'r119-live',enableDeliberate:true,
+      detachedTurnConsumption:true,appDataDir:join(tmpRoot,`r119-${absenceToleranceMs ?? 'default'}`),
+      ...(absenceToleranceMs === undefined ? {} : {absenceToleranceMs}),
+    });
+    try {
+      await worker.runOnce(); // PREPARE
+      await worker.runOnce(); await worker.runOnce(); // two genuinely active Fake turns
+      const runId = runIdOf(db);
+      const deadline = Date.now()+3000;
+      while ((db.prepare("SELECT count(*) n FROM agent_turns WHERE run_id=? AND status='RUNNING' AND exec_started_at IS NOT NULL").get(runId) as {n:number}).n<2) {
+        if(Date.now()>deadline)throw Error('Fake turns did not start');
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      const turns=db.prepare('SELECT exec_started_at,collab_absence_ms,collab_turn_deadline_ms FROM agent_turns WHERE run_id=?').all(runId) as Array<{exec_started_at:number;collab_absence_ms:number;collab_turn_deadline_ms:number}>;
+      expect(turns.every(t=>t.collab_absence_ms===(absenceToleranceMs ?? 20*60_000)&&t.collab_turn_deadline_ms===0)).toBe(true);
+      pumpDeliberation(db,taskId,opts(absenceToleranceMs ?? 20*60_000),Math.max(...turns.map(t=>t.exec_started_at))+21*60_000);
+      expect(db.prepare('SELECT status,stage FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({status:'RUNNING',stage:'INDEPENDENT'});
+      expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toMatchObject({status:'ACTIVE'});
+      expect(db.prepare('SELECT status FROM run_participants WHERE run_id=?').all(runId)).toEqual([{status:'pending'},{status:'pending'}]);
+      expect((db.prepare("SELECT count(*) n FROM domain_events WHERE run_id=? AND kind='run.participantAbsent'").get(runId) as {n:number}).n).toBe(0);
+      expect((await worker.awaitInFlightTurns(3000)).remaining).toEqual([]);
+      expect(listRunArtifacts(db,runId,'analysis_draft')).toHaveLength(2);
+      expect(db.prepare('SELECT status FROM run_participants WHERE run_id=?').all(runId)).toEqual([{status:'completed'},{status:'completed'}]);
+      expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({stage:'CROSS_REVIEW'});
+      expect(frozenStageInputs(db,runId,'CROSS_REVIEW',0)!.entries).toHaveLength(2);
+      expect((db.prepare("SELECT count(*) n FROM domain_events WHERE run_id=? AND kind='run.lateArrivalRecorded'").get(runId) as {n:number}).n).toBe(0);
+    } finally {
+      await adapter.closeAllSessions();
+      await worker.awaitInFlightTurns(3000);
+      db.close();
+    }
+  });
 });

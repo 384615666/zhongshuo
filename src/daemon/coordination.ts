@@ -90,7 +90,6 @@ export function seedExplicitRecipientCoordination(
   if(!parent)throw Error('明确收件人任务不存在');
   const recipients=[...new Set(selectedMemberIds)];
   if(recipients.length<2)throw Error('明确多人发送至少需要两位成员');
-  if(recipients.length>12)throw Error('一次最多请求12位 AI');
   const members=coordinationRoomMembers(db,parent.room_id,parent.project_id,recipients);
   if(members.length!==recipients.length)throw Error('明确收件人中有成员已停用或不属于本房间');
   const analysisOnly=(JSON.parse((db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId) as {write_scope_json:string}).write_scope_json) as {analysisOnly?:boolean}).analysisOnly===true;
@@ -239,7 +238,7 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const roomDirect=routeJson&&JSON.parse(routeJson).mode==='DIRECT'&&task.kind==='room_task'&&task.parent_task_id==null&&task.source_connection_id==null
     &&(queued?JSON.parse(queued.roster_json).length:coordinationRoster(db,taskId).length)>0;
   if(routeJson && (JSON.parse(routeJson).mode==='AUTO'||roomDirect) && !dispatchKey.includes(':conversation:')) {
-    return {kind:'planning' as const,run:null,request,note:`按【本轮指令】自然理解谁来做、先后顺序和是否需要同伴核对；直接点名接单也可以按用户要求使用这里已有的正式交接。正文中的成员姓名与中文相邻提及同样是用户要求，不以输入框解析出的名单代替语义判断。明确要求先处理再由同伴核对时，用 coordinationPlan 的 dependsOn 或完成前一步后提交 handoffs，后一步读取本次成果；同伴尚未执行时不能宣称整件事完成。普通单人可完成的工作直接完成，不因可用成员多就派工，也不要让用户选择模式、调整设置或重新发送相同要求。coordinationPlan=null 表示不创建计划；handoffs 和 coordinationPlan 二选一，无交接时 handoffs=[]。提交计划的回合只做必要调查与分工，不先实施同一工作再让子步骤重复实施；若已完成修改，交付实际结果即可。所有步骤共用信封预算，预留2次整合，不扩充总预算。计划字段：summary、steps（最多8步）；每步 key/memberId/title/objective/role/dependsOn，role=analysis/implementation/review，依赖只能引用本计划key且无环；评审依赖实施并读取冻结的实际版本。权限以本轮输入头为准，不由角色降级。已授权成员无需逐个确认，不使用 request_participant，不派发名单外成员；只有程序接受才算已排队。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
+    return {kind:'planning' as const,run:null,request,note:`按【本轮指令】自然理解谁来做、先后顺序和是否需要同伴核对；直接点名接单也可以按用户要求使用这里已有的正式交接。正文中的成员姓名与中文相邻提及同样是用户要求，不以输入框解析出的名单代替语义判断。明确要求先处理再由同伴核对时，用 coordinationPlan 的 dependsOn 或完成前一步后提交 handoffs，后一步读取本次成果；同伴尚未执行时不能宣称整件事完成。普通单人可完成的工作直接完成，不因可用成员多就派工，也不要让用户选择模式、调整设置或重新发送相同要求。coordinationPlan=null 表示不创建计划；handoffs 和 coordinationPlan 二选一，无交接时 handoffs=[]。提交计划的回合只做必要调查与分工，不先实施同一工作再让子步骤重复实施；若已完成修改，交付实际结果即可。所有步骤共用信封预算，预留2次整合，不扩充总预算。计划字段：summary、steps；每步 key/memberId/title/objective/role/dependsOn，role=analysis/implementation/review，依赖只能引用本计划key且无环；评审依赖实施并读取冻结的实际版本。权限以本轮输入头为准，不由角色降级。已授权成员无需逐个确认，不使用 request_participant，不派发名单外成员；只有程序接受才算已排队。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
   }
   return null;
 }

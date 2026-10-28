@@ -1,3 +1,4 @@
+import { userFacingSystemText,userFacingSystemEventText } from '../../contracts/userFacingText';
 /**
  * 活动流（r55 H3 真实接线——沿批准原型 /activity 的聚合列表布局）：activity.list 正式命令
  * （domain_events 只读聚合——房间事件随项目可达、DM 事件仅本人参与可见；kind 中文映射+
@@ -101,11 +102,11 @@ export function ActivityPage() {
    *  过滤，空身份不当深链用（如实落到会话/房间路径）。 */
   const locateOf = (it: ActivityItem): { label: string; go: () => void } | null => {
     if (it.taskId != null && it.locate != null && it.locate.length > '#task='.length && it.locate.startsWith('#task=')) {
-      return { label: '定位任务', go: () => { void openExternalDeepLink(it.locate!).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error')); } };
+      return { label: '定位任务', go: () => { void openExternalDeepLink(it.locate!).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); } };
     }
     if (it.conversationId != null) {
       if (it.locate != null && it.locate.length > '#dm='.length && it.locate.startsWith('#dm=')) {
-        return { label: '定位会话', go: () => { void openExternalDeepLink(it.locate!).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error')); } };
+        return { label: '定位会话', go: () => { void openExternalDeepLink(it.locate!).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); } };
       }
       if (it.roomId != null) return { label: '打开房间', go: () => navigate(`/project/${it.projectId}/room/${it.roomId}`) };
     }
@@ -128,11 +129,11 @@ export function ActivityPage() {
           <div className="spacer" />
           <button className="btn ghost sm" onClick={() => void load('reset')}>刷新</button>
         </div>
-        {visibleErr != null ? <div className="panel warning">活动流读取失败：{visibleErr}——同范围已加载内容保持；其它范围旧结果未冒充当前结果（可刷新重试）</div> : null}
+        {visibleErr != null ? <div className="panel warning">活动流读取失败：{userFacingSystemText(visibleErr ?? '')}——同范围已加载内容保持；其它范围旧结果未冒充当前结果（可刷新重试）</div> : null}
         {gapNotice && visibleItems != null ? <div className="panel info">刷新期间新增活动超过首页窗口；已从最新事件重新定位。点“加载更早”可按游标补读，中间历史未被假装连续。</div> : null}
         {visibleItems == null && visibleErr == null ? <div className="panel info">正在装载…</div> : null}
         {visibleItems != null && visibleItems.length === 0 && visibleErr == null ? (
-          <EmptyState icon="activity" title="当前范围内还没有活动事件" detail="任务派发、交付、恢复等事件会按时间倒序出现在这里（零运行零唤醒的只读聚合）。" />
+          <EmptyState icon="activity" title="当前范围内还没有活动事件" detail="任务执行、交付和恢复等活动会按时间倒序显示。" />
         ) : null}
         {visibleItems != null && visibleItems.length > 0 ? (
           <>
@@ -145,7 +146,7 @@ export function ActivityPage() {
                     <div className="row tight wrap">
                       <Tag tone="neutral" icon="clock">{it.kindLabel}</Tag>
                       <Tag tone="accent" icon="folder">{it.projectName}</Tag>
-                      <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.summary.length > 0 ? it.summary : `（无摘要事件 ${it.eventId.slice(0, 10)}…）`}</span>
+                      <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.summary.length > 0 ? userFacingSystemEventText(it.kind,it.summary) : '暂无活动说明'}</span>
                       <span className="faint small">{new Date(it.at).toLocaleString()}</span>
                       {loc != null ? <button className="btn ghost sm" onClick={loc.go}>{loc.label}</button> : null}
                     </div>
@@ -158,7 +159,7 @@ export function ActivityPage() {
                 {loading ? '加载中…' : hasMore ? '加载更早' : '没有更早的事件了'}
               </button>
             </div>
-            <div className="faint small" style={{ marginTop: 6 }}>游标分页 (created_at, seq) 双键——同毫秒多条不漏；事件正文摘要来自服务端白名单字段（残缺不虚构）。</div>
+            <div className="faint small" style={{ marginTop: 6 }}>点击加载更多可查看较早的活动记录。</div>
           </>
         ) : null}
       </div>

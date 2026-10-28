@@ -247,7 +247,7 @@ export function MessageView({
               {!isHuman && author != null ? <span className="msg-dot" aria-hidden="true" style={{ background: memberColor(author.id, author.ordinal) }} /> : null}
               <span className="msg-author">{isHuman ? '你' : author?.displayName ?? '未知成员'}</span>
               {!isHuman && author?.ordinal && author.ordinal > 1 ? <span className="small faint">#{author.ordinal}</span> : null}
-              {message.collaborationStage != null ? <span className="msg-stage-tag"><Tag tone="info" icon="layers" title="研讨阶段产物（已完成并保存为正式消息）">{collaborationStageText(message.collaborationStage)}</Tag></span> : null}
+              {message.collaborationStage != null ? <span className="msg-stage-tag"><Tag tone="info" icon="layers" title="已保存的研讨结果">{collaborationStageText(message.collaborationStage)}</Tag></span> : null}
               {isRepairedSource ? <Tag tone="neutral" icon="refresh" title="此文保留为历史原文，当前有效版本已补交">原答已补交</Tag> : null}
               {isRepairReplacement ? <Tag tone="accent" icon="refresh" title="来自明确的格式补交输出">补交</Tag> : null}
               {!isHuman && message.kind === 'report' ? <Tag tone="accent" icon="file-text">报告</Tag> : null}
@@ -717,7 +717,7 @@ function SystemCard({
                 if (a.api === 'task.retry') onRetry?.();
                 else if (a.api === 'run.allowMissing') onAllowMissing?.();
                 else if (a.api === 'task.steer') onSteer?.();
-                else recordLocalOnly(a.api, `${a.label}（原型未实现具体动作）`);
+                else recordLocalOnly(a.api, `${a.label}（演示）`);
               }}
             >
               {a.label}

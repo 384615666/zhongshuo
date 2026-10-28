@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 共享预览面板（R69 统一阅读器重做）：**壳=参考 ZCode 三层结构**（标签条→面包屑行→内容区，
  * 对照 reference-*.png 五图与 zai-org/ZCode @29628c9 PreviewPane.tsx/AnimatedSidePanePanel），
@@ -372,7 +373,7 @@ export function PreviewPane({
         for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
         contentBase64 = btoa(bin);
         name = resource.title.endsWith('.md') ? resource.title : `${resource.title}.md`;
-        fact = `交付文档 v${fd.revision} · ${doc.bytes}B · manifest ${fd.manifestHash.slice(0, 12)}…${doc.hashMatch === false ? '（正文 hash 与 manifest 不一致——以 manifest 为验收身份）' : ''}`;
+        fact = `交付文档 v${fd.revision} · ${doc.bytes}B · 交付校验值 ${fd.manifestHash.slice(0, 12)}…${doc.hashMatch === false ? '（内容校验值与交付记录不同，验收使用交付记录中的版本）' : ''}`;
       } else {
         toast('这种来源暂不支持保存原文件（会话导出在会话头部菜单）', 'warn');
         return;
@@ -391,7 +392,7 @@ export function PreviewPane({
         toast(`已触发浏览器下载「${name}」（${fact}）`, 'success');
       }
     } catch (e: unknown) {
-      setDownloadError({ resourceId: resource.id, text: `保存原文件失败：${(e as Error).message}。原件保留，可重试。` });
+      setDownloadError({ resourceId: resource.id, text: `保存原文件失败：${userFacingSystemText((e as Error).message ?? '')}。原件保留，可重试。` });
     } finally {
       setDlBusy(false);
     }
@@ -512,7 +513,7 @@ export function PreviewPane({
           <span className="mono-sm">{url}</span>
         </span>
         <span className="spacer" />
-        <Tag plain title={isWorktree ? '项目工作区文件——只读快照' : isDelivery ? '正式 AI 交付文档——不可变快照' : '会话附件/成果——服务端托管'}>
+        <Tag plain title={isWorktree ? '项目工作区文件——只读快照' : isDelivery ? 'AI 交付文档' : '会话附件/成果——服务端托管'}>
           {isWorktree ? '工作区只读' : isDelivery ? 'AI 交付文档' : '会话资源'}
         </Tag>
         {canChooseReading ? (
@@ -618,7 +619,7 @@ export function PreviewPane({
           <MenuItem icon="info" title="完整路径、版本、内容 hash、来源与可见范围" onClick={() => { setInfoOpen(true); setMoreAt(null); }}>文件信息</MenuItem>
           <MenuItem
             icon="download"
-            title={`保存当前这份文件的原件字节（${isFormalAttachment ? 'attachment.originalFile：服务端 sha256 核验' : isWorktree ? 'project.file.read：工作区原文件读取快照' : isDelivery ? 'delivery.document：交付文档正文（UTF-8）' : '当前来源'}）`}
+            title={`保存当前这份文件的原件字节（${isFormalAttachment ? 'attachment.originalFile：服务端 sha256 核验' : isWorktree ? '项目文件预览' : isDelivery ? 'delivery.document：交付文档正文（UTF-8）' : '当前来源'}）`}
             disabled={dlBusy}
             onClick={() => { void doDownloadOriginal(); setMoreAt(null); }}
           >
@@ -821,7 +822,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
       <div className="preview-unsupported" data-zs-preview-error={err.slice(0, 40)}>
         <Icon name="alert-triangle" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>这份文件当前不能预览</div>
-        <div className="small muted" style={{ marginTop: 6, maxWidth: 460, lineHeight: 1.7 }}>{err}</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 460, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}</div>
         <div className="panel-actions">
           <button className="btn sm" onClick={() => setNonce((n) => n + 1)}>重试</button>
           <button className="btn sm" onClick={onOpenComment}>评论此文件</button>
@@ -863,7 +864,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
         revisionLabel={revLabel}
         onDownload={dl}
         fallbackSheets={loaded.office?.sheets ?? []}
-        fallbackNote={loaded.extraction === 'failed' ? `提取不可用（${loaded.extractionError ?? '解析失败'}）——模型注入侧 fail-closed` : undefined}
+        fallbackNote={loaded.extraction === 'failed' ? `提取不可用（${loaded.extractionError ?? '解析失败'}），暂时无法把文件内容发送给 AI` : undefined}
         {...readerProps}
       />
     );
@@ -1051,7 +1052,7 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
         <Icon name="file-text" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>这份交付没有可读文档</div>
         <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>
-          交付的最终输出未持久化为可读文档——交付身份仍有效：v{fd.revision} · manifest {fd.manifestHash.slice(0, 12)}…（验收/引用按「详情」与引用通道进行）。
+          交付的最终输出未持久化为可读文档——交付身份仍有效：v{fd.revision} · 交付校验值 {fd.manifestHash.slice(0, 12)}…（验收/引用按「详情」与引用通道进行）。
         </div>
         <div className="panel-actions">
           <button className="btn sm" onClick={onOpenComment}>评论此交付（会话锚点）</button>
@@ -1080,13 +1081,13 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
           <div className="small" style={{ marginTop: 8 }}><strong>已执行验证</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.executedVerifications.map((v, i) => <li key={i}>{v}</li>)}</ul></div>
         ) : null}
         {tc.unexecutedVerifications != null && tc.unexecutedVerifications.length > 0 ? (
-          <div className="small" style={{ marginTop: 8 }}><strong>未执行验证</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.unexecutedVerifications.map((v, i) => <li key={i}>{v.item ?? ''}{v.reason != null ? `——${v.reason}` : ''}</li>)}</ul></div>
+          <div className="small" style={{ marginTop: 8 }}><strong>未执行验证</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.unexecutedVerifications.map((v, i) => <li key={i}>{v.item ?? ''}{v.reason != null ? `——${userFacingSystemText(v.reason ?? '')}` : ''}</li>)}</ul></div>
         ) : null}
         {tc.remainingIssues != null && tc.remainingIssues.length > 0 ? (
           <div className="small" style={{ marginTop: 8 }}><strong>遗留问题</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.remainingIssues.map((v, i) => <li key={i}>{v}</li>)}</ul></div>
         ) : null}
         <div className="small faint" style={{ marginTop: 10, borderTop: '1px solid var(--border,#dbe2ea)', paddingTop: 8 }}>
-          交付文档 v{fd.revision} · manifest {fd.manifestHash.slice(0, 12)}…；「源码」查看原始 JSON。
+          交付文档 v{fd.revision} · 交付校验值 {fd.manifestHash.slice(0, 12)}…；「源码」查看原始 JSON。
         </div>
       </div>
     );
@@ -1165,7 +1166,7 @@ function CommentDialog({ resource, revision, onClose }: { resource: PreviewResou
               void createFileCommentBridge(resource.id, body.trim()).then((r) => {
                 setBusy(false);
                 if (r.ok) { toast(`评论已保存到源会话（${originText}），锚定 v${revision.revision}——仅记录，未触发模型`, 'success'); onClose(); }
-                else toast(`评论提交失败：${r.error ?? '未知错误'}（未提交）`, 'error');
+                else toast(`评论提交失败：${userFacingSystemText(r.error ?? '未知错误')}（未提交）`, 'error');
               });
             }}
           >

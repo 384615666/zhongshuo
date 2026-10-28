@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 命令面板（r56 H4 §4——Ctrl+K，沿批准原型 CommandPalette 的布局/交互，**正式数据接线**）：
  *  - 列表来自真实事实：页面动作 + 已装载房间/私信/成员（store）+ 任务（board.view 只读聚合）
@@ -47,7 +48,7 @@ const taskStatusLabel = (t: { taskStatus: string; runStatus: string | null }): s
 const locateGo = (link: string) => () => {
   void openExternalDeepLink(link).catch((e: unknown) => {
     // r57：定位失败明确反馈（openExternalDeepLink 只抛错不自带 toast——旧实现静默吞掉）。
-    toast(`面板定位失败：${(e as Error).message}`, 'error');
+    toast(`面板定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
   });
 };
 
@@ -138,8 +139,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           <span className="kbd">Esc</span>
         </div>
         <div className="overlay-body" style={{ padding: 8, overflow: 'auto', minHeight: 120 }}>
-          {tasksErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>任务聚合读取失败：{tasksErr}（房间/私信/成员/动作仍可用——不冒充没有任务）</div> : null}
-          {searchErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>检索失败：{searchErr}（房间/私信/任务/动作仍可用）</div> : null}
+          {tasksErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>任务聚合读取失败：{userFacingSystemText(tasksErr ?? '')}（仍可查找房间、私信、成员和操作）</div> : null}
+          {searchErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>检索失败：{userFacingSystemText(searchErr ?? '')}（房间/私信/任务/动作仍可用）</div> : null}
           {items.length === 0 && query.length > 0 ? <div className="panel info" style={{ margin: 4, padding: 8 }}>没有匹配结果（消息/线程走服务端检索，其余按已装载事实过滤）。</div> : null}
           {items.map((it, i) => (
             <button
@@ -158,7 +159,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div className="row tight" style={{ padding: '6px 14px', borderTop: '1px solid var(--border-subtle,#e6eaf0)' }}>
-          <span className="small faint">定位类动作只导航/定位——确认执行、验收、解除保护在各自页面按正式合同执行；不搜索文件正文。</span>
+          <span className="small faint">选择结果可打开对应页面；执行、验收和解除保护需在该页面确认。搜索范围不含文件正文。</span>
         </div>
       </div>
     </div>

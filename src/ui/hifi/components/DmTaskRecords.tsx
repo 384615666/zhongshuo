@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useRef, useState } from 'react';
 import type { ConversationTaskPage } from '../../../contracts/conversationTasks.ts';
 import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
@@ -36,7 +37,7 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
   const row=current?.data?.items.find(x=>x.id===taskId);
   const options=current?.data?.items.map(t=>({value:t.id,label:t.title}))??[];
   if(taskId&&!options.some(o=>o.value===taskId))options.unshift({value:taskId,label:'继续查看当前任务（本页之外）'});
-  return <Modal title="私信任务记录" subtitle="读取当前会话的任务、运行和版本；继续失败运行仍沿用正式快照合同。" size="lg" onClose={onClose}>
+  return <Modal title="私信任务记录" subtitle="查看当前私信的任务、执行情况和成果版本。" size="lg" onClose={onClose}>
     <div data-zs-dm-task-records="1" className="thread-details" style={{height:'min(65vh,680px)',minHeight:240}}>
       <div className="row tight wrap" style={{padding:'8px 0'}}>
         <Select value={taskId??''} options={options} ariaLabel="选择私信任务" onChange={id=>{saveReadingPosition(`dm-task:${key}`,id);setChosen({key,id});}}/>
@@ -46,9 +47,9 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
         <button className="btn ghost sm" disabled={current?.loading} onClick={()=>trigger.current?.()}>刷新任务列表</button>
       </div>
       {current?.at?<span className="faint small">任务列表更新于 {fullTime(current.at)} · 每页最多20项</span>:null}
-      {current?.error?<div className="panel warning">任务列表读取失败：{current.error}；{current.data?'保留本页':'尚未取得快照'}，可刷新重试。</div>:null}
+      {current?.error?<div className="panel warning">任务列表读取失败：{userFacingSystemText(current.error ?? '')}；{current.data?'保留本页':'尚未取得快照'}，可刷新重试。</div>:null}
       {current?.loading?<span className="faint small">正在读取任务列表…</span>:null}
-      {current?.data?.items.length===0?<div className="panel info">{current.before?'本页没有更早任务；其他窗口保留。':'本次确认此会话尚无正式任务；仅记录消息不创建任务。'}</div>:null}
+      {current?.data?.items.length===0?<div className="panel info">{current.before?'本页没有更早任务；其他窗口保留。':'此私信还没有任务。仅记录的消息不会创建任务。'}</div>:null}
       {taskId?<DmTaskRecord key={`${key}:${taskId}`} projectId={projectId} conversationId={conversationId} taskId={taskId} revision={row?.revision} runStatus={row?.latestRun?.status} onRetry={onRetry} retryBusy={retryBusy} acceptedRetry={acceptedRetry}/>:null}
     </div>
   </Modal>;

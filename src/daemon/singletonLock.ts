@@ -155,7 +155,7 @@ export function acquireSingletonLock(
     if (isProcessAlive(owner.content.pid)) {
       return domainErr(
         'WORKSPACE_BUSY',
-        `daemon 已在运行（pid=${owner.content.pid}）；第二个实例不再启动另一份调度器（§8.3）`,
+        `daemon 已在运行（pid=${owner.content.pid}），请使用已经打开的众说窗口`,
       );
     }
 

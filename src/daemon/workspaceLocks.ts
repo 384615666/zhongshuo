@@ -51,7 +51,7 @@ export function acquireLease(
   if (input.policy !== 'single_writer') {
     return domainErr(
       'CAPABILITY_UNSUPPORTED',
-      'parallel_writers 写入并发策略已延期、未批准施工（§14.7/ADR-I19）；当前仅开放 single_writer',
+      '当前按项目依次修改文件，不支持同时写入同一项目',
     );
   }
   // 未确认释放的租约（active 或 expired）都是潜在持有者。
@@ -77,7 +77,7 @@ export function acquireLease(
 }
 
 function busy(holders: LeaseRow[]): DomainResult<never> {
-  return domainErr('WORKSPACE_BUSY', '写入目录被占用：排队并显示持有者（§16.5）', {
+  return domainErr('WORKSPACE_BUSY', '其他任务正在修改此目录，本任务正在等待', {
     details: {
       holders: holders.map<LeaseHolderInfo>((h) => ({
         ownerTurnId: h.owner_turn_id,

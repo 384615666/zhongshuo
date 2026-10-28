@@ -72,12 +72,12 @@ export function resolveReplyTarget(
         return domainErr('CONVERSATION_SCOPE_MISMATCH', 'room_root 目标必须是房间会话且 roomId 一致');
       }
       if (conv.archived) {
-        return domainErr('ROOM_ARCHIVED', '房间已归档，不能新增任务；可查看既有记录（§16.5）');
+        return domainErr('ROOM_ARCHIVED', '房间已归档，恢复后可以新增任务；已有记录仍可查看');
       }
       if (input.preallocatedThreadId == null || input.newAnchorMessageId == null) {
         return domainErr(
           'VALIDATION_INVALID',
-          '主池发送需要预分配 threadId 与 anchor 消息 ID（§12.3 单事务关联）',
+          '对话创建未完成，请重新发送',
         );
       }
       return domainOk({
@@ -109,7 +109,7 @@ export function resolveReplyTarget(
         if (!inSameThread) {
           return domainErr(
             'THREAD_SCOPE_MISMATCH',
-            'reply_to_message_id 必须指向同串回复或该串 anchor（§12.3）',
+            '引用的消息不在当前回复串中',
           );
         }
       }

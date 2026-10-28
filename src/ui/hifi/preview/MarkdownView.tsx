@@ -250,7 +250,7 @@ function renderInline(text: string, tableCell = false): React.ReactNode[] {
         const m = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(piece);
         if (m) {
           out.push(
-            <span className="md-link" key={`l${pi}-${si}-${li}`} title={`外部链接（原型不自动打开）：${m[2]}`}>
+            <span className="md-link" key={`l${pi}-${si}-${li}`} title={`外部链接：${m[2]}`}>
               {tableCell ? renderInline(m[1], true) : m[1]}<span className="md-link-mark">↗</span>
             </span>,
           );

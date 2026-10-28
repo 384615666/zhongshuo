@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 房间主池页（第五十一轮 H2 修订）：room.pool 线程卡（原型 root-card 形态——任务号/状态/
  * 正文/回复数/未读；记录串如实无任务号）→ 点击进线程视图（/thread/:id）。Composer 正式
@@ -17,8 +18,8 @@ import { navigate } from './lib/router';
 const EMPTY: never[] = [];
 /** 正式侧能力锁定（第四十七轮）：未接通的能力点击前禁用并说明。 */
 const FORMAL_LIMITS = {
-  method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链（H3）——当前按项目默认方式派发',
-  access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——当前按成员默认权限执行',
+  method: '当前按项目默认方式执行',
+  access: '当前使用成员的默认权限',
 } as const;
 
 const TASK_STATUS: Record<string, { label: string; tone: 'success' | 'info' | 'neutral' | 'warning' }> = {
@@ -59,10 +60,10 @@ export function RoomPage({ roomId }: { roomId: string }) {
       <div className="row tight wrap" style={{ padding: '10px 14px 0' }}>
         <span className="section-title">#{room.name}</span>
         <span className="faint small">{roomMembers.length > 0 ? `成员：${roomMembers.map((m) => m.displayName).join('、')}` : rosterError != null ? '成员名单读取失败（保留上次名单；重试=切换视图）' : '暂无启用成员（仅记录仍可保存；派发需先有成员）'}</span>
-        <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在本房间的原界面打开：附件管理/任务停止/验收返工/成果与预览（尚未换装的能力经此可达）" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面打开本房间</button>
+        <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在原界面打开本房间，管理附件、任务与成果" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面打开本房间</button>
       </div>
       <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
-        {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
+        {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
         {cards.length === 0 && readError == null ? <div className="panel info">主池暂无线程——发送第一条（或仅记录）。</div> : null}
         {cards.map((c) => (
           <div
@@ -86,7 +87,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
               <span style={{ flex: 1 }} />
               <span className="small faint">{c.createdAt > 0 ? new Date(c.createdAt).toLocaleString() : '时间未知'}</span>
             </div>
-            <div className="root-body clamp-2" style={{ marginTop: 4 }}>{c.body || '（正文不可得——如实标注）'}</div>
+            <div className="root-body clamp-2" style={{ marginTop: 4 }}>{c.body || '（正文无法读取）'}</div>
             {c.delivery?.feedback?.find((item) => item.status === 'needs_revision' || item.status === 'needs_user') ? (
               <div className="small faint" style={{ marginTop: 4 }}>
                 {(() => {
@@ -117,8 +118,8 @@ export function RoomPage({ roomId }: { roomId: string }) {
         formalLimits={FORMAL_LIMITS}
         attachmentUpload={room.conversationId != null && room.conversationId !== '' ? { conversationId: room.conversationId } : undefined}
         onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-          if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（原信封）', 'success'); }
-          return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+          if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（上次发送记录）', 'success'); }
+          return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${userFacingSystemText(r.error ?? '')}` } : { status: 'unknown', error: r.error };
         })}
         onSend={(p): Promise<FormalSendOutcome> => (async () => {
           // 发送前用唯一正式 builder 固化完整信封（含 projectId/conversationId/roomId——
@@ -133,7 +134,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
           const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
           env.revAtSend = p.draftRev;
           const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）
-          if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
+          if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
           const r = await sendEnvelope(env);
           if (r.status === 'ok') settleOutbound(draftKey, env);
           else if (r.status === 'failed') dropOutbound(draftKey, env);
@@ -143,7 +144,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
             toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
             return { status: 'ok' };
           }
-          return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+          return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${userFacingSystemText(r.error ?? '')}` } : { status: 'unknown', error: r.error };
         })()}
       />
     </div>

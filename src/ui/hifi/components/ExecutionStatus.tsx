@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import type {
   TaskExecutionAction,
   TaskExecutionMember,
@@ -65,6 +66,12 @@ function memberWaitingText(member: TaskExecutionMember): string {
   return `${member.displayName}等待结果`;
 }
 
+// Waiting reasons can quote a user question or review text verbatim.
+function executionReasonText(status: TaskExecutionStatus): string {
+  if (status.reason.code.startsWith('WAITING_')) return status.reason.message;
+  return userFacingSystemText(status.reason.message);
+}
+
 function friendlyDetail(status: TaskExecutionStatus): string | null {
   if (status.phase === 'ADMISSION_WAITING') {
     const blocker = status.evidence.executionBlocker;
@@ -84,7 +91,7 @@ function friendlyDetail(status: TaskExecutionStatus): string | null {
     if (status.reason.code === 'NO_EXECUTION_EVIDENCE') return '没有取得可确认的执行进展，正在安全等待刷新。';
     return '上一次执行的结果还没确认；需要先核对，暂时不能继续。';
   }
-  if (status.phase === 'NOT_STARTED_FAILED' || status.phase === 'FAILED') return status.reason.message;
+  if (status.phase === 'NOT_STARTED_FAILED' || status.phase === 'FAILED') return executionReasonText(status);
   if (status.phase === 'STOPPING') return '停止请求已送出，正在等执行端确认。';
   if (status.phase === 'WAITING_FOR_USER') return status.waitingForUser?.message ?? status.reason.message;
   if (status.phase === 'WAITING_FOR_PEER') {
@@ -155,7 +162,7 @@ function timeText(at: number | null): string {
 }
 
 function memberText(member: TaskExecutionMember): string {
-  return `${member.displayName}${member.stage == null ? '' : ` · ${member.stage}`}`;
+  return `${member.displayName}${member.stage == null ? '' : ` · ${userFacingSystemText(member.stage ?? '')}`}`;
 }
 
 function resultText(status: TaskExecutionStatus): string {
@@ -164,7 +171,7 @@ function resultText(status: TaskExecutionStatus): string {
     results.deliveries.length > 0 ? `结果 ${results.deliveries.length}` : null,
     results.artifacts.length > 0 ? `文件 ${results.artifacts.length}` : null,
   ].filter((part): part is string => part != null);
-  if (parts.length === 0 && results.changeSets.length === 0) return '尚无正式成果';
+  if (parts.length === 0 && results.changeSets.length === 0) return '还没有成果';
   const current = results.currentDelivery;
   return `${parts.join(' · ')}${current == null ? '' : ` · 当前 v${current.revision}（${current.reviewStatus === 'pending' ? '待验收' : current.reviewStatus === 'accepted' ? '已验收' : current.reviewStatus === 'changes_requested' ? '要求修改' : current.reviewStatus === 'superseded' ? '已被替代' : '无需验收'}）`}`;
 }
@@ -225,7 +232,7 @@ export function ExecutionStatus({
             data-zs-execution-action={firstAction.kind}
             data-zs-action-id={firstAction.id}
             disabled={onAction == null}
-            title={onAction == null ? '父界面尚未接入该操作的正式处理入口' : undefined}
+            title={onAction == null ? '此处暂不可操作，请打开对应任务详情' : undefined}
             onClick={onAction == null ? undefined : () => onAction(firstAction)}
           >
             <Icon name={ACTION_ICON[firstAction.kind]} size={12} />
@@ -242,7 +249,7 @@ export function ExecutionStatus({
             </div>
           ) : null}
           {status.reason.message !== summary.detail && status.reason.message !== summary.main ? (
-            <div className="small faint" style={{ marginTop: 4 }}>{status.reason.message}</div>
+            <div className="small faint" style={{ marginTop: 4 }}>{executionReasonText(status)}</div>
           ) : null}
           {summary.result != null ? (
             <div className="row tight" style={{ marginTop: 4, gap: 6 }}>
@@ -260,7 +267,7 @@ export function ExecutionStatus({
                   data-zs-execution-action={action.kind}
                   data-zs-action-id={action.id}
                   disabled={onAction == null}
-                  title={onAction == null ? '父界面尚未接入该操作的正式处理入口' : undefined}
+                  title={onAction == null ? '此处暂不可操作，请打开对应任务详情' : undefined}
                   onClick={onAction == null ? undefined : () => onAction(action)}
                 >
                   <Icon name={ACTION_ICON[action.kind]} size={12} />
@@ -279,18 +286,18 @@ export function ExecutionStatus({
               <div>最后业务活动：{status.lastBusinessActivity == null ? '无可确认活动' : `${status.lastBusinessActivity.summary} · ${timeText(status.lastBusinessActivity.at)}`}</div>
               <div>成果：{resultText(status)}</div>
               {status.actualPerformingMembers.map(member => (
-                <div key={`actual:${member.memberId}:${member.turnId ?? ''}`}>{memberText(member)} · {member.status} · {member.turnId ?? '无 turn'}</div>
+                <div key={`actual:${member.memberId}:${member.turnId ?? ''}`}>{memberText(member)} · {member.status} · {member.turnId ?? '暂无执行记录'}</div>
               ))}
               {status.waitingMembers.map(member => (
-                <div key={`waiting:${member.memberId}:${member.turnId ?? member.runId ?? ''}`}>{memberText(member)} · {member.reason}</div>
+                <div key={`waiting:${member.memberId}:${member.turnId ?? member.runId ?? ''}`}>{memberText(member)} · {userFacingSystemText(member.reason ?? '')}</div>
               ))}
-              <div>事件 #{status.evidence.sourceHighWatermark} · 任务 {status.evidence.taskStatus} · revision {status.evidence.taskRevision} · stop generation {status.evidence.stopGeneration}</div>
-              <div>运行 {status.evidence.runCount} · 执行轮次 {status.evidence.turnCount} · 在途 run {status.evidence.activeRunIds.length} · 未闭环 UNKNOWN {status.evidence.unknownTurnIds.length}</div>
-              <div>待派发队列 {status.evidence.outbox?.pendingCount ?? 0} · 心跳参与业务活动：否</div>
+              <div>事件 #{status.evidence.sourceHighWatermark} · 任务 {status.evidence.taskStatus} · 版本 {status.evidence.taskRevision} · 停止次数 {status.evidence.stopGeneration}</div>
+              <div>运行 {status.evidence.runCount} · 执行轮次 {status.evidence.turnCount} · 进行中 {status.evidence.activeRunIds.length} · 待确认结果 {status.evidence.unknownTurnIds.length}</div>
+              <div>待派发队列 {status.evidence.outbox?.pendingCount ?? 0}</div>
               {status.existingResults.changeSets.map(change => (
                 <div key={change.id}>变更集 {change.id} · {change.applicationStatus}</div>
               ))}
-              <div>本投影只读；不会停止、重派、释放保护或修改准入。</div>
+              <div>这里显示执行记录；如需操作，请使用任务页面的对应按钮。</div>
             </div>
           </details>
         </>

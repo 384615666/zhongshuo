@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 项目设置（R65 原型还原·ProjectSettingsPage 同源）：路由绑定 projectId（无效项目报错不回退）；
  * 真实绑定=项目信息（project.update CAS）、任务交付验收（project.reviewPolicy.set CAS）、
@@ -7,7 +8,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { NumberField, SwitchRow } from '../components/SettingsRow';
+import { SwitchRow } from '../components/SettingsRow';
 import { ErrorState, Modal, Tag } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { updateProjectReal, projectLifecycleReal, setTaskReviewReal, collabGet, collabSet, stopAllProjectReal } from '../loader';
@@ -64,7 +65,7 @@ export function TurnDeadlineField({ value, effective, onCommit, disabled = false
         aria-invalid={error ? true : undefined}
         aria-busy={disabled ? true : undefined}
         disabled={disabled}
-        title={disabled ? '正在保存并回读，完成后可继续编辑' : undefined}
+        title={disabled ? '正在保存，完成后可继续编辑' : undefined}
         onChange={(event) => { setDraft(event.target.value); if (error) setError(null); }}
         onBlur={commit}
         onKeyDown={(event) => {
@@ -74,7 +75,7 @@ export function TurnDeadlineField({ value, effective, onCommit, disabled = false
       />
       <span className="pset-unit">秒</span>
     </div>
-    {error ? <div className="pset-row-error">{error}</div> : null}
+    {error ? <div className="pset-row-error">{userFacingSystemText(error ?? '')}</div> : null}
   </div>;
 }
 
@@ -124,7 +125,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
       if (!current) return;
       setCollab(value);
       setCollabError(null);
-    }).catch((e: unknown) => { if (current) setCollabError(`协作限制读取失败：${(e as Error).message}；当前值不能当作默认值。`); });
+    }).catch((e: unknown) => { if (current) setCollabError(`协作限制读取失败：${userFacingSystemText((e as Error).message ?? '')}；当前值不能当作默认值。`); });
     return () => { current = false; };
   }, [boundId]);
   useEffect(() => {
@@ -166,16 +167,16 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
     try {
       const result = await collabSet(id, patch, collab.revision);
       if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) {
-        toast(`「${targetName}」协作限制${result.ok ? '保存命令已接受，回读待重新进入原项目核对' : `保存失败：${result.error}`}（当前页面已切换/关闭）`, result.ok ? 'warn' : 'error');
+        toast(`「${targetName}」协作限制${result.ok ? '保存已提交，可重新进入原项目查看结果' : `保存失败：${result.error}`}（当前页面已切换/关闭）`, result.ok ? 'warn' : 'error');
         return;
       }
-      if (!result.ok) { setCollabError(`保存失败：${result.error}`); toast(`保存失败：${result.error}`, 'error'); return; }
+      if (!result.ok) { setCollabError(`保存失败：${userFacingSystemText(result.error ?? '')}`); toast(`保存失败：${userFacingSystemText(result.error ?? '')}`, 'error'); return; }
       let reread: Awaited<ReturnType<typeof collabGet>>;
       try { reread = await collabGet(id); }
-      catch (e) { if (mounted.current && id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollabError(`保存命令已接受，但回读失败：${(e as Error).message}；当前值未获确认。`); return; }
+      catch (e) { if (mounted.current && id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollabError(`保存已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}；当前值未获确认。`); return; }
       if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) return;
       setCollab(reread);
-      toast('协作限制已保存并回读', 'success');
+      toast('已保存', 'success');
     } finally {
       if (mounted.current && id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) { collabSavingRef.current = false; setCollabSaving(false); }
     }
@@ -230,8 +231,8 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
       return;
     }
     setBusy(false);
-    if (r.ok) toast('项目信息已保存（回读一致；revision 已推进）', 'success');
-    else { setSaveErr(r.error ?? '未知错误'); toast(`保存失败：${r.error}（输入已保留）`, 'error'); }
+    if (r.ok) toast('项目信息已保存', 'success');
+    else { setSaveErr(r.error ?? '未知错误'); toast(`保存失败：${userFacingSystemText(r.error ?? '')}（输入已保留）`, 'error'); }
   };
 
   return (
@@ -258,9 +259,9 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
             </div>
             <button className="btn sm primary" disabled={busy || !nameDraft.trim() || !dirtyInfo} onClick={() => void saveInfo()}>保存</button>
           </div>
-          {saveErr != null ? <div className="panel warning" style={{ marginTop: 8 }}>保存失败：{saveErr}（输入已保留；若项目已被他人/他端修改，请刷新后重试——revision 乐观锁）</div> : null}
+          {saveErr != null ? <div className="panel warning" style={{ marginTop: 8 }}>保存失败：{userFacingSystemText(saveErr ?? '')}。输入已保留，请刷新后重试。</div> : null}
           <div className="small faint" style={{ marginTop: 6 }}>
-            只改应用里的显示信息，<strong>不会</strong>重命名磁盘目录（{project.rootPath}）。保存按 revision {project.revision} 乐观锁提交。
+            只改应用里的显示信息，<strong>不会</strong>重命名磁盘目录（{project.rootPath}）。
           </div>
         </div>
 
@@ -278,12 +279,12 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
             <div className="card">
               <SwitchRow
                 label="任务交付后需要我确认"
-                hint="开启后，任务交付会等你验收才算完成；关闭后，满足交付要求即完成。仅影响新任务（创建时快照）。"
+                hint="开启后，任务交付会等你验收才算完成；关闭后，满足交付要求即完成。只影响之后创建的任务。"
                 checked={project.taskReviewEnabled ?? false}
-                onChange={(v) => { const targetName = project.displayName; void setTaskReviewReal(project.id, v, project.revision).then((r) => { if (!r.ok) toast(`「${targetName}」验收开关保存失败：${r.error}`, 'error'); }); }}
+                onChange={(v) => { const targetName = project.displayName; void setTaskReviewReal(project.id, v, project.revision).then((r) => { if (!r.ok) toast(`「${targetName}」验收开关保存失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}
               >
                 {pendingReview?.projectId === project.id && pendingReview.count > 0 ? <button className="pset-link" onClick={() => navigate('/pending')} title="去待我处理逐条验收">还有 {pendingReview.count} 个已有任务等待验收 → 查看</button> : null}
-                {pendingReviewError?.projectId === project.id ? <span className="small faint">待验收数量读取失败：{pendingReviewError.message}（去待我处理查看）</span> : null}
+                {pendingReviewError?.projectId === project.id ? <span className="small faint">待验收数量读取失败：{userFacingSystemText(pendingReviewError.message ?? '')}（去待我处理查看）</span> : null}
               </SwitchRow>
               <div className="pset-note">
                 关闭验收不等于自动批准权限、自动提交或推送 Git。这个开关与项目是否为 Git 仓库无关。
@@ -295,20 +296,9 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
           <section className="pset-section" id="pset-collab">
             <div className="pset-section-title">协作限制</div>
             <div className="card">
-              {collabError != null ? <div className="panel warning">{collabError} <button className="btn sm" onClick={() => { const id = project.id; const routeGeneration = routeIdentity.current.generation; setCollabError(null); void collabGet(id).then((value) => { if (id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollab(value); }).catch((e: unknown) => { if (id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollabError(`协作限制读取失败：${(e as Error).message}`); }); }}>重试读取</button></div> : null}
-              {collab == null ? (collabError == null ? <div className="small faint">正在读取协作限制（project.collab.get）…</div> : null) : (
+              {collabError != null ? <div className="panel warning">{userFacingSystemText(collabError ?? '')} <button className="btn sm" onClick={() => { const id = project.id; const routeGeneration = routeIdentity.current.generation; setCollabError(null); void collabGet(id).then((value) => { if (id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollab(value); }).catch((e: unknown) => { if (id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollabError(`协作限制读取失败：${userFacingSystemText((e as Error).message ?? '')}`); }); }}>重试读取</button></div> : null}
+              {collab == null ? (collabError == null ? <div className="small faint">正在读取协作设置…</div> : null) : (
                 <>
-                  <NumberField
-                    label="成员无响应后继续"
-                    hint="超过这个时间就按在场成员继续，不再干等。迟到成果仍会并入。留空/设 0=服务端默认。"
-                    value={collab.absenceToleranceMs == null ? 0 : Math.round(collab.absenceToleranceMs / 60000)}
-                    min={0}
-                    max={1440}
-                    unit="分钟"
-                    onCommit={(v) => { void saveCollab({ absenceToleranceMs: v > 0 ? v * 60000 : null }); }}
-                    integer
-                  />
-                  <div className="pset-divider" />
                   <TurnDeadlineField
                     value={collab.turnDeadlineMs}
                     effective={{ ms: collab.effectiveTurnDeadlineMs, source: collab.turnDeadlineSource }}
@@ -318,7 +308,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                   <div className="pset-note">
                     默认不设总时长上限；启用后达到设定时间会中断，且只对之后开始的执行生效。
                   </div>
-                  {collabSaving ? <div className="small faint">正在保存并回读协作限制…</div> : null}
+                  {collabSaving ? <div className="small faint">正在保存…</div> : null}
                 </>
               )}
             </div>
@@ -331,19 +321,19 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
               <div className="pset-row">
                 <div className="pset-row-label">
                   <div className="pset-row-name">同时修改文件的任务</div>
-                  <div className="pset-row-hint">单写者策略（同一物理目录最多 1 个受管理写入者，其他任务排队）。</div>
+                  <div className="pset-row-hint">同一目录中的文件修改依次执行，其他任务排队。</div>
                 </div>
                 <Tag tone="success" icon="check-circle">单写者（当前策略）</Tag>
               </div>
               <div className="pset-note">
-                并行写入策略（§14.7）在正式合同中延期——本节只读呈现当前策略，不提供切换（不伪造可配置）。
+                同一位置的文件修改会依次执行；这里显示当前策略。
               </div>
               <ProjectWriteAccessPanel key={projectId} projectId={projectId} name={project.displayName} path={project.rootPath??''}/>
             </div>
           </section>
 
           <div className="pset-foot">
-            改动立即保存并按 revision 乐观锁提交；这些设置只影响 <strong>{project.displayName}</strong>。
+            改动立即保存；这些设置只影响 <strong>{project.displayName}</strong>。
           </div>
 
           {/* 高级操作 */}
@@ -358,8 +348,8 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 <div className="strong" style={{ fontSize: 12 }}>归档项目</div>
                 <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
                   退出日常项目列表、历史保留只读；其下房间不再收消息、不建任务、不被唤醒。磁盘文件不受影响。
-                  {unfinishedCount != null ? unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束（board.view 最近回读），需要先处理。</> : <> 最近读取没有未结束任务；归档时服务端会再次复查。</> : <> 未结束任务数读取中；归档时服务端会再次复查。</>}
-                  {unfinishedReadError != null ? <> 最近一次任务数读取失败：{unfinishedReadError}（保留上次回读，操作前请查看任务看板）。</> : null}
+                  {unfinishedCount != null ? unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束，需要先处理。</> : <> 最近读取没有未结束任务；归档时服务端会再次复查。</> : <> 未结束任务数读取中；归档时服务端会再次复查。</>}
+                  {unfinishedReadError != null ? <> 最近一次任务数读取失败：{userFacingSystemText(unfinishedReadError ?? '')}（请先到任务看板查看最新状态）。</> : null}
                 </div>
               </div>
               <button className="btn sm" disabled={Boolean(project.archivedAt)} onClick={() => setArchiveOpen(true)}>
@@ -370,7 +360,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
               <div style={{ minWidth: 0 }}>
                 <div className="strong" style={{ fontSize: 12 }}>停止这个项目的全部任务</div>
                 <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
-                  覆盖 <strong>{project.displayName}</strong> 的所有房间：按看板权威清单逐任务停止（每次绑定该任务 run+停止代次）。
+                  覆盖 <strong>{project.displayName}</strong> 的所有房间：逐个发送正在执行任务的停止请求。
                 </div>
               </div>
               <button className="btn sm danger" onClick={() => setStopAllOpen(true)}>
@@ -406,7 +396,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                     setBusy(false);
                     setArchiveOpen(false);
                     if (r.ok) { toast('项目已归档（历史保留只读）——可在项目 ⋯ 菜单恢复', 'success'); navigate(`/project/${targetId}`); }
-                    else toast(`归档被拒：${r.error}`, 'error');
+                    else toast(`归档被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
                   });
                 }}
               >
@@ -426,7 +416,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
         <Modal
           size="sm"
           title="项目全停"
-          subtitle={`覆盖 ${project.displayName} 的所有房间（board.view 权威清单 → 逐任务 task.stop）`}
+          subtitle={`覆盖 ${project.displayName} 的所有房间中正在执行的任务`}
           onClose={() => setStopAllOpen(false)}
           footer={
             <>
@@ -458,7 +448,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
         >
           <div className="panel warning">
             <div className="panel-title"><Icon name="alert-triangle" size={13} /> 停止不是撤销</div>
-            已写入磁盘的改动会保留；撤销是带版本检查的独立操作。每次停止绑定该任务当前 run 与停止代次（过时绑定会被服务端拒绝）。
+            停止后，已写入磁盘的改动会保留。如需撤销，请另行操作；撤销前会检查文件版本。
           </div>
         </Modal>
       ) : null}

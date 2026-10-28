@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {useRef,useState} from 'react';
 import type {PreDispatchFailureProjection} from '../../../contracts/taskDetails';
 import {sendCommand} from '../bridge';
@@ -26,7 +27,7 @@ export function AnalysisContinueAction({failure,roomId}:{failure:PreDispatchFail
       pending.current=null;
       toast('已按原请求继续','success');
       await Promise.allSettled([loadRoomPool(roomId),...(failure.threadId?[refreshThreadTask(failure.threadId)]:[])]);
-    }catch(error){toast(`未确认继续结果：${(error as Error).message}。可同号重试。`,'error');}
+    }catch(error){toast(`未确认继续结果：${userFacingSystemText((error as Error).message ?? '')}。可同号重试。`,'error');}
     finally{setBusy(false);}
   };
   return <div className="small" onClick={event=>event.stopPropagation()} data-zs-analysis-recovery="1">

@@ -1838,7 +1838,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             if(!route.ok)throw new DaemonCommandError(route.error.code,route.error.message);
             if(route.value.kind!=='dispatch')return [];
             const members=route.value.mode==='DIRECT'?route.value.frozenMemberIds:coordinationRoomMembers(deps.db,target.roomId,target.projectId,route.value.mode==='AUTO'&&route.value.participantScope!=='selected'?undefined:route.value.frozenMemberIds).map(m=>m.id);
-            if(members.length>12)throw new DaemonCommandError('CONFIGURATION_NOT_READY','自动协作最多选择12位房间成员，请调整名单');
             return [...members].sort();
           };
           const coordinator=params.target.kind==='room_root'?coordinatorOf(deps.db,params.target.roomId):null;
@@ -1873,7 +1872,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 | { id: string; project_id: string; conversation_id: string; room_id: string; root_task_id: string | null; last_message_seq: number }
                 | undefined;
               if (thread == null || thread.project_id !== params.target.projectId || thread.conversation_id !== params.target.conversationId) {
-                throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '线程目标与项目/会话不一致，拒绝提交（§4.5）');
+                throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '对话与当前项目不匹配，请重新打开对话后发送');
               }
               if (target.replyToMessageId != null) {
                 const replyTo = deps.db.prepare('SELECT thread_id,project_id,conversation_id,thread_message_seq FROM messages WHERE id=?').get(target.replyToMessageId) as
@@ -1951,7 +1950,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             // 私信发送（DEV-22；R4 §2.3/§4.6）：mentions 必空（无 @ 派工）；record_only 只保存；
             // 附件=DEV-24 文本首包（第二十六轮五）：attachmentRefs=artifacts.id——归属/能力校验
             // 走四通道共用 resolveAttachmentRefs（第二十七轮二），消息-附件关联同事务。
-            if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信不做 @ 派工（§4.6 一对一）：mentions 必须为空');
+            if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信只发送给当前聊天对象，请移除其他成员的 @');
             if (params.deliberationBudget != null || params.collaboration != null) {
               throw new DaemonCommandError('VALIDATION_INVALID', '私信不接受独立研讨预算或协作模式；本次草稿保留');
             }
@@ -1964,7 +1963,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '目标不是该项目的私信会话');
             }
             if (conv.archived_at != null) {
-              throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑，保留历史（R4 §2.1）');
+              throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档，恢复后可以继续发送消息');
             }
             const peer = dmPeerOf(deps.db, target.conversationId);
             if (peer == null) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '私信会话缺少 Agent 对端（数据不完整）');
@@ -3020,7 +3019,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const conv = dmConversationOf(deps.db, params.conversationId);
         if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
         if (dmLocalUserOf(deps.db, params.conversationId) !== deps.localUserId) {
-          throw new DaemonCommandError('FORBIDDEN', '仅该私信 audience 可读取（R4 §2.3）');
+          throw new DaemonCommandError('FORBIDDEN', '只有这段私信的参与者可以查看');
         }
         const limit = params.limit ?? 50;
         const rows = (params.beforeSeq != null
@@ -3450,7 +3449,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           ).all(pattern, deps.localUserId, ...(params.scope === 'project' ? [params.projectId!] : (visibleProjectFilter ?? [])), ...(params.conversationId != null ? [params.conversationId] : []), ...(authorIds ?? []), ...(fromMs != null ? [fromMs] : []), ...(toMs != null ? [toMs] : []), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; title: string; status: string; created_at: number | null; author_id: string | null }>)
             .map((r) => ({ kind: 'task', taskId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, title: r.title, status: r.status, createdAt: r.created_at, authorId: r.author_id, locate: `#task=${r.id}` }));
         }
-        return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按所在消息的文件名检索；正文提取未实施（不冒充支持）；日期按本机时区解释' } });
+        return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按文件名搜索，日期按本机时区显示' } });
       }
       case 'attachment.uploadText': {
         // DEV-24 文本/Markdown 首包（第二十六轮五；第二十七轮六扩代码类）——能力①保存副本：
@@ -4983,7 +4982,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           decision: z.enum(['accept', 'changes_requested']),
           note: z.string().min(1).max(500).optional(),
         }).refine((p) => p.decision !== 'changes_requested' || (p.note != null && p.note.trim().length > 0), {
-          message: '要求修改必须填写意见（§10.5-4：意见进入正式任务记录并注入返工输入）',
+          message: '请填写需要修改的内容',
           path: ['note'],
         }).parse(env.params);
         const result = run(() => {

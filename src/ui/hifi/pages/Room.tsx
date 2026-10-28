@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {TaskExecutionStatusView} from '../components/TaskExecutionStatusView';
 import {taskExecutionNeedsReview,taskExecutionStatusSummary} from '../components/ExecutionStatus';
 /**
@@ -66,8 +67,8 @@ import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
 
 /** 正式侧能力锁定（未接通能力点击前禁用并说明——不在原型位置伪造可用）。 */
 const FORMAL_LIMITS = {
-  method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链——当前按项目默认方式派发',
-  access: '实际执行权限由明确项目授权与成员配置共同决定；发送前显示回读事实，派发前服务端复查',
+  method: '当前按项目默认方式执行',
+  access: '按项目授权和成员配置访问文件',
 } as const;
 
 /** 打开会话附件：登记资源（真实 attachmentId/audience）→ 共享预览标签。 */
@@ -605,7 +606,7 @@ export function RoomPage({
                 onClick={() => {
                   setRoomMenuAnchor(null);
                   void roomArchiveReal(room.id, room.revision, 'unarchive').then((r) => {
-                    toast(r.ok ? '已取消归档' : `取消归档失败：${r.error}`, r.ok ? 'success' : 'error');
+                    toast(r.ok ? '已取消归档' : `取消归档失败：${userFacingSystemText(r.error ?? '')}`, r.ok ? 'success' : 'error');
                   });
                 }}
               >
@@ -788,8 +789,8 @@ function RoomPool({
           <div
             className={`write-line${parallel && maxWriters && holders.length >= maxWriters ? ' warn' : ''}`}
             title={parallel
-              ? `并行写入策略：同物理目录最多 ${maxWriters ?? '—'} 个受管理写入者；达上限的任务排队`
-              : '单写者策略：同一物理目录最多 1 个受管理写入者，其他任务排队'}
+              ? `并行写入策略：同物理目录最多 ${maxWriters ?? '—'} 个任务同时修改文件；其他任务排队`
+              : '同一目录中的文件修改依次执行，其他任务排队'}
           >
             <Icon name={parallel && maxWriters && holders.length >= maxWriters ? 'alert-triangle' : 'lock'} size={11} />
             <span className="truncate">
@@ -844,7 +845,7 @@ function RoomPool({
           sendDisabledReason={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
           sendDisabledLabel={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
           onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-            if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（原信封）', 'success'); }
+            if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（上次发送记录）', 'success'); }
             return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })}
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -863,7 +864,7 @@ function RoomPool({
             });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
-            if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
+            if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
             const r = await sendEnvelope(env);
             if (r.status === 'ok') settleOutbound(draftKey, env);
             else if (r.status === 'failed') dropOutbound(draftKey, env);
@@ -929,7 +930,7 @@ function RootCardActions({ message, saved }: { message: Message; saved: boolean 
         window.dispatchEvent(new CustomEvent('zs:focus-composer',{detail:key}));
       }}><Icon name="corner-down-right" size={12}/> 引用</button>
       <button type="button" className="btn ghost sm" data-zs-saved={saved?'1':undefined} title={saved?'取消收藏':'收藏，不改动原消息'} onClick={()=>{
-        void toggleSavedMessage(message,message.projectId).then(r=>{if(r.ok)toast(r.saved?'已收藏':'已取消收藏','success');else if(!r.busy)toast(r.error??'收藏失败','error');});
+        void toggleSavedMessage(message,message.projectId).then(r=>{if(r.ok)toast(r.saved ? '已收藏' : '已取消收藏','success');else if(!r.busy)toast(userFacingSystemText(r.error??'收藏失败'),'error');});
       }}><Icon name="bookmark" size={12}/> {saved?'已收藏':'收藏'}</button>
       <span className="small msg-action-feedback" aria-live="polite">{copyState==='copied'?'已复制':copyState==='failed'?'复制失败':''}</span>
     </div>
@@ -987,7 +988,7 @@ function RootCard({
   const primary = useMemo(() => {
     if (!task) return null;
     if(executionStatus){const summary=taskExecutionStatusSummary(executionStatus);return {label:summary.label,icon:'activity',tone:taskExecutionNeedsReview(executionStatus)?'warning' as const:executionStatus.phase==='COMPLETED'?'success' as const:['UNKNOWN','FAILED','NOT_STARTED_FAILED'].includes(executionStatus.phase)?'danger' as const:'info' as const,detail:[summary.main,summary.detail,summary.result].filter(Boolean).join(' · ')};}
-    if(preDispatchFailure)return {label:'尚未启动',icon:'octagon',tone:'danger' as const,detail:`${preDispatchFailure.memberName??'执行成员'} · 模型尚未被调用 · ${preDispatchFailure.event.message}`};
+    if(preDispatchFailure)return {label:'尚未启动',icon:'octagon',tone:'danger' as const,detail:`${preDispatchFailure.memberName??'执行成员'} · 模型尚未被调用 · ${userFacingSystemText(preDispatchFailure.event.message ?? '')}`};
     // 1) 需要用户介入的最高优先
     if (task.status === 'REVIEW') {
       const cs = s.changeSets.find((c) => c.taskId === task.id);
@@ -1203,7 +1204,7 @@ function RootCard({
         <div className="faint small">
           {task.currentRunBudget.enforcement === 'disabled'
             ? `本轮调用次数限制已关闭（仅真实记账）：已记录 ${task.currentRunBudget.usedTurns} 次`
-            : <>本轮冻结预算：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次调用
+            : <>本次调用预算：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次调用
               {task.currentRunBudget.remainingTurns > 0 ? ` · 剩余 ${task.currentRunBudget.remainingTurns} 次` : ' · 已用尽'}</>}
         </div>
       ) : null}
@@ -1247,7 +1248,7 @@ function RootCard({
             <Icon name="clock" size={13} />
             等 {memberLabel(byId(s.members, absent.memberId))}（已 {Math.round((Date.now() - absent.since) / 60000)} 分钟）
           </div>
-          超过缺席容忍后会按缺席继续，不会一直转圈。
+          AI 仍在执行，完成后会继续处理。
         </div>
       ) : null}
 
@@ -1890,7 +1891,7 @@ function ThreadPanel({
                       onSave={() => {
                         void toggleSavedMessage(m, s.projects.find((pr) => pr.id === s.activeProjectId)?.id ?? null).then((r) => {
                           if (r.ok) toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏', 'success');
-                          else if (r.busy !== true) toast(`收藏操作失败：${r.error ?? '未知错误'}`, 'error');
+                          else if (r.busy !== true) toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}`, 'error');
                         });
                       }}
                       onQuote={(message) => insertMessageAction(message, 'quote')}
@@ -1993,8 +1994,8 @@ function ThreadPanel({
             ? {
               onStop: () => {
                 void stopThreadTask(threadId).then((r) => {
-                  if (r.ok) toast('停止请求已提交（等活跃 turn 结束——详情状态会刷新）', 'success');
-                  else toast(`停止失败：${r.error}`, 'error');
+                  if (r.ok) toast('停止请求已提交，正在等待执行结束', 'success');
+                  else toast(`停止失败：${userFacingSystemText(r.error ?? '')}`, 'error');
                 });
               },
               stopping,
@@ -2002,7 +2003,7 @@ function ThreadPanel({
             : undefined}
           onClearSubtask={() => setSubtaskTarget(undefined)}
           onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-            if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（原信封）', 'success'); }
+            if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（上次发送记录）', 'success'); }
             return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })}
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -2014,14 +2015,14 @@ function ThreadPanel({
             const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
-            if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
+            if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
             const r = await sendEnvelope(env);
             if (r.status === 'ok') settleOutbound(draftKey, env);
             else if (r.status === 'failed') dropOutbound(draftKey, env);
             else confirmOutboundUnknown(draftKey, env);
             if (r.status === 'ok') {
               void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-              toast(r.data.disposition==='enqueued'?'已发送，等待 AI 回复':'已跟进', 'success');
+              toast(r.data.disposition==='enqueued' ? '已发送，等待 AI 回复' : '已跟进', 'success');
               return { status: 'ok' };
             }
             return r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
@@ -2074,9 +2075,9 @@ function ThreadDetails({
         await command('task.redispatch', { ...snapshot,...(details.failedRetry.formatRepair?{formatRepair:true,useCurrentExecutionSnapshot:true}:{}), reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':details.failedRetry.formatRepair?'用户按当前成员配置只读补交已有结果':'用户在运行详情显式继续最近失败运行' });
         setAcceptedRetryRun(snapshot.sourceRunId);
         recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
-        toast('继续请求已入队；等待正式执行结果', 'success');
+        toast('继续请求已入队', 'success');
       } catch (e) {
-        toast(`继续被拒：${(e as Error).message}——请按当前任务事实重新决定`, 'error');
+        toast(`继续被拒：${userFacingSystemText((e as Error).message ?? '')}——请按当前任务事实重新决定`, 'error');
       } finally {
         setRetryBusyTask((current) => current === snapshot.taskId ? null : current);
         formal.refresh();
@@ -2153,8 +2154,7 @@ function ThreadDetails({
           <div className="msg-list">
             <div className="panel info">
               <div className="panel-title"><Icon name="layers" size={13} /> 研讨详情（阶段/初稿/互评/确认矩阵）</div>
-              研讨过程明细的只读投影尚未接入本页——经「⋯ → 原界面」可查完整研讨记录。
-              这里不伪造阶段进度或共识状态。
+              请通过「⋯ → 原界面」查看完整研讨记录。
             </div>
           </div>
         ) : null}
@@ -2224,7 +2224,7 @@ function ThreadOverview({
         </div>
         <dl className="kv">
           <dt>标题</dt>
-          <dd>{task ? task.title : '（记录串：没有任务标题，也不伪造编号）'}</dd>
+          <dd>{task ? task.title : '记录串（未创建任务）'}</dd>
           {task ? (
             <>
               <dt>任务号</dt>
@@ -2325,7 +2325,7 @@ function ThreadPendingStrip({
           <div className="row tight wrap">
             <Icon name="octagon" size={13} />
             <span className="strong" style={{ fontSize: 12 }}>任务被阻塞，需要你处理</span>
-            <span className="small faint truncate">请在详情查看正式受阻原因与下一步</span>
+            <span className="small faint truncate">请在详情查看原因和下一步</span>
             <div className="spacer" />
             <button className="btn sm" onClick={() => onOpenSection(run ? 'run' : 'overview')}>
               查看详情
@@ -2386,7 +2386,7 @@ function ThreadMembers({ threadId }: { threadId: string; isDiscussion: boolean }
   const readError=s.readErrors['thread:'+threadId];
   return <div className="msg-list">
     <div className="section-title">本串成员 <span className="count">{snapshot?members.length:'…'}</span></div>
-    {error||readError?<div className="panel danger" role="alert">{error??readError}<button className="btn sm" onClick={()=>void loadThread(threadId)}>刷新名单</button></div>:null}
+    {error||readError?<div className="panel danger" role="alert">{userFacingSystemText(error??readError)}<button className="btn sm" onClick={()=>void loadThread(threadId)}>刷新名单</button></div>:null}
     {!snapshot?<div className="small faint">正在读取成员…</div>:members.length===0?<EmptyState icon="users" title="还没有 AI 参与" detail="从下方添加一位 AI，再发消息。"/>:null}
     {members.map(m=><div key={m.id} className="row" style={{justifyContent:'space-between'}}>
       <span className="row tight"><Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id,m.ordinal)} size={22} state={m.workState} subject={`member:${m.id}`}/><span className="strong">{memberLabel(m)}</span><span className="small faint">{snapshot?.eligibleMemberIds.includes(m.id)?(m.workStateReason||'状态未提供'):'暂不可接收新消息'}</span></span>
@@ -2537,7 +2537,7 @@ function ThreadArtifacts({
                         openedFrom: target,
                       });
                       openPreviewTab(rid, d.revision, { target });
-                      recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（manifest ${d.manifestHash.slice(0, 8)}…）`);
+                      recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（交付校验值 ${d.manifestHash.slice(0, 8)}…）`);
                     }}
                   >打开/保存文件</button>
                   <button className="btn ghost sm" onClick={onReview}>确认或修改</button>
@@ -2573,11 +2573,11 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
         <button
           className="btn ghost sm"
           title="刷新任务详情（绑定服务端当前事实）"
-          onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${(e as Error).message}`, 'error'))}
+          onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'))}
         >刷新详情</button>
         <button
           className="btn ghost sm"
-          title="复制本任务的正式定位链接（#task=<实体ID>——应用内深链，不是公网分享链接）"
+          title="复制可在众说中打开的任务链接"
           onClick={() => {
             const link = `#task=${task.id}`;
             void navigator.clipboard?.writeText(link).then(
@@ -2587,7 +2587,7 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
           }}
         >复制定位链接</button>
       </div>
-      <details className="small faint"><summary>操作快照身份</summary>任务 revision {detail?.revision ?? task.revision} · 停止代次 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
+      <details className="small faint"><summary>操作版本信息</summary>任务 revision {detail?.revision ?? task.revision} · 停止请求版本 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
     </div>
     {formal ? <><TaskExecutionStatusView status={formal.executionStatus} density="detail"/><TaskExtraFacts detail={formal}/><AnalysisContinueAction failure={formal.preDispatchFailure} roomId={task.roomId}/></> : null}
     </>
@@ -2625,7 +2625,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
     }
     const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined, threadId);
     if (r.ok) { toast(reviewBox.mode === 'accept' ? '已确认完成' : '修改意见已保存，下一步可以开始修改', 'success'); setReviewBox(null); void loadThread(threadId); }
-    else toast(`提交失败：${r.error}——意见已保留；如果成果已更新，请对新版本重新操作`, 'error');
+    else toast(`提交失败：${userFacingSystemText(r.error ?? '')}——意见已保留；如果成果已更新，请对新版本重新操作`, 'error');
   };
   const rp = detail?.reworkPending ?? null;
   return (
@@ -2647,7 +2647,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
               <div style={{ marginTop: 8 }}>
                 {stale ? (
                   <div className="panel warning">
-                    交付已更新（打开时冻结的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{pending.revision}）——本框已作废，请对新版本重新操作。
+                    交付已更新（打开时查看的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{pending.revision}）——本框已作废，请对新版本重新操作。
                     <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setReviewBox(null)}>关闭</button>
                   </div>
                 ) : (
@@ -2690,7 +2690,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
                   void (async () => {
                     try {
                       const r = await executeTaskRework(snapshot, threadId);
-                      if (!r.ok) { toast(`执行返工被拒：${r.error}——已刷新为当前返工事实`, 'error'); void loadThread(threadId); return; }
+                      if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前返工事实`, 'error'); void loadThread(threadId); return; }
                       toast('返工执行已入队（完成后交付升级为新待验收版本）', 'success');
                       void loadThread(threadId);
                     } finally { setBusyRework(false); }
@@ -2722,7 +2722,7 @@ function ThreadActivity({ threadId, detail, onChangeTab }: { threadId: string; d
     <div className="msg-list">
       <div className="panel">
         <div className="panel-title"><Icon name="terminal" size={13} /> 活动与进展</div>
-        正式任务事件按时间列在下方；工具事件来自 worker 审计，用量见运行详情。
+        下方按时间显示任务活动，调用用量可在运行详情查看。
       </div>
 
       {/* 普通过程说明：正常信息不占对话区域，但记录一条都不少 */}
@@ -2745,7 +2745,7 @@ function ThreadActivity({ threadId, detail, onChangeTab }: { threadId: string; d
         </>
       ) : null}
 
-      {detail ? <TaskEventFacts detail={detail} /> : <div className="card tight faint small">正式活动尚未读到；可刷新重试。</div>}
+      {detail ? <TaskEventFacts detail={detail} /> : <div className="card tight faint small">暂未读到活动记录，可刷新重试。</div>}
       {detail?.runs.some((r) => r.turns.length > 0) ? <button className="btn sm" onClick={() => onChangeTab('run')}>查看执行轮次与用量 <Icon name="chevron-right" size={11} /></button> : null}
     </div>
   );
@@ -2994,7 +2994,7 @@ function RoomFiles({
               <button
                 className="btn"
                 disabled
-                title="选区评论（决策 33）的锚点写入命令尚未接入本包——文件级评论经预览面板「评论此文件」走真实仅记录提交"
+                title="暂不支持评论选中文本；可在预览面板点击「评论此文件」添加文件评论"
               >
                 提交评论（未接入）
               </button>
@@ -3002,7 +3002,7 @@ function RoomFiles({
           }
         >
           <div className="panel info" style={{ marginBottom: 12 }}>
-            Raft 目前不支持 PDF/图片的定位评论；众说也如实照此说明，不把不支持的媒体写成已支持。
+            PDF 和图片暂不支持定位评论。
           </div>
           <div className="field">
             <label className="field-label">支持的五类锚点</label>
@@ -3079,7 +3079,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
               void roomArchiveReal(room.id, room.revision, 'archive').then((r) => {
                 setSaveBusy(false);
                 if (r.ok) { toast('房间已归档（历史保留·只读）——可在房间 ⋯ 菜单取消归档', 'success'); onClose(); }
-                else toast(`归档被拒：${r.error}`, 'error');
+                else toast(`归档被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
               });
             }}
           >
@@ -3090,7 +3090,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
           <button
             className="btn primary"
             disabled={saveBusy || !name.trim() || (name === room.name && desc === (room.description ?? '') && coordinator === room.coordinatorMemberId)}
-            title="保存（room.update 乐观锁：名称/描述/协调者——协调者须为房间成员）"
+            title="保存房间名称、描述和默认 AI"
             onClick={() => {
               setSaveBusy(true);
               void updateRoomReal(room.id, room.revision, {
@@ -3099,8 +3099,8 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
                 ...(coordinator !== room.coordinatorMemberId ? { coordinatorMemberId: coordinator } : {}),
               }).then((r) => {
                 setSaveBusy(false);
-                if (r.ok) { toast('房间设置已保存（回读一致；revision 已推进）', 'success'); onClose(); }
-                else { toast(`保存失败：${r.error}（输入已保留）`, 'error'); }
+                if (r.ok) { toast('房间设置已保存', 'success'); onClose(); }
+                else { toast(`保存失败：${userFacingSystemText(r.error ?? '')}（输入已保留）`, 'error'); }
               });
             }}
           >
@@ -3166,12 +3166,12 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
               <button
                 className="btn sm"
                 disabled={saveBusy || isCoord}
-                title={isCoord ? '协调者不能移出——先在上方更换协调者' : '移出本房间（room.members.set；新增/移出只对后续新任务生效——运行中研讨名单冻结）'}
+                title={isCoord ? '协调者不能移出——先在上方更换协调者' : '移出本房间，仅影响后续新任务；正在进行的研讨保留原参与成员'}
                 onClick={() => {
                   setSaveBusy(true);
                   void roomMembersSetReal(room.id, m.id, 'remove').then((r) => {
                     setSaveBusy(false);
-                    if (!r.ok) toast(`移出失败：${r.error}`, 'error');
+                    if (!r.ok) toast(`移出失败：${userFacingSystemText(r.error ?? '')}`, 'error');
                   });
                 }}
               >
@@ -3197,12 +3197,12 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
                 <button
                   className="btn sm primary"
                   disabled={saveBusy}
-                  title="加入本房间（room.members.set——新增只对后续新任务生效，正在运行的研讨沿用冻结名单）"
+                  title="加入本房间，可参与后续新任务；正在进行的研讨保留原参与成员"
                   onClick={() => {
                     setSaveBusy(true);
                     void roomMembersSetReal(room.id, m.id, 'add').then((r) => {
                       setSaveBusy(false);
-                      if (!r.ok) toast(`加入失败：${r.error}`, 'error');
+                      if (!r.ok) toast(`加入失败：${userFacingSystemText(r.error ?? '')}`, 'error');
                     });
                   }}
                 >
@@ -3213,7 +3213,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
           </div>
           <div className="panel" style={{ marginTop: 10 }}>
             任务中新增房间成员不会自动加入正在运行的研讨：新房间成员对后续新任务生效，
-            正在跑的研讨沿用其冻结名单。
+            正在进行的研讨保留原参与成员。
           </div>
         </>
       ) : null}
@@ -3229,7 +3229,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
               <button
                 key={t.id}
                 className="btn sm danger"
-                title="打开该任务线程，在输入区/详情执行停止（task.stop 三重绑定）"
+                title="打开任务对话串，在输入区或详情中停止执行"
                 onClick={() => navigate(`/project/${s.activeProjectId}/room/${t.roomId}?thread=${t.conversationThreadId}&tab=task`)}
               >
                 停止 #{t.roomTaskNumber}（去线程）

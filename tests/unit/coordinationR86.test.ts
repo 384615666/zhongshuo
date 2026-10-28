@@ -20,8 +20,10 @@ describe('R86 authoritative collaboration plan', () => {
       expect(() => validateCoordinationPlan({ summary: 'x', steps }, ['a', 'b'])).toThrow();
     }
   });
-  it('rejects empty work and unbounded plans', () => {
-    for (const steps of [[], Array.from({ length: 9 }, (_, i) => step(`a${i}`))]) expect(() => validateCoordinationPlan({ summary: 'x', steps }, ['a'])).toThrow();
+  it('rejects empty work and accepts complete plans beyond eight steps', () => {
+    expect(() => validateCoordinationPlan({ summary: 'x', steps:[] }, ['a'])).toThrow();
+    const steps=Array.from({length:12},(_,i)=>step(`a${i}`));
+    expect(validateCoordinationPlan({summary:'x',steps},['a']).steps).toHaveLength(12);
   });
   it('reserves integration calls and counts unknown/reserved calls conservatively', () => {
     expect(coordinationCallAvailable(21, 'work')).toBe(true);

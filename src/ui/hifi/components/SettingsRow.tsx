@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 设置行基元（应用设置 §2.2 / 项目设置 §17.8 共用）。
  *
@@ -19,17 +20,17 @@ import { Switch, Tag } from './ui';
 
 /* ---------------- 原型边界标注（§2.4） ---------------- */
 
-/** 原型模拟标记的统一措辞：不声称已生效，也不冒充成功。 */
+/** 演示标记的统一措辞：不声称已生效，也不冒充成功。 */
 export const SIMULATED_TITLE =
-  '原型只改内存里的模拟值，未接入真实系统能力；这里不声称已生效';
+  '演示设置不会改变系统配置';
 
 /**
- * 「原型模拟」标记。
+ * 「演示」标记。
  *
  * §2.4 要求每个控件都能回答"能不能改、改了影响什么"：真正改状态的控件不需要它，
  * 只改内存模拟值或只弹提示的控件必须带它，避免"点了就 toast"冒充已生效。
  */
-export function SimulatedTag({ title = SIMULATED_TITLE, label = '原型模拟' }: { title?: string; label?: string }) {
+export function SimulatedTag({ title = SIMULATED_TITLE, label = '演示' }: { title?: string; label?: string }) {
   return (
     <Tag plain title={title}>
       {label}
@@ -132,7 +133,7 @@ export function SwitchRow({
       id={id}
       control={
         disabledReason ? (
-          <span className="pset-disabled" title={disabledReason}>
+          <span className="pset-disabled" title={userFacingSystemText(disabledReason ?? '')}>
             <Switch checked={checked} onChange={() => {}} disabled label={<span className="visually-hidden">{label}</span>} />
           </span>
         ) : (
@@ -142,7 +143,7 @@ export function SwitchRow({
     >
       {disabledReason ? (
         <div className="pset-row-hint pset-row-blocked">
-          <Icon name="lock" size={11} /> {disabledReason}
+          <Icon name="lock" size={11} /> {userFacingSystemText(disabledReason ?? '')}
         </div>
       ) : null}
       {children}
@@ -313,7 +314,7 @@ export function NumberField({
       }
     >
       {children}
-      {error ? <div className="pset-row-error">{error}</div> : null}
+      {error ? <div className="pset-row-error">{userFacingSystemText(error ?? '')}</div> : null}
     </SettingsRow>
   );
 }

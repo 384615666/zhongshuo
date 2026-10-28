@@ -217,7 +217,7 @@ function draftsFromManifest(db: ZhongshuoDatabase, runId: string, manifest: Froz
 export interface MemberAbsenceVerdict {
   memberId: string;
   markedAbsent: boolean;
-  /** open=有在途 turn 且执行时间达宽限；queued=未派发（不缺席）；terminalHandled=终态路径已处理。 */
+  /** open-execution=在途执行超过观察宽限，仍不缺席；queued=未派发。 */
   basis: 'open-execution' | 'queued' | 'no-stage-turn' | 'within-grace';
   effectiveExecMs?: number;
 }
@@ -228,10 +228,10 @@ function stageTurnPrefix(stage: string): string {
 }
 
 /**
- * 逐成员缺席宽限判定（只标记，不杀 turn）：
+ * 逐成员执行时长观察（只读，不将活跃执行判为缺席）：
  * - 宽限取**该 turn 派发时快照**（collab_absence_ms——第十八轮四：执行中改项目配置不影响
  *   在途 turn；快照缺失的历史行回落调用方传入的项目/全局值）；
- * - 有本阶段**在途** turn 且 有效执行时间(now-started-paused) ≥ grace → absent（basis=open-execution）；
+ * - 有本阶段**在途** turn 且 有效执行时间(now-started-paused) ≥ grace → 仅返回 open-execution 观察结果，不改成员/运行状态；
  * - 无 turn（排队）→ 永不缺席；turn 未启动(exec_started_at 空) → 不计。
  * 单轮截止/UNKNOWN/失败等其他 basis 由 worker 终态路径处理（互不重复：此处只看在途）。
  */
@@ -257,19 +257,11 @@ export function evaluateMemberAbsence(db: ZhongshuoDatabase, runId: string, stag
       continue;
     }
     const effective = Math.max(0, now - open.exec_started_at - (open.exec_paused_ms ?? 0));
-    if (effective >= effectiveGrace) {
-      const changed = db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, memberId).changes;
-      if (changed > 0) {
-        appendDomainEvent(db, {
-          schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: '',
-          threadId: null, runId, kind: 'run.participantAbsent', createdAt: now,
-          payload: { memberId, stage, reason: 'absence-grace', effectiveExecMs: effective, turnId: open.id, killed: false },
-        });
-      }
-      verdicts.push({ memberId, markedAbsent: true, basis: 'open-execution', effectiveExecMs: effective });
-    } else {
-      verdicts.push({ memberId, markedAbsent: false, basis: 'within-grace', effectiveExecMs: effective });
-    }
+    // Elapsed time is an observation, never evidence that a live turn is absent.
+    // Keep its seat pending so normal completion participates in the same barrier.
+    // Confirmed failure/stop/UNKNOWN remain owned by the terminal/recovery paths.
+    verdicts.push({ memberId, markedAbsent: false,
+      basis: effective >= effectiveGrace ? 'open-execution' : 'within-grace', effectiveExecMs: effective });
   }
   return verdicts;
 }
@@ -357,9 +349,8 @@ export interface RunRow {
 }
 
 export interface DeliberationOptions {
-  /** E4 absenceGrace：成员**实际执行时间**（turn.started 起、扣审批/等待暂停）超过即按缺席推进；
-   * 不强杀在途成员（其后续完成走迟到路径）。与单轮 turnDeadline（中断分支）分离。
-   * 兼容旧字段名 absenceToleranceMs。默认 20 分钟。 */
+  /** Compatibility observation threshold (default 20 minutes). Elapsed time alone
+   * never ends a live turn's participation; explicit turn deadlines are separate. */
   absenceToleranceMs: number;
   /** 排队等待观察线：成员步骤尚未派发超过此时长只记诊断事件（不记成员缺席——排队非成员责任）。 */
   dispatchWaitDeadlineMs?: number;
@@ -1147,13 +1138,13 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
   if (task == null || ['CANCELLED', 'DONE'].includes(task.status)) return { advanced: false };
   const threadId = task.conversation_thread_id ?? run.thread_id ?? '';
   const roster = rosterOf(db, run.id);
-  // E4 语义（修复轮）：排队等待≠缺席——缺席只来自成员自己的执行事实（宽限/截止中断/
-  // UNKNOWN）。阶段起算时间只用于排队观察线，不标记成员。
+  // E4: elapsed execution and queue time never prove absence. Confirmed terminal
+  // outcomes and UNKNOWN protection remain handled by their existing paths.
   const stage = run.stage ?? 'INDEPENDENT';
-  let participants = participantsOf(db, run.id);
+  const participants = participantsOf(db, run.id);
   if (options.absenceToleranceMs > 0) {
     evaluateMemberAbsence(db, run.id, stage, now, options.absenceToleranceMs, roster.members.map((m) => m.memberId));
-    participants = participantsOf(db, run.id); // 宽限标记后重读
+    // Observation is read-only; terminal paths supply participant state.
   }
   if (options.dispatchWaitDeadlineMs != null && run.stage_started_at != null && now - run.stage_started_at >= options.dispatchWaitDeadlineMs) {
     for (const m of roster.members) {
@@ -1191,7 +1182,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
     && ['INDEPENDENT', 'CROSS_REVIEW', 'ISSUE_DISCUSSION'].includes(stage) && drafts.length > 0) {
     const noPendingSteps = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:${run.id}:%`) as { c: number }).c === 0;
     if (noPendingSteps) {
-      advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: stage, reason: '前置预算耗尽，按 §6.5 转入整合' });
+      advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: stage, reason: '本轮调用次数已用完，开始整合现有结果' });
       freezeSynthesisInputs(db, run.id);
       enqueueSynthesis(db, run.id, taskId, hostOf(roster));
       return { advanced: true };

@@ -428,7 +428,7 @@ export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainRe
       if (verdict === 'conflict') {
         step.status = 'conflict';
         step.detail = step.expectState === 'present'
-          ? '当前内容与本次变更 after 及撤销后预期均不匹配（后续外部修改）——不覆盖，人工处理（§14.5）'
+          ? '文件在本次修改后又发生了变化，请核对内容后再撤销'
           : '期望仍不存在但当前已有不同内容（后续外部修改）——不覆盖';
         persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
         executed += 1;
@@ -602,7 +602,7 @@ function checkNoOverlappingLease(db: ZhongshuoDatabase, root: string): ReturnTyp
   const identityKey = comparisonKey(root);
   const overlapping = listActiveLeases(db).filter((lease) => lockDomainsOverlap(lease.lock_domain, identityKey));
   if (overlapping.length === 0) return null;
-  return domainErr('WORKSPACE_BUSY', '写入目录被占用：撤销拒绝执行（单写者，§14.1）', {
+  return domainErr('WORKSPACE_BUSY', '其他任务正在修改此目录，请等它结束后再撤销', {
     details: { holders: overlapping.map((l) => ({ ownerTurnId: l.owner_turn_id, lockDomain: l.lock_domain, status: l.status })) },
   });
 }

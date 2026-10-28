@@ -71,7 +71,7 @@ button.primary{background:#2456d6;color:#fff;border-color:#2456d6}
       <div id="send-error" class="meta warn hidden" style="margin:4px 0"></div>
       <textarea id="send-text" placeholder="输入消息（默认交给 AI；房间消息进主池，私信按 1 对 1，线程内跟进串内）"></textarea>
       <div>
-        <select id="mention-sel" class="hidden" title="指派成员（DIRECT）：留空=自动路由——M0 模式下房间消息未指派会被门禁阻塞（如实标 BLOCKED，不冒充执行）"><option value="">不指派（自动路由）</option></select>
+        <select id="mention-sel" class="hidden" title="选择接收消息的AI；留空时由房间默认AI处理"><option value="">不指派（自动路由）</option></select>
         <button id="send-btn" class="primary">发送</button>
         <button id="record-btn">仅记录</button>
         <label class="meta"><input type="file" id="attach-file"> 附件</label><span id="attach-name" class="meta"></span>
@@ -358,7 +358,7 @@ async function refreshTargets(initial) {
 function renderReadError(scope, e) {
   const msg = (e && e.message) || String(e);
   window.__lastReadError = scope + ': ' + msg;
-  feedLine('error', '读取失败（' + scope + '）：' + msg + '——保留上次快照（不冒充空数据）');
+  feedLine('error', '读取失败（' + scope + '）：' + msg + '，当前仍显示上次读取的内容');
   const host = scope === 'tasks' ? document.getElementById('tasks') : document.getElementById('messages');
   if (host == null) return;
   let note = document.getElementById('read-fail-note-' + scope);
@@ -417,7 +417,7 @@ async function refreshMentionPicker() {
     sel.classList.remove('hidden');
   } catch (e) {
     sel.classList.add('hidden');
-    feedLine('warn', '房间成员读取失败（' + (e.message || e) + '）——本次发送将不指派成员；M0 下未指派的房间消息会被阻塞');
+    feedLine('warn', '房间成员读取失败（' + (e.message || e) + '），请刷新成员列表后再选择接收人');
   }
 }
 /** 房间线程列表（第三十三轮四：正式读取入口；第三十五轮一：失败上抛——不再吞成空列表）。 */
@@ -428,7 +428,7 @@ async function renderThreadList() {
   const r = await cmd('room.pool', { roomId: currentTarget.roomId });
   const threads = (r.data && (r.data.threads || r.data.items)) || [];
   const head = document.createElement('div');
-  head.textContent = '房间线程 ' + threads.length + ' 条（点击读取——正式 thread.history 命令，零派发）：';
+  head.textContent = '房间线程 ' + threads.length + ' 条（点击查看）：';
   box.appendChild(head);
   for (const th of threads.slice(0, 30)) {
     const row = document.createElement('div');
@@ -452,7 +452,7 @@ async function openThread(threadId, anchorTitle) {
   const rootAtts = (r.data && r.data.rootAttachments) || [];
   if (rootAtts.length > 0 || (typeof anchorTitle === 'string' && anchorTitle.length > 0)) {
     const box = document.getElementById('messages');
-    box.textContent = '线程 ' + String(threadId).slice(0, 14) + '…（thread.history 正式读取）';
+    box.textContent = '线程 ' + String(threadId).slice(0, 14) + '…';
     const root = document.createElement('div');
     root.className = 'msg';
     const rootMeta = document.createElement('div');
@@ -469,7 +469,7 @@ async function openThread(threadId, anchorTitle) {
     renderMessageItemsInto((r.data && r.data.items) || []);
     return;
   }
-  renderMessageItems((r.data && r.data.items) || [], '线程 ' + String(threadId).slice(0, 14) + '…（thread.history 正式读取）');
+  renderMessageItems((r.data && r.data.items) || [], '线程 ' + String(threadId).slice(0, 14) + '…');
 }
 async function loadMessages() {
   const box = document.getElementById('messages');

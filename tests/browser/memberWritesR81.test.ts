@@ -19,7 +19,7 @@ describe('R81 durable unknown configuration creation contracts', () => {
         const bus=new EventTarget();const command=vi.fn(async()=>({ok:true,data:{}}));
         vi.stubGlobal('window',{zs:{command},dispatchEvent:(e:Event)=>bus.dispatchEvent(e)});
         const journal=await import('../../src/ui/hifi/data/memberWrites.ts');
-        expect(()=>journal.pendingMemberWrites()).toThrow('数据根尚未确认');
+        expect(()=>journal.pendingMemberWrites()).toThrow('正在确认数据位置');
         let restored=0;bus.addEventListener('zs-member-writes',()=>{restored=journal.pendingMemberWrites().length;});
         const store=await import('../../src/ui/hifi/data/store.ts');store.initDraftPersistence('r81-root');
         expect(restored).toBe(1);expect(journal.pendingMemberWrites()[0]?.params.displayName).toBe('原成员');expect(command).not.toHaveBeenCalled();

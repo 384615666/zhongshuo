@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {useEffect,useRef,useState} from 'react';
 import type {SendLookupResult} from '../../../contracts/sendRecovery.ts';
 import {querySubmittedSend,openRecoveredSend} from '../loader';
@@ -27,14 +28,14 @@ export function SendRecoveryAction({draftKey,onRecovered}:{draftKey:string;onRec
       setState({identity,busy:false,result});
       if(result.status==='found'){
         onRecovered(getDraftFull(draftKey),{draftKey,commandId:frozen.commandId});
-        await openRecoveredSend(result.location).catch(error=>toast(`定位原消息失败：${(error as Error).message}`,'error'));
+        await openRecoveredSend(result.location).catch(error=>toast(`定位原消息失败：${userFacingSystemText((error as Error).message ?? '')}`,'error'));
       }
     }catch(error){if(current.current===identity&&ticket===generation.current)setState({identity,busy:false,error:(error as Error).message});}
   };
   return <div className="small panel info" data-zs-send-recovery="1">
     <button type="button" className="btn ghost sm" disabled={visible?.busy} onClick={()=>void query()}>{visible?.busy?'正在查询原发送…':'查询刚才的发送'}</button>
-    {last?.commandId===reference.commandId&&last.outcome==='rejected'?<span>上次发送已明确拒绝：{last.error??'草稿保留'}</span>:null}
-    {visible?.error?<div role="alert">查询未确认：{visible.error}。原请求保留，没有重新发送。</div>:null}
+    {last?.commandId===reference.commandId&&last.outcome==='rejected'?<span>上次发送已明确拒绝：{userFacingSystemText(last.error??'草稿保留')}</span>:null}
+    {visible?.error?<div role="alert">查询未确认：{userFacingSystemText(visible.error ?? '')}。原请求保留，没有重新发送。</div>:null}
     {found?<div>已找到原消息。</div>:null}
     {visible?.result&&visible.result.status!=='found'?<div role="status">{visible.result.message}</div>:null}
   </div>;

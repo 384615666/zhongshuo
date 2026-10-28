@@ -1,3 +1,4 @@
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {useEffect, useState} from 'react';
 import type {MessageFileChange} from '../../../contracts/messageFileChanges.ts';
 import type {ChangeSnapshot} from '../../../contracts/changeSnapshot.ts';
@@ -112,11 +113,11 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
       </div>)}</div>
     </details> : null}
     {selected ? <Modal title={`${selected.file.displayName} · ${selected.mode === 'diff' ? '查看变更' : '文件内容'}`} size="xl" onClose={() => setSelected(null)}>
-      {error ? <div role="alert">读取失败：{error}</div> : !snapshot ? <div>正在读取这次保存的文件版本…</div> : selected.mode === 'content' ? <>
-        {snapshot.content?.after.text != null ? <MarkdownView text={snapshot.content.after.text}/> : <div>{snapshot.content?.after.reason ?? '这份文件没有可预览的文本快照，可查看变更记录。'}</div>}
+      {error ? <div role="alert">读取失败：{userFacingSystemText(error ?? '')}</div> : !snapshot ? <div>正在读取这次保存的文件版本…</div> : selected.mode === 'content' ? <>
+        {snapshot.content?.after.text != null ? <MarkdownView text={snapshot.content.after.text}/> : <div>{userFacingSystemText(snapshot.content?.after.reason ?? '这份文件没有可预览的文本快照，可查看变更记录。')}</div>}
       </> : <div className="message-file-diff">
         {(['before', 'after'] as const).map(side => <section key={side}><strong>{side === 'before' ? '修改前' : '修改后'}</strong>
-          {snapshot.content?.[side].text != null ? <pre>{snapshot.content[side].text}</pre> : <p>{snapshot.content?.[side].reason ?? '此侧没有可预览的文本快照'}</p>}
+          {snapshot.content?.[side].text != null ? <pre>{snapshot.content[side].text}</pre> : <p>{userFacingSystemText(snapshot.content?.[side].reason ?? '此侧没有可预览的文本快照')}</p>}
         </section>)}
       </div>}
     </Modal> : null}

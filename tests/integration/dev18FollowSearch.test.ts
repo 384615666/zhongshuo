@@ -135,7 +135,7 @@ describe('DEV-18 第二包：搜索（范围/过滤/分页/audience/定位）', 
     expect(r.messages[0].messageId).toBe('anc_pa');
     const none = await cmd<{ messages: any[] }>('search.query', { text: '附件正文不存在的内容', scope: 'all' });
     expect(none.messages.length).toBe(0); // 正文提取未实施——不冒充
-    expect(r.attachmentNote).toContain('正文提取未实施');
+    expect(r.attachmentNote).toContain('附件按文件名搜索');
   });
 
   it('第二十六轮三：日期按本机时区（北京时间凌晨边界）+混合类型过滤一致性+会话过滤', async () => {
