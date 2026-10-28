@@ -13,6 +13,7 @@ import { snapshotConversationWriteAccess } from './projectWriteAccess.ts';
 import { resolveMemberRuntime } from './memberRuntime.ts';
 import { memberExecutableStatus } from './memberManagement.ts';
 import {readThreadMembers} from './threadMembers.ts';
+import {changeSetFilesForDelivery} from './clarificationWork.ts';
 
 type ScopeMember = { memberId: string; displayName: string; description: string | null; writeScope: string | null; unavailableReason?: string };
 type Parent = { id: string; project_id: string; conversation_id: string; room_id: string; conversation_thread_id: string; root_message_id: string; owner_member_id: string; title: string; stop_generation: number; status: string; source_connection_id:string|null };
@@ -316,7 +317,7 @@ export function settleIntegrationLaunchFailure(db:ZhongshuoDatabase,coordination
   })();
 }
 
-function verifyHandoffFiles(value:unknown,root:string):void {
+export function verifyHandoffFiles(value:unknown,root:string):void {
   const pending:unknown[]=[value],seen=new Set<object>();
   const buffer=Buffer.alloc(64*1024);
   while(pending.length){
@@ -424,10 +425,7 @@ function finalHandoff(db: ZhongshuoDatabase, taskId: string) {
   if(!row) return null;
   const final=db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq DESC LIMIT 1").get(taskId) as {body_json:string}|undefined;
   const root=(db.prepare('SELECT p.canonical_path FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=?').get(taskId) as {canonical_path:string}).canonical_path;
-  const changes=db.prepare(`SELECT f.path,f.sha256,f.state FROM change_set_files f JOIN change_sets c ON c.id=f.change_set_id
-    WHERE c.task_id=? AND c.id IN (SELECT value FROM json_each(?)) AND f.role='after'
-    AND NOT EXISTS(SELECT 1 FROM change_set_files b WHERE b.change_set_id=f.change_set_id AND b.role='before' AND b.path=f.path AND b.state=f.state AND b.sha256 IS f.sha256)
-    ORDER BY f.path`).all(taskId,row.change_set_refs_json) as FrozenFile[];
+  const changes=changeSetFilesForDelivery(db,taskId,JSON.parse(row.change_set_refs_json) as string[]);
   verifyHandoffFiles({files:changes},root);
   return {...row,files:changes,final:final ? JSON.parse(final.body_json) as unknown : null};
 }

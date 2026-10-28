@@ -4,6 +4,8 @@ import {redispatchExecution} from './redispatchExecution.ts';
 import {automaticRecoveryForDispatch,continuedRecoveryExecution,hasBusinessToolEvidence,markAutomaticRecovery,pumpAutomaticRecoveries,rebindAutomaticRecovery,requestAutomaticRecovery,saveRecoveryExecution,settleRejectedRecoveryDispatch} from './automaticRecovery.ts';
 import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations, settleIntegrationLaunchFailure } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
+import { verifyHandoffFiles } from './coordination.ts';
+import { pendingClarificationChangeSets,changeSetFilesForDelivery } from './clarificationWork.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import {runtimeToolAction, visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
 import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThreadReplyRun,setThreadReplyState,settleThreadReplyForRun} from './threadReplies.ts';
@@ -485,7 +487,15 @@ export class DispatchWorker {
       this.busyDeferrals.set(claimed.id, task.id); // 本轮 drain 跳过该 id（防队首热转）
       return;
     }
-    try { assertCoordinationDispatch(this.db,task.id,executionDispatchKey); }
+    let partialClarificationRefs:string[];
+    try {
+      assertCoordinationDispatch(this.db,task.id,executionDispatchKey);
+      partialClarificationRefs=pendingClarificationChangeSets(this.db,task.id,task.stop_generation);
+      if(partialClarificationRefs.length){
+        const root=this.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(task.project_id) as {canonical_path:string};
+        verifyHandoffFiles({files:changeSetFilesForDelivery(this.db,task.id,partialClarificationRefs)},root.canonical_path);
+      }
+    }
     catch(error) {
       const reason=String(error).slice(0,1000);
       if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,reason);
@@ -1099,6 +1109,7 @@ export class DispatchWorker {
       }
       if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(dispatchWriteScope??coordination?.request?.writeScopeJson)).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
       assertCoordinationDispatch(this.db,task.id,executionDispatchKey,turnId);
+      if(partialClarificationRefs.length)verifyHandoffFiles({files:changeSetFilesForDelivery(this.db,task.id,partialClarificationRefs)},project.canonical_path);
       const liveThreadRequest=generalRequest??(coordination?.request?threadReplyForDispatch(this.db,`task:${task.id}:thread-reply:${coordination.request.messageId}`):undefined);
       if(liveThreadRequest){const blocked=threadReplyBlock(this.db,liveThreadRequest,this.defaultKindOf());if(blocked)throw new AdapterCallError(blocked.code as ConstructorParameters<typeof AdapterCallError>[0],blocked.message,true);}
       if(executionBasis){const current=this.db.prepare('SELECT current_delivery_id FROM tasks WHERE id=?').get(task.id) as {current_delivery_id:string|null};if(current.current_delivery_id!==executionBasis.deliveryId)throw new AdapterCallError('STALE_REVISION','连接期间成果已更新；本条尚未发给 AI，请确认新版后重试',true);}
@@ -2434,12 +2445,12 @@ export class DispatchWorker {
           if(!silent)this.ensureStructuredFinalReply(task, turnId, finalText, result);
           if (Object.prototype.hasOwnProperty.call(result, 'document')) this.bindDocument(task, runId, turnId, result);
           else this.bindDetailMarkdown(task, runId, turnId, result);
-          if(result.userQuestion)this.audit(task,runId,turnId,'turn.workClarification',{question:result.userQuestion,note:'已有成果保留；仅依赖此答复的工作等待确认'});
           if(result.handoffs?.length){
             const messages=acceptMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs);
             for(const message of messages){const recipient=this.db.prepare('SELECT display_name FROM project_members WHERE id=?').get(message.toMemberId) as {display_name:string};this.insertThreadReply(task,turnId,message.id,`给 ${recipient.display_name}：\n${message.text}`);}
           }
           if(planningRun && result.coordinationPlan) {
+            if(result.userQuestion)this.audit(task,runId,turnId,'turn.workClarification',{question:result.userQuestion,note:'已有成果保留；仅依赖此答复的工作等待确认'});
             acceptCoordinationPlan(this.db,task.id,runId,result.coordinationPlan);
             return;
           }
@@ -2460,6 +2471,16 @@ export class DispatchWorker {
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
           // 成功合同已确认、任务身份在本 turn 内：记录候选（正式结果 .files + 本 turn 已验证差异）。
           snapshotRef.current = { files: [...result.files], diff: changes?.ok ? { added: [...changes.value.diff.added], modified: [...changes.value.diff.modified] } : null };
+          const deliveryChangeSets = [...new Set([
+            ...pendingClarificationChangeSets(this.db,task.id,task.stop_generation,turnId),
+            this.kvGet(`repair-source-changeset:${turnId}`),
+            this.kvGet(`write-changeset:${turnId}`),
+          ].filter((value): value is string => value != null))];
+          changeSetFilesForDelivery(this.db,task.id,deliveryChangeSets);
+          if(result.userQuestion)this.audit(task,runId,turnId,'turn.workClarification',{
+            question:result.userQuestion,changeSetRefs:deliveryChangeSets,
+            note:'已有成果保留；仅依赖此答复的工作等待确认',
+          });
           if(result.userQuestion&&!waitingHandoffs){
             this.transitionTask(task.id,'WAITING_USER');
             this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',question:result.userQuestion,note:'问题已提出，等待确认后继续；未冒充完成交付'});
@@ -2490,10 +2511,6 @@ export class DispatchWorker {
           const manifestHash = createHash('sha256').update(collaboration?JSON.stringify({finalText,collaboration}):finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';
-          const deliveryChangeSets = [
-            this.kvGet(`write-changeset:${turnId}`),
-            this.kvGet(`repair-source-changeset:${turnId}`),
-          ].filter((value): value is string => value != null);
           const prevRevision = (this.db
             .prepare('SELECT COALESCE(MAX(revision), 0) r FROM task_deliveries WHERE task_id = ?')
             .get(task.id) as { r: number }).r;

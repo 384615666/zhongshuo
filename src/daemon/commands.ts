@@ -1705,7 +1705,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if(target.kind==='thread'){
           try{
             assertThreadTaskReady(deps.db,target.threadId);
-            const selected=selectThreadRecipients(deps.db,target.threadId,params.mentions as MentionNode[],undefined,params.collaboration);
+            const selected=selectThreadRecipients(deps.db,target.threadId,params.mentions as MentionNode[],undefined,params.collaboration,target);
             willDispatch=true;members=selected.candidateIds;routedMode=selected.route.kind==='dispatch'?selected.route.mode:null;
           }catch(error){return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:(error as Error).message,supported:false,members:[]}});}
         }
@@ -1773,6 +1773,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               params.mentions as MentionNode[],
               params.threadMemberVersion,
               'deliberate',
+              params.target,
             );
             if(preflight.route.kind!=='dispatch'||preflight.route.mode!=='DELIBERATE'){
               throw new DaemonCommandError('VALIDATION_INVALID','本次未形成有效的回复串独立研讨名单；请至少选择两位当前串内可用 AI，草稿保留');
@@ -1830,7 +1831,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
             if(params.target.kind==='thread'){
               assertThreadTaskReady(deps.db,params.target.threadId);
-              return selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration).candidateIds;
+              return selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,params.target).candidateIds;
             }
             const target=params.target;
             const route=resolveTopLevelRoute({intent:'default',collaboration:params.collaboration,mentions:params.mentions as MentionNode[],room:{coordinatorMemberId:coordinatorOf(deps.db,target.roomId),enabledAgentMemberIds:enabledAgents(deps.db,target.roomId)}});
@@ -1841,7 +1842,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             return [...members].sort();
           };
           const coordinator=params.target.kind==='room_root'?coordinatorOf(deps.db,params.target.roomId):null;
-          const preparedThreadSelection=params.target.kind==='thread'?JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration)):null;
+          const preparedThreadSelection=params.target.kind==='thread'?JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,params.target)):null;
           const members=preparationMembers();
           const bindings=members.map(memberId=>({memberId,runtime:resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null)}));
           for(const {memberId,runtime} of bindings){
@@ -1854,7 +1855,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           submitReplayGuard();
           if(params.target.kind==='room_root'&&coordinator!==coordinatorOf(deps.db,params.target.roomId))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间协调成员变化；未提交，草稿保留');
-          if(params.target.kind==='thread'&&preparedThreadSelection!==JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration)))throw new DaemonCommandError('CONFIGURATION_NOT_READY','准备期间本串收件人已变化，请确认名单后再发送；草稿保留');
+          if(params.target.kind==='thread'&&preparedThreadSelection!==JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,params.target)))throw new DaemonCommandError('CONFIGURATION_NOT_READY','准备期间本串收件人已变化，请确认名单后再发送；草稿保留');
           if(JSON.stringify(members)!==JSON.stringify(preparationMembers())||bindings.some(b=>JSON.stringify(b.runtime)!==JSON.stringify(resolveMemberRuntime(deps.db,b.memberId,process.env.ZS_RUNTIME??null))))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间房间名单或成员配置变化；未提交，草稿保留');
           assertPreparedRuntimeConfigurations(preparedConfigurations);
 
@@ -1904,7 +1905,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
-              const selection=params.intent==='default'?selectThreadRecipients(deps.db,thread.id,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration):undefined;
+              const selection=params.intent==='default'?selectThreadRecipients(deps.db,thread.id,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,target):undefined;
               if(params.intent==='default')assertThreadTaskReady(deps.db,thread.id);
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
               assertImageGate(resolvedAtts,params.intent==='default',params.imageAck,params.body,(selection?.recipientIds??[]).every(id=>memberImageCapability(deps.db,id).status==='supported'));
