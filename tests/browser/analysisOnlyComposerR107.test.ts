@@ -192,7 +192,7 @@ describe('R107 analysis-only Composer request scope', () => {
     expect(store.getDraftFull('room:r1').analysisOnly).toBe(true);
   });
 
-  it('shows the clear one-shot chip only in the room-root Composer', () => {
+  it('does not expose the removed analysis-only control in any Composer', () => {
     const common = {
       draftKey: 'room:r1',
       onSend: () => {},
@@ -212,8 +212,8 @@ describe('R107 analysis-only Composer request scope', () => {
       target: { kind: 'dm', roomId: 'dm:c1', dmId: 'c1' },
     }));
 
-    expect(room).toContain('本次仅分析');
-    expect(room).toContain('data-zs-analysis-only="false"');
+    expect(room).not.toContain('本次仅分析');
+    expect(room).not.toContain('data-zs-analysis-only');
     expect(thread).not.toContain('本次仅分析');
     expect(dm).not.toContain('本次仅分析');
   });

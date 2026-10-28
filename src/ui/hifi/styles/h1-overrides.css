@@ -2,3 +2,95 @@
    私信会话列表列与阅读区约 50/50——列表收窄为固定窄列（DmPage flexBasis 配合）。
    R88 起消息列不再强制通栏：人类消息右对齐，AI 消息左侧阅读，宽度由 components.css
    的消息列规则统一约束。 */
+
+/* ---------- R115 高分屏与 3440 宽屏布局 ----------
+   数据页随可用宽度增加信息密度；文档正文仍保持可读行长。
+   这些规则放在最后加载的覆盖层，避免再次引入与面板实测宽度无关的窄窗改动。 */
+
+.page.narrow {
+  max-width: clamp(1080px, 70vw, 1440px);
+}
+
+.detail-panel {
+  max-width: clamp(1080px, 72vw, 1440px);
+}
+
+@media (min-width: 1600px) {
+  /* 两列数据网格保留最多 2040px 的工作面；中间单卡不会随 3440 视口无限变宽。 */
+  .grid.grid-2,
+  .grid.grid-3 {
+    max-width: 2040px;
+    margin-inline: auto;
+  }
+
+  /* 看板与模板列表是同类卡片集合，宽屏增加列数而不是继续拉宽每张卡。 */
+  .grid.grid-3 {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+
+  /* 成员列表卡片由数据属性识别，不影响项目主页与详情页中语义固定的两栏。 */
+  .grid.grid-2:has(> .card[data-zs-member-card]) {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+
+  /* 文件树/Git 清单在普通窗口仍保持 300px；只有进入超大屏才适度增宽。 */
+  .files-layout,
+  .fg-body:not(.narrow),
+  .git-layout:not(.narrow) {
+    grid-template-columns: clamp(300px, 16vw, 420px) minmax(0, 1fr);
+  }
+
+  /*
+   * 房间主池的根消息不在 zs-message-panel 容器内。
+   * 仅约束普通 Markdown 块；预览折叠容器、代码、表格和附件保持原规则。
+   */
+  .root-body .md-view > :is(
+    .md-h,
+    .md-p,
+    .md-ul,
+    .md-ol,
+    .md-quote,
+    .md-spec
+  ) {
+    max-width: 88ch;
+  }
+
+  /* 项目设置：页头、项目信息与下方表单使用同一工作面。 */
+  .page:has(> .pset) {
+    width: 100%;
+    max-width: 1360px;
+    margin-inline: auto;
+  }
+
+  .page:has(> .pset) > .pset {
+    max-width: none;
+  }
+}
+
+/* Markdown 的普通段落按面板宽度单独限行；代码、表格、图表和附件仍可吃满可用宽度。 */
+@container preview-pane (min-width: 1100px) {
+  .preview-read-doc .md-view > :is(
+    .md-h,
+    .md-p,
+    .md-ul,
+    .md-ol,
+    .md-quote,
+    .md-spec
+  ) {
+    max-width: 88ch;
+  }
+}
+
+/* 房间主池与回复串在大屏上同样需要稳定行长。附件和结构化卡片不套此上限。 */
+@container zs-message-panel (min-width: 1100px) {
+  .msg-text .md-view > :is(
+    .md-h,
+    .md-p,
+    .md-ul,
+    .md-ol,
+    .md-quote,
+    .md-spec
+  ) {
+    max-width: 88ch;
+  }
+}
