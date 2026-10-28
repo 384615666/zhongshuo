@@ -673,3 +673,47 @@ describe('R92 coordinator handoff completion',()=>{
     }finally{await adapter?.closeAllSessions();if(f.db.open)f.db.close();}
   });
 });
+
+
+describe('R116 accumulated handoffs and actual permissions',()=>{
+  it('lets authorized peers hand back implementation and carries all twelve cumulative steps into integration',async()=>{
+    const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
+    try{
+      let additions=0;
+      adapter=new FakeRuntimeAdapter({turnScriptSequencer:({text})=>{
+        const identity=turnIdentity(f.db,text);
+        if(identity.integration_run_id){
+          expect(text).toContain('关联修订10');
+          return complete('全部累计步骤已核验');
+        }
+        if(additions<10){
+          additions++;
+          return [{kind:'writeFile',path:`step-${additions}.md`,content:`已落实第${additions}项`},...complete(`完成核对${additions}`,{handoffs:[{toMemberId:identity.owner_member_id===f.a?f.b:f.a,purpose:'implement',message:`关联修订${additions}：按已核验结论落实下一项`} ]})];
+        }
+        return complete('最后一项已落实');
+      }});
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r116-handoffs',appDataDir:f.dir});
+      const sent=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},body:'核对后按实际授权完成关联修订',intent:'default',mentions:[f.a,f.b].map(memberId=>({kind:'member',memberId}))});
+      for(let i=0;i<24&&await worker.runOnce();i++){/* bounded synthetic harness, production rounds are not capped */}
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_steps').get()).toEqual({n:12});
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'completed'});
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'DONE'});
+      const details=await f.cmd<{coordination:{steps:unknown[]}}>('task.details',{projectId:f.projectId,taskId:sent.taskId});
+      expect(details.coordination.steps).toHaveLength(12);
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='FAILED'").get()).toEqual({n:0});
+    }finally{await adapter?.closeAllSessions();f.db.close();}
+  });
+
+  it('does not reject a single recipient merely because the room has over twelve available peers',async()=>{
+    const f=await fixture();try{
+      for(let i=0;i<13;i++){
+        const {memberId}=await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:`额外同伴${i}`});
+        await f.cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'bypassPermissions'});
+      }
+      const sent=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},body:'只请协调者回答此问题',intent:'default',mentions:[{kind:'member',memberId:f.a}]});
+      const scope=f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(sent.taskId) as {roster_json:string};
+      expect(JSON.parse(scope.roster_json)).toHaveLength(15);
+      expect(f.db.prepare('SELECT count(*) n FROM agent_turns').get()).toEqual({n:0});
+    }finally{f.db.close();}
+  });
+});

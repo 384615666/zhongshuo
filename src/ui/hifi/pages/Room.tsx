@@ -961,7 +961,7 @@ function RootCard({
     ?? delivery?.feedback?.[0];
   const deliveryIssue = delivery?.issueResolutions?.find((item) => item.status === 'needs_user')
     ?? delivery?.issueResolutions?.find((item) => item.status === 'insufficient_evidence');
-  const deliveryDetail = (deliveryFeedback?.question ? `${deliveryFeedback.question}${deliveryFeedback.owner ? `（责任方：${deliveryFeedback.owner}）` : ''}` : '')
+  const deliveryDetail = delivery?.question || (deliveryFeedback?.question ? `${deliveryFeedback.question}${deliveryFeedback.owner ? `（责任方：${deliveryFeedback.owner}）` : ''}` : '')
     || deliveryFeedback?.revisionRequest || deliveryFeedback?.reason
     || (deliveryIssue?.question ? `${deliveryIssue.question}${deliveryIssue.owner ? `（责任方：${deliveryIssue.owner}）` : ''}` : '')
     || deliveryIssue?.reason
@@ -2301,7 +2301,7 @@ function ThreadPendingStrip({
     : undefined;
   const deliveryPending = pendingDelivery?.status === 'pending';
   const blocked = task.status === 'BLOCKED';
-  const runTrouble = run?.status === 'FAILED' || run?.status === 'PARTIAL' || run?.status === 'INTERRUPTED';
+  const runTrouble = task.status !== 'WAITING_USER' && (run?.status === 'FAILED' || run?.status === 'PARTIAL' || run?.status === 'INTERRUPTED');
   if (!deliveryPending && !blocked && !runTrouble) return null;
 
   return (

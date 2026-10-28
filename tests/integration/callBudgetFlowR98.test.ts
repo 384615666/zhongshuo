@@ -53,7 +53,7 @@ describe('R98 budget policy through formal submission and real worker gates (syn
     expect(f.db.prepare("SELECT COUNT(*) n FROM domain_events WHERE run_id=? AND kind='run.budgetSkipped'").get(run.id)).toEqual({n: 0});
   });
 
-  it('explicit AUTO dispatches after more than 24 historical calls when disabled', async () => {
+  it.each([false,true])('explicit AUTO honors frozen policy beyond 24 historical calls (enabled=%s)', async (enabled) => {
     const f = await fixture(), sent = await f.submit();
     // Seed the legacy explicit-recipient queue this budget regression is about.
     const root=f.db.prepare('SELECT root_message_id FROM tasks WHERE id=?').get(sent.taskId) as {root_message_id:string};
@@ -62,6 +62,7 @@ describe('R98 budget policy through formal submission and real worker gates (syn
     const child = f.db.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY rowid LIMIT 1').get(sent.taskId) as {id: string};
     const parentRun = f.db.prepare('SELECT budget_json FROM workflow_runs WHERE task_id=?').get(sent.taskId) as {budget_json: string};
     expect(JSON.parse(parentRun.budget_json).callBudget).toMatchObject({enforcement: 'disabled'});
+    if(enabled){const policy=JSON.parse(parentRun.budget_json);policy.maxTurns=100;policy.callBudget={version:1,mode:'AUTO',enforcement:'enabled',counting:'always',limit:100,limitSource:'override'};f.db.prepare('UPDATE workflow_runs SET budget_json=? WHERE task_id=?').run(JSON.stringify(policy),sent.taskId);}
     f.db.prepare("INSERT INTO workflow_runs(id,task_id,conversation_id,mode,status) VALUES('prior-run',?,?,'DIRECT','SUCCEEDED')").run(child.id, f.room.conversationId);
     for (let i = 0; i < 30; i++) f.db.prepare("INSERT INTO agent_turns(id,run_id,conversation_id,member_id,stage_key,status,attempt) VALUES(?,'prior-run',?,?,'direct.work','SUCCEEDED',?)").run(`historical-${i}`, f.room.conversationId, f.members[0], i + 1);
     await f.worker.runOnce();

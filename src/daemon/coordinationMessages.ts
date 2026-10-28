@@ -43,7 +43,7 @@ export function communicationForTurn(db:ZhongshuoDatabase,taskId:string,memberId
   const replyTo=replyCandidate&&replyCandidate!==memberId&&scope.some(m=>m.memberId===replyCandidate&&m.writeScope&&targetAvailable(db,parent,replyCandidate))?replyCandidate:null;
   return{mentionEnabled:true,submitVia:'final-result',maxHandoffs:4,
     members:scope.filter(m=>m.writeScope&&targetAvailable(db,parent,m.memberId)).map(m=>({memberId:m.memberId,displayName:m.displayName,description:m.description??null})),
-    allowedPurposes:phase==='planning'?['ask','review','implement']:replyTo?['ask','review','reply']:['ask','review'],
+    allowedPurposes:phase==='planning'?['ask','review','implement']:replyTo?['ask','review','implement','reply']:['ask','review','implement'],
     replyToMemberId:replyTo};
 }
 
@@ -93,7 +93,6 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
     if(!member?.writeScope||!targetAvailable(db,context.parent,message.toMemberId))throw Error('收件人不在本轮获准可用名单中');
     if(message.toMemberId===source.member_id&&message.purpose!=='implement')throw Error('不向自己发送重复提问或回声');
     if(message.purpose==='reply'&&!allowedReplyTargets.has(message.toMemberId))throw Error('回复只能发给实际来源成员或本轮协调者');
-    if(message.purpose==='implement'&&context.phase!=='planning')throw Error('分析、评审或接收角色不能借交接提升写权限');
     if(message.purpose==='reply'&&context.phase!=='child')throw Error('当前没有需要回复的来源成员');
     const fingerprint=message.toMemberId+':'+message.purpose+':'+hash(message.message);
     if(seen.has(fingerprint)||db.prepare('SELECT 1 FROM coordination_messages WHERE coordination_run_id=? AND source_member_id=? AND target_member_id=? AND purpose=? AND body_hash=?').get(context.rootRunId,source.member_id,message.toMemberId,message.purpose,hash(message.message)))throw Error('同一轮重复交接相同消息，不会再次唤醒');
@@ -119,7 +118,7 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   const mergedKeys=new Set(merged.filter(item=>item!=null).map(item=>item.stepKey));
   const plan:CoordinationPlan={summary:current?.summary??'成员消息交接',steps:[...(current?.steps??[]).map(step=>mergedKeys.has(step.key)
     ?{...step,dependsOn:[...new Set([...step.dependsOn,context.child!.step_key])]}:step),...additions]};
-  if(plan.steps.length)validateCoordinationPlan(plan,context.roster.filter(m=>m.writeScope).map(m=>m.memberId));
+  if(plan.steps.length)validateCoordinationPlan(plan,context.roster.filter(m=>m.writeScope).map(m=>m.memberId),{accumulated:context.phase==='child'});
   const unstarted=(db.prepare(`SELECT count(*) n FROM coordination_steps s WHERE s.run_id=? AND NOT EXISTS(SELECT 1 FROM workflow_runs r JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=s.child_task_id)`).get(context.rootRunId) as {n:number}).n;
   if(coordinationCallEnforcement(db,context.rootRunId)!=='disabled'
     &&coordinationCallsUsed(db,context.rootRunId)+unstarted+additions.length+2>coordinationCallLimit(db,context.rootRunId))

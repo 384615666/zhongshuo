@@ -339,3 +339,13 @@ describe('R91 MessageView: 生成文件卡在正文之后、操作之前且不�
     expect(html).toContain('msg-actions');
   });
 });
+
+
+describe('R116 explicit delivery confirmation',()=>{
+  it('renders the current question instead of the superseded repair request',()=>{
+    const message=msgOfReply('p1','r1','t1',{id:'r116-question',authorType:'agent',authorId:'member_a',seq:1,createdAt:1,
+      body:{text:'已有结果保留',delivery:{status:'needs_user',question:'请确认采用方案甲，或提供新的核验依据。',feedback:[{status:'needs_revision',revisionRequest:'旧版本修改要求'}]}}});
+    const html=renderMessage(message);
+    expect(html).toContain('等待你补充');expect(html).toContain('请确认采用方案甲');expect(html).not.toContain('旧版本修改要求');
+  });
+});

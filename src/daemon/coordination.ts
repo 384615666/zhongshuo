@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, statSync, lstatSync,realpathSync } from 'node:fs';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { statSync, lstatSync,realpathSync,openSync,readSync,closeSync } from 'node:fs';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import {pendingAutomaticRecovery} from './automaticRecovery.ts';
 import {assessTaskRedispatchReadiness} from '../persistence/stores/recoveryGuard.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
-import { coordinationCallAvailable, validateCoordinationPlan, coordinationTopologicalSteps,type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
+import { validateCoordinationPlan, coordinationTopologicalSteps,type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
 import { parsePersistedCallBudgetSnapshot, runCallBudgetPolicy } from './callBudget.ts';
 import { DEFAULT_CALL_BUDGET_LIMITS } from '../contracts/callBudget.ts';
 import { snapshotConversationWriteAccess } from './projectWriteAccess.ts';
@@ -28,7 +28,7 @@ function event(db: ZhongshuoDatabase, task: Parent, runId: string, kind: string,
 export function coordinationRoomMembers(db:ZhongshuoDatabase,roomId:string,projectId:string,selectedIds?:readonly string[]) {
   return db.prepare(`SELECT pm.id,pm.display_name,pm.description FROM room_members rm
     JOIN project_members pm ON pm.id=rm.member_id WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent'
-    AND (? IS NULL OR pm.id IN(SELECT value FROM json_each(?))) ORDER BY pm.id LIMIT 13`)
+    AND (? IS NULL OR pm.id IN(SELECT value FROM json_each(?))) ORDER BY pm.id`)
     .all(roomId,projectId,selectedIds?JSON.stringify(selectedIds):null,selectedIds?JSON.stringify(selectedIds):null) as {id:string;display_name:string;description:string|null}[];
 }
 
@@ -43,7 +43,6 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
   const route=JSON.parse(task.route_json) as {mode:string;frozenMemberIds:string[];participantScope?:'selected'};
   const analysisOnly=(JSON.parse((db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId) as {write_scope_json:string}).write_scope_json) as {analysisOnly?:boolean}).analysisOnly===true;
   const members=coordinationRoomMembers(db,task.room_id,task.project_id,route.mode==='DIRECT'||route.mode==='AUTO'&&route.participantScope!=='selected'?undefined:route.frozenMemberIds);
-  if (members.length > 12) throw Error('自动协作最多选择 12 位房间成员；请先调整房间名单');
   if(!members.some(m=>m.id===task.owner_member_id))throw Error('协调者必须是本房间启用的 AI 成员');
   const roster: ScopeMember[] = members.map(m => {
     try {
@@ -213,20 +212,24 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
     if(child.handoff_json==null&&/^r\d+$/.test(child.step_key))child.handoff_json=freezeRecipientRequests(db,child.run_id,taskId);
     const coordinator=db.prepare(`SELECT pm.display_name FROM tasks parent JOIN project_members pm ON pm.id=parent.owner_member_id
       WHERE parent.id=?`).get(child.task_id) as {display_name:string};
-    if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request:undefined as Request|undefined,
+    if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request,
       note:`用户明确选择了你本人。协调成员是「${coordinator.display_name}」。本步骤 ${child.step_key}，角色 ${child.role}。统一文档默认由协调成员负责整合和写入；其他成员独立核算、检查并回传实质纠正，不分别覆盖同一份统一文档。用户指定作者、独立文件或多个版本时遵从原文；需要后继修订时走明确依赖的正式分工或交接，当前步骤已明确分派实施或修订的按该步骤和冻结上游完成。任务分工不改变实际工具权限，仍以本轮输入头为准。普通问候或提问使用 responseKind=conversation，确有实际工作结果时使用 responseKind=work。复核全部一致时，answer 简短确认无差异并指出需更新的位置；完整复算留在 executedVerifications 或已有文档。handoff 只交新增纠正或具体收口动作，不复制可见 answer。明确名单中已安排的成员无需为同一原任务重复发送 ask/review 邀请，新增工作才交接。不要替其他成员代答或修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}`};
-    return { kind:'child' as const, run:child, request:undefined as Request|undefined,
+    return { kind:'child' as const, run:child, request,
       note:`协调成员是「${coordinator.display_name}」。你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。完成本步骤需要的查证、命令、修改和验证；实际 runtime 权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要同伴继续核对时使用本轮已开放的 handoffs，不扩大目标。结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
   }
   const repair=db.prepare(`SELECT c.* FROM format_repair_workitems f JOIN agent_turns a ON a.id=f.source_turn_id
     JOIN coordination_integration_attempts i ON i.execution_run_id=a.run_id JOIN coordination_runs c ON c.run_id=i.coordination_run_id
     WHERE f.target_dispatch_key=? AND f.status IN ('pending','consumed') AND c.task_id=? AND c.state IN ('blocked','integrating')`).get(dispatchKey,taskId) as CoordinationRun|undefined;
   const integration=repair??db.prepare("SELECT * FROM coordination_runs WHERE task_id=? AND state='integrating'").get(taskId) as CoordinationRun|undefined;
-  if(integration && (repair || dispatchKey===`task:${taskId}:redispatch:coord_${integration.run_id}`)) {
+  const integrationAnswer=integration&&request&&db.prepare(`SELECT 1 FROM thread_reply_requests q
+    JOIN coordination_integration_attempts i ON i.coordination_run_id=?
+    JOIN domain_events e ON e.run_id=i.execution_run_id AND e.turn_id=q.source_turn_id
+    WHERE q.dispatch_key=? AND q.source_task_status='WAITING_USER' AND e.kind='turn.workClarification' LIMIT 1`).get(integration.run_id,dispatchKey);
+  if(integration && (repair || integrationAnswer || dispatchKey===`task:${taskId}:redispatch:coord_${integration.run_id}`)) {
     const steps=(db.prepare(`SELECT s.step_key,s.role,s.handoff_json,t.id,t.title,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(integration.run_id) as Array<{handoff_json:string|null}>)
       .map(step=>({...step,handoff_json:promptHandoff(step.handoff_json)}));
-    const incoming=db.prepare(`SELECT h.id,h.source_member_id,h.target_member_id,h.body,h.body_hash,d.id deliveryId,d.revision,d.manifest_hash manifestHash FROM coordination_messages h JOIN agent_turns a ON a.id=h.source_turn_id LEFT JOIN task_deliveries d ON d.run_id=a.run_id WHERE h.coordination_run_id=? AND h.child_task_id IS NULL ORDER BY h.created_at,h.id LIMIT 32`).all(integration.run_id);
-    return {kind:'integration' as const,run:integration,request:requestRow('q.run_id',integration.run_id),repair:Boolean(repair),note:`整合已完成的真实成员工作。核对成果与评审，主动读取实际文件并完成用户请求所需的整合、修改与验证；保留其他成员作者身份。不再生成新计划，按本轮有效权限执行。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}\n同伴交回的真实消息（保留作者、消息hash和来源版本）：${JSON.stringify(incoming)}`};
+    const incoming=db.prepare(`SELECT h.id,h.source_member_id,h.target_member_id,h.body,h.body_hash,d.id deliveryId,d.revision,d.manifest_hash manifestHash FROM coordination_messages h JOIN agent_turns a ON a.id=h.source_turn_id LEFT JOIN task_deliveries d ON d.run_id=a.run_id WHERE h.coordination_run_id=? AND h.child_task_id IS NULL ORDER BY h.created_at,h.id`).all(integration.run_id);
+    return {kind:'integration' as const,run:integration,request:request??requestRow('q.run_id',integration.run_id),repair:Boolean(repair),note:`整合已完成的真实成员工作。核对成果与评审，主动读取实际文件并完成用户请求所需的整合、修改与验证；保留其他成员作者身份。不再生成新计划，按本轮有效权限执行。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}\n同伴交回的真实消息（保留作者、消息hash和来源版本）：${JSON.stringify(incoming)}`};
   }
   const task=db.prepare('SELECT route_json,kind,parent_task_id,source_connection_id FROM tasks WHERE id=?').get(taskId) as {route_json:string|null;kind:string;parent_task_id:string|null;source_connection_id:string|null};
   const queued=(db.prepare('SELECT route_json,roster_json FROM thread_reply_requests WHERE dispatch_key=? AND task_id=?').get(dispatchKey,taskId) as {route_json:string;roster_json:string}|undefined)
@@ -250,7 +253,7 @@ export function coordinationCallsUsed(db: ZhongshuoDatabase, runId: string): num
 export function coordinationCallLimit(db: ZhongshuoDatabase,runId:string) {
   const row=db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string|null};
   const budget=row.budget_json?JSON.parse(row.budget_json) as {maxTurns?:number}:{};
-  return Math.min(24,budget.maxTurns??24);
+  return budget.maxTurns??24;
 }
 
 export function coordinationCallEnforcement(db: ZhongshuoDatabase,runId:string): 'enabled'|'disabled'|'legacy' {
@@ -285,7 +288,7 @@ export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string
   const used=coordinationCallsUsed(db,context.run.run_id)-ownReservation;
   const reserve=context.kind==='integration'?0:2;
   if(coordinationCallEnforcement(db,context.run.run_id)!=='disabled'
-    &&(!coordinationCallAvailable(used,context.kind==='integration'?'integration':'work') || used>=coordinationCallLimit(db,context.run.run_id)-reserve))
+    &&(!Number.isSafeInteger(used)||used<0||used>=coordinationCallLimit(db,context.run.run_id)-reserve))
     throw Error('本轮协作总调用预算已用尽；保留成果，未继续派发');
 }
 
@@ -313,27 +316,35 @@ export function settleIntegrationLaunchFailure(db:ZhongshuoDatabase,coordination
   })();
 }
 
-function verifyHandoffFiles(value:unknown,root:string,depth=0,budget={remaining:32*1024*1024}):void {
-  if(depth>12)throw Error('交接记录超出有界嵌套范围');
-  if(!value || typeof value!=='object')return;
-  if(Array.isArray(value)){for(const item of value)verifyHandoffFiles(item,root,depth+1,budget);return;}
-  const row=value as Record<string,unknown>;
-  if(Array.isArray(row.files))for(const raw of row.files){
-    if(!raw||typeof raw!=='object')continue;
-    const file=raw as {path?:string;sha256?:string;state?:string};if(!file.path)throw Error('交接文件缺少路径');
-    const path=resolve(root,file.path),rel=relative(root,path);
-    if(rel==='..'||rel.startsWith('../')||rel.startsWith('..\\')||isAbsolute(rel))throw Error('交接文件越出项目');
-    if(file.state==='absent'){
-      try{lstatSync(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error;}
-      throw Error('交接版本已删除的文件被重新创建；未继续派发');
+function verifyHandoffFiles(value:unknown,root:string):void {
+  const pending:unknown[]=[value],seen=new Set<object>();
+  const buffer=Buffer.alloc(64*1024);
+  while(pending.length){
+    const current=pending.pop();
+    if(!current||typeof current!=='object'||seen.has(current))continue;
+    seen.add(current);
+    if(Array.isArray(current)){pending.push(...current);continue;}
+    const row=current as Record<string,unknown>;
+    if(Array.isArray(row.files))for(const raw of row.files){
+      if(!raw||typeof raw!=='object')continue;
+      const file=raw as {path?:string;sha256?:string;state?:string};if(!file.path)throw Error('交接文件缺少路径');
+      const path=resolve(root,file.path),rel=relative(root,path);
+      if(rel==='..'||rel.startsWith(`..${sep}`)||isAbsolute(rel))throw Error('交接文件越出项目');
+      if(file.state==='absent'){
+        try{lstatSync(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error;}
+        throw Error('交接版本已删除的文件被重新创建；未继续派发');
+      }
+      if(file.state!=='present'||!file.sha256)throw Error('交接文件状态或hash未知，不能冒充已核验');
+      const physical=realpathSync.native(path),physicalRelative=relative(realpathSync.native(root),physical);
+      if(physicalRelative==='..'||physicalRelative.startsWith(`..${sep}`)||isAbsolute(physicalRelative))throw Error('交接文件物理身份越出项目');
+      if(!statSync(physical).isFile())throw Error('交接版本不再是文件；未继续派发');
+      const fd=openSync(physical,'r'),hash=createHash('sha256');
+      try{let bytes:number;while((bytes=readSync(fd,buffer,0,buffer.length,null))>0)hash.update(buffer.subarray(0,bytes));}
+      finally{closeSync(fd);}
+      if(hash.digest('hex')!==file.sha256)throw Error('交接版本的文件字节已变化；未继续派发');
     }
-    if(file.state!=='present'||!file.sha256)throw Error('交接文件状态或hash未知，不能冒充已核验');
-    const physical=realpathSync.native(path),physicalRelative=relative(realpathSync.native(root),physical);
-    if(physicalRelative==='..'||physicalRelative.startsWith('../')||physicalRelative.startsWith('..\\')||isAbsolute(physicalRelative))throw Error('交接文件物理身份越出项目');
-    const stat=statSync(physical);budget.remaining-=stat.size;
-    if(!stat.isFile()||budget.remaining<0||createHash('sha256').update(readFileSync(physical)).digest('hex')!==file.sha256)throw Error('交接版本的文件字节已变化或超过32MiB总核验上限；未继续派发');
+    for(const key of ['upstream','output'])if(row[key])pending.push(row[key]);
   }
-  for(const key of ['upstream','output'])if(row[key])verifyHandoffFiles(row[key],root,depth+1,budget);
 }
 
 type FrozenFile={path:string;sha256:string|null;state:string};
@@ -345,7 +356,7 @@ function dependencyKeys(plan:CoordinationPlan,key:string):Set<string> {
 function managedHandoffFiles(db:ZhongshuoDatabase,runId:string,keys?:Set<string>):FrozenFile[] {
   const run=db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(runId) as {plan_json:string};
   const plan=JSON.parse(run.plan_json) as CoordinationPlan;
-  const steps=db.prepare('SELECT step_key,handoff_json FROM coordination_steps WHERE run_id=? ORDER BY rowid LIMIT 8').all(runId) as {step_key:string;handoff_json:string|null}[];
+  const steps=db.prepare('SELECT step_key,handoff_json FROM coordination_steps WHERE run_id=? ORDER BY rowid').all(runId) as {step_key:string;handoff_json:string|null}[];
   const latest=new Map<string,{file:FrozenFile;producer:string}>();
   for(const ordered of coordinationTopologicalSteps(plan)){
     const step=steps.find(s=>s.step_key===ordered.key);if(!step)throw Error('分工步骤身份缺失');
@@ -416,8 +427,7 @@ function finalHandoff(db: ZhongshuoDatabase, taskId: string) {
   const changes=db.prepare(`SELECT f.path,f.sha256,f.state FROM change_set_files f JOIN change_sets c ON c.id=f.change_set_id
     WHERE c.task_id=? AND c.id IN (SELECT value FROM json_each(?)) AND f.role='after'
     AND NOT EXISTS(SELECT 1 FROM change_set_files b WHERE b.change_set_id=f.change_set_id AND b.role='before' AND b.path=f.path AND b.state=f.state AND b.sha256 IS f.sha256)
-    ORDER BY f.path LIMIT 101`).all(taskId,row.change_set_refs_json) as FrozenFile[];
-  if(changes.length>100)throw Error('成果文件超过交接核验上限；保留原件，不能冒充完整评审');
+    ORDER BY f.path`).all(taskId,row.change_set_refs_json) as FrozenFile[];
   verifyHandoffFiles({files:changes},root);
   return {...row,files:changes,final:final ? JSON.parse(final.body_json) as unknown : null};
 }
@@ -433,9 +443,8 @@ function freezeRecipientRequests(db:ZhongshuoDatabase,runId:string,taskId:string
       FROM coordination_messages h JOIN agent_turns a ON a.id=h.source_turn_id
       LEFT JOIN task_deliveries d ON d.run_id=a.run_id
       WHERE h.coordination_run_id=? AND h.child_task_id=? AND h.status='accepted' AND h.target_turn_id IS NULL
-      ORDER BY h.created_at,h.id LIMIT 33`).all(runId,taskId);
+      ORDER BY h.created_at,h.id`).all(runId,taskId);
     if(!requests.length)return null;
-    if(requests.length>32)throw Error('待派发步骤的交接消息超过核验上限');
     const run=db.prepare(`SELECT c.plan_json,c.state,c.stop_generation,t.stop_generation current_generation,t.status
       FROM coordination_runs c JOIN tasks t ON t.id=c.task_id WHERE c.run_id=?`).get(runId) as {plan_json:string;state:string;stop_generation:number;current_generation:number;status:string};
     if(run.state!=='running'||run.status==='CANCELLED'||run.stop_generation!==run.current_generation)throw Error('交接运行已停止或代次变化');
@@ -485,7 +494,7 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     const blocked=steps.find(s=>assessTaskRedispatchReadiness(db,s.child_task_id,{queueOnly:true})!=null
       ||!pendingAutomaticRecovery(db,s.child_task_id)&&!db.prepare(`SELECT 1 FROM outbox o JOIN domain_events e ON e.kind='task.redispatchEnqueued' AND json_extract(e.payload_json,'$.dispatchKey')=o.dispatch_key
         JOIN tasks t ON t.id=e.task_id WHERE t.id=? AND o.status IN ('pending','leased') AND o.stop_generation_at_enqueue=t.stop_generation
-          AND NOT EXISTS(SELECT 1 FROM agent_turns a WHERE a.dispatch_key=o.dispatch_key) LIMIT 1`).get(s.child_task_id)&&(['BLOCKED','CANCELLED','WAITING_USER'].includes(s.status)
+          AND NOT EXISTS(SELECT 1 FROM agent_turns a WHERE a.dispatch_key=o.dispatch_key) LIMIT 1`).get(s.child_task_id)&&(['BLOCKED','CANCELLED'].includes(s.status)
         ||s.status!=='DONE'&&db.prepare("SELECT 1 FROM workflow_runs WHERE id=(SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1) AND status IN ('FAILED','INTERRUPTED')").get(s.child_task_id)));
     if(blocked) {
       db.prepare(`UPDATE coordination_messages SET status='blocked',error_message='同伴步骤未完成或结果待核实；不会自动继续',updated_at=? WHERE coordination_run_id=? AND status IN ('accepted','queued') AND target_turn_id IS NULL`).run(Date.now(),run.run_id);
@@ -542,10 +551,15 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
         return;
       }
     }
-    // Any dispatched unfinished child remains the sole active step, including startup and unknown windows.
-    if(steps.some(s=>s.handoff_json!=null && s.status!=='DONE')) return;
+    // A completed turn asking a question releases its slot. Live input/approval
+    // waits and unknown execution retain the existing single-writer protection.
+    const waitingSteps=steps.filter(s=>s.status==='WAITING_USER'&&!db.prepare(`SELECT 1 FROM workflow_runs r
+      LEFT JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=? AND
+      (r.status IN ('RUNNING','WAITING','QUEUED','STOPPING') OR a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING','UNKNOWN')) LIMIT 1`).get(s.child_task_id));
+    if(steps.some(s=>s.handoff_json!=null && s.status!=='DONE'&&!waitingSteps.includes(s))) return;
     const next=plan.steps.find(p=>steps.find(s=>s.step_key===p.key)!.handoff_json==null && p.dependsOn.every(key=>steps.find(s=>s.step_key===key)!.status==='DONE'));
     if(next) {
+      if(parent.status==='WAITING_USER')db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=?").run(parent.id);
       const step=steps.find(s=>s.step_key===next.key)!;
       const upstream=next.dependsOn.map(key=>(JSON.parse(steps.find(s=>s.step_key===key)!.handoff_json!) as {output:unknown}).output);
       if(upstream.some(h=>h==null)) throw Error('上游没有可交接的正式版本');
@@ -553,6 +567,14 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       enqueueOutbox(db,{dispatchKey:`task:${step.child_task_id}:initial`,stopGenerationAtEnqueue:0});
       db.prepare("UPDATE coordination_messages SET status='queued',updated_at=? WHERE child_task_id=? AND status='accepted'").run(Date.now(),step.child_task_id);
       event(db,parent,run.run_id,'coordination.stepQueued',{stepKey:next.key,childTaskId:step.child_task_id,upstream});return;
+    }
+    if(waitingSteps.length){
+      if(parent.status!=='WAITING_USER'){
+        db.prepare("UPDATE tasks SET status='WAITING_USER',revision=revision+1 WHERE id=?").run(parent.id);
+        db.prepare("UPDATE workflow_runs SET status='WAITING',stage='等待用户补充；独立步骤已推进' WHERE id=?").run(run.run_id);
+        event(db,parent,run.run_id,'coordination.waitingForUser',{childTaskIds:waitingSteps.map(s=>s.child_task_id)});
+      }
+      return;
     }
     const allDelivered=steps.every(s=>s.status==='DONE'&&s.current_delivery_id);
     const deferredReady=deferredHandoffs&&steps.every(s=>s.status==='DONE');
@@ -600,12 +622,12 @@ export function readCoordination(db:ZhongshuoDatabase,taskId:string,selectedRunI
     d.id delivery_id,d.revision delivery_revision,d.manifest_hash FROM coordination_steps s
     JOIN tasks t ON t.id=s.child_task_id JOIN project_members m ON m.id=t.owner_member_id AND m.project_id=t.project_id
     JOIN tasks parent ON parent.id=t.parent_task_id AND parent.project_id=t.project_id AND parent.conversation_id=t.conversation_id
-    LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE s.run_id=? AND parent.id=? ORDER BY s.rowid LIMIT 8`).all(run.run_id,taskId) as {step_key:string;role:string;handoff_json:string|null;id:string;title:string;status:string;owner_member_id:string;display_name:string;delivery_id:string|null;delivery_revision:number|null;manifest_hash:string|null}[];
+    LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE s.run_id=? AND parent.id=? ORDER BY s.rowid`).all(run.run_id,taskId) as {step_key:string;role:string;handoff_json:string|null;id:string;title:string;status:string;owner_member_id:string;display_name:string;delivery_id:string|null;delivery_revision:number|null;manifest_hash:string|null}[];
   const finalFiles=plan&&run.state==='completed'?new Map(managedHandoffFiles(db,run.run_id).map(f=>[f.path,f])):null;
   if(finalFiles&&run.integration_run_id){
     const after=db.prepare(`SELECT f.path,f.sha256,f.state FROM task_deliveries d JOIN change_sets c ON c.id IN(SELECT value FROM json_each(d.change_set_refs_json))
-      JOIN change_set_files f ON f.change_set_id=c.id AND f.role='after' WHERE d.task_id=? AND d.run_id=? AND c.task_id=? ORDER BY f.rowid LIMIT 101`).all(taskId,run.integration_run_id,taskId) as FrozenFile[];
-    if(after.length>100)finalFiles.clear();else for(const file of after)finalFiles.set(file.path,file);
+      JOIN change_set_files f ON f.change_set_id=c.id AND f.role='after' WHERE d.task_id=? AND d.run_id=? AND c.task_id=? ORDER BY f.rowid`).all(taskId,run.integration_run_id,taskId) as FrozenFile[];
+    for(const file of after)finalFiles.set(file.path,file);
   }
   return {runId:run.run_id,state:run.state,summary:plan?.summary??(run.state==='completed'?'本次由协调成员直接回答，未分工':'协调成员正在判断是否需要分工'),errorMessage:run.error_message,
     usedCalls:coordinationCallsUsed(db,run.run_id),maxCalls:coordinationCallLimit(db,run.run_id),enforcement:coordinationCallEnforcement(db,run.run_id),steps:rows.map(r=>{

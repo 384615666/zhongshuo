@@ -243,14 +243,14 @@ export function unanimousFrozenIssueStancesInRound(input: {
   return result;
 }
 
-/** 第 3 轮复核检查点可派发条件（§6.1）：host、roundNo=3、该轮意见已收集或明确记缺席。 */
+/** 从第 3 轮起逐轮检查是否有新证据值得继续。 */
 export function checkpointEligible(input: {
   role: 'host' | 'member';
   roundNo: number;
   roundOpinionsCollected: boolean;
   alreadyDispatchedCheckpoint: boolean;
 }): boolean {
-  return input.role === 'host' && input.roundNo === 3 && input.roundOpinionsCollected && !input.alreadyDispatchedCheckpoint;
+  return input.role === 'host' && input.roundNo >= 3 && input.roundOpinionsCollected && !input.alreadyDispatchedCheckpoint;
 }
 
 // ---------- 共识聚合（§6.5） ----------

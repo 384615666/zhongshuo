@@ -55,9 +55,9 @@ export function requestAutomaticRecovery(db:ZhongshuoDatabase,args:{taskId:strin
   if(db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND (a.status='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1) OR a.protection_state='retained') LIMIT 1`).get(args.taskId))return false;
   const retryHint=/retry[- _]?after\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|s|seconds)?/i.exec(args.reason);
   const hintedMs=retryHint?Number(retryHint[1])*(retryHint[2]?.toLowerCase()==='ms'?1:1000):0;
-  const delay=Math.max(execution.extraAttempts===0?2000:8000,Math.min(300000,hintedMs));
-  const job:AutomaticRecovery={...execution,extraAttempts:execution.extraAttempts+1,taskId:args.taskId,runId:args.runId,sourceTurnId:args.turnId,targetDispatchKey:`task:${args.taskId}:redispatch:auto_${args.turnId}`,kind:args.kind,stopGeneration:task.stop_generation,nextAttemptAt:args.now+delay,state:'waiting',reason:args.reason.slice(0,1000)};
-  if(hintedMs>300000){job.state='stopped';save(db,`automatic-recovery:${args.turnId}`,job);record(db,job,'recovery.stopped',`服务端要求等待超过5分钟，未提前重发。最后原因：${job.reason}。请稍后从原任务继续。`,args.now);return false;}
+  const delay=Math.max(execution.extraAttempts===0?2000:8000,Number.isFinite(hintedMs)?hintedMs:0);
+  if(!Number.isFinite(hintedMs)||!Number.isSafeInteger(args.now+Math.ceil(delay)))return false;
+  const job:AutomaticRecovery={...execution,extraAttempts:execution.extraAttempts+1,taskId:args.taskId,runId:args.runId,sourceTurnId:args.turnId,targetDispatchKey:`task:${args.taskId}:redispatch:auto_${args.turnId}`,kind:args.kind,stopGeneration:task.stop_generation,nextAttemptAt:args.now+Math.ceil(delay),state:'waiting',reason:args.reason.slice(0,1000)};
   const noRetry=/auth|unauthori|forbidden|api.?key|credential|billing|balance|credit|insufficient|quota|usage.limit|payment|cancel|interrupt|permission|认证|余额|欠费|权限|配置|名单|代次|停止|预算|未开放|不存在|已失效|目录|成员停用/i.test(`${args.code??''} ${args.reason}`);
   const exhausted=execution.extraAttempts>=2||source.turn_purpose==='format_repair';
   const transient=/429|\b50[234]\b|rate.?limit|overloaded|temporar|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network|socket|fetch failed|upstream|网络|限流|暂时|繁忙/i.test(`${args.code??''} ${args.reason}`);

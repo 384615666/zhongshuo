@@ -160,6 +160,7 @@ export class DispatchWorker {
   private readonly interruptGraceMs: number;
   private readonly maxTurns: number;
   private readonly coordinationMaxCalls:number;
+  private readonly coordinationMaxCallsOverride:boolean;
   private readonly appDataDir: string;
   private readonly enableDeliberate: boolean;
   private readonly absenceToleranceMs: number;
@@ -215,7 +216,8 @@ export class DispatchWorker {
     this.maxTurns = options.maxTurns ?? 6;
     const coordinationCap=options.coordinationMaxCalls??24;
     if(!Number.isSafeInteger(coordinationCap)||coordinationCap<0)throw Error('协作调用预算必须是非负整数');
-    this.coordinationMaxCalls=Math.min(24,coordinationCap);
+    this.coordinationMaxCalls=coordinationCap;
+    this.coordinationMaxCallsOverride=options.coordinationMaxCalls!=null;
     this.appDataDir = options.appDataDir ?? join(tmpdir(), 'zhongshuo-appdata');
     this.enableDeliberate = options.enableDeliberate === true;
     this.absenceToleranceMs = options.absenceToleranceMs ?? 20 * 60_000;
@@ -672,7 +674,7 @@ export class DispatchWorker {
       ?coordinationCallLimit(this.db,coordination.run.run_id)
       :coordination?.kind==='planning'
         ?(dispatchCallBudgetPolicy?.enforcement==='enabled'
-          ?Math.min(dispatchCallBudgetPolicy.limit,this.coordinationMaxCalls)
+          ?this.coordinationMaxCallsOverride?Math.min(dispatchCallBudgetPolicy.limit,this.coordinationMaxCalls):dispatchCallBudgetPolicy.limit
           :dispatchCallBudgetPolicy?.enforcement==='disabled'?DEFAULT_CALL_BUDGET_LIMITS.AUTO:this.coordinationMaxCalls)
         :dispatchCallBudgetPolicy?.enforcement==='enabled'
           ?dispatchCallBudgetPolicy.limit
@@ -2322,8 +2324,10 @@ export class DispatchWorker {
             if(proposed)try{validatePlanForRun(this.db,task.id,runId,proposed);}catch(error){contract={ok:false,issues:[String(error)]};}
           }
           if(contract.ok){const result=taskCompleteSchema.parse(JSON.parse(finalText));if(result.handoffs?.length)try{validateMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs,Boolean(result.coordinationPlan));}catch(error){contract={ok:false,issues:[String(error)]};}
-            if(result.replyDisposition==='none'&&hasBusinessToolEvidence(this.db,turnId))contract={ok:false,issues:['本轮有实际工具执行，不允许静默结束；保留执行事实，按实际结果交付，格式修复不重复执行']};
-            if(result.replyDisposition==='none'||result.coordinationPlan||result.handoffs?.some(handoff=>handoff.purpose==='implement')){
+            if(result.replyDisposition==='none'&&(hasBusinessToolEvidence(this.db,turnId)||result.userQuestion))contract={ok:false,issues:['本轮有实际工具执行或待用户确认的问题，不允许静默结束；保留执行事实和问题，格式修复不重复执行']};
+            // A concrete successor handoff depends on this turn's actual
+            // delivery; completed writes must not forbid distinct next work.
+            if(result.replyDisposition==='none'||result.coordinationPlan){
               const changeSets=[this.kvGet(`write-changeset:${turnId}`),this.kvGet(`repair-source-changeset:${turnId}`)].filter((id):id is string=>id!=null);
               for(const changesetId of new Set(changeSets)){
                 const changes=finalizeChangeset(this.db,{changeSetId:changesetId,appDataDir:this.appDataDir});
@@ -2430,6 +2434,7 @@ export class DispatchWorker {
           if(!silent)this.ensureStructuredFinalReply(task, turnId, finalText, result);
           if (Object.prototype.hasOwnProperty.call(result, 'document')) this.bindDocument(task, runId, turnId, result);
           else this.bindDetailMarkdown(task, runId, turnId, result);
+          if(result.userQuestion)this.audit(task,runId,turnId,'turn.workClarification',{question:result.userQuestion,note:'已有成果保留；仅依赖此答复的工作等待确认'});
           if(result.handoffs?.length){
             const messages=acceptMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs);
             for(const message of messages){const recipient=this.db.prepare('SELECT display_name FROM project_members WHERE id=?').get(message.toMemberId) as {display_name:string};this.insertThreadReply(task,turnId,message.id,`给 ${recipient.display_name}：\n${message.text}`);}
@@ -2455,6 +2460,11 @@ export class DispatchWorker {
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
           // 成功合同已确认、任务身份在本 turn 内：记录候选（正式结果 .files + 本 turn 已验证差异）。
           snapshotRef.current = { files: [...result.files], diff: changes?.ok ? { added: [...changes.value.diff.added], modified: [...changes.value.diff.modified] } : null };
+          if(result.userQuestion&&!waitingHandoffs){
+            this.transitionTask(task.id,'WAITING_USER');
+            this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',question:result.userQuestion,note:'问题已提出，等待确认后继续；未冒充完成交付'});
+            return;
+          }
           if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0
             &&(!childCoordination(this.db,task.id)||explicitRecipientChild(this.db,task.id))&&!integrationRun) {
             if(previousWork>0){
@@ -3073,12 +3083,13 @@ export class DispatchWorker {
     }
   }
 
-  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string; detailMarkdown?: string; document?: DocumentArtifact|null }): void {
+  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string; detailMarkdown?: string; document?: DocumentArtifact|null; userQuestion?: string|null }): void {
     const hasDocumentField = Object.prototype.hasOwnProperty.call(result, 'document');
-    const visible = (result.answer ?? '').trim() || result.changeSummary.trim()
+    let visible = (result.answer ?? '').trim() || result.changeSummary.trim()
       || (hasDocumentField
         ? (result.document?.markdown.trim() ? `文档：${result.document.filename}` : '')
         : (result.detailMarkdown?.trim() ? '完整详情见下方 Markdown 附件。' : ''));
+    if (result.userQuestion && !visible.includes(result.userQuestion)) visible += `\n\n待你确认：${result.userQuestion}`;
     if (visible.length === 0) return;
     const key = `final-message:${turnId}`;
     const expectedResultKey = this.expectedResultKeyForTurn(turnId);
@@ -3096,7 +3107,8 @@ export class DispatchWorker {
             const projected = isExplicitTaskCompleteOutput(text)
               ? chatAnswer(text, 'agent', expectedResultKey).trim()
               : text;
-            const supplemented = agentReplyText(projected, finalText, expectedResultKey).trim() || visible;
+            let supplemented = agentReplyText(projected, finalText, expectedResultKey).trim() || visible;
+            if(result.userQuestion&&!supplemented.includes(result.userQuestion))supplemented+=`\n\n待你确认：${result.userQuestion}`;
             if (normalize(supplemented) === normalize(text)) return; // 完整答案已可见，不重复
             const nextBody = JSON.stringify({
               ...body,

@@ -131,10 +131,11 @@ function deliveryOfBody(body: unknown): DeliveryFact | undefined {
   if (body == null || typeof body !== 'object' || Array.isArray(body)) return undefined;
   const value = body as { delivery?: unknown; runtimeControlResult?: unknown };
   if (value.delivery != null && typeof value.delivery === 'object' && !Array.isArray(value.delivery)) {
-    const delivery = value.delivery as { status?: unknown; overallConsensus?: unknown; unresolvedIssues?: unknown; feedback?: unknown; issueResolutions?: unknown };
+    const delivery = value.delivery as { status?: unknown; question?: unknown; overallConsensus?: unknown; unresolvedIssues?: unknown; feedback?: unknown; issueResolutions?: unknown };
     if (delivery.status === 'delivered' || delivery.status === 'delivered_with_questions' || delivery.status === 'needs_user' || delivery.status === 'blocked' || delivery.status === 'legacy') {
       return {
         status: delivery.status,
+        ...(typeof delivery.question === 'string' ? { question: delivery.question } : {}),
         ...(delivery.overallConsensus === 'unanimous' || delivery.overallConsensus === 'qualified' || delivery.overallConsensus === 'disputed' || delivery.overallConsensus === 'unconfirmed' ? { overallConsensus: delivery.overallConsensus } : {}),
         ...(Array.isArray(delivery.unresolvedIssues) ? { unresolvedIssues: delivery.unresolvedIssues as DeliveryFact['unresolvedIssues'] } : {}),
         ...(Array.isArray(delivery.feedback) ? { feedback: delivery.feedback as DeliveryFact['feedback'] } : {}),

@@ -31,9 +31,9 @@ const command=async<T>(method:string,params:unknown):Promise<T>=>{
     {protocolVersion:1,commandId:randomUUID(),method,params}) as {ok:boolean;data:T;error?:unknown};
   if(!result.ok)throw Error(`${method}: ${JSON.stringify(result.error)}`);return result.data;
 };
-const output=(answer:string,document?:{filename:string;markdown:string}):FakeTurnScript=>[
+const output=(answer:string,document?:{filename:string;markdown:string},userQuestion?:string):FakeTurnScript=>[
   {kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'example',answer,changeSummary:answer,
-    responseKind:document?'work':'conversation',document:document?{...document,purpose:'读书会活动准备与当天流程'}:null,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}},
+    responseKind:document?'work':'conversation',userQuestion:userQuestion??null,document:document?{...document,purpose:'读书会活动准备与当天流程'}:null,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}},
 ];
 async function main(){
   const {project:{id:projectId}}=await command<{project:{id:string}}>('project.open',{path:project});
@@ -59,7 +59,10 @@ async function main(){
   await worker.drain();
   const delivery=(db.prepare('SELECT current_delivery_id FROM tasks WHERE id=?').get(work.taskId) as {current_delivery_id:string|null}).current_delivery_id;
   if(delivery){db.prepare("UPDATE tasks SET status='REVIEW',review_policy='user_review' WHERE id=?").run(work.taskId);db.prepare("UPDATE task_deliveries SET review_status='pending' WHERE id=?").run(delivery);}
-  const meta={projectId,roomId:room.id,conversationId:room.conversationId,otherRoomId:room2.room.id,claude,codex,chat,work,dm,attachmentId:uploaded.attachmentId,delivery};
+  script=output('座位安排和阅读流程已整理好。茶点费用需要你决定后再安排。',undefined,'是否准备茶点？建议只提供饮用水，节省预算。');
+  const question=await command<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请安排读书会场地和茶点，费用由我确认。',intent:'default',mentions:[{kind:'member',memberId:claude}]});
+  await worker.drain();
+  const meta={projectId,roomId:room.id,conversationId:room.conversationId,otherRoomId:room2.room.id,claude,codex,chat,work,question,dm,attachmentId:uploaded.attachmentId,delivery};
   writeFileSync(join(dir,'guide-fixture.json'),JSON.stringify(meta,null,2));
   console.log(JSON.stringify(meta));
 }

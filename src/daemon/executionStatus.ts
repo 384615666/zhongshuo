@@ -717,6 +717,20 @@ export function readTaskExecutionStatus(
   }
 
   if (waitingForUser == null) {
+    const deliveryQuestion = db.prepare(`SELECT e.seq,e.kind,e.created_at,e.task_id,e.run_id,e.turn_id,
+      NULL AS member_id,NULL AS message_body_json,e.payload_json
+      FROM domain_events e JOIN tasks t ON t.id=e.task_id
+      WHERE t.id IN (${marks}) AND t.status='WAITING_USER' AND e.kind='run.deliveryNeedsUser'
+        AND e.run_id=(SELECT id FROM workflow_runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1)
+      ORDER BY e.seq DESC LIMIT 1`).get(...scopeIds) as EventRow | undefined;
+    if (deliveryQuestion != null) waitingForUser = {
+      kind: 'clarification', message: boundedText(parseObject(deliveryQuestion.payload_json).question) ?? '请确认下一步。',
+      memberIds: [], runId: deliveryQuestion.run_id, turnId: null, deliveryId: null,
+      eventSeq: deliveryQuestion.seq, since: deliveryQuestion.created_at,
+    };
+  }
+
+  if (waitingForUser == null) {
     const issueEvent = db.prepare(
       `SELECT e.seq,e.kind,e.created_at,e.task_id,e.run_id,e.turn_id,
               json_extract(e.payload_json,'$.memberId') member_id,
@@ -724,6 +738,8 @@ export function readTaskExecutionStatus(
        FROM domain_events e JOIN agent_turns a ON a.id=e.turn_id
        JOIN workflow_runs r ON r.id=a.run_id
        WHERE r.task_id IN (${marks}) AND e.kind='run.issueResolution'
+         AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=r.task_id AND t.status='WAITING_USER')
+         AND r.id=(SELECT id FROM workflow_runs WHERE task_id=r.task_id ORDER BY rowid DESC LIMIT 1)
          AND json_extract(e.payload_json,'$.status')='needs_user'
        ORDER BY e.seq DESC LIMIT 1`,
     ).get(...scopeIds) as EventRow | undefined;
@@ -749,6 +765,8 @@ export function readTaskExecutionStatus(
        FROM domain_events e LEFT JOIN agent_turns a ON a.id=e.turn_id
        JOIN workflow_runs r ON r.id=COALESCE(e.run_id,a.run_id)
        WHERE r.task_id IN (${marks}) AND e.kind='turn.workClarification'
+         AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=r.task_id AND t.status='WAITING_USER')
+         AND r.id=(SELECT id FROM workflow_runs WHERE task_id=r.task_id ORDER BY rowid DESC LIMIT 1)
        ORDER BY e.seq DESC LIMIT 1`,
     ).get(...scopeIds) as EventRow | undefined;
     if (clarification != null) {

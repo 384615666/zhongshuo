@@ -147,6 +147,8 @@ describe('第 3 轮检查点资格（§6.1）', () => {
   it('仅 host、roundNo=3、意见已收集、未派发过', () => {
     const base = { roundOpinionsCollected: true, alreadyDispatchedCheckpoint: false };
     expect(checkpointEligible({ role: 'host', roundNo: 3, ...base })).toBe(true);
+    expect(checkpointEligible({ role: 'host', roundNo: 4, ...base })).toBe(true);
+    expect(checkpointEligible({ role: 'host', roundNo: 8, ...base })).toBe(true);
     expect(checkpointEligible({ role: 'member', roundNo: 3, ...base })).toBe(false);
     expect(checkpointEligible({ role: 'host', roundNo: 2, ...base })).toBe(false);
     expect(checkpointEligible({ role: 'host', roundNo: 3, roundOpinionsCollected: false, alreadyDispatchedCheckpoint: false })).toBe(false);

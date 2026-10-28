@@ -146,6 +146,21 @@ export interface RecoverySnapshot {
  */
 export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnapshot {
   const safeWaiting=safeRecoveryWaiting(db);
+  // A question with no queued work, live process or retained write protection is
+  // durable conversation state. Restarting must not turn it into a failed run.
+  const questionWaits=db.prepare(`SELECT c.run_id FROM coordination_runs c JOIN tasks t ON t.id=c.task_id
+    WHERE c.state='running' AND t.status='WAITING_USER' AND t.stop_generation=c.stop_generation
+      AND EXISTS(SELECT 1 FROM tasks child JOIN coordination_steps s ON s.child_task_id=child.id
+        WHERE s.run_id=c.run_id AND child.status='WAITING_USER')
+      AND NOT EXISTS(SELECT 1 FROM outbox o WHERE o.status IN ('pending','leased') AND
+        (o.dispatch_key LIKE 'task:'||t.id||':%' OR EXISTS(SELECT 1 FROM tasks child WHERE child.parent_task_id=t.id AND o.dispatch_key LIKE 'task:'||child.id||':%')))
+      AND NOT EXISTS(SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks scoped ON scoped.id=r.task_id
+        WHERE (scoped.id=t.id OR scoped.parent_task_id=t.id) AND
+          (a.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN') OR a.status='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1) OR a.protection_state='retained'
+            OR EXISTS(SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id=a.id AND l.status!='released')))
+      AND NOT EXISTS(SELECT 1 FROM tasks child JOIN coordination_steps s ON s.child_task_id=child.id
+        WHERE s.run_id=c.run_id AND child.status NOT IN ('DONE','WAITING_USER','OPEN'))`).all() as Array<{run_id:string}>;
+  safeWaiting.runIds.push(...questionWaits.map(row=>row.run_id));
   // 真实调用台账（第十八轮二补漏）：恢复前先取将被标 UNKNOWN 的 turn 清单——崩溃现场的真实
   // startTurn 台账行按「执行不确定」结算（不永久 inflight；崩溃≠请求未发出）。
   const recoveringTurnIds = (db

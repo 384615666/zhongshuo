@@ -424,10 +424,11 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   // 精确字段约束（§4.2：足以无歧义生成结果的字段约束——真实模型不会猜 schema）。
   lines.push(
-    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"conversation|work","replyDisposition":"reply|none","answer":"最短有用、符合任务的自然回复；none 时为空串","document":null,"changeSummary":"实际工作摘要；无工作时为空串","files":[],"executedVerifications":[],"unexecutedVerifications":[],"remainingIssues":[],"handoffs":[]${envelope.stage==='coordination.planning'?',"coordinationPlan":null':''}}`,
+    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"conversation|work","replyDisposition":"reply|none","answer":"最短有用、符合任务的自然回复；none 时为空串","document":null,"userQuestion":null,"changeSummary":"实际工作摘要；无工作时为空串","files":[],"executedVerifications":[],"unexecutedVerifications":[],"remainingIssues":[],"handoffs":[]${envelope.stage==='coordination.planning'?',"coordinationPlan":null':''}}`,
   );
   lines.push('严格 schema：上述字段与 document 均须出现。已把完整业务文档写入项目文件时，files 引用真实路径，document=null 即可，不要在 document.markdown 重抄同名第二副本；未写项目文件而需要可读文档时，自主提供 {filename,purpose,markdown}。用户明确要求两个独立版本时按要求交付。filename 必须是安全的 .md basename，purpose 说明用途，markdown 原样保留。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
   lines.push(`${USER_CASE_FACT_RULE}answer 只说本轮核验结论、实质纠正和影响交付的问题；详细复算留在已有文档。hash、字节数通常由程序保留，仅内容不一致或用户明确要求时在正文提。返工时 answer 先说本轮实际修改；核对后无需修改则简短确认，不重述整份旧方案。`);
+  lines.push('确需用户确认或补充且无法自行核实时，把具体问题、建议方案与影响填入 userQuestion，同时在 answer 保留已完成结果；无问题用 null。先完成不依赖答复的工作；需要答复的步骤会等待确认，独立同伴步骤可继续。不要仅为已授权工作、任意分歧或可自行查证的信息提问；有问题不得用 replyDisposition=none。');
   lines.push('responseKind 与 replyDisposition 必填，各选一个枚举值：普通交流、问候、简单问答或澄清用 conversation，实质工作成果用 work。仅没有待答问题、新证据和未完成工作且不需要可见回复时，用 conversation + none，answer/changeSummary=""、document=null、所有数组为空，不发确认语；仍提交完整内部对象。none 不可用于工作交付、计划或交接。普通对话不需要工具或验证，相关数组为空；短问候、孤立数字或“测试”直接简短回应，document=null，不自行扩成文件审计、hash、政策或输入一致性报告。answer 由你自然撰写，保留影响结果的条件与分歧，不固定点数，不向用户讲内部协议。未执行的验证用 {item,reason}，真实文件与执行过的验证按实际填写；没有就留空。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
@@ -509,7 +510,7 @@ ${summaryRule}
 - 主动核对整合稿、冻结来源和实际可验证内容；能确认的直接确认，有问题写出证据与可执行修改。
 ${DELIBERATE_DELIVERY_SCOPE_RULE}
 - 文档仍有错误时用 deliveryFeedback.status=needs_revision 明确返工，不能只在聊天纠正后仍报 ready。
-- 填写 deliveryFeedback：判断整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体修改请求，needs_user 写清需要谁补充什么。不要把业务待确认写成全员同意，也不要因任意分歧无限重做。
+- 填写 deliveryFeedback：判断整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体可执行修改请求，不因已修订过就放弃。确需用户决定或缺少无法自行取得的信息时用 needs_user，question 写清待确认的问题、建议方案与影响，owner 写责任方；能独立完成的工作先完成，非必要业务待确认不妨碍已有成果交付。没有新依据可改变的反复意见应提出具体问题请用户裁定，不循环重写或假报 ready。
 - issueResponses 只针对输入中列出的冻结 issue；逐项写明 resolved 或 still_open 及理由。它确认的是当前冻结 synthesis artifact+revision，不得用 summary、claim 矩阵或 deliveryFeedback=ready 代替；原有 resolution 为 needs_user 的业务决定仍保持 needs_user，不能由你越权关闭。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`;
@@ -542,7 +543,7 @@ ${DELIBERATE_USER_VIEW_RULE}
 - 输入若列出可复用既有业务文档，先选择内容匹配的同名文件；不同文件名只用于确属独立材料，不要仅因轮次另起相似版本。修订已有的完整正文不要抄进讨论。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
-  'ISSUE_DISCUSSION|checkpoint': `你是本轮主持复核（第 3 轮强制检查点）。评估是否仍有**新证据**值得继续讨论：
+  'ISSUE_DISCUSSION|checkpoint': `你是本轮主持复核（从第 3 轮起逐轮检查）。评估是否仍有**新证据**值得继续讨论：
 - verdict=continue 仅当存在明确的新证据或新的可验证路径；否则 stop 转入整合。
 - 理由必须引用本轮输入中的证据；不要用泛泛的“再讨论”延长流程。
 ${DELIBERATE_USER_VIEW_RULE}
@@ -551,6 +552,7 @@ ${DELIBERATE_USER_VIEW_RULE}
 - summary 直接给最终用户需要的结论和交付。只有完整互评后没有任何新结论、文件/正文修改、建议、条件、争议或返工，且 summary 与你的冻结初稿完全一致，才可请求 ratification.disposition=skip_if_unchanged；其他情况用 required。程序核对冻结版本和实际执行，跳过确认不等于新增全员确认记录。
 ${DELIBERATE_DELIVERY_SCOPE_RULE}
 - 汇总可用结果：能形成一套可执行交付的差异收敛成清晰方案；主动读取实际文件/验证材料，必要时补齐可验证细节。外部未知写清待谁、问什么。
+- 修订时逐项处理最新冻结反馈，复查同一修改影响到的全文与关联文件，避免只修改一处后保留旧推导。先完成不依赖用户答复的部分；确需确认的选择写出具体问题与建议，不把未作出的决定当成已授权。
 - 汇总共识为 claims（逐条陈述+来源引用）；未解决的分歧如实列入 disputedClaims（含分歧摘要），不要用一句总结覆盖反对意见。
 - 基于当前冻结议题与立场填写 issueResolutions：每项必须是 resolved / needs_user / insufficient_evidence；resolved 必须有本轮完整一致立场依据（agree 或 disagree），一致否定时明确记录否定/更正依据，不能覆盖混合立场或缺席；needs_user/insufficient_evidence 写清理由及必要问题/责任方。
 - 全员明确 disagree 表示一致否定旧主张或旧表述，应据此明确更正，并可在保留全部否定立场的前提下把该争议标为已处理（resolved）；更正的 claims 仍须 RAT 确认。不要把一致否定写成对原命题的同意或 confirm，也不要制造假的待确认/证据不足。

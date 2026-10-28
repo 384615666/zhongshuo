@@ -16,6 +16,7 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { assembleStepInput, delibDispatchKey, frozenStageInputs, pumpDeliberation } from '../../src/daemon/deliberationRunner.ts';
+import { readTaskExecutionStatus } from '../../src/daemon/executionStatus.ts';
 import { selectStageInstruction } from '../../src/contracts/prompts.ts';
 import { listRunArtifacts, getRatificationRecords, getSynthesisClaims, currentSynthesisVersion, publishDeliberationArtifact } from '../../src/persistence/stores/deliberation.ts';
 
@@ -235,11 +236,15 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     });
     const issueId = issues[0]!.id;
     const issueIds = issues.map((issue) => issue.id);
-    for (let round = 1; round <= 3; round += 1) {
+    for (let round = 1; round <= 5; round += 1) {
       await step(worker, scripts, position(issueId, 'm1', round)); // m1
       expectLastInstruction(adapter, 'member', 'ISSUE_DISCUSSION', 'stage_work', 'issue-position-v1');
       await step(worker, scripts, position(issueId, 'm2', round)); // m2
       expectLastInstruction(adapter, 'member', 'ISSUE_DISCUSSION', 'stage_work', 'issue-position-v1');
+      if(round>=3&&round<5){
+        await step(worker,scripts,done({schemaVersion:'checkpoint-verdict-v1',summary:'新证据值得继续',document:null,verdict:'continue',reason:`第${round}轮有新的验证路径`}));
+        expect(db.prepare('SELECT stage,round_no FROM workflow_runs WHERE id=?').get(runId)).toEqual({stage:'ISSUE_DISCUSSION',round_no:round+1});
+      }
     }
     await step(worker, scripts, done({
       schemaVersion: 'checkpoint-verdict-v1',
@@ -297,7 +302,7 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     expect(records.filter((r) => r.response_status === 'submitted')).toHaveLength(2);
     expect(records.some((r) => r.stance === 'conditional' && r.conditions_json != null)).toBe(true);
     const threadId = (db.prepare('SELECT conversation_thread_id FROM tasks WHERE id = ?').get(taskId) as { conversation_thread_id: string }).conversation_thread_id;
-    const expectedStageCounts = { IND: 2, CR: 2, ISS: 6, CHK: 1, SYN: 1, RAT: 2 } as const;
+    const expectedStageCounts = { IND: 2, CR: 2, ISS: 10, CHK: 3, SYN: 1, RAT: 2 } as const;
     for (const [code, expected] of Object.entries(expectedStageCounts)) {
       const stageMessages = db.prepare(`SELECT id,body_json FROM messages
         WHERE thread_id=? AND id LIKE ? ORDER BY rowid`).all(threadId, `msg_delib_${runId}_${code}_%`) as Array<{ id: string; body_json: string }>;
@@ -367,14 +372,14 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     }
     // 预算账：14 步正常阶段全结算，尾部保留清零；
     const budget = JSON.parse((db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(runId) as { budget_json: string }).budget_json) as { usedTurns: number; tailReservationByStage: { SYNTHESIS: number; RATIFY: number } };
-    expect(budget.usedTurns).toBe(14);
+    expect(budget.usedTurns).toBe(20);
     expect(budget.tailReservationByStage.SYNTHESIS).toBe(0);
     expect(budget.tailReservationByStage.RATIFY).toBe(0);
     // §6.2 会话隔离：每步骤新任务专用会话（不复用看过同题他人报告的会话）——
-    // 14 步 14 会话，且每一步使用独立会话、无共享。
-    expect((db.prepare('SELECT count(*) c FROM runtime_sessions').get() as { c: number }).c).toBe(14);
-    expect(db.prepare("SELECT count(*) c FROM runtime_sessions WHERE member_id = 'm1'").get()).toMatchObject({ c: 8 });
-    expect(db.prepare("SELECT count(*) c FROM runtime_sessions WHERE member_id = 'm2'").get()).toMatchObject({ c: 6 });
+    // 20 步 20 会话，且每一步使用独立会话、无共享。
+    expect((db.prepare('SELECT count(*) c FROM runtime_sessions').get() as { c: number }).c).toBe(20);
+    expect(db.prepare("SELECT count(*) c FROM runtime_sessions WHERE member_id = 'm1'").get()).toMatchObject({ c: 12 });
+    expect(db.prepare("SELECT count(*) c FROM runtime_sessions WHERE member_id = 'm2'").get()).toMatchObject({ c: 8 });
     await adapter.closeAllSessions();
     db.close();
   }, 60_000);
@@ -581,13 +586,13 @@ describe('R96 delivery feedback and bounded revision', () => {
     const feedback = { status: 'needs_revision' as const, reason: '内部仍需修订', revisionRequest: '补充缺失步骤', question: '', owner: '' };
     await step(worker, scripts, done({ schemaVersion: 'ratify-v1', summary: '需要修订', document: null, deliveryFeedback: feedback, responses: [{ claimId: 'clm_1', stance: 'confirm' }] }));
     await step(worker, scripts, done({ schemaVersion: 'ratify-v1', summary: '需要修订', document: null, deliveryFeedback: feedback, responses: [{ claimId: 'clm_1', stance: 'confirm' }] }));
-    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({ status: 'BLOCKED' });
+    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({ status: 'WAITING_USER' });
     expect(db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(runId)).toEqual({ status: 'PARTIAL' });
     expect(listRunArtifacts(db, runId, 'synthesis')).toHaveLength(1);
     const final = db.prepare('SELECT body_json FROM messages WHERE id=?').get(`msg_report_${runId}`) as { body_json: string };
     const body = JSON.parse(final.body_json) as { delivery?: { status?: string }; runtimeControlResult?: string };
-    expect(body.delivery?.status).toBe('blocked');
-    expect((JSON.parse(body.runtimeControlResult ?? '{}') as { deliveryStatus?: string }).deliveryStatus).toBe('blocked');
+    expect(body.delivery?.status).toBe('needs_user');
+    expect((JSON.parse(body.runtimeControlResult ?? '{}') as { deliveryStatus?: string }).deliveryStatus).toBe('needs_user');
     await adapter.closeAllSessions();
     db.close();
   });
@@ -605,10 +610,10 @@ describe('R96 delivery feedback and bounded revision', () => {
     db.prepare("DELETE FROM outbox WHERE dispatch_key LIKE ?").run(`task:${taskId}:delib:${runId}:RAT:m2:%`);
     const pumped = pumpDeliberation(db, taskId, { absenceToleranceMs: 60_000, blobDir: join(tmpRoot, 'app-r96-legacy-missing') });
     expect(pumped.advanced).toBe(true);
-    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({ status: 'BLOCKED' });
+    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({ status: 'WAITING_USER' });
     expect(db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(runId)).toEqual({ status: 'PARTIAL' });
     const final = db.prepare('SELECT body_json FROM messages WHERE id=?').get(`msg_report_${runId}`) as { body_json: string };
-    expect((JSON.parse(final.body_json) as { delivery?: { status?: string } }).delivery?.status).toBe('blocked');
+    expect((JSON.parse(final.body_json) as { delivery?: { status?: string } }).delivery?.status).toBe('needs_user');
     await adapter.closeAllSessions();
     db.close();
   });
@@ -1033,4 +1038,92 @@ describe('DELIBERATE 编排：预算耗尽兜底（不无界调用）', () => {
     await adapter.closeAllSessions();
     db.close();
   }, 60_000);
+});
+
+
+describe('R116 adaptive delivery revision', () => {
+  const synthesis = (summary: string) => done({schemaVersion:'synthesis-v1',summary,document:null,issueResolutions:[],claims:[{statement:summary,sourceRefs:['c1']}],disputedClaims:[],recommendations:[]});
+  const rat = (status: 'ready'|'needs_revision'|'needs_user', text: string) => done({schemaVersion:'ratify-v1',summary:status==='ready'?'已核实':'最新复核',document:null,
+    deliveryFeedback:{status,reason:text,revisionRequest:status==='needs_revision'?text:'',question:status==='needs_user'?text:'',owner:status==='needs_user'?'用户':''},
+    responses:[{claimId:'clm_1',stance:status==='needs_revision'?'object':'confirm',reason:text}]});
+
+  it.each([false,true])('keeps five independent version matrices and resumes after reopening (budget enabled=%s)',async(enabled)=>{
+    const dbPath=join(tmpRoot,`r116-${enabled}.sqlite`),appDataDir=join(tmpRoot,`r116-${enabled}`);
+    let db=openDatabase(dbPath);seed(db,['m1','m2']);
+    const scripts:FakeTurnScript[]=[];
+    const adapter=new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:()=>{const script=scripts.shift();if(!script)throw Error('Unplanned turn');return script;}});
+    let worker=new DispatchWorker({db,adapter,leaseOwner:'r116',enableDeliberate:true,absenceToleranceMs:60_000,appDataDir});
+    try{
+      const {taskId,runId}=await reachSynthesisAfterAgreement(db,worker,scripts,116);
+      const budget=JSON.parse((db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string}).budget_json);
+      budget.runMaxTurns=enabled?100:17;
+      budget.callBudget=enabled?{version:1,mode:'DELIBERATE',enforcement:'enabled',counting:'always',limit:100,limitSource:'override'}:{version:1,mode:'DELIBERATE',enforcement:'disabled',counting:'always'};
+      db.prepare('UPDATE workflow_runs SET budget_json=? WHERE id=?').run(JSON.stringify(budget),runId);
+      for(let version=1;version<=5;version++){
+        await step(worker,scripts,synthesis(`已落实第${version}项修订`));
+        await step(worker,scripts,rat('ready','我已核实'));
+        await step(worker,scripts,rat(version===5?'ready':'needs_revision',version===5?'全部核实':`继续处理第${version+1}项关联修改`));
+        if(version<5){
+          expect(db.prepare('SELECT stage,round_no FROM workflow_runs WHERE id=?').get(runId)).toEqual({stage:'SYNTHESIS',round_no:version});
+          const queued=db.prepare("SELECT count(*) n FROM outbox WHERE status='pending'").get();
+          pumpDeliberation(db,taskId,{absenceToleranceMs:60_000,blobDir:appDataDir});
+          expect(db.prepare("SELECT count(*) n FROM outbox WHERE status='pending'").get()).toEqual(queued);
+        }
+        if(version===2){
+          db.close();db=openDatabase(dbPath);
+          worker=new DispatchWorker({db,adapter,leaseOwner:'r116-reopened',enableDeliberate:true,absenceToleranceMs:60_000,appDataDir});
+        }
+      }
+      const versions=listRunArtifacts(db,runId,'synthesis');
+      expect(versions.map(a=>a.revision)).toEqual([1,2,3,4,5]);
+      for(const artifact of versions){
+        const votes=getRatificationRecords(db,runId,artifact.id,artifact.revision);
+        expect(votes).toHaveLength(2);expect(votes.every(v=>v.response_status==='submitted')).toBe(true);
+        expect(votes.some(v=>v.stance==='object')).toBe(artifact.revision<5);
+      }
+      expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'DONE'});
+      expect(JSON.parse((db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string}).budget_json).usedTurns).toBe(19);
+      expect(readTaskExecutionStatus(db,taskId)?.waitingForUser).toBeNull();
+      expect(await worker.runOnce()).toBe(false);
+    }finally{await adapter.closeAllSessions();db.close();}
+  });
+
+  it('asks a specific question on identical repeated output without reclassifying it as a failure',async()=>{
+    const db=openDatabase(':memory:');seed(db,['m1','m2']);const scripts:FakeTurnScript[]=[];
+    const adapter=new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:()=>scripts.shift()!});
+    const worker=new DispatchWorker({db,adapter,leaseOwner:'r116-no-progress',enableDeliberate:true,absenceToleranceMs:60_000,appDataDir:join(tmpRoot,'r116-repeat')});
+    try{
+      const {taskId,runId}=await reachSynthesisAfterAgreement(db,worker,scripts,117);
+      for(let i=0;i<2;i++){
+        await step(worker,scripts,synthesis('相同的未修订稿'));
+        await step(worker,scripts,rat('needs_revision','选择的日期仍与工期矛盾'));
+        await step(worker,scripts,rat('ready','已核实其余部分'));
+      }
+      expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'WAITING_USER'});
+      const status=readTaskExecutionStatus(db,taskId)!;
+      expect(status.phase).toBe('WAITING_FOR_USER');expect(status.waitingForUser?.message).toContain('下一步采用的方案');
+      const final=JSON.parse((db.prepare('SELECT body_json FROM messages WHERE id=?').get(`msg_report_${runId}`) as {body_json:string}).body_json);
+      expect(final.delivery.status).toBe('needs_user');expect(final.text).toContain('选择的日期仍与工期矛盾');expect(final.text).not.toBe('相同的未修订稿');
+      expect(await worker.runOnce()).toBe(false);
+    }finally{await adapter.closeAllSessions();db.close();}
+  });
+
+  it('shows questions immediately while independent internal corrections continue',async()=>{
+    const db=openDatabase(':memory:');seed(db,['m1','m2']);const scripts:FakeTurnScript[]=[];
+    const adapter=new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:()=>scripts.shift()!});
+    const worker=new DispatchWorker({db,adapter,leaseOwner:'r116-question',enableDeliberate:true,absenceToleranceMs:60_000,appDataDir:join(tmpRoot,'r116-question')});
+    try{
+      const {taskId,runId}=await reachSynthesisAfterAgreement(db,worker,scripts,118);
+      await step(worker,scripts,synthesis('第一版'));
+      await step(worker,scripts,rat('needs_user','请选择上线时间；建议下周一'));
+      await step(worker,scripts,rat('needs_revision','先纠正与上线时间无关的合计'));
+      expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toEqual({stage:'SYNTHESIS'});
+      expect(db.prepare("SELECT body_json FROM messages WHERE task_id=? AND body_json LIKE '%待你确认%' LIMIT 1").get(taskId)).toBeTruthy();
+      await step(worker,scripts,synthesis('合计已纠正，尚待上线时间'));
+      await step(worker,scripts,rat('needs_user','请选择上线时间；建议下周一'));
+      await step(worker,scripts,rat('ready','合计核实'));
+      expect(readTaskExecutionStatus(db,taskId)?.waitingForUser?.message).toContain('请选择上线时间');
+      expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'WAITING_USER'});
+    }finally{await adapter.closeAllSessions();db.close();}
+  });
 });

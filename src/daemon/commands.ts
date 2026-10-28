@@ -768,6 +768,7 @@ function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[])
 }
 
 interface DeliveryFactProjection {
+  question?: string;
   status: string;
   overallConsensus: string | null;
   unresolvedIssues: unknown[];
@@ -816,6 +817,7 @@ function deliveryFactsOfTask(db: ZhongshuoDatabase, taskId: string): DeliveryFac
     return {
       status,
       overallConsensus: typeof payload.overallConsensus === 'string' ? payload.overallConsensus : null,
+      question: typeof payload.question === 'string' ? payload.question : undefined,
       unresolvedIssues: Array.isArray(payload.unresolvedIssues) ? payload.unresolvedIssues : [],
       feedback: Array.isArray(payload.deliveryFeedback) ? payload.deliveryFeedback : [],
       issueResolutions: Array.isArray(payload.issueResolutions) ? payload.issueResolutions : [],

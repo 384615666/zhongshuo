@@ -35,8 +35,12 @@ export function coordinationTopologicalSteps(plan:CoordinationPlan):Coordination
   for(const step of plan.steps)visit(step.key);return ordered;
 }
 
-export function validateCoordinationPlan(value: unknown, eligibleMemberIds: readonly string[]): CoordinationPlan {
-  const plan = coordinationPlanSchema.parse(value);
+export function validateCoordinationPlan(value: unknown, eligibleMemberIds: readonly string[], options?: { accumulated?: boolean }): CoordinationPlan {
+  // A single model proposal stays bounded. Persisted work may grow through
+  // separately validated handoffs without imposing a lifetime eight-step cap.
+  const plan = options?.accumulated
+    ? coordinationPlanSchema.extend({steps:z.array(coordinationStepSchema.extend({dependsOn:z.array(z.string().max(40))})).min(1)}).parse(value)
+    : coordinationPlanSchema.parse(value);
   const allowed = new Set(eligibleMemberIds);
   const byKey = new Map(plan.steps.map(step => [step.key, step]));
   if (byKey.size !== plan.steps.length) throw Error('分工计划包含重复步骤');

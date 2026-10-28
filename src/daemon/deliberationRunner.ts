@@ -483,7 +483,7 @@ type DeliveryDecision =
   | { status: 'legacy'; feedback: DeliveryFeedbackRecord[] }
   | { status: 'ready'; feedback: DeliveryFeedbackRecord[] }
   | { status: 'needs_revision'; feedback: DeliveryFeedbackRecord[]; reason: string }
-  | { status: 'needs_user'; feedback: DeliveryFeedbackRecord[]; reason: string }
+  | { status: 'needs_user'; feedback: DeliveryFeedbackRecord[]; reason: string; question?: string }
   | { status: 'incomplete'; feedback: DeliveryFeedbackRecord[]; reason: string };
 
 function collectDeliveryFeedbacks(
@@ -534,6 +534,22 @@ function decideDeliveryFeedback(
     return { status: 'incomplete', feedback, reason: `确认交付反馈不完整：${missing.join(', ')}` };
   }
   return { status: 'ready', feedback };
+}
+
+/** Exact repeated output without execution evidence is a request for direction,
+ * not a reason to spend an arbitrary number of additional revision turns. */
+function repeatedRevisionWithoutWork(db: ZhongshuoDatabase, runId: string, synthesis: { artifactId: string; revision: number; hash: string }, feedback: DeliveryFeedbackRecord[]): boolean {
+  if (synthesis.revision < 2) return false;
+  const previous = frozenSynthesisOf(db, runId, synthesis.revision - 2);
+  if (previous == null || previous.hash !== synthesis.hash) return false;
+  const turn = db.prepare("SELECT id FROM agent_turns WHERE run_id=? AND 'art_' || id=? AND status='SUCCEEDED'").get(runId, synthesis.artifactId) as { id: string } | undefined;
+  if (turn == null || db.prepare("SELECT 1 FROM domain_events WHERE turn_id=? AND kind IN ('tool.started','tool.completed') LIMIT 1").get(turn.id)) return false;
+  const changes = db.prepare("SELECT json_extract(payload_json,'$.changeSetId') id FROM domain_events WHERE turn_id=? AND kind='changeset.baselineCaptured'").all(turn.id) as Array<{ id: string }>;
+  if (changes.some(change => capturedFileChanges(db, change.id).length > 0)) return false;
+  const prior = collectDeliveryFeedbacks(db, runId, previous.artifactId, previous.revision);
+  const identity = (items: DeliveryFeedbackRecord[]) => JSON.stringify(items.map(item =>
+    [item.memberId, item.status, item.reason, item.revisionRequest ?? '', item.question ?? '']).sort((a, b) => a[0]!.localeCompare(b[0]!)));
+  return prior != null && identity(prior) === identity(feedback);
 }
 
 interface IssueResolutionResult {
@@ -1333,28 +1349,29 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         enqueueSynthesis(db, run.id, taskId, hostOf(roster));
         return { advanced: true };
       }
-      // 第 3 轮强制检查点（§6.1）：host、意见已收集、未派发过。
+      // From round 3 onward, the host evaluates new evidence after each round.
       const host = hostOf(roster);
       const checkpointDone = listRunArtifacts(db, run.id, 'checkpoint_verdict').some((a) => a.revision === round);
-      if (round === 3 && !checkpointDone) {
-        enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId: run.id, stage: 'CHK', memberId: host, roundNo: round, purpose: 'checkpoint' }) });
+      if (round >= 3 && !checkpointDone) {
+        const checkpoint: DelibStep = { taskId, runId: run.id, stage: 'CHK', memberId: host, roundNo: round, purpose: 'checkpoint' };
+        const attempts = db.prepare('SELECT status FROM outbox WHERE dispatch_key IN (?,?)').all(delibDispatchKey(checkpoint), repairDispatchKey(checkpoint)) as Array<{status:string}>;
+        if (attempts.length > 0 && attempts.every(attempt => ['done','failed'].includes(attempt.status))) {
+          advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: '本轮复核检查未能完成；保留已有材料，转入整合说明缺口', round });
+          freezeSynthesisInputs(db, run.id);
+          enqueueSynthesis(db, run.id, taskId, host);
+          return { advanced: true };
+        }
+        enqueueOutbox(db, { dispatchKey: delibDispatchKey(checkpoint) });
         return { advanced: false };
       }
-      if (round === 3 && checkpointDone) {
+      if (round >= 3 && checkpointDone) {
         const verdict = checkpointVerdictOf(db, run.id, round);
         if (verdict === 'continue') {
-          advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', round + 1, now, { from: 'ISSUE_DISCUSSION', reason: '第 3 轮检查点：继续（有新证据）', round: round + 1 });
+          advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', round + 1, now, { from: 'ISSUE_DISCUSSION', reason: `第 ${round} 轮检查点：继续（有新证据）`, round: round + 1 });
           enqueueIssueSteps(db, run.id, taskId, expectedMemberIds, round + 1);
           return { advanced: true };
         }
         advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: '检查点停止/预算上限，转入整合' });
-        freezeSynthesisInputs(db, run.id);
-        enqueueSynthesis(db, run.id, taskId, host);
-        return { advanced: true };
-      }
-      if (round > 3) {
-        // 检查点后的额外轮：一轮后即回检查点语义（预算承担硬上限，决策 06）。
-        advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: `第 ${round} 轮完成，转入整合` });
         freezeSynthesisInputs(db, run.id);
         enqueueSynthesis(db, run.id, taskId, host);
         return { advanced: true };
@@ -1427,7 +1444,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       if (waiting.length > 0) return { advanced: false };
       closeRatificationBarrier(db, { runId: run.id, synthesisArtifactId: synthesis.artifactId, synthesisRevision: synthesis.revision, missingReason: '席位终结（失败/缺席/预算跳过），未回复' });
       const feedback = collectDeliveryFeedbacks(db, run.id, synthesis.artifactId, synthesis.revision);
-      const delivery = decideDeliveryFeedback(feedback, expectedMembers, records);
+      let delivery = decideDeliveryFeedback(feedback, expectedMembers, records);
       // RATIFY issue closure is an explicit, version-bound fact. It is never
       // inferred from summary text, claim consensus, or generic "ready".
       resolveIssuesAfterRatification(db, {
@@ -1441,8 +1458,9 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       const revisionAccounting = budgetAccounting(budget, 'front');
       const revisionBudget = revisionAccounting.enforcement === 'disabled'
         || revisionAccounting.stageAvailableTurns >= 1 + expectedMembers.length;
-      if (delivery.status === 'needs_revision' && synthesis.revision === 1 && revisionBudget) {
-        const nextRound = 1;
+      const noProgress = delivery.status === 'needs_revision' && repeatedRevisionWithoutWork(db, run.id, synthesis, delivery.feedback);
+      if (delivery.status === 'needs_revision' && revisionBudget && !noProgress) {
+        const nextRound = synthesis.revision;
         const revisionEntries = [{
           artifactId: synthesis.artifactId, revision: synthesis.revision, hash: synthesis.hash,
         }, ...delivery.feedback.map((item) => {
@@ -1452,7 +1470,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         freezeStageInputs(db, run.id, 'SYNTHESIS_REVISION', nextRound, revisionEntries);
         advanceStage(db, run.id, taskId, 'SYNTHESIS', nextRound, now, {
           from: 'RATIFY',
-          reason: 'RAT deliveryFeedback=needs_revision；使用一次有预算的整合修订',
+          reason: '复核提出具体修改；继续整合修订并重新确认当前版本',
           synthesisArtifactId: synthesis.artifactId,
           synthesisRevision: synthesis.revision,
         });
@@ -1464,6 +1482,14 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
           payload: { fromRevision: synthesis.revision, toRound: nextRound, feedback: delivery.feedback },
         });
         return { advanced: true };
+      }
+      if (delivery.status === 'needs_revision' || delivery.status === 'incomplete') {
+        const question = delivery.status === 'incomplete'
+          ? '有成员尚未完成本版复核。请确认是否补齐成员配置后继续复核，或调整参与成员。已有成果已保留。'
+          : noProgress
+            ? `修订后交付内容和复核意见完全相同，未发现新的执行记录。请确认下一步采用的方案或补充依据。待修改：${delivery.reason}`
+            : `本次调用预算不足以完成下一次修订和复核。请确认是否调整调用预算后继续。待修改：${delivery.reason}`;
+        delivery = { status: 'needs_user', feedback: delivery.feedback, reason: delivery.reason, question };
       }
       publishFinalReport(db, { runId: run.id, taskId, conversationId: task.conversation_id, threadId, claims, expectedMembers, synthesis, delivery, now, blobDir: options.blobDir, reviewPolicy: reviewPolicyOf(db, taskId) });
       return { advanced: true };
@@ -1680,7 +1706,13 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
       hostMemberId: hostOf(rosterOf(db, input.runId)),
     })
     : null;
-  const finalSummary = hostSummary?.summary ?? synthesisPayload?.summary ?? '';
+  const question = input.delivery.status === 'needs_user'
+    ? input.delivery.question ?? input.delivery.feedback.filter(item => item.status === 'needs_user')
+      .map(item => `${item.question}${item.owner ? `（${item.owner}）` : ''}`).join('\n')
+    : '';
+  const finalSummary = input.delivery.status === 'needs_user'
+    ? question || input.delivery.reason
+    : hostSummary?.summary ?? synthesisPayload?.summary ?? '';
   const reportPayload = {
     schemaVersion: 'final-report-v1',
     synthesisRef: input.completion?.disposition === 'direct_answer' || input.completion?.disposition === 'no_reply'
@@ -1697,6 +1729,7 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     }),
     overallConsensus: overall,
     deliveryStatus,
+    question,
     deliveryFeedback: input.delivery.feedback,
     issueResolutions: effectiveIssueResolutions(db, input.runId, synthesisPayload as Record<string, unknown> | null),
     unresolvedIssues,
@@ -1739,13 +1772,14 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
       const thread=db.prepare('UPDATE conversation_threads SET last_message_seq=last_message_seq+1,revision=revision+1 WHERE id=? RETURNING last_message_seq').get(input.threadId) as {last_message_seq:number};
       const labels:Record<string,string>={unanimous:'共同确认',qualified:'附条件确认',disputed:'存在分歧',unconfirmed:'尚未核实'};
       const legacyText=[reportPayload.summary,...reportPayload.claimResults.map(c=>`${c.statement}（${labels[c.consensus]??c.consensus}）`),...reportPayload.disputedClaims.map(c=>`分歧：${c.statement}${c.disagreementSummary?` · ${c.disagreementSummary}`:''}`),...reportPayload.recommendations].filter(Boolean).join('\n\n');
-      const text=hostSummary?.summary ?? modelUserView?.summary ?? legacyText;
+      const text=input.delivery.status === 'needs_user' ? finalSummary : hostSummary?.summary ?? modelUserView?.summary ?? legacyText;
       const bodyJson=JSON.stringify({
         text,
         ...(hostSummary != null ? { summaryRef: hostSummary.summaryRef } : {}),
         ...(modelUserView?.document!=null&&modelUserView.document.markdown.trim().length>0?{document:modelUserView.document}:{}),
         delivery: {
           status: deliveryStatus, overallConsensus: overall, unresolvedIssues: reportPayload.unresolvedIssues,
+          question,
           feedback: reportPayload.deliveryFeedback, issueResolutions: reportPayload.issueResolutions,
         },
         runtimeControlResult:JSON.stringify(reportPayload),
@@ -1755,6 +1789,11 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
       appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:input.conversationId,threadId:input.threadId,taskId:input.taskId,runId:input.runId,kind:'thread.replyAdded',createdAt:input.now,payload:{messageId}});
     }
     settleThreadReplyForRun(db,input.runId,deliveryStatus==='blocked'?'failed':'succeeded',deliveryStatus==='blocked'?'研讨交付未完成：仍有内部未解决问题':undefined,input.completion?.disposition === 'no_reply' ? undefined : messageId);
+    if (deliveryStatus === 'needs_user') appendDomainEvent(db, {
+      schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: projectIdOf(db, input.taskId),
+      conversationId: input.conversationId, threadId: input.threadId, taskId: input.taskId, runId: input.runId,
+      kind: 'run.deliveryNeedsUser', createdAt: input.now, payload: { question: finalSummary, synthesisRevision: input.synthesis.revision },
+    });
     appendDomainEvent(db, {
       schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: projectIdOf(db, input.taskId), conversationId: input.conversationId,
       threadId: input.threadId, taskId: input.taskId, runId: input.runId, kind: 'run.finalReportPublished', createdAt: input.now,
@@ -2629,11 +2668,15 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       const modelUserView = typeof payload.summary === 'string' && payload.summary.trim().length > 0 && hasOwn(payload, 'document')
         ? { summary: payload.summary, document: documentOfPayload(payload) }
         : null;
-      const visibleText = modelUserView?.summary ?? renderStageProductText(db, { runId: input.runId, step: input.step, payload });
+      let visibleText = modelUserView?.summary ?? renderStageProductText(db, { runId: input.runId, step: input.step, payload });
+      const userFeedback = input.step.stage === 'RAT' ? payload.deliveryFeedback as DeliveryFeedback | undefined : undefined;
+      if (userFeedback?.status === 'needs_user' && userFeedback.question && !visibleText.includes(userFeedback.question)) {
+        visibleText += `\n\n待你确认：${userFeedback.question}${userFeedback.owner ? `（${userFeedback.owner}）` : ''}`;
+      }
       if (visibleText.length > 0) {
         const projection = modelUserView != null
           ? {
-              text: modelUserView.summary,
+              text: visibleText,
               document: modelUserView.document != null && modelUserView.document.markdown.trim().length > 0 ? modelUserView.document : undefined,
             }
           : { text: visibleText };

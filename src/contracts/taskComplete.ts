@@ -16,6 +16,8 @@ export const taskCompleteSchema=z.strictObject({
   responseKind:z.enum(['conversation','work']).optional(),
   /** Internal completion is still required when no visible reply is useful. */
   replyDisposition:z.enum(['reply','none']).optional(),
+  /** Only work depending on this answer waits; independent peer steps may proceed. */
+  userQuestion:z.string().trim().min(1).max(8000).nullable().optional(),
   files:z.array(z.string()),
   executedVerifications:z.array(z.string()),
   unexecutedVerifications:z.array(z.strictObject({item:z.string(),reason:z.string()})),
@@ -34,6 +36,7 @@ export function taskCompleteOutputSchema(resultKey:string,planning=false){
     document:documentSchema.nullable(),
     responseKind:z.enum(['conversation','work']),
     replyDisposition:z.enum(['reply','none']),
+    userQuestion:z.string().trim().min(1).max(8000).nullable(),
     handoffs:z.array(memberHandoffSchema).max(4),
   });
   // Claude CLI validates draft-07; Codex shares the same closed object schema.

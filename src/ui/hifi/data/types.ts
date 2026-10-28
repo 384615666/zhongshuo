@@ -90,6 +90,7 @@ export type DeliveryState = 'delivered' | 'delivered_with_questions' | 'needs_us
 /** Program-projected delivery facts; never inferred from the model's prose. */
 export interface DeliveryFact {
   status: DeliveryState;
+  question?: string;
   overallConsensus?: Consensus;
   unresolvedIssues?: Array<{ id?: string; issueId?: string; status: string }>;
   feedback?: Array<{ status?: string; reason?: string; revisionRequest?: string; question?: string; owner?: string }>;

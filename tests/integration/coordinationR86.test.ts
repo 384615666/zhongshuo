@@ -11,6 +11,8 @@ import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { parseDelibStep } from '../../src/daemon/deliberationRunner.ts';
 import { listRunArtifacts } from '../../src/persistence/stores/deliberation.ts';
 import type {TaskDetailsResult} from '../../src/contracts/taskDetails.ts';
+import {applyRecovery} from '../../src/daemon/stopFlow.ts';
+import {readTaskExecutionStatus} from '../../src/daemon/executionStatus.ts';
 import {reworkPendingOf} from '../../src/persistence/stores/dm.ts';
 
 afterEach(() => vi.unstubAllEnvs());
@@ -787,5 +789,95 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.adapter.startTurnLog).toHaveLength(3);
       expect((f.db.prepare("SELECT count(*) n FROM task_deliveries d JOIN tasks t ON t.id=d.task_id WHERE t.parent_task_id!=?").get(old.taskId) as {n:number}).n).toBe(1);
     }finally{f.db.close();}
+  });
+});
+
+
+describe('R116 user confirmation in independent collaboration steps',()=>{
+  it('continues independent work, takes a reply in the same thread and resumes the original child',async()=>{
+    const f=await fixture(false,{coordinationMaxCalls:20});
+    try{
+      const root=await f.send();
+      const plan={summary:'先推进可独立处理的工作',steps:[
+        {...f.plan.steps[0]!,key:'choice',objective:'需要用户选择后完成'},
+        {...f.plan.steps[1]!,key:'independent',dependsOn:[],objective:'不依赖选择的独立核对'},
+        {...f.plan.steps[1]!,key:'dependent',dependsOn:['choice'],objective:'读取选择后的成果'},
+      ]};
+      await f.run(output('安排独立工作',plan));
+      const choice=f.db.prepare("SELECT child_task_id id FROM coordination_steps WHERE step_key='choice'").get() as {id:string};
+      await f.run(output('已保存可确认部分',undefined,{responseKind:'work',userQuestion:'请选择方案甲或乙；建议甲'}));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(choice.id)).toEqual({status:'WAITING_USER'});
+      expect(f.db.prepare("SELECT body_json FROM messages WHERE task_id=? AND body_json LIKE '%请选择方案甲或乙%' LIMIT 1").get(choice.id)).toBeTruthy();
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'running'});
+      expect(await f.run(output('独立核对已完成',undefined,{responseKind:'work'}))).toBe(true);
+      expect(await f.worker.runOnce()).toBe(false);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'WAITING_USER'});
+      expect(readTaskExecutionStatus(f.db,root.taskId)?.waitingForUser?.message).toBe('请选择方案甲或乙；建议甲');
+      expect(await f.worker.runOnce()).toBe(false);
+      const recovery=applyRecovery(f.db,Date.now());
+      expect(recovery).toMatchObject({interruptedRuns:0,unknownTurns:0});
+      const reply=await f.cmd<{messageId:string}>('message.submit',{
+        target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:root.threadId},
+        body:'选择方案甲，请接着原步骤做',intent:'default',mentions:[],
+      });
+      expect(f.db.prepare('SELECT task_id FROM thread_reply_requests WHERE message_id=?').get(reply.messageId)).toEqual({task_id:choice.id});
+      expect(await f.run(output('按选择甲完成原步骤',undefined,{responseKind:'work'}))).toBe(true);
+      expect(f.adapter.startTurnLog.at(-1)?.text).toContain('选择方案甲，请接着原步骤做');
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(choice.id)).toEqual({status:'DONE'});
+      expect(await f.run(output('依赖复核完成',undefined,{responseKind:'work'}))).toBe(true);
+      expect(f.adapter.startTurnLog.at(-1)?.text).toContain('按选择甲完成原步骤');
+      expect(await f.run(output('整合前需要选择发布位置',undefined,{responseKind:'work',userQuestion:'请确认发布在项目目录还是另存'}))).toBe(true);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'WAITING_USER'});
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:root.threadId},body:'发布在项目目录',intent:'default',mentions:[]});
+      expect(await f.run(output('工作全部完成',undefined,{responseKind:'work'}))).toBe(true);
+      expect(f.adapter.startTurnLog.at(-1)?.text).toContain('发布在项目目录');
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
+      expect(readTaskExecutionStatus(f.db,root.taskId)?.waitingForUser).toBeNull();
+      expect(f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId)).toEqual({n:3});
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='FAILED'").get()).toEqual({n:0});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+});
+
+
+describe('R116 complete file handoff without arbitrary file counts',()=>{
+  it('verifies 101 actual changed files and preserves all of them for the reviewer',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();await f.run(output('准备修改后复核',f.plan));
+      const writes:FakeTurnScript=[...Array.from({length:101},(_,i)=>({kind:'writeFile' as const,path:`part-${i}.md`,content:`完整成果${i}`})),
+        ...output('已完成101个文件',undefined,{responseKind:'work'})];
+      await f.run(writes);
+      expect(await f.run(output('逐一核验101个文件',undefined,{responseKind:'work'}))).toBe(true);
+      const source=f.db.prepare("SELECT handoff_json FROM coordination_steps WHERE step_key='analysis'").get() as {handoff_json:string};
+      expect(JSON.parse(source.handoff_json).output.files).toHaveLength(101);
+      expect(f.adapter.startTurnLog.at(-1)?.text).toContain('part-100.md');
+      await f.run(output('全部核验并交付',undefined,{responseKind:'work'}));
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+});
+
+
+describe('R116 confirmation routing boundaries',()=>{
+  it('requires a recipient for different pending questions and preserves stop after a reply is queued',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();
+      await f.run(output('两项独立工作',{...f.plan,steps:[f.plan.steps[0]!,{...f.plan.steps[1]!,dependsOn:[]}]}));
+      await f.run(output('问题甲',undefined,{userQuestion:'甲的方案是否采用？'}));
+      await f.run(output('问题乙',undefined,{userQuestion:'乙的日期是否采用？'}));
+      await f.worker.runOnce();
+      const target={kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:root.threadId};
+      const ambiguous=await f.raw('message.submit',{target,body:'可以',intent:'default',mentions:[]});
+      expect(ambiguous.ok).toBe(false);expect(JSON.stringify(ambiguous.error)).toContain('@');
+      const reply=await f.cmd<{messageId:string}>('message.submit',{target,body:'乙按建议日期进行',intent:'default',mentions:[{kind:'member',memberId:f.b}]});
+      const child=f.db.prepare("SELECT child_task_id id FROM coordination_steps WHERE step_key='review'").get() as {id:string};
+      expect(f.db.prepare('SELECT task_id FROM thread_reply_requests WHERE message_id=?').get(reply.messageId)).toEqual({task_id:child.id});
+      const before=f.adapter.startTurnLog.length;
+      const parentRun=f.db.prepare('SELECT run_id FROM coordination_runs WHERE task_id=?').get(root.taskId) as {run_id:string};
+      await f.cmd('task.stop',{taskId:root.taskId,targetRunId:parentRun.run_id,expectedStopGeneration:0});
+      await f.worker.runOnce();
+      expect(f.adapter.startTurnLog).toHaveLength(before);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'CANCELLED'});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
   });
 });

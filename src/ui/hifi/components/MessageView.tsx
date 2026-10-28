@@ -114,7 +114,7 @@ function DeliveryFacts({ delivery }: { delivery?: Message['delivery'] }) {
     ?? delivery.feedback?.find((item) => item.status === 'needs_user');
   const issue = delivery.issueResolutions?.find((item) => item.status === 'needs_user')
     ?? delivery.issueResolutions?.find((item) => item.status === 'insufficient_evidence');
-  const action = (feedback?.question ? `${feedback.question}${feedback.owner ? `（责任方：${feedback.owner}）` : ''}` : '')
+  const action = delivery.question || (feedback?.question ? `${feedback.question}${feedback.owner ? `（责任方：${feedback.owner}）` : ''}` : '')
     || feedback?.revisionRequest
     || (issue?.question ? `${issue.question}${issue.owner ? `（责任方：${issue.owner}）` : ''}` : '')
     || feedback?.reason || issue?.reason;

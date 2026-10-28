@@ -15,6 +15,7 @@ export interface ThreadReplyScopeMember {
   memberId:string;displayName:string;description:string|null;writeScope:string|null;unavailableReason?:string;
 }
 export interface ThreadReplySelection {
+  resumeTaskId?:string;
   memberId:string;recipientIds:string[];candidateIds:string[];inviteIds:string[];
   route:TopLevelRouteOutcome;membershipVersion:string;
 }
@@ -35,6 +36,17 @@ export function selectThreadRecipients(
   const owner=th.root_task_id?(db.prepare('SELECT owner_member_id FROM tasks WHERE id=?').get(th.root_task_id) as {owner_member_id:string|null})?.owner_member_id:null;
   const all=mentions.some(m=>m.kind==='all');
   const explicit=[...new Set(mentions.flatMap(m=>m.kind==='member'?[m.memberId]:[]))];
+  const waitingChildren=!all&&explicit.length<=1&&collaboration!=='deliberate'
+    ?db.prepare(`SELECT t.id,t.owner_member_id FROM tasks t JOIN coordination_steps s ON s.child_task_id=t.id
+      JOIN coordination_runs c ON c.run_id=s.run_id JOIN tasks parent ON parent.id=c.task_id
+      WHERE t.parent_task_id=? AND t.status='WAITING_USER' AND c.state='running'
+        AND parent.status NOT IN ('DONE','CANCELLED') AND parent.stop_generation=c.stop_generation
+        AND (? IS NULL OR t.owner_member_id=?)
+        AND EXISTS(SELECT 1 FROM domain_events e WHERE e.task_id=t.id AND e.kind='turn.workClarification'
+          AND e.run_id=(SELECT id FROM workflow_runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1))`).all(th.root_task_id,explicit[0]??null,explicit[0]??null) as Array<{id:string;owner_member_id:string}>
+    :[];
+  const resumeChild=waitingChildren.length===1?waitingChildren[0]:undefined;
+  if(waitingChildren.length>1)throw new DaemonCommandError('VALIDATION_INVALID','有多个步骤正在等你答复，请在输入框 @ 本次要答复的 AI；原输入已保留。');
   const available=(db.prepare(`SELECT pm.id FROM room_members rm JOIN project_members pm ON pm.id=rm.member_id
     WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent' ORDER BY pm.id`).all(snapshot.roomId,snapshot.projectId) as {id:string}[]).map(m=>m.id);
   if(!all&&explicit.some(id=>!available.includes(id)))throw new DaemonCommandError('MEMBER_UNAVAILABLE','请选择本房间可用的 AI；输入保留');
@@ -62,7 +74,7 @@ export function selectThreadRecipients(
     };
     return{memberId,recipientIds:frozen,candidateIds:frozen,inviteIds:[],route,membershipVersion:snapshot.version};
   }
-  const recipientIds=all?[...snapshot.eligibleMemberIds]:explicit.length?explicit:[owner&&snapshot.eligibleMemberIds.includes(owner)?owner:snapshot.eligibleMemberIds[0]].filter((id):id is string=>Boolean(id));
+  const recipientIds=resumeChild?[resumeChild.owner_member_id]:all?[...snapshot.eligibleMemberIds]:explicit.length?explicit:[owner&&snapshot.eligibleMemberIds.includes(owner)?owner:snapshot.eligibleMemberIds[0]].filter((id):id is string=>Boolean(id));
   if(!recipientIds.length)throw new DaemonCommandError(snapshot.memberIds.length?'MEMBER_DISABLED':'MEMBER_UNAVAILABLE',snapshot.memberIds.length?'本串没有可用的 AI，请启用成员或添加其他 AI':'请先为本串添加一位可用的 AI');
   if(recipientIds.length>12)throw new DaemonCommandError('VALIDATION_INVALID','一次最多请求12位 AI');
   const roomCoordinator=(db.prepare('SELECT coordinator_member_id FROM rooms WHERE id=?').get(snapshot.roomId) as {coordinator_member_id:string|null})?.coordinator_member_id;
@@ -71,10 +83,10 @@ export function selectThreadRecipients(
   const removed=(db.prepare("SELECT member_id FROM thread_agent_followers WHERE thread_id=? AND status!='following'").all(threadId) as {member_id:string}[]).map(m=>m.member_id);
   const candidateIds=!all&&explicit.length<2?available.filter(id=>explicit.includes(id)||!removed.includes(id)):recipientIds;
   const explicitScope=all||explicit.length>1;
-  const route:TopLevelRouteOutcome=recipientIds.length===1&&(explicit.length===1||candidateIds.length===1)
+  const route:TopLevelRouteOutcome=recipientIds.length===1&&(resumeChild!=null||explicit.length===1||candidateIds.length===1)
     ?{kind:'dispatch',mode:'DIRECT',targetMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]}
     :{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,...(explicitScope?{participantScope:'selected' as const}:{}),frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]};
-  return{memberId,recipientIds,candidateIds,inviteIds,route,membershipVersion:snapshot.version};
+  return{memberId,recipientIds,candidateIds:resumeChild?recipientIds:candidateIds,inviteIds,route,membershipVersion:snapshot.version,...(resumeChild?{resumeTaskId:resumeChild.id}:{})};
 }
 
 export interface GeneralThreadReply extends ConversationReplyRow {
@@ -119,6 +131,16 @@ export function enqueueThreadReply(
 ){
   const th=db.prepare(`SELECT th.project_id,th.conversation_id,th.room_id,th.root_task_id,t.stop_generation,t.status,t.current_delivery_id
     FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {project_id:string;conversation_id:string;room_id:string;root_task_id:string;stop_generation:number;status:string;current_delivery_id:string|null};
+  if(selection.resumeTaskId){
+    const child=db.prepare(`SELECT id,stop_generation,status,current_delivery_id FROM tasks
+      WHERE id=? AND parent_task_id=? AND conversation_thread_id=? AND status='WAITING_USER' AND owner_member_id=?`)
+      .get(selection.resumeTaskId,th.root_task_id,threadId,selection.memberId) as {id:string;stop_generation:number;status:string;current_delivery_id:string|null}|undefined;
+    if(!child)throw new DaemonCommandError('STALE_REVISION','待答复的步骤已变化，请刷新后发送；输入保留');
+    const bound=db.prepare('UPDATE messages SET task_id=? WHERE id=? AND thread_id=? AND task_id=?')
+      .run(child.id,messageId,threadId,th.root_task_id);
+    if(bound.changes!==1)throw new DaemonCommandError('THREAD_SCOPE_MISMATCH','答复消息与当前任务不匹配；未派发');
+    Object.assign(th,{root_task_id:child.id,stop_generation:child.stop_generation,status:child.status,current_delivery_id:child.current_delivery_id});
+  }
   const roster=selection.candidateIds.map(memberId=>{
     const member=db.prepare('SELECT display_name,description FROM project_members WHERE id=? AND project_id=?').get(memberId,th.project_id) as {display_name:string;description:string|null};
     try{return{memberId,displayName:member.display_name,description:member.description,writeScope:snapshotConversationWriteAccess(db,th.root_task_id,process.env.ZS_RUNTIME??null,memberId)};}
@@ -173,7 +195,11 @@ export function threadReplyBlock(db:ZhongshuoDatabase,q:GeneralThreadReply,defau
   const t=db.prepare(`SELECT t.project_id,t.conversation_id,t.conversation_thread_id,t.status,t.stop_generation,t.current_delivery_id,
     th.root_task_id,th.status threadStatus,p.status projectStatus,r.archived_at FROM tasks t JOIN projects p ON p.id=t.project_id
     JOIN conversation_threads th ON th.id=t.conversation_thread_id JOIN rooms r ON r.id=th.room_id WHERE t.id=?`).get(q.taskId) as {project_id:string;conversation_id:string;conversation_thread_id:string;status:string;stop_generation:number;current_delivery_id:string|null;root_task_id:string;threadStatus:string;projectStatus:string;archived_at:number|null}|undefined;
-  if(!t||t.project_id!==q.projectId||t.conversation_id!==q.conversationId||t.conversation_thread_id!==q.threadId||t.root_task_id!==q.taskId)return{code:'THREAD_SCOPE_MISMATCH',message:'对话目标已变化；输入保留'};
+  const childTarget=t&&t.root_task_id!==q.taskId?db.prepare(`SELECT 1 FROM coordination_steps s
+    JOIN coordination_runs c ON c.run_id=s.run_id JOIN tasks parent ON parent.id=c.task_id
+    JOIN tasks child ON child.id=s.child_task_id WHERE child.id=? AND child.parent_task_id=? AND child.owner_member_id=?
+      AND c.state='running' AND parent.status NOT IN ('DONE','CANCELLED') AND parent.stop_generation=c.stop_generation`).get(q.taskId,t.root_task_id,q.memberId):null;
+  if(!t||t.project_id!==q.projectId||t.conversation_id!==q.conversationId||t.conversation_thread_id!==q.threadId||(t.root_task_id!==q.taskId&&!childTarget))return{code:'THREAD_SCOPE_MISMATCH',message:'对话目标已变化；输入保留'};
   if(t.threadStatus!=='open'||t.projectStatus!=='active'||t.archived_at!=null)return{code:'CONVERSATION_UNAVAILABLE',message:'项目或对话已归档；输入保留'};
   if(t.status==='CANCELLED'||t.stop_generation!==q.sourceStopGeneration)return{code:'TASK_STOPPED',message:'这条请求之前的任务已停止；不会自动继续'};
   // This is an ordinary user message, not task.review/executeRework. Its target
