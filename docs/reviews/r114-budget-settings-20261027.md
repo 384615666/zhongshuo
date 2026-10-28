@@ -36,3 +36,12 @@
 - 手册新图通过正式UI采集，两个编号对应真实控件。示例库3次Fake执行、0真实模型调用；正常关窗daemon退出0且pid文件移除。用户原数据未启动或迁移。
 
 完整验证脚本与原始证据保存在ignored `dist/r114-settings-review/`；配图采集在ignored `dist/user-guide-capture/`。
+
+## V57 实机测试包（2026-10-28交付）
+
+- 构建源码：`cbedcc8e44fca979966a933a9985468325423983`，clean，BUILD `bld_b3462f725237f977`。
+- 目录：`dist/desktop/desktop-daily-win-v57-r114-budget-settings-20261027/`。
+- 通用ZIP：`dist/desktop/zhongshuo-v57-windows-x64-20261027.zip`，646文件，220697809字节，完整解码CRC通过。
+- ZIP SHA-256：`79d3fc8d1d38767e3da7cbeb55552a2f465889cfabbc43c50f2ed9b2ba7a72ce`，同目录附校验文件。
+- 614个程序文件逐项hash一致；内外手册正文一致，18张图片全部存在。随包main/preload/renderer与随包Node/daemon隔离启动通过，14章18图全部加载，正常退出码0、daemon.pid移除，0个模型执行轮次、0真实调用。
+- 通用包附简短启动说明、许可证和图文教程；本机沿用数据启动器在生成ZIP后单独加入交付目录，与V56启动器逐字节相同。用户先正常退出旧版，再运行新目录的`start-existing-data.vbs`即可沿用原数据。
