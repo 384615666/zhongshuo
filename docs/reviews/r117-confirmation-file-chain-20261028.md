@@ -28,3 +28,12 @@
 最终10文件189项通过，其中本轮新增25项；主工程及hifi类型检查通过。7个本轮代码/测试文件eslint与原HEAD对照：10项既有问题，无新增。差异检查通过。
 
 辅助脚本、原始运行记录保存在ignored `dist/r117-clarification/`。旧版兼容测试最初未通过，原因是夹具未显式创建格式补交和使用了错误的执行状态字段；最终按正式`task.redispatch`合同构造修复链后才计入验收。未重放用户原任务，真实模型调用为0。
+
+## V60 测试包
+
+- clean源码：`70c749166cf98941f2afe39ec7bae9b37b32f16a`，BUILD `bld_5710204bb36d94f3`。
+- 目录：`dist/desktop/desktop-daily-win-v60-r117-confirmation-20261028/`；通用ZIP：`zhongshuo-v60-windows-x64-20261028.zip`。
+- 615项程序hash独立核对一致；ZIP648文件、220686615字节，完整解码CRC通过。SHA-256：`9b432077f13ab3511dd782e506d257e8e1ffdd08a959e434c8321d432680dec9`。
+- 使用包内实际Electron、main/preload/renderer、Node及daemon隔离启动，app.health及内置14章19图加载通过；内外手册正文一致，新增逐条答复说明存在。正常退出0、pid文件移除，0turn/0real_call。
+- 采集辅助脚本先后遇到初始页面切换时执行上下文销毁、启动导航覆盖测试目标路由；修正采集就绪判定和路由校验后重验通过，未修改产品代码解决辅助采集问题。
+- 通用ZIP不含运行数据或本机专用启动器；生成ZIP后单独加入与V59逐字节相同的沿用数据入口。先正常退出旧版，再运行新目录`start-existing-data.vbs`。
