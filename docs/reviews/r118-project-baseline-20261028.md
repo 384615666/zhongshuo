@@ -27,3 +27,11 @@
 对现场项目只读执行新文件清单和元数据检查：2657项、无截断、0读取失败、0越界项，不含ignored安装包。未捕获业务文件正文或启动原任务。
 
 主工程/hifi类型检查通过，本轮5个代码/测试文件eslint为0，差异检查通过。辅助测试及记录保存在ignored `dist/r118-baseline/`。真实模型调用为0。
+
+## V61 交付
+
+- clean源码：`da12269711dd8fd0133f04ab92507b68fdf3c095`；BUILD `bld_e017b34044d66776`。
+- 目录：`dist/desktop/desktop-daily-win-v61-r118-project-baseline-20261028/`；通用ZIP：`zhongshuo-v61-windows-x64-20261028.zip`。
+- 615个程序文件独立hash一致；ZIP648文件、220689519字节，完整CRC通过；SHA-256：`3a1f0e03c4daaa73c5864d50c252ec4537db36958e0a28ea55db0aa503d4d49f`。
+- 实际包内Electron与daemon隔离启动、app.health、内置14章19图及新增Git说明加载通过；内外手册正文一致；正常退出0、pid文件移除，0turn/0real_call。
+- 通用ZIP不含用户数据或本机专用启动器；ZIP完成后单独加入与V60逐字节相同的沿用数据入口。正常退出旧版，从V61的`start-existing-data.vbs`启动后，可在原串发送“按原要求继续”。
