@@ -28,3 +28,12 @@
 - 图文手册步骤、完成提示说明及回复串截图同步。UI 与 daemon 构建通过。
 
 本机详细验证输出位于 ignored 的 `dist/r121-diagnostics/`，界面矩阵位于 ignored 的 `dist/r115-layout-review/r121-scale-1.25-bf79b8/`。公开记录不包含原业务内容或本机配置。
+
+## V64 交付
+
+- clean 源码 `114b0adb8b3c0606b7ca97b718598a1b5b0c9e44`，BUILD `bld_3237b6d84ef16010`；615 个程序文件独立 SHA-256 校验一致。
+- 目录 `dist/desktop/desktop-daily-win-v64-r121-room-send-20261029/`，通用 ZIP `dist/desktop/zhongshuo-v64-windows-x64-20261029.zip`。
+- ZIP 648 个文件、220733675 字节，CRC 通过，SHA-256 `6acd4a9b44207d2e6e7a11c1104de62a3c4367dc21dc2c02fd83679baf765540`。
+- 实际包内 Electron/Node/daemon 在独立数据目录启动，手册 14 章 19 图、原界面及命令桥加载通过，正常退出码 0，daemon pid 文件移除；0 turn/0 real_call。
+- 首次包装验证把临时入口参数交给已打包程序，该参数未作为应用入口执行，检查超时；辅助可见测试又因误指定主屏被现有校验拒绝。两次辅助失败原件保留，后续改用实际成品调试入口与有效非主屏，最终通过；只检查并清理自身验证进程，用户 V63 保持运行。
+- 通用 ZIP 完成后才加入本机专用沿用数据启动器，与 V63 逐字节一致；原运行数据保持原位。正常退出 V63 后打开 V64 的 `start-existing-data.vbs`，在原串发送继续要求。没有替用户切换正在运行的程序。
