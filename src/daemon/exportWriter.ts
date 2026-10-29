@@ -9,7 +9,7 @@
  *   产物）——不当作正常随包副本也不冒充缺失；不可读/不存在按合同列 missing；
  * - manifest.json 与最终 assets 字节一致：写后**重读文件**逐件复核 sha256+体积；
  * - system 消息保留「系统」来源（human=用户 / agent=成员 / system=系统，不统一贴成员）；
- * - 预算显式：消息数/附件件数/附件总量，超限 EXPORT_TOO_LARGE 明确失败（提示收窄范围），
+ * - 预算显式：消息数超限 EXPORT_TOO_LARGE 明确失败；文件不设件数或字节上限（提示收窄范围），
  *   不静默缩小导出范围；
  * - 重活异步分步：逐件 await 让出事件循环——复制/校验不长期堵 daemon IPC 与停止命令。
  */
@@ -23,8 +23,6 @@ import { readVerifiedStoreRaw, ATT_TEXT_KINDS } from './attachments.ts';
 export const TEXT_PREVIEW_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.log', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.rs', '.rb', '.php', '.swift', '.kt', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.html', '.htm', '.css', '.scss', '.vue', '.svelte', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lua', '.r', '.m', '.pl']);
 
 export const EXPORT_MAX_MESSAGES = 2000;
-export const EXPORT_MAX_ASSET_FILES = 200;
-export const EXPORT_MAX_ASSET_TOTAL_BYTES = 256 * 1024 * 1024;
 
 export class ExportWriterError extends Error {
   code: 'EXPORT_TOO_LARGE' | 'EXPORT_ATTACHMENT_CONFLICT' | 'EXPORT_ATTACHMENT_INTEGRITY' | 'EXPORT_VERIFY_FAILED';
@@ -128,9 +126,6 @@ function prepare(input: ExportInput): Prepared {
       missing: missingHere,
     });
   }
-  if (assets.length > EXPORT_MAX_ASSET_FILES) {
-    throw new ExportWriterError('EXPORT_TOO_LARGE', `导出附件件数 ${assets.length} 超上限 ${EXPORT_MAX_ASSET_FILES}——请收窄范围，不静默丢件`);
-  }
   void missing;
   return {
     title: input.target.kind === 'thread' ? `线程导出（${input.target.threadId?.slice(0, 14)}…）` : `会话导出（${input.conv.id.slice(0, 14)}…）`,
@@ -176,9 +171,7 @@ async function verifyAndCopyAssets(
   if (prepared.assets.length === 0) return { manifestFiles: [], droppedUnreadable };
   mkdirSync(join(exportDir, 'assets'), { recursive: true });
   const manifestFiles: Array<{ file: string; bytes: number; sha256: string; artifactId: string; kind: string; revision: number; sourceName: string | null }> = [];
-  let totalBytes = 0;
   for (const { file, att } of prepared.assets) {
-    // eslint-disable-next-line no-await-in-loop -- 逐件让出事件循环
     // 按资源 kind 的实际存储扩展名读取（text_file/code_file={hash}.txt；其余={hash}.bin）。
     const verified = readVerifiedStoreRaw(att.blob_path, att.hash, (ATT_TEXT_KINDS as readonly string[]).includes(att.kind) ? 'txt' : 'bin', blobRoot);
     if (!verified.ok) {
@@ -188,10 +181,6 @@ async function verifyAndCopyAssets(
       }
       // out-of-store / corrupted：不当作正常随包副本——整笔明确失败。
       throw new ExportWriterError('EXPORT_ATTACHMENT_INTEGRITY', `附件 ${att.display_name ?? att.artifact_id} 托管副本校验失败（${verified.error.code}）：${verified.error.message}——整笔拒绝，不以未核对字节随包`);
-    }
-    totalBytes += verified.raw.length;
-    if (totalBytes > EXPORT_MAX_ASSET_TOTAL_BYTES) {
-      throw new ExportWriterError('EXPORT_TOO_LARGE', `导出附件总量超上限 ${EXPORT_MAX_ASSET_TOTAL_BYTES}B——请收窄范围（按线程导出）或分批导出，不静默缩小范围`);
     }
     writeFileSync(join(exportDir, file.replaceAll('/', String.fromCharCode(92))), verified.raw);
     // 最终字节一致性（第三十一轮一）：写后重读实际文件复核——清单必须与磁盘字节一致。

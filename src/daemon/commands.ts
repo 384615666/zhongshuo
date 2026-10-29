@@ -69,11 +69,11 @@ import { join, resolve, basename } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedFullText, readVerifiedBlob, readVerifiedStoreRaw, validateImageBuffer, truncateUtf8Bytes, decodeTextBytes } from './attachments.ts';
+import { ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, kindForFilename, readVerifiedCopy, readVerifiedFullText, readVerifiedBlob, readVerifiedStoreRaw, validateImageBuffer, decodeTextBytes } from './attachments.ts';
 import { writeExport, TEXT_PREVIEW_EXTENSIONS, ExportWriterError } from './exportWriter.ts';
 import { readRemoteConfig, writeRemoteConfig, createPairingCode, listDevices, revokeDeviceInDb, lanIps } from './remoteServer.ts';
 import {
-  PDF_MAX_BYTES, OFFICE_MAX_BYTES, CSV_MAX_BYTES, ARTIFACT_PARSE_KINDS,
+  ARTIFACT_PARSE_KINDS,
   validateExtractCache, renderSheetWindow, parseSheetRangeSpec,
   type ExtractCache, type ParseJobKind,
 } from './parseContracts.ts';
@@ -554,7 +554,6 @@ async function uploadDocumentAttachment(
     conversationId: string;
     filename: string;
     contentBase64: string;
-    byteCap: number;
     parseKind: 'pdf' | 'csv' | 'office';
   },
 ): Promise<{ data: Record<string, unknown>; replayed: boolean }> {
@@ -572,7 +571,6 @@ async function uploadDocumentAttachment(
   }
   const raw = Buffer.from(params.contentBase64, 'base64');
   if (raw.length === 0) throw new DaemonCommandError('VALIDATION_INVALID', '文档内容为空');
-  if (raw.length > params.byteCap) throw new DaemonCommandError('VALIDATION_INVALID', `文档原件 ${raw.length.toLocaleString('en-US')}B（约 ${(raw.length / 1048576).toFixed(1)}MiB）超过上限 ${(params.byteCap / 1048576).toFixed(0)}MiB（明确规则拒绝——不静默截断保存）`);
   const hash = createHash('sha256').update(raw).digest('hex');
   const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
   mkdirSync(blobRoot, { recursive: true });
@@ -2553,7 +2551,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const { captureBaseline } = await import('./changeset.ts');
         const r = captureBaseline(deps.db, {
           projectId: params.projectId, taskId: params.taskId ?? null, runId: params.runId ?? null,
-          paths: params.paths, maxBytes: params.maxBytes, appDataDir: deps.appDataDir, now: Date.now(),
+          paths: params.paths, appDataDir: deps.appDataDir, now: Date.now(),
         });
         if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
         return withCommandId({ ok: true, data: r.value });
@@ -2733,13 +2731,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         };
         try {
           if (env.method === 'git.stage') {
-            const params = z.strictObject({ projectId: z.string().min(1), paths: z.array(z.string().min(1).max(400)).min(1).max(100) }).parse(env.params);
+            const params = z.strictObject({ projectId: z.string().min(1), paths: z.array(z.string().min(1).max(400)).min(1) }).parse(env.params);
             const { gitStage } = await import('./gitWrite.ts');
             const data = await gitStage(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
           }
           if (env.method === 'git.unstage') {
-            const params = z.strictObject({ projectId: z.string().min(1), paths: z.array(z.string().min(1).max(400)).min(1).max(100) }).parse(env.params);
+            const params = z.strictObject({ projectId: z.string().min(1), paths: z.array(z.string().min(1).max(400)).min(1) }).parse(env.params);
             const { gitUnstage } = await import('./gitWrite.ts');
             const data = await gitUnstage(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
@@ -2838,7 +2836,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           if (env.method === 'git.conflict.resolve') {
             // 三方内容+手动解决（§14.6：不提供整文件一键用某边覆盖——只接受用户提交的内容）。
-            const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(400), content: z.string().max(4 * 1024 * 1024), expectedSnapshotHash: z.string().regex(/^[0-9a-f]{64}$/).optional() }).parse(env.params);
+            const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(400), content: z.string(), expectedSnapshotHash: z.string().regex(/^[0-9a-f]{64}$/).optional() }).parse(env.params);
             const { gitConflictResolve } = await import('./gitWrite.ts');
             const data = await gitConflictResolve(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
@@ -3462,12 +3460,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          content: z.string().min(1).max(600_000),
+          content: z.string().min(1),
         }).parse(env.params);
         const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
         if (/[\u0000-\u0008\u000E-\u001F]/.test(params.content)) throw new DaemonCommandError('VALIDATION_INVALID', '内容含二进制控制字节——不是文本附件（七类二进制随后续批次）');
         const bytes = Buffer.byteLength(params.content, 'utf8');
-        if (bytes > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `文件大小 ${bytes}B 超过文本附件上限 ${ATT_MAX_BYTES}B（明确规则：不静默截断保存）`);
         const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
         if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
         const hash = createHash('sha256').update(params.content, 'utf8').digest('hex');
@@ -3493,11 +3490,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          contentBase64: z.string().max(512 * 1024),
+          contentBase64: z.string(),
         }).parse(env.params);
         const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
         const raw = Buffer.from(params.contentBase64, 'base64');
-        if (raw.length > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `文件 ${raw.length}B 超过文本附件上限 ${ATT_MAX_BYTES}B（明确规则：不静默截断保存）`);
         const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
         if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
         const dec = decodeTextBytes(raw);
@@ -3703,14 +3699,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          contentBase64: z.string().min(1).max(12 * 1024 * 1024), // base64 膨胀裕量
+          contentBase64: z.string().min(1), // base64 膨胀裕量
         }).parse(env.params);
         const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
         const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
         if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
         const raw = Buffer.from(params.contentBase64, 'base64');
         if (raw.length === 0) throw new DaemonCommandError('VALIDATION_INVALID', '图片内容为空');
-        if (raw.length > ATT_IMAGE_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `图片原件 ${raw.length}B 超过上限 ${ATT_IMAGE_MAX_BYTES}B（明确规则：不静默压缩）`);
         const meta = validateImageBuffer(raw);
         if (!meta.ok) throw new DaemonCommandError('VALIDATION_INVALID', meta.message);
         const hash = createHash('sha256').update(raw).digest('hex');
@@ -3753,13 +3748,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          contentBase64: z.string().min(1).max(28 * 1024 * 1024),
+          contentBase64: z.string().min(1),
         }).parse(env.params);
         const r = await uploadDocumentAttachment(deps, run, { scope, commandId: env.commandId, payloadHash }, {
           conversationId: params.conversationId,
           filename: params.filename,
           contentBase64: params.contentBase64,
-          byteCap: PDF_MAX_BYTES,
           parseKind: 'pdf',
         });
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
@@ -3803,13 +3797,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          contentBase64: z.string().min(1).max(48 * 1024 * 1024),
+          contentBase64: z.string().min(1),
         }).parse(env.params);
         const r = await uploadDocumentAttachment(deps, run, { scope, commandId: env.commandId, payloadHash }, {
           conversationId: params.conversationId,
           filename: params.filename,
           contentBase64: params.contentBase64,
-          byteCap: OFFICE_MAX_BYTES,
           parseKind: 'office',
         });
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
@@ -3820,13 +3813,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          contentBase64: z.string().min(1).max(8 * 1024 * 1024),
+          contentBase64: z.string().min(1),
         }).parse(env.params);
         const r = await uploadDocumentAttachment(deps, run, { scope, commandId: env.commandId, payloadHash }, {
           conversationId: params.conversationId,
           filename: params.filename,
           contentBase64: params.contentBase64,
-          byteCap: CSV_MAX_BYTES,
           parseKind: 'csv',
         });
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
@@ -3870,16 +3862,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 上限双保险（OFFICE_MAX_BYTES 20MiB），超限/缺参=明确不带字节（前端如实降级）。
         let visualBytesBase64: string | undefined;
         let visualBytesAvailable = false;
-        let visualBytesReason: string | null = null;
+        const visualBytesReason: string | null = null;
         if (params.includeBytes === true && (row.kind === 'docx_file' || row.kind === 'slides_file' || row.kind === 'sheet_file')) {
           const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
           if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
-          if (verified.raw.length > OFFICE_MAX_BYTES) {
-            visualBytesReason = `原件 ${verified.raw.length.toLocaleString('en-US')}B（约 ${(verified.raw.length / 1048576).toFixed(1)}MiB）超视觉通道上限 ${(OFFICE_MAX_BYTES / 1048576).toFixed(0)}MiB——视觉预览不可用，文字提取不受影响`;
-          } else {
-            visualBytesBase64 = verified.raw.toString('base64');
-            visualBytesAvailable = true;
-          }
+          visualBytesBase64 = verified.raw.toString('base64');
+          visualBytesAvailable = true;
         }
         const visualBytes = visualBytesAvailable
           ? { visualBytesAvailable: true as const, bytesBase64: visualBytesBase64 }
@@ -4238,7 +4226,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
              WHERE c.project_id = ? AND (
                c.kind = 'room'
                OR (c.kind = 'dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
-             ) ORDER BY a.rowid DESC LIMIT 200`,
+             ) ORDER BY a.rowid DESC`,
           ).all(p.id, deps.localUserId) as Array<{ id: string; source_name: string | null; hash: string; revision: number; kind: string; conversation_id: string; conversation_kind: string; room_id: string | null; created_at: number; message_id: string | null }>).map((a) => ({
             attachmentId: a.id, filename: a.source_name ?? a.id, hash: a.hash, revision: a.revision, kind: a.kind,
             conversationId: a.conversation_id, conversationKind: a.conversation_kind, roomId: a.room_id,
@@ -4248,7 +4236,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const drafts = (deps.db.prepare(
             `SELECT cs.id, cs.task_id, cs.application_status, cs.before_ref, cs.after_ref, t.title AS task_title
              FROM change_sets cs JOIN tasks t ON t.id = cs.task_id JOIN conversations c ON c.id=t.conversation_id
-             WHERE cs.project_id = ? AND (c.kind='room' OR (c.kind='dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id=c.id AND dp.principal_type='human' AND dp.principal_id=?))) ORDER BY cs.rowid DESC LIMIT 100`,
+             WHERE cs.project_id = ? AND (c.kind='room' OR (c.kind='dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id=c.id AND dp.principal_type='human' AND dp.principal_id=?))) ORDER BY cs.rowid DESC`,
           ).all(p.id,deps.localUserId) as Array<{ id: string; task_id: string | null; application_status: string; before_ref: string; after_ref: string; task_title: string | null }>).map((d) => ({
             changeSetId: d.id, taskId: d.task_id, taskTitle: d.task_title, applicationStatus: d.application_status,
             beforeRef: d.before_ref, afterRef: d.after_ref, locate: d.task_id != null ? `#task=${d.task_id}` : null,
@@ -4259,7 +4247,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
              WHERE t.project_id = ? AND (
                c.kind = 'room'
                OR (c.kind = 'dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
-             ) ORDER BY d.rowid DESC LIMIT 100`,
+             ) ORDER BY d.rowid DESC`,
           ).all(p.id, deps.localUserId) as Array<{ id: string; revision: number; manifest_hash: string; reviewed_at: number | null; task_id: string; title: string; conversation_kind: string }>).map((d) => ({
             deliveryId: d.id, revision: d.revision, manifestHash: d.manifest_hash, taskId: d.task_id, title: d.title,
             audience: d.conversation_kind === 'dm' ? 'dm' : 'room', reviewedAt: d.reviewed_at, locate: `#delivery=${d.id}`,
@@ -4398,12 +4386,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         } catch {
           throw new DaemonCommandError('RESOURCE_NOT_FOUND', `目录列举失败：${params.path ?? '.'}`);
         }
-        const MAX_ENTRIES = 500;
         const sorted = dirents
           .filter((d) => d.name !== '.' && d.name !== '..')
           .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh-CN') : a.isDirectory() ? -1 : 1));
-        const truncated = sorted.length > MAX_ENTRIES;
-        const entries = sorted.slice(0, MAX_ENTRIES).map((d) => {
+        const truncated = false;
+        const entries = sorted.map((d) => {
           let sizeBytes: number | null = null;
           let modifiedAt: number | null = null;
           if (!d.isDirectory()) {
@@ -4448,8 +4435,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!textOk) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读文本预览白名单——二进制/未知格式不执行不转码`);
         let raw: Buffer;
         try {
-          const st = statSync(realTarget);
-          if (st.size > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size}B 超只读预览上限 ${ATT_MAX_BYTES}B`);
           raw = readFileSync(realTarget);
         } catch (error) {
           if (error instanceof DaemonCommandError) throw error;
@@ -4458,8 +4443,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         let content: string;
         try { content = new TextDecoder('utf-8', { fatal: true }).decode(raw); }
         catch { throw new DaemonCommandError('VALIDATION_INVALID', '项目文件不是有效 UTF-8 文本——只读预览拒绝（二进制走 Git/系统工具）'); }
-        const cut = truncateUtf8Bytes(content, ATT_EXCERPT_BYTES);
-        return withCommandId({ ok: true, data: { projectId: proj.id, path: params.path, baseName: basename(realTarget), bytes: raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, content: cut.text, note: '项目文件只读快照（非托管副本——源文件后续变化不追溯；不进模型输入）' } });
+        return withCommandId({ ok: true, data: { projectId: proj.id, path: params.path, baseName: basename(realTarget), bytes: raw.length, truncated: false, excerptBytes: raw.length, content, note: '项目文件只读快照（非托管副本——源文件后续变化不追溯；不进模型输入）' } });
       }
       case 'project.file.stat': {
         // R68 §6：工作区文件**轻量 stat**（脏检测通道）——路径安全链与 readFull 同源，只
@@ -4952,7 +4936,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           showAvatars:z.boolean().optional(),
           avatar:z.strictObject({
             subject:z.string().min(1).max(140),
-            dataUrl:z.string().max(524288).nullable(),
+            dataUrl:z.string().nullable(),
           }).optional(),
         }).refine(value=>value.showAvatars!==undefined||value.avatar!==undefined,{message:'至少提供一项外观设置'}).parse(env.params);
         const result=run(()=>{
@@ -5649,19 +5633,19 @@ function resolveProjectTextStat(
  * 被 readFull/originalFile 拒绝（review-r71 §P1：上传通道通过不能替代原始路径）。
  * 分道不变：Office=OFFICE_MAX_BYTES；PDF/图片保持各自通道限额。
  */
-const PREVIEW_BINARY_EXTENSIONS: Record<string, { cap: number; kind: 'image_file' | 'pdf_file' | 'docx_file' | 'sheet_file' | 'slides_file' }> = {
-  '.png': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.jpg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.jpeg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.gif': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.webp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.bmp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+const PREVIEW_BINARY_EXTENSIONS: Record<string, { kind: 'image_file' | 'pdf_file' | 'docx_file' | 'sheet_file' | 'slides_file' }> = {
+  '.png': { kind: 'image_file' },
+  '.jpg': { kind: 'image_file' },
+  '.jpeg': { kind: 'image_file' },
+  '.gif': { kind: 'image_file' },
+  '.webp': { kind: 'image_file' },
+  '.bmp': { kind: 'image_file' },
   // Local SVG remains an <img> byte source, never a document/script or model input.
-  '.svg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.pdf': { cap: PDF_MAX_BYTES, kind: 'pdf_file' },
-  '.docx': { cap: OFFICE_MAX_BYTES, kind: 'docx_file' },
-  '.xlsx': { cap: OFFICE_MAX_BYTES, kind: 'sheet_file' },
-  '.pptx': { cap: OFFICE_MAX_BYTES, kind: 'slides_file' },
+  '.svg': { kind: 'image_file' },
+  '.pdf': { kind: 'pdf_file' },
+  '.docx': { kind: 'docx_file' },
+  '.xlsx': { kind: 'sheet_file' },
+  '.pptx': { kind: 'slides_file' },
 };
 function isProjectPreviewableExt(ext: string): boolean {
   return TEXT_PREVIEW_EXTENSIONS.has(ext) || PREVIEW_BINARY_EXTENSIONS[ext] != null;
@@ -5693,7 +5677,6 @@ function resolveProjectPreviewFile(
   const dot = realTarget.lastIndexOf('.');
   const ext = dot >= 0 ? realTarget.slice(dot).toLowerCase() : '';
   const binary = PREVIEW_BINARY_EXTENSIONS[ext];
-  const cap = binary?.cap ?? ATT_MAX_BYTES;
   if (!TEXT_PREVIEW_EXTENSIONS.has(ext) && binary == null) {
     throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读阅读白名单——与上传同类型面（文本/图片/PDF/Office/CSV）；未知格式不执行不转码`);
   }
@@ -5701,7 +5684,6 @@ function resolveProjectPreviewFile(
   let mtimeMs: number;
   try {
     const st = statSync(realTarget);
-    if (st.size > cap) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size.toLocaleString('en-US')}B（约 ${(st.size / 1048576).toFixed(1)}MiB）超只读上限 ${(cap / 1048576).toFixed(0)}MiB（完整阅读/原件保存拒绝——不静默截断）`);
     raw = readFileSync(realTarget);
     mtimeMs = st.mtimeMs;
   } catch (error) {

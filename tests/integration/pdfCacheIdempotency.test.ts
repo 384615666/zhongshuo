@@ -62,7 +62,7 @@ describe('PDF 上传幂等三层 + 缓存 schema v2', () => {
     expect(cache.cacheSchema).toBe(2);
     expect(cache.parserName).toBe('pdfjs-dist');
     expect(cache.parserVersion).toMatch(/^\d/);
-    expect(cache.budgets).toEqual({ pageText: 65536, totalText: 524288 });
+    expect(cache.budgets).toEqual({ completePreview: 1 });
     expect(cache.pages.map((p) => p.page)).toEqual([1, 2]);
     expect(cache.pages[0]!.bytes).toBeGreaterThan(0);
     const completed0 = getParsePool().stats().completed;

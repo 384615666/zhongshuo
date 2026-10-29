@@ -54,7 +54,6 @@ describe('project.file.read（项目文件只读快照）', () => {
       ['../说明 文档.md', 'FORBIDDEN'],
       ['子目录/../../说明 文档.md', 'FORBIDDEN'],
       ['二进制.bin', 'CAPABILITY_UNSUPPORTED'],
-      ['大文件.txt', 'VALIDATION_INVALID'],
       ['不存在.md', 'RESOURCE_NOT_FOUND'],
     ];
     for (const [path, code] of cases) {
@@ -62,6 +61,8 @@ describe('project.file.read（项目文件只读快照）', () => {
       expect(bad.ok, path).toBe(false);
       expect(bad.error?.code, path).toBe(code);
     }
+    const large=await env.send('project.file.read',{projectId:'p1',path:'大文件.txt'});
+    expect(large.ok).toBe(true);expect((large.data as unknown as {content:string}).content.length).toBeGreaterThan(256*1024);
     env.close();
   }, 60_000);
 });

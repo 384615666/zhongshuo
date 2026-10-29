@@ -1,51 +1,24 @@
 /**
  * 文档解析共享合同（第二十九轮一/二/四）——父进程（commands/turnInput/parsePool）与
- * 解析子进程（parseWorker）共用：限额常量、提取缓存 schema（v2）与严格校验、任务/
+ * 解析子进程（parseWorker）共用：运行资源常量、提取缓存 schema（v2）与严格校验、任务/
  * 响应形状。本文件**零重依赖**（pdfjs/mammoth/xlsx/fflate 只进 parseWorker 子进程——
  * 隔离边界第二十九轮一：解析不占 daemon 主线程，截止/取消由父进程执行边界强制）。
  *
  * 缓存 schema v2（第二十九轮二）：sourceHash 一致**不能**代替结构与版本校验——
- * cacheSchema/kind/parserName/parserVersion/budgets/页码连续性/文本预算全部核对；
+ * cacheSchema/kind/parserName/parserVersion/budgets/页码连续性/完整提取口径全部核对；
  * 校验不过=缓存无效（预览侧按需重提，组装侧 fail-closed 不派发）。
  */
 
 // ---------- 执行边界限额（父进程强制） ----------
-export const PARSE_CONCURRENCY = 1; // 串行解析：内存上限=单 worker 320MB（并发=排队）
+export const PARSE_CONCURRENCY = 1; // 串行解析：单 worker 内存受下面资源常量约束（并发=排队）
 export const PARSE_QUEUE_MAX = 4; // 等待队列上限：超=parse-busy 明确拒绝（不悬挂）
 export const PARSE_DEADLINE_MS = 30_000; // 整体截止：覆盖加载、逐页/逐项提取、结果传输与收拢
 export const PARSE_KILL_GRACE_MS = 2_000; // SIGTERM→SIGKILL 升级窗口
 export const PARSE_MEMORY_LIMIT_MB = 768; // 子进程 --max-old-space-size（R71：真实 XLSX 单表 73MiB XML+全表对象超 320——按真件上调；仍为硬界，非无界）
 export const PARSE_TOTAL_MEMORY_LIMIT_BYTES = 896 * 1024 * 1024; // 整进程提交内存硬界（R71 随 V8 上限同步上调；Job Object PROCESS_MEMORY 仍为硬界）
-export const PARSE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024; // 单次响应 JSON 上限（防御性——worker 侧已限输出）
-
-// ---------- PDF 限额（解析侧执行） ----------
-export const PDF_MAX_BYTES = 20 * 1024 * 1024;
-export const PDF_MAX_PAGES = 200;
-export const PDF_PAGE_TEXT_MAX = 64 * 1024;
-export const PDF_TOTAL_TEXT_MAX = 512 * 1024;
-
-// ---------- Office 共同限额（zip 预检 + 解析输出） ----------
-/**
- * R71：Office 原件上限 20MiB→**32MiB**（用户真实 PPT 22.54MiB 被拦——渲染器
- * RECOMMENDED_ZIP_LIMITS（4000 条目/单条目 32MiB/总量 256MiB/媒体 192MiB）与解析池
- * ZIP 护栏（1500/64MiB/160MiB）均远高于该档，20MiB 只是入口常量过紧）。
- * **分道**：此值只管「保存原件+本地预览+视觉字节通道」；文本提取输出仍受
- * PARSE_TOTAL_TEXT_MAX/SLIDES_MAX_SLIDES 等预算约束（预览扩容不等于 AI 拿到全文）。
- */
-export const OFFICE_MAX_BYTES = 32 * 1024 * 1024; // 原件上限（DOCX/XLSX/PPTX）
-export const CSV_MAX_BYTES = 5 * 1024 * 1024;
-export const ZIP_MAX_ENTRIES = 1_500;
-export const ZIP_ENTRY_MAX_BYTES = 128 * 1024 * 1024; // 单条目声明解压上限（R71：真实 XLSX 单表 XML 解压 73.4MiB 被 64MiB 拒——同 PPT 容量同类；zip 炸弹护栏由条目数+总量+解析子进程 Job Object 内存/截止共同承担）
-export const ZIP_TOTAL_MAX_BYTES = 160 * 1024 * 1024; // 全部条目声明解压总量上限
-export const DOCX_PARAGRAPH_MAX = 10_000;
-export const SLIDES_MAX_SLIDES = 200;
-export const SHEET_MAX_SHEETS = 40;
-export const SHEET_CELL_MAX_BYTES = 4_096; // 单单元格文本
-export const SHEET_PREVIEW_ROWS = 200; // 预览窗口（行）
-export const SHEET_PREVIEW_COLS = 32; // 预览窗口（列）
-export const SHEET_INJECT_DEFAULT_ROWS = 50; // 注入默认窗口（未选范围时=有界默认，非全量）
+// ---------- 模型输入摘录窗（不限制原件、完整解析缓存或本地预览） ----------
+export const SHEET_INJECT_DEFAULT_ROWS = 50;
 export const SHEET_INJECT_DEFAULT_COLS = 16;
-export const PARSE_TOTAL_TEXT_MAX = 512 * 1024; // 各类提取文本总量上限
 
 /** 提取缓存公共头。 */
 export interface ExtractCacheCommon {
@@ -55,7 +28,7 @@ export interface ExtractCacheCommon {
   parserName: string;
   parserVersion: string;
   extractedAt: number;
-  /** 提取时使用的输出预算（key→bytes）——预算口径变化=缓存作废（防旧小预算冒充新口径）。 */
+  /** 提取口径标记（有限数值）；变化使旧缓存失效，容量不写 Infinity/JSON null。 */
   budgets: Record<string, number>;
   totalTextBytes: number;
   truncatedTotal: boolean;
@@ -79,7 +52,7 @@ export interface SheetCacheSheet {
   name: string;
   rowCount: number;
   colCount: number;
-  /** 预览窗口内单元格值（字符串化；公式无缓存值=「公式无缓存值」占位）。 */
+  /** 完整工作表单元格值（字符串化；公式无缓存值=「公式无缓存值」占位）。 */
   cells: string[][];
   merges: Array<[number, number, number, number]>; // [r1,c1,r2,c2] 0 基含端
   rowTruncated: boolean;
@@ -117,12 +90,9 @@ export type ExtractCache = ExtractCacheCommon & (
 
 /** 当前预算口径（校验既有缓存是否按现口径产出）。 */
 export function currentBudgetsFor(kind: ExtractCache['kind']): Record<string, number> {
-  switch (kind) {
-    case 'pdf': return { pageText: PDF_PAGE_TEXT_MAX, totalText: PDF_TOTAL_TEXT_MAX };
-    case 'docx': return { totalText: PARSE_TOTAL_TEXT_MAX };
-    case 'sheet': return { cellText: SHEET_CELL_MAX_BYTES, totalText: PARSE_TOTAL_TEXT_MAX };
-    case 'slides': return { slideText: PDF_PAGE_TEXT_MAX, totalText: PARSE_TOTAL_TEXT_MAX };
-  }
+  // R120: 完整本地解析口径；预览重提旧预算缓存，模型输入另行兼容历史摘录。
+  void kind;
+  return { completePreview: 1 };
 }
 
 // 当前解析器身份（第三十轮三：缓存校验核对**适用解析器与真实版本**——非空字符串不算）。
@@ -145,11 +115,38 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** 仅识别已发布的 v2 预算；这些数值不作为新文件或预览上限。 */
+function legacyBudgetsFor(kind: ExtractCache['kind']): Record<string, number> {
+  switch (kind) {
+    case 'pdf': return { pageText: 65536, totalText: 524288 };
+    case 'docx': return { totalText: 524288 };
+    case 'sheet': return { cellText: 4096, totalText: 524288 };
+    case 'slides': return { slideText: 65536, totalText: 524288 };
+  }
+}
+function sameBudgets(actual: Record<string, unknown>, expected: Record<string, number>): boolean {
+  return Object.keys(actual).length === Object.keys(expected).length
+    && Object.entries(expected).every(([key, value]) => actual[key] === value);
+}
+
+/** 输入允许已知历史摘录，原样保留预算和截断信息；预览仍使用严格入口。 */
+export function validateExtractCacheForInput(rawJson: string | null | undefined, expectedHash: string, kind: ExtractCache['kind']): ExtractCache | null {
+  return validateExtractCache(rawJson, expectedHash, kind, { allowLegacyInput: true });
+}
+
+/** 历史 sheet 未逐格保存截断标记，不能声称完整。 */
+export function extractCacheIsTruncated(cache: ExtractCache): boolean {
+  return cache.truncatedTotal || (cache.kind === 'pdf' ? cache.pages.some((p) => p.truncated)
+    : cache.kind === 'docx' ? cache.htmlTruncated
+    : cache.kind === 'slides' ? cache.slides.some((s) => s.truncated)
+    : cache.budgets.completePreview !== 1 || cache.sheets.some((s) => s.rowTruncated || s.colTruncated));
+}
+
 /**
  * 提取缓存严格校验（第二十九轮二）：结构/版本/预算/来源 hash 逐项核对。
  * 返回 null=缓存无效（调用方决定重提或 fail-closed）；**不抛错**（损坏缓存是数据态）。
  */
-export function validateExtractCache(rawJson: string | null | undefined, expectedHash: string, kind: ExtractCache['kind']): ExtractCache | null {
+export function validateExtractCache(rawJson: string | null | undefined, expectedHash: string, kind: ExtractCache['kind'], options?: { allowLegacyInput?: boolean }): ExtractCache | null {
   const byteLen = (v: unknown): number => typeof v === 'string' ? Buffer.byteLength(v, 'utf8') : -1;
   if (rawJson == null) return null;
   let parsed: unknown;
@@ -165,67 +162,83 @@ export function validateExtractCache(rawJson: string | null | undefined, expecte
   if (typeof c.parserVersion !== 'string' || c.parserVersion !== expectedParser.version) return null;
   if (typeof c.extractedAt !== 'number' || !Number.isFinite(c.extractedAt)) return null;
   if (!isPlainObject(c.budgets)) return null;
-  const expected = currentBudgetsFor(kind);
-  for (const [k, v] of Object.entries(expected)) {
-    if (c.budgets[k] !== v) return null; // 预算口径变化=旧缓存作废
-  }
-  if (typeof c.totalTextBytes !== 'number' || typeof c.truncatedTotal !== 'boolean') return null;
+  const legacy = options?.allowLegacyInput === true && sameBudgets(c.budgets, legacyBudgetsFor(kind));
+  if (!legacy && !sameBudgets(c.budgets, currentBudgetsFor(kind))) return null;
+  if (!Number.isSafeInteger(c.totalTextBytes) || (c.totalTextBytes as number) < 0 || typeof c.truncatedTotal !== 'boolean'
+    || (!legacy && c.truncatedTotal)) return null;
   if (kind === 'pdf') {
     if (typeof c.totalPages !== 'number' || !Array.isArray(c.pages)) return null;
     let pagesSum = 0;
     for (let i = 0; i < c.pages.length; i += 1) {
       const p = c.pages[i];
       if (!isPlainObject(p) || p.page !== i + 1 || typeof p.text !== 'string' || typeof p.truncated !== 'boolean' || typeof p.bytes !== 'number') return null;
-      // 逐层字节一致（第三十轮三：伪造外壳——超预算字符串/bytes 与实际不符即拒）。
+      // 逐层字节一致；bytes 与实际不符即拒。
       if (p.bytes !== byteLen(p.text)) return null;
-      if (p.bytes > PDF_PAGE_TEXT_MAX) return null;
+      if (!legacy && p.truncated) return null;
+      if (legacy && p.bytes > 65536) return null;
       pagesSum += p.bytes as number;
     }
-    if (c.pages.length > PDF_MAX_PAGES || c.totalPages !== c.pages.length) return null;
-    if (c.totalTextBytes !== pagesSum) return null;
+    if (!Number.isSafeInteger(c.totalPages) || (c.totalPages as number) < c.pages.length
+      || (c.totalPages !== c.pages.length && !(legacy && c.truncatedTotal))) return null;
+    // 旧 PDF 在总预算切断末页时，totalTextBytes 未累计该页；只接受这个已知形态。
+    const tail = c.pages.at(-1) as { bytes: number; truncated: boolean } | undefined;
+    if (c.totalTextBytes !== pagesSum && !(legacy && c.truncatedTotal && tail?.truncated
+      && pagesSum === 524288 && c.totalTextBytes === pagesSum - tail.bytes)) return null;
+    if (legacy && (pagesSum > 524288 || c.pages.length > 200)) return null;
     return parsed as unknown as ExtractCache;
   }
   if (kind === 'docx') {
     if (typeof c.text !== 'string' || typeof c.html !== 'string' || typeof c.htmlTruncated !== 'boolean' || typeof c.paragraphCount !== 'number') return null;
     if (c.totalTextBytes !== byteLen(c.text)) return null;
-    if (byteLen(c.text) > PARSE_TOTAL_TEXT_MAX) return null;
+    if ((!legacy && c.htmlTruncated) || !Number.isSafeInteger(c.paragraphCount) || (c.paragraphCount as number) < 0) return null;
+    if (legacy && ((c.totalTextBytes as number) > 524288 || byteLen(c.html) > 786432 || (c.paragraphCount as number) > 10000)) return null;
     return parsed as unknown as ExtractCache;
   }
   if (kind === 'sheet') {
     if (c.sourceFormat !== 'xlsx' && c.sourceFormat !== 'csv') return null;
-    if (typeof c.encoding !== 'string' || !Array.isArray(c.sheets) || c.sheets.length === 0 || c.sheets.length > SHEET_MAX_SHEETS) return null;
+    if (typeof c.encoding !== 'string' || !Array.isArray(c.sheets) || c.sheets.length === 0) return null;
+    let sheetsSum = 0;
     for (const sh of c.sheets) {
       if (!isPlainObject(sh) || typeof sh.name !== 'string' || typeof sh.rowCount !== 'number' || typeof sh.colCount !== 'number'
         || !Array.isArray(sh.cells) || !Array.isArray(sh.merges) || typeof sh.rowTruncated !== 'boolean' || typeof sh.colTruncated !== 'boolean' || typeof sh.formulaMissing !== 'boolean') return null;
-      if (sh.cells.length > SHEET_PREVIEW_ROWS) return null;
+      if (!Number.isSafeInteger(sh.rowCount) || !Number.isSafeInteger(sh.colCount) || (sh.rowCount as number) < 0 || (sh.colCount as number) < 0 || (!legacy && (sh.rowTruncated || sh.colTruncated || sh.cells.length !== sh.rowCount))
+        || sh.cells.length > (sh.rowCount as number)) return null;
+      if (legacy && (sh.cells.length > 200 || (!c.truncatedTotal && sh.cells.length !== Math.min(sh.rowCount as number, 200))
+        || sh.rowTruncated !== ((sh.rowCount as number) > 200) || sh.colTruncated !== ((sh.colCount as number) > 32))) return null;
       let sheetSum = 0;
       for (const row of sh.cells) {
-        if (!Array.isArray(row) || row.length > SHEET_PREVIEW_COLS) return null;
+        if (!Array.isArray(row) || row.length > (sh.colCount as number) || (legacy && row.length > 32)) return null;
         for (const cell of row) {
           if (typeof cell !== 'string') return null;
           const b = byteLen(cell);
-          if (b > SHEET_CELL_MAX_BYTES) return null;
+          if (legacy && b > 4096) return null;
           sheetSum += b;
         }
       }
-      sheetSum;
-      void sheetSum;
+      sheetsSum += sheetSum;
+      for (const merge of sh.merges) {
+        if (!Array.isArray(merge) || merge.length !== 4 || !merge.every((v: unknown) => Number.isSafeInteger(v))) return null;
+      }
     }
-    if (typeof c.totalTextBytes !== 'number' || c.totalTextBytes > PARSE_TOTAL_TEXT_MAX) return null;
+    if (legacy && (c.sheets.length > 40 || (c.totalTextBytes as number) > (c.sourceFormat === 'csv' ? 528384 : 655360))) return null;
+    // 旧 CSV 总字节统计包含预览窗口之外的已解析行/列。
+    if (c.totalTextBytes !== sheetsSum && !(legacy && c.sourceFormat === 'csv' && (c.totalTextBytes as number) >= sheetsSum)) return null;
     return parsed as unknown as ExtractCache;
   }
   // slides
-  if (typeof c.totalSlides !== 'number' || !Array.isArray(c.slides) || c.slides.length === 0 || c.slides.length > SLIDES_MAX_SLIDES) return null;
+  if (typeof c.totalSlides !== 'number' || !Array.isArray(c.slides) || c.slides.length === 0) return null;
   let slidesSum = 0;
   for (let i = 0; i < c.slides.length; i += 1) {
     const sl = c.slides[i];
     if (!isPlainObject(sl) || sl.slide !== i + 1 || typeof sl.text !== 'string' || typeof sl.notes !== 'string' || typeof sl.truncated !== 'boolean') return null;
     const tb = byteLen(sl.text);
     const nb = byteLen(sl.notes);
-    if (tb < 0 || nb < 0 || tb > PDF_PAGE_TEXT_MAX || nb > PDF_PAGE_TEXT_MAX) return null;
+    if (tb < 0 || nb < 0 || (!legacy && sl.truncated) || (legacy && (tb > 65536 || nb > 65536))) return null;
     slidesSum += tb + nb; // 备注计入总量（第三十轮三）
   }
-  if (c.totalTextBytes !== slidesSum) return null;
+  if (c.totalTextBytes !== slidesSum || !Number.isSafeInteger(c.totalSlides) || (c.totalSlides as number) < c.slides.length
+    || (c.totalSlides !== c.slides.length && !(legacy && c.truncatedTotal))) return null;
+  if (legacy && (slidesSum > 524288 || c.slides.length > 200)) return null;
   return parsed as unknown as ExtractCache;
 }
 
@@ -238,7 +251,7 @@ export interface ParseJob {
   /** 托管副本绝对路径（worker 自读并核对 sha256——读取时点完整性）。 */
   blobPath: string;
   expectedHash: string;
-  /** pptx-pages 专用：pages JSON 输出文件（IPC 响应有 4MB 防御上限——大载荷走文件，
+  /** pptx-pages 专用：pages JSON 输出文件（大载荷走文件，
    * 父进程在响应后读取并校验）。 */
   outPath?: string;
   /** 受控故障注入（仅 ZS_TEST_PARSE_HOOKS=1 时由池附加——生产不设）。 */
@@ -314,7 +327,7 @@ export function renderSheetWindow(
   let bounded = false;
   if (spec == null || spec.trim().length === 0) {
     const first = cache.sheets[0]!;
-    range = { sheetName: first.name, r1: 0, c1: 0, r2: Math.min(first.rowCount, SHEET_INJECT_DEFAULT_ROWS) - 1, c2: Math.min(first.colCount, SHEET_INJECT_DEFAULT_COLS) - 1 };
+    range = { sheetName: first.name, r1: 0, c1: 0, r2: Math.min(first.rowCount, first.cells.length, SHEET_INJECT_DEFAULT_ROWS) - 1, c2: Math.min(first.colCount, SHEET_INJECT_DEFAULT_COLS) - 1 };
     if (range.r2 < 0) range.r2 = 0;
     if (range.c2 < 0) range.c2 = 0;
     bounded = true;
@@ -330,9 +343,9 @@ export function renderSheetWindow(
   if (range.r1 >= sheet.rowCount || range.c1 >= sheet.colCount) {
     return { ok: false, error: `注入范围越界：${windowLabel} 超出工作表「${sheet.name}」实际 ${sheet.rowCount}×${sheet.colCount}` };
   }
-  // 缓存预览窗口（200 行×32 列）之外没有真实数据——不得以空串冒充（如实拒绝）。
-  const winR = Math.min(sheet.rowCount, SHEET_PREVIEW_ROWS);
-  const winC = Math.min(sheet.colCount, SHEET_PREVIEW_COLS);
+  // 完整缓存范围之外不得以空串冒充。
+  const winR = Math.min(sheet.rowCount, sheet.cells.length);
+  const winC = cache.budgets.completePreview === 1 ? sheet.colCount : Math.min(sheet.colCount, 32);
   if (range.r2 >= winR || range.c2 >= winC) {
     return { ok: false, error: `注入范围超出可注入窗口（${colNameOf(range.c1)}${range.r1 + 1}:${colNameOf(range.c2)}${range.r2 + 1} → 窗口上限 ${colNameOf(winC - 1)}${winR}；更大数据请拆分范围或导出为文本附件）——不以窗口外空数据冒充` };
   }

@@ -93,7 +93,7 @@ describe('R82 explicit project write contracts (isolated fake/protocol, zero rea
     await f.grant(true,0);const t=await f.send();const adapter=new FakeRuntimeAdapter({turnScripts:[[{kind:'writeFile',path:'bounded.txt',content:'x'.repeat(256*1024+1)},{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',changeSummary:'独立容量工程夹具',files:['bounded.txt'],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}]]});
     const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r82-budget',appDataDir:f.data});for(let n=0;n<8&&await worker.runOnce();n++);
     const cs=f.db.prepare('SELECT id FROM change_sets WHERE task_id=?').get(t.taskId) as {id:string};
-    const r=await f.raw('changeset.readSnapshot',{projectId:f.p,taskId:t.taskId,changeSetId:cs.id,path:'bounded.txt'});expect(r.ok).toBe(true);expect(JSON.stringify(r.data)).toContain('256 KiB');expect(JSON.stringify(r.data).length).toBeLessThan(4096);
+    const r=await f.raw('changeset.readSnapshot',{projectId:f.p,taskId:t.taskId,changeSetId:cs.id,path:'bounded.txt'});expect(r.ok).toBe(true);expect(JSON.stringify(r.data)).toContain('x'.repeat(256*1024+1));
   }finally{f.db.close();}});
   it('revocation invalidates frozen task; changing member config does not silently elevate',async()=>{const f=await fixture();try{
     await f.grant(true,0);const t=await f.send();expect(effectiveTaskWriteAccess(f.db,t.taskId,f.member,'fake').modificationAuthorized).toBe(true);

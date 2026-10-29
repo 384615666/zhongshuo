@@ -1,12 +1,6 @@
 /**
- * PPTX 静态页预览（DEV-24 M3；第三十七轮四建立，第三十八轮四重写）：受控转换+版本绑定缓存+分列。
- * - 真实幻灯片列表（sldIdLst 顺序，含跳号）；当前页内容（形状坐标/文本/图片内联）；缩放=SVG 矢量；
- * - 重活进 parsePool 可终止子进程（kind='pptx-pages'，载荷走 outPath 文件）；
- * - 缓存命中也核对原件（readVerifiedBlob 先行——原件损坏不再回旧缓存）；
- * - 严格缓存校验（schema 2：结构/页序/尺寸/字节预算/SVG 白名单/转换器版本）；
- * - 五缺陷反例（第三十八轮确认）：①纯图表页静默白页→显式未渲染标注；②400 字截 300 不标→
- *   textTruncated；③XML 实体双重转义→先解码再安全输出；④277748B SVG 超 220KB 预算放行→
- *   按 UTF-8 字节核对+截断标注；⑤异常缓存（foreignObject/onclick/错页序/非法尺寸）过校验→拒。
+ * R120 静态页预览：完整页序、形状文本/图片/备注、超旧容量仍可预览。
+ * 保留不支持对象占位、XML实体、原件核验及SVG白名单反例。
  */
 import { describe, expect, it, afterAll, beforeAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
@@ -17,7 +11,7 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { makePptxPagesSample, makePng } from '../../scripts/lib/craftDocuments.mjs';
 import { safeUnzipWith as safeUnzip } from '../../src/daemon/zipGuard.ts';
-import { buildPptxPages, validatePptxPagesCache, svgWellFormed, PAGE_SVG_MAX_BYTES, PPTX_PAGES_CONVERTER_VERSION } from '../../src/daemon/pptxPages.ts';
+import { buildPptxPages, validatePptxPagesCache, svgWellFormed, PPTX_PAGES_CONVERTER_VERSION } from '../../src/daemon/pptxPages.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
@@ -137,27 +131,27 @@ describe('PPTX 静态页预览：受控转换（parsePool 子进程路径）', (
     expect(p2.slides[0]!.unsupportedKinds).toContain('组合形状');
   }, 60_000);
 
-  it('反例②：形状文本超字节预算截断必须置 textTruncated（旧实现 400 字无声截 300 不标）', () => {
+  it('形状长文本越过旧字节预算后完整保留', () => {
     const emu = 9525;
-    const long = '中'.repeat(500); // 500 字=1500B——SHAPE_TEXT_MAX_BYTES=1200B 截断（400 字整=预算内）
+    const long = '中'.repeat(500); // 1500B，超过旧1200B形状文本门槛
     const bytes = makePptxPagesSample({
       slides: [{ no: 1, shapes: [{ x: 50 * emu, y: 50 * emu, cx: 600 * emu, cy: 200 * emu, texts: [long] }] }],
     });
     const files = safeUnzip(bytes);
     const pages = buildPptxPages(files, (n) => files[n], sha(bytes));
     const s1 = pages.slides[0]!;
-    expect(s1.textTruncated).toBe(true); // 截断可见
+    expect(s1.textTruncated).toBe(false); // 完整文本
     const shown = /中+/.exec(s1.svg)?.[0]?.length ?? 0;
-    expect(shown).toBe(400); // 1200B=400 字（旧实现按字符固定截 300——字节口径下 400 且有标记）
-    expect(s1.truncated).toBe(false); // 页级预算未触
-    // 超预算长文本（3 字/字×5000 字=15000B>1200B）→截断+flag+不再固定 300。
+    expect(shown).toBe(500); // 保留全部500字
+    expect(s1.truncated).toBe(false); // 无容量截断
+    // 15000B长文本同样完整保留。
     const longer = '汉'.repeat(5000);
     const bytes2 = makePptxPagesSample({ slides: [{ no: 1, shapes: [{ x: 0, y: 0, cx: 600 * emu, cy: 400 * emu, texts: [longer] }] }] });
     const f2 = safeUnzip(bytes2);
     const p2 = buildPptxPages(f2, (n) => f2[n], sha(bytes2));
-    expect(p2.slides[0]!.textTruncated).toBe(true);
+    expect(p2.slides[0]!.textTruncated).toBe(false);
     const shown2 = /汉+/.exec(p2.slides[0]!.svg)?.[0]?.length ?? 0;
-    expect(shown2).toBe(400); // 1200B=400 字（不是旧实现的 300）
+    expect(shown2).toBe(5000); // 全部5000字
   }, 60_000);
 
   it('反例③：XML 实体先解码再安全输出——A &amp; B 不再变成 A &amp;amp; B', () => {
@@ -183,7 +177,7 @@ describe('PPTX 静态页预览：受控转换（parsePool 子进程路径）', (
     expect(p2.slides[0]!.svg).toContain('中文');
   }, 60_000);
 
-  it('反例④：SVG 预算按 UTF-8 字节核对——350 形状×200 汉字（旧 277748B 放行）截断标注', () => {
+  it('350形状SVG越过旧220KB预算仍完整渲染', () => {
     const emu = 9525;
     const shapes = Array.from({ length: 350 }, (_, i) => ({
       x: (i % 7) * 90 * emu, y: Math.floor(i / 7) * 40 * emu, cx: 80 * emu, cy: 30 * emu,
@@ -193,11 +187,11 @@ describe('PPTX 静态页预览：受控转换（parsePool 子进程路径）', (
     const files = safeUnzip(bytes);
     const pages = buildPptxPages(files, (n) => files[n], sha(bytes));
     const s1 = pages.slides[0]!;
-    // 硬界：放行的每页 SVG 必须 ≤ 预算（字节口径）。
-    expect(byteLen(s1.svg)).toBeLessThanOrEqual(PAGE_SVG_MAX_BYTES);
-    // 超限页明确标注（丢图片内联救不回纯文本页→整页「未渲染」标注——不静默放行超预算内容）。
-    expect(s1.truncated).toBe(true);
-    expect(s1.svg).toContain('超静态预览上限');
+    // 越过旧220KB门槛仍保留实际内容。
+    expect(byteLen(s1.svg)).toBeGreaterThan(220_000);
+    // 不再用整页占位替代真实内容。
+    expect(s1.truncated).toBe(false);
+    expect(s1.svg).toContain('汉'.repeat(200));
   }, 60_000);
 
   it('反例⑤：异常缓存不再过校验——foreignObject/onclick/错页序/非法尺寸/超预算字节/SVG 白名单', async () => {
@@ -230,11 +224,11 @@ describe('PPTX 静态页预览：受控转换（parsePool 子进程路径）', (
     expect(validatePptxPagesCache(JSON.stringify(evil5), h)).toBeNull();
     const legacy = JSON.stringify({ schema: 1, sourceHash: h, pxW: 1280, pxH: 720, slides: [{ slide: 1, svg: '<svg/>', truncated: false, shapes: 1, images: 0, notes: '' }] });
     expect(validatePptxPagesCache(legacy, h)).toBeNull(); // 旧 schema 全量作废
-    // ⑥超预算字节 SVG（内容合法但超界）。
+    // ⑥超过旧字节门槛但内容合法的SVG仍有效。
     const evil6 = JSON.parse(JSON.stringify(good)) as typeof good;
     evil6.slides[0]!.svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720"><text x="1" y="1" font-size="12" fill="#1e293b" font-family="system-ui,'Microsoft YaHei',sans-serif">${'汉'.repeat(80_000)}</text></svg>`;
-    expect(byteLen(evil6.slides[0]!.svg)).toBeGreaterThan(PAGE_SVG_MAX_BYTES);
-    expect(validatePptxPagesCache(JSON.stringify(evil6), h)).toBeNull();
+    expect(byteLen(evil6.slides[0]!.svg)).toBeGreaterThan(220_000);
+    expect(validatePptxPagesCache(JSON.stringify(evil6), h)).not.toBeNull();
     void PPTX_PAGES_CONVERTER_VERSION;
   }, 60_000);
 
@@ -276,10 +270,12 @@ describe('PPTX 静态页预览：受控转换（parsePool 子进程路径）', (
     expect(pages.slides[0]!.images).toBe(0);
   }, 180_000);
 
-  it('超页数明确拒绝（不静默截断列表）', () => {
-    const many = Array.from({ length: 61 }, (_, i) => ({ no: i + 1, shapes: [{ x: 0, y: 0, cx: 1000, cy: 1000, texts: [`页${i + 1}`] }] }));
+  it('超过旧60页边界后完整保留列表', () => {
+    const many = Array.from({ length: 61 }, (_, i) => ({ no: i + 1, shapes: [{ x: 0, y: 0, cx: 952500, cy: 952500, texts: [`页${i + 1}`] }] }));
     const bytes = makePptxPagesSample({ slides: many });
     const files = safeUnzip(bytes);
-    expect(() => buildPptxPages(files, (n) => files[n], sha(bytes))).toThrow(/超静态预览上限/);
+    const pages = buildPptxPages(files, (n) => files[n], sha(bytes));
+    expect(pages.slides).toHaveLength(61);
+    expect(pages.slides[60]!.svg).toContain('页61');
   }, 60_000);
 });

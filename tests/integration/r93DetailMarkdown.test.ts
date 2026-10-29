@@ -719,14 +719,16 @@ describe('R93 complete Markdown detail and bounded downstream reading', () => {
       await worker.runOnce();
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({ status: 'DONE' });
       const final = f.db.prepare("SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY rowid DESC LIMIT 1").get(sent.taskId) as { id: string; body_json: string };
-      expect(JSON.parse(final.body_json).detailMarkdown).toContain('R93_DETAIL_TAIL_FALLBACK');
-      expect(f.db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(final.id)).toEqual({ n: 0 });
+      expect(JSON.parse(final.body_json).detailMarkdown).toBeUndefined();
+      const blob=f.db.prepare('SELECT a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?').get(final.id) as {blob_path:string};
+      expect(readFileSync(blob.blob_path,'utf8')).toBe(detail);
+      expect(f.db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(final.id)).toEqual({ n: 1 });
       await submitThread(f, sent.threadId, '继续读取降级原文');
       await worker.runOnce();
       const envelope = latestContext(f);
       const rendered = renderTurnBundle(envelope);
-      expect(rendered).toContain('【完整详情（附件不可用，原文保留）】');
-      expect(rendered).toContain('R93_DETAIL_TAIL_FALLBACK');
+      expect(rendered).toContain('完整详情.md');
+      expect(rendered).toContain('截断');
     } finally {
       await adapter?.closeAllSessions();
       f.close();

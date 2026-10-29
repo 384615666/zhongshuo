@@ -11,10 +11,8 @@ import {existsSync,mkdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import {atomicWriteFile} from '../contracts/atomicFile.ts';
-import {ATT_MAX_BYTES} from './attachments.ts';
 import {isSafeDocumentFilename} from '../contracts/document.ts';
 
-export const DETAIL_MARKDOWN_MAX_BYTES=ATT_MAX_BYTES;
 export const DETAIL_ATTACHMENT_ID_PREFIX='matt_detail_';
 export const DETAIL_ARTIFACT_ID_PREFIX='art_detail_';
 
@@ -50,7 +48,6 @@ export function persistDetailMarkdown(input:DetailMarkdownPersistInput):DetailMa
   if(bytes.length===0||input.markdown.trim().length===0)return{status:'failed',code:'EMPTY_DETAIL',message:'详情为空'};
   const filename=input.filename??'完整详情.md';
   if(!isSafeDocumentFilename(filename))return{status:'failed',code:'INVALID_FILENAME',message:'文档文件名不安全'};
-  if(bytes.length>DETAIL_MARKDOWN_MAX_BYTES)return{status:'too-large',bytes:bytes.length,maxBytes:DETAIL_MARKDOWN_MAX_BYTES,message:'完整详情超过托管文本上限；保留原文，不生成附件'};
   const message=input.db.prepare(
     `SELECT id,project_id,conversation_id,thread_id,task_id,author_type,author_id,status
        FROM messages WHERE id=?`,

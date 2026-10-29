@@ -10,13 +10,12 @@
  * - §6.3 分析基线默认排除：VCS 内部目录、依赖缓存、构建目录和常见凭据文件——按**命名
  *   清单**排除（不按 "." 前缀一刀切：.editorconfig/.gitignore 等非凭据配置可见；
  *   .env.example 是文档惯例，不排）。
- * - §13.2 大项目处理：忽略依赖和构建目录；设上限并显示排除项。
+ * - §13.2 大项目处理：忽略依赖和构建目录并显示排除项。
  * - §6.2 可实现隔离的边界：有广泛本机读取权限的 CLI 仍可能绕过应用接口——本清单只声明
  *   **输入清单过滤范围**，不构成 runtime 文件沙箱认证。
  *
  * 路径匹配：段与文件名比较用小写（Windows 大小写不敏感；分隔符统一 '/'）——别名/大小写
- * 变体（Node_Modules/DIST/.ENV）同等排除。上限按**过滤后**计数：扫描窗口放大，避免排除项
- * 耗尽名额使合法文件不可发现；截断如实标注。
+ * 变体（Node_Modules/DIST/.ENV）同等排除。默认完整扫描与列举；测试可显式注入过滤后条数上限，截断如实标注。
  */
 import { scanDirectoryFiles } from './preimage.ts';
 import { existsSync, statSync } from 'node:fs';
@@ -53,11 +52,11 @@ export interface ListingScopeOptions {
 
 /** 生成项目范围授权清单（root 必须存在且为目录——否则返回 null，不阻断组装）。 */
 export function projectScopedFileListing(root: string, options: ListingScopeOptions = {}): AuthorizedFileListing | null {
-  const maxEntries = options.maxEntries ?? 200;
+  const maxEntries = options.maxEntries;
   try {
     if (!existsSync(root) || !statSync(root).isDirectory()) return null;
-    // 扫描窗口放大：过滤后计数到 maxEntries——排除项不占用合法文件的名额。
-    const scan = scanDirectoryFiles(root, maxEntries * 3 + 128);
+    // 完整扫描后应用授权过滤；可选测试上限不缩小扫描范围。
+    const scan = scanDirectoryFiles(root);
     let excludedInternal = 0;
     const files: string[] = [];
     for (const f of scan.files) {
@@ -68,8 +67,8 @@ export function projectScopedFileListing(root: string, options: ListingScopeOpti
       if (isCredentialFileName(fileName.toLowerCase())) { excludedInternal += 1; continue; }
       files.push(rel);
     }
-    const truncated = scan.truncated || files.length > maxEntries;
-    const listed = files.slice(0, maxEntries);
+    const truncated = scan.truncated || (maxEntries != null && files.length > maxEntries);
+    const listed = maxEntries == null ? files : files.slice(0, maxEntries);
     const parts: string[] = [];
     if (scan.failedDirs.length > 0) parts.push(`子树读取失败 ${scan.failedDirs.length} 处（受影响文件不在清单内）`);
     if (scan.rejectedEntries.length > 0) parts.push(`物理路径拒绝 ${scan.rejectedEntries.length} 项（越界链接/环——不可读）`);

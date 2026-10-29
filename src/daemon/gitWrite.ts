@@ -16,7 +16,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve, join, dirname, relative, isAbsolute, sep } from 'node:path';
-import { statSync, lstatSync, realpathSync, openSync, readSync, closeSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, fstatSync, statSync, lstatSync, realpathSync, openSync, closeSync, writeFileSync, renameSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand, getReceipt } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
@@ -40,7 +40,6 @@ export class GitWriteError extends Error {
   }
 }
 
-const MAX_PATHS_PER_CALL = 100;
 
 // ---------- 基础设施 ----------
 
@@ -52,7 +51,7 @@ function writeEnv(literalPaths: boolean): NodeJS.ProcessEnv {
 }
 
 async function mustGit(args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv; what: string }): Promise<GitCapture> {
-  const cap = await captureGit(args, { cwd: options.cwd, capBytes: options.capBytes ?? 1024 * 1024, env: options.env });
+  const cap = await captureGit(args, { cwd: options.cwd, env: options.env });
   if (cap.spawnError != null) throw new GitWriteError('GIT_COMMAND_FAILED', `git ${options.what} 无法执行（${cap.spawnError}）`);
   if (cap.exitCode !== 0) {
     throw new GitWriteError('GIT_COMMAND_FAILED', `git ${options.what} 失败（exit=${cap.exitCode}）：${cap.stderr.trim().slice(0, 200)}`);
@@ -156,7 +155,7 @@ function assertWritable(db: ZhongshuoDatabase, projectId: string, projectRoot: s
 
 /** 当前 porcelain（写操作的状态事实源；截断如实失败，不当空结果）。 */
 async function currentStatus(loc: RepoLocation): Promise<GitStatusEntry[]> {
-  const cap = await mustGit(['-C', loc.worktreeRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { capBytes: 256 * 1024, what: 'status' });
+  const cap = await mustGit(['-C', loc.worktreeRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { what: 'status' });
   if (cap.truncated) throw new GitWriteError('GIT_COMMAND_FAILED', 'git status 输出超采集上限——状态列表不完整，写操作拒绝（请先清理或缩小变更面）');
   return parsePorcelainEntries(cap.stdout.toString('utf8'));
 }
@@ -264,8 +263,8 @@ export interface StageOutcome {
 export async function gitStage(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; paths: string[]; journal: JournalInput }): Promise<StageOutcome> {
   const replay = replayIfReceipted<StageOutcome>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
-  if (input.paths.length === 0 || input.paths.length > MAX_PATHS_PER_CALL) {
-    throw new GitWriteError('VALIDATION_INVALID', `paths 数量须在 1..${MAX_PATHS_PER_CALL}`);
+  if (input.paths.length === 0) {
+    throw new GitWriteError('VALIDATION_INVALID', 'paths 不能为空');
   }
   const loc = await repoGuard(input.projectRoot, input.paths);
   return withRepoWriteLock(loc.worktreeRoot, async () => {
@@ -328,8 +327,8 @@ async function adjudicatePendingStage(loc: RepoLocation, paths: string[]): Promi
 export async function gitUnstage(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; paths: string[]; journal: JournalInput }): Promise<StageOutcome> {
   const replay = replayIfReceipted<StageOutcome>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
-  if (input.paths.length === 0 || input.paths.length > MAX_PATHS_PER_CALL) {
-    throw new GitWriteError('VALIDATION_INVALID', `paths 数量须在 1..${MAX_PATHS_PER_CALL}`);
+  if (input.paths.length === 0) {
+    throw new GitWriteError('VALIDATION_INVALID', 'paths 不能为空');
   }
   const loc = await repoGuard(input.projectRoot, input.paths);
   return withRepoWriteLock(loc.worktreeRoot, async () => {
@@ -359,17 +358,17 @@ export async function gitUnstage(db: ZhongshuoDatabase, input: { projectId: stri
       toUnstage.push(path);
     }
     if (toUnstage.length > 0) {
-      const head = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', '--quiet', 'HEAD'], { capBytes: 4096 });
+      const head = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', '--quiet', 'HEAD'], { });
       if (head.spawnError || head.truncated || ![0,1].includes(head.exitCode ?? -1)) throw new GitWriteError('GIT_COMMAND_FAILED', '取消暂存前无法核实 HEAD');
       if (head.exitCode === 0) {
         await mustGit(['-C', loc.worktreeRoot, 'restore', '--staged', '--', ...toUnstage], { env: writeEnv(true), what: 'restore --staged' });
       } else {
         // A real unborn branch has no HEAD tree to restore. Remove only these
         // index entries; never use rm (which could delete the sole working copy).
-        const symbolic = await mustGit(['-C', loc.worktreeRoot, 'symbolic-ref', 'HEAD'], { capBytes: 4096, what: 'unborn branch' });
+        const symbolic = await mustGit(['-C', loc.worktreeRoot, 'symbolic-ref', 'HEAD'], { what: 'unborn branch' });
         const ref = symbolic.stdout.toString('utf8').trim();
         if (!ref.startsWith('refs/heads/')) throw new GitWriteError('GIT_COMMAND_FAILED', '无法确认首提交前的分支身份');
-        const exists = await captureGit(['-C', loc.worktreeRoot, 'show-ref', '--verify', '--quiet', ref], { capBytes: 4096 });
+        const exists = await captureGit(['-C', loc.worktreeRoot, 'show-ref', '--verify', '--quiet', ref], { });
         if (exists.spawnError || exists.truncated || exists.exitCode !== 1) throw new GitWriteError('GIT_COMMAND_FAILED', 'HEAD 不可读且不能证明分支尚无提交，未改索引');
         await mustGit(['-C', loc.worktreeRoot, 'update-index', '--force-remove', '--', ...toUnstage], { env: writeEnv(true), what: 'unstage unborn index entries' });
       }
@@ -466,12 +465,12 @@ async function baselineDirtyPaths(cs: ChangeSetRowInfo, loc: RepoLocation, chang
       if (inScope) unverifiable.push({ path: wt, reason: '基线前像内容不可用——无法排除用户原有改动，保守跳过' });
       continue;
     }
-    const headBlob = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', `HEAD:${wt}`], { capBytes: 4096 });
+    const headBlob = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', `HEAD:${wt}`], { });
     if (headBlob.exitCode !== 0) {
       dirty.add(wt); // HEAD 无此文件：基线时已是用户未跟踪/新增文件
       continue;
     }
-    const blob = await captureGit(['-C', loc.worktreeRoot, 'cat-file', 'blob', headBlob.stdout.toString('utf8').trim()], { capBytes: 8 * 1024 * 1024 });
+    const blob = await captureGit(['-C', loc.worktreeRoot, 'cat-file', 'blob', headBlob.stdout.toString('utf8').trim()], { });
     if (blob.exitCode !== 0 || blob.truncated) {
       if (inScope) unverifiable.push({ path: wt, reason: 'HEAD 内容读取失败/过大——无法排除用户原有改动，保守跳过' });
       continue;
@@ -670,9 +669,11 @@ async function worktreeMatchesAfter(loc: RepoLocation, projectRel: string, after
   if (st.isDirectory()) return '路径现为目录（文件类型变化）';
   const fd = openSync(fsPath, 'r');
   try {
-    const buf = Buffer.alloc(Math.min(8 * 1024 * 1024, 16 * 1024 * 1024));
-    const read = readSync(fd, buf, 0, buf.length, 0);
-    const actual = createHash('sha256').update(buf.subarray(0, read)).digest('hex');
+    const opened = fstatSync(fd, { bigint: true });
+    const content = readFileSync(fd);
+    const current = fstatSync(fd, { bigint: true });
+    if (BigInt(content.length) !== opened.size || opened.size !== current.size || opened.mtimeNs !== current.mtimeNs) return '读取期间文件变化或读取不完整';
+    const actual = createHash('sha256').update(content).digest('hex');
     if (actual !== after.sha256) return '内容与冻结 after 不一致（任务定型后又被修改）';
     return true;
   } finally {
@@ -698,7 +699,7 @@ const OID_RE = /^[0-9a-f]{40}$/;
 /** 索引 → tree oid（git write-tree）。同文件内容变化、文件模式变化都会改变 tree——
  * 这是提交预览绑定的**内容身份**（不再用 XY/path 列表摘要）。冲突索引/不可写索引非零退出。 */
 async function writeTreeOf(loc: RepoLocation): Promise<string> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'write-tree'], { capBytes: 4096 });
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'write-tree'], { });
   if (cap.spawnError != null || cap.exitCode !== 0) {
     throw new GitWriteError('GIT_COMMAND_FAILED', `git write-tree 失败（exit=${cap.exitCode}）：${cap.stderr.trim().slice(0, 160)}——冲突未解决的索引不能定型为 tree`);
   }
@@ -713,7 +714,7 @@ async function commitTreeOf(loc: RepoLocation, tree: string, parent: string | nu
   const args = ['-C', loc.worktreeRoot, 'commit-tree', tree];
   if (parent != null) args.push('-p', parent);
   args.push('-m', fullMessage);
-  const cap = await mustGit(args, { capBytes: 4096, env: writeEnv(false), what: 'commit-tree' });
+  const cap = await mustGit(args, { env: writeEnv(false), what: 'commit-tree' });
   const oid = cap.stdout.toString('utf8').trim();
   if (!OID_RE.test(oid)) throw new GitWriteError('GIT_COMMAND_FAILED', `commit-tree 输出非提交对象 id：${oid.slice(0, 60)}`);
   return oid;
@@ -728,15 +729,15 @@ async function commitTreeOf(loc: RepoLocation, tree: string, parent: string | nu
 async function updateRefCas(loc: RepoLocation, ref: string, newOid: string, expectedOld: string | null): Promise<{ ok: true } | { ok: false; current: string | null; stderr: string }> {
   // **显式 ref 的比较交换**：不经可变的 HEAD 解引用（第十二轮一）——外部把 HEAD 切到同旧
   // OID 的其他分支/删除重建目标 ref，都不会让本次更新落到未批准的目标上。
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'update-ref', ref, newOid, expectedOld ?? ZERO_OID], { capBytes: 8192 });
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'update-ref', ref, newOid, expectedOld ?? ZERO_OID], { });
   if (cap.spawnError == null && cap.exitCode === 0) return { ok: true };
-  const cur = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', ref], { capBytes: 4096 });
+  const cur = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', ref], { });
   return { ok: false, current: cur.exitCode === 0 && OID_RE.test(cur.stdout.toString('utf8').trim()) ? cur.stdout.toString('utf8').trim() : null, stderr: cap.stderr.trim().slice(0, 200) };
 }
 
 /** 当前分支（symbolic-ref --short）；detached HEAD 返回 null。 */
 async function currentBranchOf(loc: RepoLocation): Promise<string | null> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'symbolic-ref', '--short', 'HEAD'], { capBytes: 4096 });
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'symbolic-ref', '--short', 'HEAD'], { });
   if (cap.exitCode !== 0) return null;
   return cap.stdout.toString('utf8').trim() || null;
 }
@@ -746,7 +747,7 @@ async function currentBranchOf(loc: RepoLocation): Promise<string | null> {
  * 提交并说明原因；不设置全局绕过、不改用户配置。长期方案差异记录于本轮报告。 */
 async function commitWorkflowConflicts(loc: RepoLocation): Promise<string[]> {
   const conflicts: string[] = [];
-  const hooksPathCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'core.hooksPath'], { capBytes: 4096 });
+  const hooksPathCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'core.hooksPath'], { });
   const hooksPath = hooksPathCap.exitCode === 0 && hooksPathCap.stdout.toString('utf8').trim() !== ''
     ? resolve(loc.worktreeRoot, hooksPathCap.stdout.toString('utf8').trim())
     : join(loc.worktreeRoot, '.git', 'hooks');
@@ -759,7 +760,7 @@ async function commitWorkflowConflicts(loc: RepoLocation): Promise<string[]> {
       conflicts.push(`检测到 ${hook} 钩子（${hooksPath}）——内置提交经 commit-tree 构造，不执行任何钩子；为不静默绕过你的工作流，内置提交已阻塞。请用你自己的 git 客户端提交（钩子会正常执行），或临时移除钩子后再用内置提交`);
     }
   }
-  const gpgCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'commit.gpgsign'], { capBytes: 4096 });
+  const gpgCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'commit.gpgsign'], { });
   if (gpgCap.exitCode === 0 && gpgCap.stdout.toString('utf8').trim() === 'true') {
     conflicts.push('commit.gpgsign=true——内置提交（commit-tree）不产生签名；为不静默降级签名要求，内置提交已阻塞。请用你自己的 git 客户端提交（签名正常执行）');
   }
@@ -796,15 +797,15 @@ export async function gitCommitPreview(db: ZhongshuoDatabase, input: { projectId
 async function commitSnapshot(db: ZhongshuoDatabase, loc: RepoLocation, input: { projectId: string; projectRoot: string }): Promise<CommitPreview> {
   {
 
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const head = headCap.exitCode === 0 && OID_RE.test(headCap.stdout.toString('utf8').trim()) ? headCap.stdout.toString('utf8').trim() : null;
     const branch = await currentBranchOf(loc);
     const status = await currentStatus(loc);
     const staged = status.filter((e) => e.category === 'staged');
     // 未合并条目在 porcelain 中同时占 X/Y 列（staged+unstaged 各一条）——去重后呈现。
     const conflicts = [...new Set(status.filter((e) => isUnmergedXy(e.xy)).map((e) => e.path))];
-    const nameCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'user.name'], { capBytes: 4096 });
-    const emailCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'user.email'], { capBytes: 4096 });
+    const nameCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'user.name'], { });
+    const emailCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'user.email'], { });
     const identity = { name: nameCap.exitCode === 0 ? nameCap.stdout.toString('utf8').trim() : null, email: emailCap.exitCode === 0 ? emailCap.stdout.toString('utf8').trim() : null };
     // tree 定型在锁内最后拍快照：预览的 HEAD/分支/状态列表/内容 tree 来自同一时序（产品内
     // 不交错）；外部并发由提交时的 tree 比对 + update-ref CAS 兜底。
@@ -892,7 +893,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
       }
       // pending：HEAD 仍在预期父上=未执行（对象可能已建但未落 ref，安全重执行）；
       // 尾标记命中=已执行（恢复结果）；两者皆非=外部推进——进人工核对，不自动执行。
-      const headCap0 = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+      const headCap0 = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
       const head0 = headCap0.exitCode === 0 && OID_RE.test(headCap0.stdout.toString('utf8').trim()) ? headCap0.stdout.toString('utf8').trim() : null;
       if (head0 !== input.expectedHead) {
         const trailerHit = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
@@ -907,7 +908,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
     } else {
       // 无日志行（第十轮遗留崩溃窗口/外部推进）：HEAD 已离开预期父时先按尾标记核对——
       // 命中=我们的提交已落 ref（恢复）；否则如实按 HEAD 移动拒绝。
-      const headCapN = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+      const headCapN = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
       const headN = headCapN.exitCode === 0 && OID_RE.test(headCapN.stdout.toString('utf8').trim()) ? headCapN.stdout.toString('utf8').trim() : null;
       if (headN !== input.expectedHead) {
         const trailerHitN = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
@@ -933,7 +934,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
     for (const conflict of await commitWorkflowConflicts(loc)) {
       throw new GitWriteError('VALIDATION_INVALID', `提交前置不满足：${conflict}`);
     }
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const headNow = headCap.exitCode === 0 && OID_RE.test(headCap.stdout.toString('utf8').trim()) ? headCap.stdout.toString('utf8').trim() : null;
     if (headNow !== input.expectedHead) {
       throw new GitWriteError('STALE_REVISION', `HEAD 已移动（预览 ${input.expectedHead ?? '空仓库'} → 当前 ${headNow ?? '空仓库'}）——请重新预览后再提交`);
@@ -957,12 +958,12 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
     if (input._between != null) await input._between();
     // 提交后核对（第十二轮一）：**目标 ref** 必须等于本次提交对象（不依赖事后读 HEAD 猜结果）；
     // HEAD 只作附注记录（外部可能已切走——不影响本次副作用的事实认定）。
-    const verifyRef = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { capBytes: 4096 });
+    const verifyRef = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { });
     const refAfter = verifyRef.exitCode === 0 ? verifyRef.stdout.toString('utf8').trim() : null;
-    const verifyHead = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const verifyHead = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const headAfterActual = verifyHead.exitCode === 0 ? verifyHead.stdout.toString('utf8').trim() : null;
     const branchAfter = await currentBranchOf(loc);
-    const treeVerify = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${ourOid}^{tree}`], { capBytes: 4096 });
+    const treeVerify = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${ourOid}^{tree}`], { });
     const treeOk = treeVerify.exitCode === 0 && treeVerify.stdout.toString('utf8').trim() === treeNow;
     const consistent = refAfter === ourOid && treeOk;
     const result: CommitOutcome = {
@@ -994,7 +995,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
 
 /** 近窗提交尾部标记检索（精确行匹配 + 父提交核对——恢复路径的既成事实证明）。 */
 async function findCommitByTrailer(loc: RepoLocation, commandId: string, expectedHead: string | null): Promise<{ oid: string; subject: string } | null> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'log', '-n', '30', `--format=%H%x1f%P%x1f%s%x1f%b%x1e`], { capBytes: 512 * 1024 });
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'log', '-n', '30', `--format=%H%x1f%P%x1f%s%x1f%b%x1e`], { });
   if (cap.exitCode !== 0) return null; // 空仓库/无历史：视为未执行
   const needle = `${COMMIT_TRAILER_KEY}: ${commandId}`;
   for (const record of cap.stdout.toString('utf8').split('\x1e')) {
@@ -1035,12 +1036,12 @@ export async function gitHistory(db: ZhongshuoDatabase, input: { projectId: stri
   const limit = Math.min(Math.max(input.limit ?? 30, 1), 200);
   const cursor = Math.max(input.cursor ?? 0, 0);
   const loc = await repoGuard(input.projectRoot);
-  const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+  const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
   const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
   if (head == null) return { items: [], head: null, hasMore: false };
   const cap = await mustGit(
     ['-C', loc.worktreeRoot, 'log', `--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%b%x1e`, '-n', String(limit + 1), '--skip', String(cursor)],
-    { capBytes: 512 * 1024, what: 'log' },
+    { what: 'log' },
   );
   const oids: string[] = [];
   const items: HistoryItem[] = [];
@@ -1075,9 +1076,6 @@ export async function gitHistory(db: ZhongshuoDatabase, input: { projectId: stri
 
 // ---------- RT-24 剩余（第十一轮·三）：分支/切换、单提交 diff、push/pull、冲突解决、撤销提交 ----------
 
-const RT24_PER_FILE_CAP = 64 * 1024;
-const RT24_TOTAL_CAP = 512 * 1024;
-const RT24_MAX_FILES = 50;
 
 /** 分支名合法性（拒绝控制字符、空格、..、通配与历史改写类符号、前导点杠、@{、结尾 .lock）。 */
 export function validateBranchName(name: string): void {
@@ -1099,7 +1097,7 @@ export interface BranchItem { name: string; oid: string; lastCommitTs: number; u
 
 export async function gitBranchList(input: { projectId: string; projectRoot: string }): Promise<{ current: string | null; branches: BranchItem[]; dirtyCount: number }> {
   const loc = await repoGuard(input.projectRoot);
-  const cap = await mustGit(['-C', loc.worktreeRoot, 'for-each-ref', 'refs/heads', '--format=%(refname:short)\x1f%(objectname)\x1f%(committerdate:unix)\x1f%(upstream:short)'], { capBytes: 64 * 1024, what: 'for-each-ref' });
+  const cap = await mustGit(['-C', loc.worktreeRoot, 'for-each-ref', 'refs/heads', '--format=%(refname:short)\x1f%(objectname)\x1f%(committerdate:unix)\x1f%(upstream:short)'], { what: 'for-each-ref' });
   const branches: BranchItem[] = [];
   for (const line of cap.stdout.toString('utf8').split('\n')) {
     if (line.trim() === '') continue;
@@ -1113,7 +1111,7 @@ export async function gitBranchList(input: { projectId: string; projectRoot: str
   }
   for (const b of branches) {
     if (b.upstream == null) continue;
-    const rv = await mustGit(['-C', loc.worktreeRoot, 'rev-list', '--left-right', '--count', `${b.upstream}...${b.name}`], { capBytes: 1024, what: 'rev-list' });
+    const rv = await mustGit(['-C', loc.worktreeRoot, 'rev-list', '--left-right', '--count', `${b.upstream}...${b.name}`], { what: 'rev-list' });
     const m = /^(\d+)\s+(\d+)\s*$/.exec(rv.stdout.toString('utf8').trim());
     if (m != null) { b.behind = Number(m[1]); b.ahead = Number(m[2]); }
   }
@@ -1126,7 +1124,7 @@ export async function gitBranchList(input: { projectId: string; projectRoot: str
 /** R65：远端真实清单（git remote -v push 侧去重；URL 原样——不做凭据推断）。 */
 export async function gitRemoteList(input: { projectRoot: string }): Promise<{ remotes: Array<{ name: string; url: string }> }> {
   const loc = await repoGuard(input.projectRoot);
-  const cap = await mustGit(['-C', loc.worktreeRoot, 'remote', '-v'], { capBytes: 64 * 1024, what: 'remote -v' });
+  const cap = await mustGit(['-C', loc.worktreeRoot, 'remote', '-v'], { what: 'remote -v' });
   const remotes: Array<{ name: string; url: string }> = [];
   const seen = new Set<string>();
   for (const line of cap.stdout.toString('utf8').split('\n')) {
@@ -1157,7 +1155,7 @@ export async function gitBranchCreate(db: ZhongshuoDatabase, input: { projectId:
     const metadata = existing ? JSON.parse(existing.request_json ?? '{}') as { creationStarted?: boolean; creationRejected?: boolean } : null;
     if (metadata?.creationRejected) throw new GitWriteError('VALIDATION_INVALID', '原分支创建已被 Git 明确拒绝，未覆盖已有分支；可修改输入后重新提交', { operationKnownRejected: true });
     const readTarget = async () => {
-      const r = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.name}`], { capBytes: 4096 });
+      const r = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.name}`], { });
       if (r.exitCode === 1 && !r.spawnError && !r.truncated) return null;
       if (r.exitCode !== 0 || r.spawnError || r.truncated || !OID_RE.test(r.stdout.toString('utf8').trim())) throw new GitWriteError('GIT_COMMAND_FAILED', '目标分支身份读取失败，未当作分支不存在');
       return r.stdout.toString('utf8').trim();
@@ -1170,14 +1168,14 @@ export async function gitBranchCreate(db: ZhongshuoDatabase, input: { projectId:
     }
     if (!existing && target != null) throw new GitWriteError('VALIDATION_INVALID', `分支 ${input.name} 已存在；没有覆盖或切换当前分支`);
     if (existing && metadata?.creationStarted !== false) throw new GitWriteError('STALE_REVISION', '原分支创建结果未能核实，且目标分支当前不存在；保留原身份，不重新创建可能已被删除的分支');
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
     if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `HEAD 已移动（期望 ${input.expectedHead ?? '空'} → 当前 ${head ?? '空'}）——分支将建于用户未确认的位置，请刷新后重试`, metadata?.creationStarted === false ? { operationKnownRejected: true } : undefined);
     if (input.expectedHead == null) throw new GitWriteError('VALIDATION_INVALID', '仓库尚无提交，请先完成第一次提交后再创建分支');
     if (!existing) beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'branch_create', request: { name: input.name, expectedHead: input.expectedHead, creationStarted: false } });
     db.prepare("UPDATE git_operations SET request_json=? WHERE id=? AND status='pending'").run(JSON.stringify({ name: input.name, expectedHead: input.expectedHead, creationStarted: true }), input.journal.commandId);
     const at = input.expectedHead ?? 'HEAD';
-    const create = await captureGit(['-C', loc.worktreeRoot, 'branch', input.name, at], { capBytes: 8192 });
+    const create = await captureGit(['-C', loc.worktreeRoot, 'branch', input.name, at], { });
     if (create.exitCode !== 0) {
       if (await readTarget() == null && create.exitCode != null && !create.spawnError) {
         db.prepare("UPDATE git_operations SET request_json=? WHERE id=? AND status='pending'").run(JSON.stringify({ name: input.name, expectedHead: input.expectedHead, creationStarted: true, creationRejected: true }), input.journal.commandId);
@@ -1219,16 +1217,16 @@ export async function gitCheckout(db: ZhongshuoDatabase, input: { projectId: str
     if (branchNow !== input.expectedBranch) {
       throw new GitWriteError('STALE_REVISION', `当前分支已变化（期望 ${input.expectedBranch} → 实际 ${branchNow ?? 'detached'}）——请刷新后重试`);
     }
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
     if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `HEAD 已移动（期望 ${input.expectedHead ?? '空'} → 当前 ${head ?? '空'}）——请刷新后重试`);
     // checkout 不自动 stash：未提交改动随行；与目标分支冲突时 git 自行拒绝（如实上抛）。
-    const co = await captureGit(['-C', loc.worktreeRoot, 'checkout', input.branch], { capBytes: 32 * 1024 });
+    const co = await captureGit(['-C', loc.worktreeRoot, 'checkout', input.branch], { });
     if (co.exitCode !== 0) {
       throw new GitWriteError('GIT_COMMAND_FAILED', `切换分支失败（未提交改动与目标冲突等）：${co.stderr.trim().slice(0, 200)}——不自动 stash，请先处理本地改动`);
     }
     const branchAfter = await currentBranchOf(loc);
-    const headAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const headAfter = headAfterCap.exitCode === 0 ? headAfterCap.stdout.toString('utf8').trim() : null;
     const status = await currentStatus(loc);
     const dirty = new Set(status.filter((e) => e.category === 'unstaged' || e.category === 'untracked').map((e) => e.path));
@@ -1250,11 +1248,11 @@ export interface CommitDiffParentMeta { oid: string; short: string; subject: str
 export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; oid: string; parentOid?: string }): Promise<{ commit: CommitDiffMeta; parentsMeta?: CommitDiffParentMeta[]; comparedParent?: string; patches: Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }>; mergeNote?: string }> {
   if (!OID_RE.test(input.oid)) throw new GitWriteError('VALIDATION_INVALID', `非法提交对象 id：${input.oid}`);
   const loc = await repoGuard(input.projectRoot);
-  const typeCap = await captureGit(['-C', loc.worktreeRoot, 'cat-file', '-t', input.oid], { capBytes: 4096 });
+  const typeCap = await captureGit(['-C', loc.worktreeRoot, 'cat-file', '-t', input.oid], { });
   if (typeCap.exitCode !== 0 || typeCap.stdout.toString('utf8').trim() !== 'commit') {
     throw new GitWriteError('RESOURCE_NOT_FOUND', `提交对象不存在：${input.oid}`);
   }
-  const metaCap = await mustGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%P\x1f%an\x1f%ae\x1f%at\x1f%s', input.oid], { capBytes: 16 * 1024, what: 'show -s' });
+  const metaCap = await mustGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%P\x1f%an\x1f%ae\x1f%at\x1f%s', input.oid], { what: 'show -s' });
   const [parentsRaw, an, ae, at, subject] = metaCap.stdout.toString('utf8').split('\x1f');
   const parents = (parentsRaw ?? '').trim().split(' ').filter((p) => p !== '');
   // 关联（仅操作日志——外部提交不虚构归属）。
@@ -1268,7 +1266,7 @@ export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: s
   // 多父 diff（第十四轮五）：数据与展示绑定所选父 OID——未选=只给父清单与注记（不虚构单一
   // “合并 diff”）；所选父必须是本提交的父（跨对象比较拒绝）。
   if (parents.length > 1) {
-    const parentsMetaCap = await mustGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%H\x1f%h\x1f%s\x1f%at', ...parents], { capBytes: 16 * 1024, what: 'show -s parents' });
+    const parentsMetaCap = await mustGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%H\x1f%h\x1f%s\x1f%at', ...parents], { what: 'show -s parents' });
     const parentsMeta = parentsMetaCap.stdout.toString('utf8').split('\n').filter((l) => l.includes('\x1f')).map((line) => {
       const [pOid, pShort, pSubject, pAt] = line.split('\x1f');
       return { oid: (pOid ?? '').trim(), short: (pShort ?? '').trim(), subject: (pSubject ?? '').trim(), timestamp: Number(pAt ?? 0) };
@@ -1292,23 +1290,17 @@ export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: s
 
 /** diff-tree 逐文件聚合（treeRange：['--root', oid] 或 [parentOid, oid]——两形态同读面同容量）。 */
 async function collectDiffPatches(loc: RepoLocation, treeRange: string[]): Promise<Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }>> {
-  const rawCap = await mustGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', ...treeRange], { capBytes: 256 * 1024, what: 'diff-tree' });
+  const rawCap = await mustGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', ...treeRange], { what: 'diff-tree' });
   const { parseRawZ } = await import('./gitStatus.ts');
   const entries = parseRawZ(rawCap.stdout.toString('utf8'));
   const CHANGE: Record<string, string> = { A: 'added', C: 'copied', D: 'deleted', M: 'modified', T: 'modified', R: 'renamed' };
   const patches: Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }> = [];
-  let budget = RT24_TOTAL_CAP;
   for (const entry of entries) {
-    if (budget <= 0 || patches.length >= RT24_MAX_FILES) {
-      patches.push({ path: entry.path, ...(entry.origPath != null ? { oldPath: entry.origPath } : {}), change: CHANGE[entry.status[0]!] ?? 'modified', binary: false, truncated: true, text: '' });
-      continue;
-    }
-    const textCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-p', '--no-commit-id', '--no-textconv', '--no-ext-diff', '--unified=3', ...treeRange, '--', entry.path], { capBytes: Math.min(RT24_PER_FILE_CAP, budget) + 1, env: { ...process.env, GIT_LITERAL_PATHSPECS: '1', GIT_PAGER: 'cat' } });
+    const textCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-p', '--no-commit-id', '--no-textconv', '--no-ext-diff', '--unified=3', ...treeRange, '--', entry.path], { env: { ...process.env, GIT_LITERAL_PATHSPECS: '1', GIT_PAGER: 'cat' } });
+    if (textCap.spawnError || textCap.exitCode !== 0 || textCap.truncated) throw new GitWriteError('GIT_COMMAND_FAILED', '提交差异正文读取失败');
     const text = textCap.stdout.toString('utf8');
     const binary = /^Binary files .* differ$/m.test(text);
-    const truncated = text.length > RT24_PER_FILE_CAP;
-    budget -= Math.min(text.length, RT24_PER_FILE_CAP);
-    patches.push({ path: entry.path, ...(entry.origPath != null ? { oldPath: entry.origPath } : {}), change: CHANGE[entry.status[0]!] ?? 'modified', binary, truncated: truncated || textCap.truncated, text: binary ? '' : truncated ? `${text.slice(0, RT24_PER_FILE_CAP)}\n…（超限截断）` : text });
+    patches.push({ path: entry.path, ...(entry.origPath != null ? { oldPath: entry.origPath } : {}), change: CHANGE[entry.status[0]!] ?? 'modified', binary, truncated: false, text: binary ? '' : text });
   }
   return patches;
 }
@@ -1322,7 +1314,7 @@ export function redactRemoteText(text: string): string {
 
 /** 对**显式 URL** 查询分支头（推送链路核对——不经远端名二次解释 fetch/push 改写）。 */
 export async function remoteHeadAtUrl(loc: RepoLocation, url: string, branch: string): Promise<string | null> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'ls-remote', url, `refs/heads/${branch}`], { capBytes: 16 * 1024 });
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'ls-remote', url, `refs/heads/${branch}`], { });
   if (cap.spawnError != null || cap.exitCode !== 0) {
     const stderr = cap.stderr.trim();
     if (/authentication|permission|could not read Username|授权|凭据|403|access denied/i.test(stderr)) {
@@ -1344,7 +1336,7 @@ export async function remoteHeadAtUrl(loc: RepoLocation, url: string, branch: st
  * - 返回值已脱敏（凭据不进结果/日志/回执）。
  */
 export async function pushUrl(loc: RepoLocation, remote: string): Promise<string> {
-  const all = await captureGit(['-C', loc.worktreeRoot, 'remote', 'get-url', '--push', '--all', remote], { capBytes: 16 * 1024 });
+  const all = await captureGit(['-C', loc.worktreeRoot, 'remote', 'get-url', '--push', '--all', remote], { });
   if (all.exitCode !== 0) {
     throw new GitWriteError('RESOURCE_NOT_FOUND', `远端 ${remote} 未配置或地址不可解析（git remote get-url --push 失败）：${redactRemoteText(all.stderr.trim().slice(0, 120))}`);
   }
@@ -1359,7 +1351,7 @@ export async function pushUrl(loc: RepoLocation, remote: string): Promise<string
   // URL 改写规则核对（第十三轮三）：get-url 返回**改写前**字面量（实测 pushInsteadOf 不在
   // get-url 生效面），而实际推送走改写后地址——确认值与执行值将不一致。受管推送**明确拒绝**
   // 受改写规则影响的目的地（不自行复刻 git 改写逻辑、不静默向不确定目的地发送）。
-  const rulesCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get-regexp', '^url[.].*[.][pP][uU][sS][hH]?[iI][nN][sS][tT][eE][aA][dD][oO][fF]$'], { capBytes: 16 * 1024 });
+  const rulesCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get-regexp', '^url[.].*[.][pP][uU][sS][hH]?[iI][nN][sS][tT][eE][aA][dD][oO][fF]$'], { });
   if (rulesCap.exitCode === 0) {
     for (const line of rulesCap.stdout.toString('utf8').split('\n')) {
       const m = /^url\.(.+)\.(push)?insteadof (.+)$/i.exec(line.trim());
@@ -1374,7 +1366,7 @@ export async function pushUrl(loc: RepoLocation, remote: string): Promise<string
 
 /** 远端分支当前头（ls-remote；无该分支=null）。AUTH 失败映射明确错误（不回显凭据）。 */
 export async function remoteHead(loc: RepoLocation, remote: string, branch: string): Promise<string | null> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'ls-remote', remote, `refs/heads/${branch}`], { capBytes: 16 * 1024 });
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'ls-remote', remote, `refs/heads/${branch}`], { });
   if (cap.spawnError != null || cap.exitCode !== 0) {
     const stderr = cap.stderr.trim();
     if (/authentication|permission|could not read Username|授权|凭据|403|access denied/i.test(stderr)) {
@@ -1423,7 +1415,7 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
       throw new GitWriteError('STALE_REVISION', `远端分支已被更新（期望 ${input.expectedRemoteHead ?? '（不存在）'} → 实际 ${remote ?? '（不存在）'}）——不覆盖他人结果；请刷新远端状态后重新确认`);
     }
     if (remote != null) {
-      const ff = await captureGit(['-C', loc.worktreeRoot, 'merge-base', '--is-ancestor', remote, input.expectedHead], { capBytes: 4096 });
+      const ff = await captureGit(['-C', loc.worktreeRoot, 'merge-base', '--is-ancestor', remote, input.expectedHead], { });
       if (ff.exitCode !== 0) {
         throw new GitWriteError('VALIDATION_INVALID', '远端包含本地没有的提交，请先拉取并合并后再推送');
       }
@@ -1431,7 +1423,7 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
     // 执行对象绑定（第十二轮二）：refspec 源=用户确认的**不可变提交 OID**（不是可变本地分支）；
     // --force-with-lease=目标:确认旧头 ⇒ 远端旧头必须严格等于确认值（机械约束，非仅前置
     // ls-remote）；未确认的本地新提交不可能被发往远端。
-    const push = await captureGit(['-C', loc.worktreeRoot, 'push', `--force-with-lease=refs/heads/${input.branch}:${input.expectedRemoteHead ?? ''}`, input.remote, `${input.expectedHead}:refs/heads/${input.branch}`], { capBytes: 32 * 1024 });
+    const push = await captureGit(['-C', loc.worktreeRoot, 'push', `--force-with-lease=refs/heads/${input.branch}:${input.expectedRemoteHead ?? ''}`, input.remote, `${input.expectedHead}:refs/heads/${input.branch}`], { });
     if (push.exitCode !== 0) {
       const stderr = push.stderr.trim();
       if (/stale info|fetch first|rejected.*non-fast-forward|forced update/i.test(stderr)) {
@@ -1469,25 +1461,25 @@ export async function gitPull(db: ZhongshuoDatabase, input: { projectId: string;
     }
     const branchNow = await currentBranchOf(loc);
     if (branchNow !== input.branch) throw new GitWriteError('STALE_REVISION', `当前分支 ${branchNow ?? 'detached'} ≠ 拉取分支 ${input.branch}——请刷新`);
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
     if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `本地 HEAD 已移动（期望 ${input.expectedHead} → ${head ?? '空'}）——请刷新后重试`);
-    const fetch = await captureGit(['-C', loc.worktreeRoot, 'fetch', input.remote, input.branch], { capBytes: 32 * 1024 });
+    const fetch = await captureGit(['-C', loc.worktreeRoot, 'fetch', input.remote, input.branch], { });
     if (fetch.exitCode !== 0) throw new GitWriteError('GIT_COMMAND_FAILED', redactRemoteText(`fetch 失败：${fetch.stderr.trim().slice(0, 160)}`));
     // 对象绑定（第十二轮二）：fetch 得到的对象先固化为 OID，合入执行用该 OID——不引用可变的
     // FETCH_HEAD 符号（外部并发 fetch 不改变本次合入对象）。
-    const fetchedCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'FETCH_HEAD'], { capBytes: 4096 });
+    const fetchedCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'FETCH_HEAD'], { });
     if (fetchedCap.exitCode !== 0 || !OID_RE.test(fetchedCap.stdout.toString('utf8').trim())) {
       throw new GitWriteError('GIT_COMMAND_FAILED', 'fetch 后无法确定 FETCH_HEAD 对象——拒绝合入（不猜测）');
     }
     const fetchedOid = fetchedCap.stdout.toString('utf8').trim();
-    const merge = await captureGit(['-C', loc.worktreeRoot, 'merge', '--ff-only', fetchedOid], { capBytes: 32 * 1024 });
+    const merge = await captureGit(['-C', loc.worktreeRoot, 'merge', '--ff-only', fetchedOid], { });
     if (merge.exitCode !== 0) {
       throw new GitWriteError('VALIDATION_INVALID', redactRemoteText(`拉取不是快进（本地与远端分叉）：${merge.stderr.trim().slice(0, 160)}——产品内不自动产生合并提交；请先处理本地提交或用你自己的 git 客户端合并`));
     }
-    const headAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+    const headAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { });
     const headAfter = headAfterCap.exitCode === 0 ? headAfterCap.stdout.toString('utf8').trim() : null;
-    const countCap = await captureGit(['-C', loc.worktreeRoot, 'rev-list', '--count', `${input.expectedHead}..${headAfter}`], { capBytes: 4096 });
+    const countCap = await captureGit(['-C', loc.worktreeRoot, 'rev-list', '--count', `${input.expectedHead}..${headAfter}`], { });
     const result: PullOutcome = { remote: input.remote, branch: input.branch, from: input.expectedHead, to: headAfter ?? '', pulledCount: Number(countCap.stdout.toString('utf8').trim() || '0') };
     const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'pull', request: { remote: input.remote, branch: input.branch, expectedHead: input.expectedHead }, result, headBefore: input.expectedHead, headAfter });
     return persisted.data;
@@ -1500,8 +1492,6 @@ export interface ConflictSnapshot {
   worktree: { hash: string | null; bytes: number | null };
 }
 export interface ConflictContent { path: string; base: string | null; ours: string | null; theirs: string | null; snapshotHash: string; snapshot: ConflictSnapshot }
-const CONFLICT_TEXT_CAP = 64 * 1024;
-const CONFLICT_PROPOSAL_CAP = 4 * 1024 * 1024;
 const contentHash = (content: string | Buffer): string => createHash('sha256').update(content).digest('hex');
 
 /** No symlink/directory replacement is accepted as an editable conflict file. */
@@ -1511,32 +1501,31 @@ function conflictWorktree(loc: RepoLocation, path: string): ConflictSnapshot['wo
   const rel = relative(root, parent);
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new GitWriteError('PATH_OUT_OF_REPO', '冲突文件的物理父目录已越出仓库');
   let st;
-  try { st = lstatSync(file); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { hash: null, bytes: null }; throw e; }
+  try { st = lstatSync(file, { bigint: true }); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { hash: null, bytes: null }; throw e; }
   if (!st.isFile() || st.isSymbolicLink()) throw new GitWriteError('VALIDATION_INVALID', '冲突路径不是可编辑的普通文件');
-  if (st.size > CONFLICT_PROPOSAL_CAP) throw new GitWriteError('VALIDATION_INVALID', '工作区冲突文件超限（>4MiB），请用 Git 客户端处理');
   const fd = openSync(file, 'r');
   try {
-    const buffer = Buffer.alloc(CONFLICT_PROPOSAL_CAP + 1);
-    let bytes = 0;
-    while (bytes < buffer.length) { const n = readSync(fd, buffer, bytes, buffer.length - bytes, bytes); if (n === 0) break; bytes += n; }
-    if (bytes > CONFLICT_PROPOSAL_CAP) throw new GitWriteError('VALIDATION_INVALID', '工作区冲突文件读取期间超限');
-    if (bytes !== st.size) throw new GitWriteError('STALE_REVISION', '冲突文件读取期间大小变化，请重新读取');
+    const opened = fstatSync(fd, { bigint: true });
+    const buffer = readFileSync(fd);
+    const bytes = buffer.length;
+    const after = fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || opened.ino !== st.ino || opened.dev !== st.dev || opened.size !== st.size || opened.mtimeNs !== st.mtimeNs || BigInt(bytes) !== opened.size || opened.size !== after.size || opened.mtimeNs !== after.mtimeNs) throw new GitWriteError('STALE_REVISION', '冲突文件读取期间身份或内容变化，请重新读取');
     return { hash: contentHash(buffer.subarray(0, bytes)), bytes };
   } finally { closeSync(fd); }
 }
 async function conflictSnapshot(loc: RepoLocation, path: string, projectId: string): Promise<{ snapshot: ConflictSnapshot; hash: string }> {
-  const index = await mustGit(['-C', loc.worktreeRoot, 'ls-files', '--stage', '-z', '--', path], { capBytes: 32 * 1024, env: writeEnv(true), what: 'ls-files (conflict identity)' });
+  const index = await mustGit(['-C', loc.worktreeRoot, 'ls-files', '--stage', '-z', '--', path], { env: writeEnv(true), what: 'ls-files (conflict identity)' });
   if (index.truncated) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突索引身份读取超限，拒绝不完整快照');
   const stages = index.stdout.toString('utf8').split('\0').filter(Boolean).map(line => {
     const m = /^(\d{6}) ([0-9a-f]{40}) ([0-3])\t([\s\S]*)$/.exec(line);
     if (!m || m[4] !== path) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突索引路径或对象身份无法核实');
     return { mode: m[1]!, oid: m[2]!, stage: Number(m[3]) };
   }).sort((a, b) => a.stage - b.stage);
-  const headRead = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', 'HEAD'], { capBytes: 4096 });
+  const headRead = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', 'HEAD'], { });
   if (headRead.spawnError || headRead.truncated || (stages.some(e => e.stage > 0) && headRead.exitCode !== 0)) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突 HEAD 身份读取失败，未当作空提交');
   const head = headRead.exitCode === 0 ? headRead.stdout.toString('utf8').trim() : null;
   if (head != null && !OID_RE.test(head)) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突 HEAD 对象身份无效');
-  const branchRead = await captureGit(['-C', loc.worktreeRoot, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { capBytes: 4096 });
+  const branchRead = await captureGit(['-C', loc.worktreeRoot, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { });
   if (branchRead.spawnError || branchRead.truncated || ![0,1].includes(branchRead.exitCode ?? -1)) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突分支身份读取失败');
   const snapshot: ConflictSnapshot = { path, head, branch: branchRead.exitCode === 0 ? branchRead.stdout.toString('utf8').trim() : null, stages, worktree: conflictWorktree(loc, path) };
   return { snapshot, hash: contentHash(JSON.stringify({ projectId, root: comparisonKey(realpathSync.native(loc.worktreeRoot)), ...snapshot })) };
@@ -1554,8 +1543,7 @@ export async function gitConflictContent(input: { projectId: string; projectRoot
     const entry = before.snapshot.stages.find(e => e.stage === n);
     if (!entry) return null; // Actual index absence, not an I/O error or truncated blob.
     if (!['100644', '100755'].includes(entry.mode)) throw new GitWriteError('VALIDATION_INVALID', '冲突包含非普通文件，不能作为文本编辑');
-    const cap = await captureGit(['-C', loc.worktreeRoot, 'cat-file', 'blob', entry.oid], { capBytes: CONFLICT_TEXT_CAP + 1 });
-    if (cap.truncated || cap.stdout.length > CONFLICT_TEXT_CAP) throw new GitWriteError('VALIDATION_INVALID', '冲突一方正文超限（>64KiB），请用 Git 客户端完整处理；未加载为可编辑内容');
+    const cap = await captureGit(['-C', loc.worktreeRoot, 'cat-file', 'blob', entry.oid], {  });
     if (cap.spawnError || cap.exitCode !== 0) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突对象读取失败，未当作该方不存在');
     if (cap.stdout.includes(0)) throw new GitWriteError('VALIDATION_INVALID', '二进制冲突不能在文本编辑器中解决');
     try { return new TextDecoder('utf-8', { fatal: true }).decode(cap.stdout); }
@@ -1583,7 +1571,6 @@ export async function gitConflictResolve(db: ZhongshuoDatabase, input: { project
       requirePendingHashMatch(db, input.journal, existing);
       if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as { path: string; resolved: true }), replayed: true, recovered: true };
     }
-    if (Buffer.byteLength(input.content, 'utf8') > CONFLICT_PROPOSAL_CAP) throw new GitWriteError('VALIDATION_INVALID', '解决内容超限（>4MiB）');
     const now = await conflictSnapshot(loc, input.path, input.projectId), hash = contentHash(input.content);
     type Pending = { version?: number; path: string; contentHash: string; approvedSnapshot?: ConflictSnapshot; expectedSnapshotHash?: string; resolvedIndex?: { oid: string; mode: string } };
     const pending: Pending | null = existing ? JSON.parse(existing.request_json ?? '{}') as Pending : null;
@@ -1672,10 +1659,10 @@ export async function gitCommitUndo(db: ZhongshuoDatabase, input: {
     if (branch == null) throw new GitWriteError('VALIDATION_INVALID', 'detached HEAD——撤销提交要求分支上下文');
     if (branch !== input.expectedBranch) throw new GitWriteError('STALE_REVISION', `当前分支 ${branch} ≠ 批准分支 ${input.expectedBranch}——请刷新后重试`);
     const targetRef = `refs/heads/${input.expectedBranch}`;
-    const refCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { capBytes: 4096 });
+    const refCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { });
     const refNow = refCap.exitCode === 0 && OID_RE.test(refCap.stdout.toString('utf8').trim()) ? refCap.stdout.toString('utf8').trim() : null;
     if (existing != null && existing.status === 'pending') {
-      const parentProbe = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${input.commitOid}^`], { capBytes: 4096 });
+      const parentProbe = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${input.commitOid}^`], { });
       const parentOid = parentProbe.exitCode === 0 ? parentProbe.stdout.toString('utf8').trim() : null;
       if (refNow === parentOid) {
         const result0 = { undone: input.commitOid, to: parentOid!, updatedRef: targetRef, returnedToStaged: 0 };
@@ -1690,7 +1677,7 @@ export async function gitCommitUndo(db: ZhongshuoDatabase, input: {
     if (refNow !== input.commitOid || refNow !== input.expectedHead) {
       throw new GitWriteError('STALE_REVISION', `目标提交不是 ${targetRef} 当前值（ref=${refNow ?? '空'}；存在后续提交/已回退/外部推进）——只允许撤销分支最新提交，不做任何历史改写`);
     }
-    const metaCap = await captureGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%P', input.commitOid], { capBytes: 4096 });
+    const metaCap = await captureGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%P', input.commitOid], { });
     const parents = metaCap.exitCode === 0 ? metaCap.stdout.toString('utf8').trim().split(' ').filter((x) => x !== '') : [];
     if (parents.length > 1) {
       throw new GitWriteError('VALIDATION_INVALID', '该提交是合并提交（多父）——软撤销语义未定义，不默认选第一个父提交；请人工处理或用你自己的 git 客户端');
@@ -1703,7 +1690,7 @@ export async function gitCommitUndo(db: ZhongshuoDatabase, input: {
     // 重叠检测：提交涉及文件 ∩ 撤销前已暂存条目 ≠ ∅ → 无法无损区分（提交内容会与用户暂存
     // 同处索引）——明确拒绝，不先执行再提示。
     const commitFiles = new Set<string>();
-    const rawCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', input.commitOid], { capBytes: 256 * 1024 });
+    const rawCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', input.commitOid], { });
     if (rawCap.exitCode === 0) {
       const { parseRawZ } = await import('./gitStatus.ts');
       for (const entry of parseRawZ(rawCap.stdout.toString('utf8'))) commitFiles.add(entry.path);
@@ -1720,7 +1707,7 @@ export async function gitCommitUndo(db: ZhongshuoDatabase, input: {
       throw new GitWriteError('STALE_REVISION', `目标 ref ${targetRef} 比较交换失败（现值 ${cas.current ?? '（不存在）'}）——未回退任何对象：${cas.stderr}`.slice(0, 240));
     }
     // 核对：ref=parent；索引 tree 与 porcelain 与操作前逐一一致（A 与 B 均未丢失的直接证明）。
-    const refAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { capBytes: 4096 });
+    const refAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { });
     const refAfter = refAfterCap.exitCode === 0 ? refAfterCap.stdout.toString('utf8').trim() : null;
     if (refAfter !== parent) throw new GitWriteError('GIT_COMMAND_FAILED', `回退后目标 ref 核对不符（期望 ${parent}，实际 ${refAfter ?? '空'}）——如实失败，请人工核对`);
     const indexTreeAfter = await writeTreeOf(loc);

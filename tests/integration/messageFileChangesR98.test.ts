@@ -73,7 +73,7 @@ describe('R98 message-bound file changes', () => {
     writeFileSync(join(f.projectRoot, '方案.md'), '# 修订稿\n');
     const after = finalizeChangeset(f.db, {changeSetId: before.value.changeSetId, appDataDir: f.appDataDir}); if (!after.ok) throw Error(after.error.message);
     const output = snapshotGeneratedFiles({...turn, declaredFiles: [], turnDiff: {added, modified: ['方案.md']}, access: {fullAccess: true, modificationAuthorized: true, root: f.projectRoot}});
-    expect(output.registered).toHaveLength(12);
+    expect(output.registered).toHaveLength(14);
     expect(output.registered[0]?.sourcePath).toBe('方案.md');
     recordMessageFileChanges({...turn, changeSetId: before.value.changeSetId, declaredFiles: [], registered: output.registered});
     expect(messageFileChanges(f.db, [turn.messageId]).get(turn.messageId)).toHaveLength(14);

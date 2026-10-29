@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {createHash} from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
@@ -77,10 +78,10 @@ describe('R90 ordinary reply dispatch', () => {
         FROM change_sets s JOIN change_set_files f
           ON f.change_set_id=s.id AND f.role='before'
         WHERE s.task_id=? GROUP BY s.id`).get(submitted.taskId) as { id: string; unavailable: number };
-      expect(changeset.unavailable).toBe(1);
+      expect(changeset.unavailable).toBe(0);
       expect(db.prepare(`SELECT content_ref FROM change_set_files
         WHERE change_set_id=? AND role='before' AND path='large-synthetic.txt'`).get(changeset.id))
-        .toEqual({ content_ref: null });
+        .toEqual({ content_ref: createHash('sha256').update(readFileSync(join(projectRoot,'large-synthetic.txt'))).digest('hex') });
       expect(db.prepare(`SELECT count(*) n FROM domain_events
         WHERE task_id=? AND kind='turn.startupFailed'`).get(submitted.taskId)).toEqual({ n: 0 });
     } finally {
@@ -216,14 +217,13 @@ describe('R90 ordinary reply dispatch', () => {
       expect(readFileSync(join(projectRoot, 'small-target.txt'), 'utf8')).toBe('modified-r90');
       const changeset = db.prepare(`SELECT s.id FROM change_sets s
         JOIN change_set_files f ON f.change_set_id=s.id AND f.role='before'
-        WHERE s.task_id=? AND f.path='large-synthetic.bin' AND f.content_unavailable IS NOT NULL`)
+        WHERE s.task_id=? AND f.path='large-synthetic.bin' AND f.content_unavailable IS NULL AND f.content_ref IS NOT NULL`)
         .get(submitted.taskId) as { id: string };
       expect(changeset.id).toBeTruthy();
       const unavailableEvent = db.prepare(`SELECT payload_json FROM domain_events
         WHERE task_id=? AND kind='run.baselineContentUnavailable' ORDER BY seq DESC LIMIT 1`)
         .get(submitted.taskId) as { payload_json: string } | undefined;
-      expect(unavailableEvent).toBeTruthy();
-      expect(JSON.parse(unavailableEvent!.payload_json)).toMatchObject({ changeSetId: changeset.id, paths: ['large-synthetic.bin'] });
+      expect(unavailableEvent).toBeUndefined();
       expect(db.prepare(`SELECT count(*) n FROM domain_events WHERE task_id=? AND kind='run.baselineReadonly'`)
         .get(submitted.taskId)).toEqual({ n: 0 });
       expect(db.prepare("SELECT count(*) n FROM workspace_leases WHERE status='active' AND owner_turn_id IN (SELECT id FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id=?))")

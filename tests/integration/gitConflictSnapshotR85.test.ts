@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
-import { beginPendingOperationForTest } from '../../src/daemon/gitWrite.ts';
+import { beginPendingOperationForTest, gitConflictResolve } from '../../src/daemon/gitWrite.ts';
 import { computeCommandPayloadHash } from '../../src/domain/idempotency.ts';
 
 const owned: Array<{ dir: string; close: () => void }> = [];
@@ -56,12 +56,17 @@ describe('R85 real Git conflict approval identity and interrupted original envel
     writeFileSync(f.file, 'external edit\n'); expect((await f.raw('git.conflict.resolve', f.params(tri))).error?.code).toBe('STALE_REVISION');
     git(f.root, 'add', '--', '中文 conflict.txt'); expect((await f.raw('git.conflict.resolve', f.params(tri))).ok).toBe(false); expect(readFileSync(f.file, 'utf8')).toBe('external edit\n');
   });
-  it('64KiB overflow and binary stages fail explicitly rather than returning a missing side', async () => {
-    for (const ours of ['ours\n' + 'x'.repeat(90000), Buffer.from([0, 1, 2, 3])]) {
-      const f = await fixture(ours), before = readFileSync(f.file), r = await f.raw('git.conflict.content', { projectId: f.projectId, path: '中文 conflict.txt' });
-      expect(r.ok).toBe(false); expect(r.error?.message).toMatch(/超限|二进制/); expect(readFileSync(f.file)).toEqual(before);
-    }
-  });
+  it('large conflict sides and >4MiB proposals remain complete; binary still fails explicitly', async () => {
+    const ours = 'ours\n' + 'x'.repeat(5 * 1024 * 1024) + 'TAIL';
+    const f = await fixture(ours), tri = await f.read();
+    expect(tri.ours).toBe(ours);
+    const content = 'resolved\n' + 'y'.repeat(5 * 1024 * 1024) + 'TAIL';
+    const r = await gitConflictResolve(f.db, { ...f.params(tri), content, projectRoot: f.root, journal: { commandId: randomUUID(), scope: 'r120', payloadHash: randomUUID(), now: Date.now() } });
+    expect(r.resolved).toBe(true); expect(readFileSync(f.file, 'utf8')).toBe(content);
+    const binary = await fixture(Buffer.from([0, 1, 2, 3]));
+    const before = readFileSync(binary.file), rejected = await binary.raw('git.conflict.content', { projectId: binary.projectId, path: '中文 conflict.txt' });
+    expect(rejected.ok).toBe(false); expect(rejected.error?.message).toMatch(/二进制/); expect(readFileSync(binary.file)).toEqual(before);
+  }, 60_000);
   it('a genuinely missing delete side stays null while the existing text remains complete', async () => {
     const f = await fixture(); git(f.root, 'merge', '--abort'); git(f.root, 'checkout', '-qb', 'deleted', 'main^'); git(f.root, 'rm', '--', '中文 conflict.txt'); git(f.root, 'commit', '-qm', 'deleted'); git(f.root, 'checkout', '-q', 'main'); f.merge('deleted');
     const tri = await f.read(); expect(tri.base).toBe('base\n'); expect(tri.ours).toBe('ours\n'); expect(tri.theirs).toBeNull(); expect(tri.snapshotHash).toMatch(/^[a-f0-9]{64}$/);

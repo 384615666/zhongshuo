@@ -299,7 +299,7 @@ export default function App() {
     let cancelled=false;
     void command<{showAvatars:boolean;avatars:Record<string,string>}>('app.appearance.get',{})
       .then(value=>{if(!cancelled)setAppearanceState(value.showAvatars,value.avatars);})
-      .catch(()=>{/* 读取失败保留默认隐藏头像，不伪造设置 */});
+      .catch(()=>{/* Keep the current appearance when the service is unavailable. */});
     return()=>{cancelled=true;};
   },[]);
 

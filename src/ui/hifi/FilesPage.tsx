@@ -2,7 +2,7 @@ import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 文件与 Git（第五十四轮 §4 收口版）：同页两标签。
  *  - 文件标签：files.view 只读四类分列（项目文件/托管附件→共享预览/Agent 草稿/交付成果→
- *    深链定位）。**项目文本文件复用既有 `project.file.read` 只读快照**（≤256KB、文本白名单、
+ *    深链定位）。**项目文本文件复用既有 `project.file.read` 只读快照**（文本白名单、
  *    fatal UTF-8——越界/二进制/超限如实拒绝；快照非托管副本、不进模型输入）。
  *  - Git 标签：git.status 真实仓库状态 + git.diff **保留 DTO 全部事实**（change/stat
  *    text|binary|unknown/renamed/truncated/source/filesOmitted/truncatedOverall——二进制空
@@ -54,7 +54,6 @@ interface GitCommitDiff {
 const KIND_LABEL: Record<string, string> = { text_file: '文本', image_file: '图片', pdf_file: 'PDF', docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯片' };
 /** 与 daemon TEXT_PREVIEW_EXTENSIONS 同源核对（白名单外不显示预览按钮——点击前如实禁用）。 */
 const TEXT_EXTS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.log', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.rs', '.rb', '.php', '.swift', '.kt', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.html', '.htm', '.css', '.scss', '.vue', '.svelte', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lua', '.r', '.m', '.pl']);
-const DIFF_DISPLAY_CAP = 40_000; // 显示区上限（显式标注——服务端 DTO 的截断事实另行分列）
 
 export function FilesPage() {
   const projectId = useStore((s) => s.activeProjectId);
@@ -158,8 +157,6 @@ export function FilesPage() {
   }, [tab, projectId, reloadFiles, reloadGit, loadHistory]);
 
   const group = files?.groups.find((g) => g.projectId === projectId) ?? files?.groups[0];
-  const diffTextLen = diff != null ? diff.patches.reduce((n, p) => n + p.text.length, 0) : 0;
-  const diffCapped = diffTextLen > DIFF_DISPLAY_CAP;
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }} className="page-stack" data-zs-files="hifi">
@@ -194,10 +191,10 @@ export function FilesPage() {
                   })}
                   {group.projectFiles.length === 0 ? <span className="faint small">（空目录）</span> : null}
                 </div>
-                {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>快照不可用：{userFacingSystemText(snapshotErr ?? '')}（只读预览拒绝——二进制/越界/超限不转码不执行）</div> : null}
+                {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>快照不可用：{userFacingSystemText(snapshotErr ?? '')}</div> : null}
                 {snapshot != null ? (
                   <div style={{ marginTop: 8 }}>
-                    <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes}B{snapshot.truncated ? ' · 超预览预算已截断（完整内容看原文件）' : ''} · 只读快照</span></div>
+                    <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes}B{snapshot.truncated ? ' · 内容未完整读取' : ''} · 只读快照</span></div>
                     <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 320, overflow: 'auto', marginTop: 6, border: '1px solid var(--border,#dbe2ea)', padding: 8, background: '#fff' }}>{snapshot.content}</pre>
                   </div>
                 ) : null}
@@ -282,8 +279,7 @@ export function FilesPage() {
                   <div className="row tight">
                     <strong>diff 正文</strong>
                     {diff.truncatedOverall ? <Tag tone="warning" icon="alert-triangle">部分截断/省略</Tag> : null}
-                    {diff.filesOmitted != null && diff.filesOmitted > 0 ? <span className="faint small">因文件数上限未生成正文 {diff.filesOmitted} 项（身份仍列出）</span> : null}
-                    {diffCapped ? <span className="faint small">显示区截断至 {DIFF_DISPLAY_CAP} 字符（完整差异走 git 客户端）</span> : null}
+                    {diff.filesOmitted != null && diff.filesOmitted > 0 ? <span className="faint small">未读取正文 {diff.filesOmitted} 项（身份仍列出）</span> : null}
                   </div>
                   {diff.patches.map((p) => (
                     <div key={p.path + p.change} style={{ marginTop: 8 }}>
@@ -295,7 +291,7 @@ export function FilesPage() {
                         {p.source === 'worktree-content' ? <span className="faint small">未跟踪内容</span> : null}
                       </div>
                       {p.stat !== 'binary' && p.text.length > 0 ? (
-                        <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 260, overflow: 'auto', marginTop: 4, border: '1px solid var(--border,#dbe2ea)', padding: 6, background: '#fff' }}>{p.text.slice(0, DIFF_DISPLAY_CAP)}</pre>
+                        <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 260, overflow: 'auto', marginTop: 4, border: '1px solid var(--border,#dbe2ea)', padding: 6, background: '#fff' }}>{p.text}</pre>
                       ) : null}
                     </div>
                   ))}
@@ -364,7 +360,7 @@ export function FilesPage() {
                         {p.truncated ? <Tag tone="warning">内容过长，未完整显示</Tag> : null}
                       </div>
                       {!p.binary && p.text.length > 0 ? (
-                        <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 240, overflow: 'auto', marginTop: 4, border: '1px solid var(--border,#dbe2ea)', padding: 6, background: '#fff' }}>{p.text.slice(0, DIFF_DISPLAY_CAP)}</pre>
+                        <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 240, overflow: 'auto', marginTop: 4, border: '1px solid var(--border,#dbe2ea)', padding: 6, background: '#fff' }}>{p.text}</pre>
                       ) : null}
                     </div>
                   ))}

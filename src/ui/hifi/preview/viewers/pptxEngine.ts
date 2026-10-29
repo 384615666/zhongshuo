@@ -1,6 +1,6 @@
 /**
  * PPTX 预览引擎（R69）：ZCode 同架构（packages/ui/src/presentation/pptxRendererPreviewEngine.ts
- * @29628c9）——`parseZipLazyMedia`（ZIP 护栏=RECOMMENDED_ZIP_LIMITS）→ `buildPresentation
+ * @29628c9）——`parseZipLazyMedia`→ `buildPresentation
  * ({lazySlides:true})`（按页惰性物化）→ 每页 `renderSlide` 挂载（缩略图/主舞台同引擎双用）。
  * 引擎库=众说 R40 已 vendored 的 @aiden0z/pptx-renderer 1.3.0（同一上游——ZCode 用 1.2.4），
  * 经 renderers.loadRendererPptx 的 URL 动态加载（应用图外独立加载，不重复进 bundle）。
@@ -24,7 +24,6 @@ interface UpstreamLib {
   parseZipLazyMedia(data: ArrayBuffer, limits?: unknown): Promise<unknown>;
   buildPresentation(files: unknown, opts?: { lazySlides?: boolean }): Promise<PptxPresentationLike>;
   renderSlide(presentation: PptxPresentationLike, slide: PptxSlide, opts?: Record<string, unknown>): UpstreamSlideHandle;
-  RECOMMENDED_ZIP_LIMITS: unknown;
 }
 
 class Document implements PptxPreviewDocument {
@@ -64,10 +63,10 @@ class Document implements PptxPreviewDocument {
   }
 }
 
-/** 打开一份 PPTX 字节 → 每页可渲染文档（ZIP 护栏沿用上游推荐限值——条目/单条/总量有界）。 */
+/** 打开一份 PPTX 字节 → 每页可渲染文档（保留格式校验，按需加载页面与媒体）。 */
 export async function openPptxDocument(data: ArrayBuffer): Promise<PptxPreviewDocument> {
   const lib = (await loadRendererPptx()) as unknown as UpstreamLib;
-  const files = await lib.parseZipLazyMedia(data, lib.RECOMMENDED_ZIP_LIMITS);
+  const files = await lib.parseZipLazyMedia(data);
   const presentation = await lib.buildPresentation(files, { lazySlides: true });
   return new Document(lib, presentation);
 }

@@ -208,8 +208,8 @@ describe('PPTX', () => {
   it('真实顺序（sldIdLst）+关系定位备注（编号不一致）+孤立页排除+备注计入预算；注入页序；页图如实 unsupported', async () => {
     const env = makeEnv();
     // slide5→slide2 真实顺序（编号不连续重排）；slide5 的备注在 notesSlide3（错号）；
-    // slide9 孤立未引用（不得混入）；slide2 备注超长（验证截断与备注计入总预算）。
-    const longNotes = '长备注词'.repeat(30000); // 60KB×3 字节=180KB > 64KB 单页上限 → 截断
+    // slide9 孤立未引用（不得混入）；slide2 长备注完整保存并计入总字节数。
+    const longNotes = '长备注词'.repeat(30000); // 超过旧64KiB门槛，完整保留
     const bytes = makePptxSlides({
       slides: [
         { no: 5, texts: ['第五页真身 顺序一', '要点甲'], notes: '错号备注 演讲词', notesNo: 3 },
@@ -227,8 +227,8 @@ describe('PPTX', () => {
     expect(pv.slides[0]!.notes).toContain('错号备注 演讲词'); // 经 slide5 的关系表定位到 notesSlide3
     expect(pv.slides[1]!.slide).toBe(2);
     expect(pv.slides[1]!.text).toContain('第二页真身 顺序二');
-    expect(pv.slides[1]!.truncated).toBe(true); // 超长备注截断
-    expect(Buffer.byteLength(pv.slides[1]!.notes, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(pv.slides[1]!.truncated).toBe(false); // 备注完整保留
+    expect(pv.slides[1]!.notes).toBe(longNotes);
     // 备注计入总预算：totalTextBytes ≥ 正文+已收备注字节。
     const sum = pv.slides.reduce((acc, sl) => acc + Buffer.byteLength(sl.text, 'utf8') + Buffer.byteLength(sl.notes, 'utf8'), 0);
     expect(pv.totalTextBytes).toBe(sum);

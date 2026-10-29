@@ -216,10 +216,7 @@ interface WsConn {
   closeTimer: NodeJS.Timeout | null;
 }
 
-const BODY_CAP_CMD = 48 * 1024 * 1024; // /cmd 承载 base64 附件（图片上限 ~27MB base64）
 const BODY_CAP_SMALL = 8 * 1024;
-const EXPORT_MAX_ASSETS = 200; // 资产额度（manifest.files——必要元文件 index/manifest 不占）
-const EXPORT_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 const WS_MAX_PAYLOAD = 64 * 1024; // 认证/订阅小消息上限（完整消息大小——ws maxPayload）
 const WS_MAX_SUBS = 200;
 const WS_SLOW_CLIENT_BYTES = 8 * 1024 * 1024; // 发送缓冲积压（慢客户端）——超限关闭
@@ -480,13 +477,13 @@ export class RemoteAccessServer {
     res.end(json);
   }
 
-  private readBody(req: IncomingMessage, cap: number): Promise<Buffer> {
+  private readBody(req: IncomingMessage, cap?: number): Promise<Buffer> {
     return new Promise((resolveB, rejectB) => {
       const chunks: Buffer[] = [];
       let total = 0;
       req.on('data', (c: Buffer) => {
         total += c.length;
-        if (total > cap) { rejectB(new Error('PAYLOAD_TOO_LARGE')); req.destroy(); return; }
+        if (cap != null && total > cap) { rejectB(new Error('PAYLOAD_TOO_LARGE')); req.destroy(); return; }
         chunks.push(c);
       });
       req.on('end', () => resolveB(Buffer.concat(chunks)));
@@ -598,7 +595,7 @@ export class RemoteAccessServer {
     if ('status' in check) { this.reply(res, check.status, { ok: false, error: { code: check.code, message: check.message } }); return; }
     let body: { commandId?: string; method?: string; params?: unknown; expectedRevision?: number };
     try {
-      const raw = await this.readBody(req, BODY_CAP_CMD);
+      const raw = await this.readBody(req);
       body = JSON.parse(raw.toString('utf8')) as typeof body;
     } catch {
       this.reply(res, 400, { ok: false, error: { code: 'BAD_REQUEST', message: '请求体不是合法 JSON（≤48MB）' } });
@@ -679,10 +676,6 @@ export class RemoteAccessServer {
     // **资产额度与必要元文件分离（第三十三轮五）**：额度=manifest.files（资产附件）；
     // index.md/index.html/export.docx 与 manifest.json 是必要元文件，不占资产额度——
     // 合法的 200 件资产导出（+正文+清单=202 个文件）完整下载，201 件资产明确拒绝。
-    if (manifest.files.length > EXPORT_MAX_ASSETS) {
-      this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出资产 ${manifest.files.length} 件超上限 ${EXPORT_MAX_ASSETS}——明确拒绝（正文/清单等必要元文件不占额度）` } });
-      return;
-    }
     // 收集全量条目（不提前 break——超限在资产额度上明确拒绝，不静默截断）。
     const entries: Array<{ rel: string; abs: string; size: number }> = [];
     const walk = (d: string, rel: string): void => {
@@ -698,8 +691,6 @@ export class RemoteAccessServer {
       return;
     }
     if (entries.length === 0) { this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: '导出目录为空' } }); return; }
-    const total = entries.reduce((s2, e) => s2 + e.size, 0);
-    if (total > EXPORT_MAX_TOTAL_BYTES) { this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出包 ${total}B 超下载上限` } }); return; }
     // 逐文件完整性（第三十三轮五重做）：**单次受控读取**——同一句柄读出的字节先 sha256 对
     // manifest 核验，**核验通过的字节直接保留进 ZIP**（不再校验后另读一次——ZIP 使用的恒为
     // 已验证字节）；主文件（index/export.docx）哈希核验同样执行（旧实现 bytes 后 continue

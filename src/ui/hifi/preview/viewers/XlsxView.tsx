@@ -17,7 +17,7 @@ import { saveReaderState, type ReaderState } from '../readerState';
 interface XlsxViewerController { activeTabIndex: number; setActiveTabIndex(i: number): void; tabs: Array<{ id: string; name: string }> }
 interface XlsxViewerProps {
   file: ArrayBuffer; fileName?: string; height?: string; isDark?: boolean; readOnly?: boolean;
-  rounded?: boolean; showDefaultToolbar?: boolean;
+  rounded?: boolean; showDefaultToolbar?: boolean; maxFileSizeBytes?: number;
   toolbar?: (controller: XlsxViewerController) => React.ReactNode;
   loadingState?: React.ReactNode;
   errorState?: (error: Error) => React.ReactNode;
@@ -177,6 +177,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
         <LazyXlsxViewer
           file={stableFile}
           fileName={filename}
+          maxFileSizeBytes={0}
           height="100%"
           readOnly
           rounded={false}
@@ -186,10 +187,6 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
           errorState={(error: Error) => {
             window.setTimeout(() => { setEngineError(error.message.slice(0, 120)); setEngineFailed(true); }, 0);
             return <div className="panel info">表格引擎错误：{error.message.slice(0, 120)}——切换回退视图…</div>;
-          }}
-          fileTooLargeState={() => {
-            window.setTimeout(() => { setEngineError('文件超出引擎上限'); setEngineFailed(true); }, 0);
-            return <div className="panel info">文件超出表格引擎上限——切换提取网格…</div>;
           }}
         />
       </Suspense>

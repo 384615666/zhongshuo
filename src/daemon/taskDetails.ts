@@ -4,7 +4,7 @@ import type { TaskExecutionBlocker } from '../contracts/executionBlockers.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import { readCoordination } from './coordination.ts';
 import { lockDomainsOverlap } from './directoryIdentity.ts';
-import {pendingAutomaticRecovery} from './automaticRecovery.ts';
+import {pendingAutomaticRecovery,AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS} from './automaticRecovery.ts';
 import { readPreDispatchFailure } from './preDispatchFailure.ts';
 
 type EventRow = { seq: number; kind: string; created_at: number; run_id: string | null; turn_id: string | null; payload_json: string };
@@ -292,6 +292,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     const rows = db.prepare(`${sql} LIMIT ?`).all(...params, limit + 1) as T[];
     return { items: rows.slice(0, limit), truncated: rows.length > limit };
   };
+  const completeFiles = <T>(sql:string,params:unknown[]):{items:T[];truncated:false}=>({items:db.prepare(sql).all(...params) as T[],truncated:false});
   const parse = (s: string | null): unknown | null => s == null ? null : JSON.parse(s) as unknown;
   const refs = (s: string): string[] => {
     const value = JSON.parse(s) as unknown;
@@ -430,14 +431,14 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     const pinned=db.prepare('SELECT * FROM task_deliveries WHERE id=? AND task_id=?').get(requestedDeliveryId,taskId) as typeof deliveryRows.items[number]|undefined;
     if(pinned)deliveryRows.items.push(pinned);
   }
-  const changeRows = bounded<{ id: string; task_id:string;application_status: string; before_ref: string; after_ref: string }>(
+  const changeRows = completeFiles<{ id: string; task_id:string;application_status: string; before_ref: string; after_ref: string }>(
     `SELECT id,task_id,application_status,before_ref,after_ref FROM change_sets WHERE project_id=? AND (task_id=? OR task_id IN
-      (SELECT id FROM tasks WHERE parent_task_id=? AND project_id=? AND conversation_id=?)) ORDER BY rowid DESC`, [projectId,taskId,taskId,projectId,conversationId], 100);
-  const artifactRows = bounded<{ id: string; kind: string; revision: number; hash: string }>(
-    'SELECT id, kind, revision, hash FROM artifacts WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY rowid DESC', [taskId, projectId, conversationId], 100);
+      (SELECT id FROM tasks WHERE parent_task_id=? AND project_id=? AND conversation_id=?)) ORDER BY rowid DESC`, [projectId,taskId,taskId,projectId,conversationId]);
+  const artifactRows = completeFiles<{ id: string; kind: string; revision: number; hash: string }>(
+    'SELECT id, kind, revision, hash FROM artifacts WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY rowid DESC', [taskId, projectId, conversationId]);
   const selectedMemberRun = memberRuns.find((r) => r.id === selectedRunId);
   return {
-    automaticRecovery:(()=>{const job=pendingAutomaticRecovery(db,taskId)??children.items.map(child=>pendingAutomaticRecovery(db,child.id)).find(Boolean);return job?{state:job.state,kind:job.kind,attempt:job.extraAttempts,maxExtraAttempts:2,nextAttemptAt:job.nextAttemptAt,reason:job.reason,taskId:job.taskId}:null;})(),
+    automaticRecovery:(()=>{const job=pendingAutomaticRecovery(db,taskId)??children.items.map(child=>pendingAutomaticRecovery(db,child.id)).find(Boolean);return job?{state:job.state,kind:job.kind,attempt:job.extraAttempts,maxExtraAttempts:AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS,nextAttemptAt:job.nextAttemptAt,reason:job.reason,taskId:job.taskId}:null;})(),
     executionBlocker: readExecutionBlocker(db, taskId),
     preDispatchFailure,
     task: { id: task.id as string, projectId: task.project_id as string, conversationId: task.conversation_id as string,
@@ -460,10 +461,10 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       artifactRefs: refs(d.artifact_refs_json), changeSetRefs: refs(d.change_set_refs_json),
       verificationRefs: refs(d.verification_refs_json), locate: `#delivery=${d.id}` })),
     changeSets: changeRows.items.map((c) => {
-      const files = bounded<{ path: string; state: string; sha256: string | null; size: number | null }>(
-        `SELECT path, state, sha256, size FROM change_set_files WHERE change_set_id = ? AND role = 'after' ORDER BY path`, [c.id], 100);
+      const files = db.prepare(`SELECT path, state, sha256, size FROM change_set_files WHERE change_set_id = ? AND role = 'after' ORDER BY path`)
+        .all(c.id) as Array<{ path: string; state: string; sha256: string | null; size: number | null }>;
       return { id: c.id, applicationStatus: c.application_status, beforeRef: c.before_ref,
-        afterRef: c.after_ref, locate: `#task=${c.task_id}`, files: files.items, filesTruncated: files.truncated };
+        afterRef: c.after_ref, locate: `#task=${c.task_id}`, files, filesTruncated: false };
     }),
     artifacts: artifactRows.items,
     nextCursors: {

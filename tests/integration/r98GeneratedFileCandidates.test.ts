@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
-import { SNAPSHOT_MAX_FILES, snapshotGeneratedFiles } from '../../src/daemon/generatedFileSnapshots.ts';
+import { snapshotGeneratedFiles } from '../../src/daemon/generatedFileSnapshots.ts';
 import type { GeneratedFileSnapshotInput } from '../../src/daemon/generatedFileSnapshots.ts';
 
 const roots: string[] = [];
@@ -258,7 +258,7 @@ describe('R98 generated file candidate union', () => {
     }
   });
 
-  it('文件数上限前优先可读文档，源码不能挤掉方案和已变更的说明', () => {
+  it('超过原12文件上限仍全部登记，保留可读文档优先顺序', () => {
     const env = makeEnv();
     try {
       const messageId = 'msg_turn_r98_priority_limit';
@@ -284,8 +284,8 @@ describe('R98 generated file candidate union', () => {
         },
       }));
 
-      expect(outcome.status).toBe('partial');
-      expect(outcome.registered).toHaveLength(SNAPSHOT_MAX_FILES);
+      expect(outcome.status).toBe('registered');
+      expect(outcome.registered).toHaveLength(15);
       expect(outcome.registered[0]).toMatchObject({
         filename: '方案.md',
         declared: true,
@@ -293,24 +293,34 @@ describe('R98 generated file candidate union', () => {
       });
       // 文档在前，其余源码仍保持原始顺序。
       expect(outcome.registered.slice(1).map((item) => item.filename))
-        .toEqual(['README.md', ...sourceNames.slice(0, SNAPSHOT_MAX_FILES - 2).map((name) => basename(name))]);
+        .toEqual(['README.md', ...sourceNames.map((name) => basename(name))]);
       expect(outcome.registered.some((item) => item.filename === 'README.md')).toBe(true);
-      expect(attachmentsOf(env, messageId)).toHaveLength(SNAPSHOT_MAX_FILES);
+      expect(attachmentsOf(env, messageId)).toHaveLength(15);
 
-      const skipped = outcome.skipped.join('\n');
-      expect(outcome.skipped).toHaveLength(3);
-      expect(skipped).toContain('LIMIT_EXCEEDED');
-      for (const name of sourceNames.slice(SNAPSHOT_MAX_FILES - 2)) {
-        expect(skipped).toContain(name);
-      }
-      expect(skipped).not.toContain('README.md');
-      expect(skipped).not.toContain('方案.md');
-      expect(outcome.failures.filter((item) => item.code === 'LIMIT_EXCEEDED')).toHaveLength(3);
-      expect(outcome.failures.every((item) => item.declared)).toBe(true);
+      expect(outcome.skipped).toEqual([]);
+      expect(outcome.failures).toEqual([]);
     } finally {
       env.close();
     }
   });
+
+  it('R120 完整登记超过64MiB总量和8MiB单文件并核验末尾hash', () => {
+    const env = makeEnv();
+    try {
+      const messageId = 'msg_turn_r98_large';
+      env.addMessage(messageId);
+      const names = Array.from({ length: 13 }, (_, i) => `large-${i}.txt`);
+      const bytes = Buffer.alloc(9 * 1024 * 1024 + 1, 120);
+      bytes[bytes.length - 1] = 121;
+      for (const name of names) writeFileSync(join(env.projectRoot, name), bytes);
+      const outcome = snapshotGeneratedFiles(env.input({ messageId, declaredFiles: names }));
+      expect(outcome.status).toBe('registered');
+      expect(outcome.failures).toEqual([]);
+      expect(outcome.registered).toHaveLength(13);
+      for (const item of outcome.registered) expect(item).toMatchObject({ sizeBytes: bytes.length, hash: sha256(bytes) });
+      expect(attachmentsOf(env, messageId)).toHaveLength(13);
+    } finally { env.close(); }
+  }, 60_000);
 
   it('同路径跨声明/added/modified及重复写法只登记一次，并保留全部证据与幂等', () => {
     const env = makeEnv();

@@ -1080,8 +1080,8 @@ describe('第三十三轮：设备级代次/限额/收拢/泵模型/下载门禁
     }
     mkBoundary('exp_bound201rej', 201);
     const rej201 = await downloadZip(h, 'exp_bound201rej', a.token);
-    expect(rej201.status).toBe(413);
-    expect(rej201.json.error.code).toBe('EXPORT_TOO_LARGE');
+    expect(rej201.status).toBe(200);
+    if(rej201.status===200){const {unzipSync}=await import('fflate');expect(Object.keys(unzipSync(new Uint8Array(rej201.body)))).toHaveLength(203);}
     await h.close();
   }, 120_000);
 

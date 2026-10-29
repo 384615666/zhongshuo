@@ -14,7 +14,7 @@
  *   一致；不一致=失败，绝不把文件挂到别的回复/别的项目上。artifact 复用同样核对行内归属。
  * - 必须真实读取字节并计算 sha256；未读取/hash/复制的文件绝不登记为附件。
  * - **用户路径读取走受控 fd**：lstat（拒绝链接/非普通文件）→ 打开前 lstat 的 dev/ino 与
- *   `openSync` 后 `fstatSync` 对比 → 按 fstat 大小**先限幅再读**（绝不越界读）→ 读后再次
+ *   `openSync` 后 `fstatSync` 对比 → 按 fstat 大小完整读取→ 读后再次
  *   fstat 对比 dev/ino/size/mtimeNs（bigint）——读取期间被替换/改写一律 CHANGED_DURING_READ，
  *   不用旧大小/旧 hash 冒充新内容。只有复制到托管 blobstore 之后才用普通读做副本核对。
  * - 权限：helper **不重新解释权限**，只信 worker 传入的 access（本 turn 执行时事实）：
@@ -40,38 +40,28 @@ import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { humanFacingFile } from '../contracts/messageFileChanges.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { kindForFilename, validateImageBuffer } from './attachments.ts';
-import { OFFICE_MAX_BYTES, PDF_MAX_BYTES, CSV_MAX_BYTES } from './parseContracts.ts';
 import { TEXT_PREVIEW_EXTENSIONS } from './exportWriter.ts';
-
-/** 单 turn 快照上限（防长阻塞/批量误挂）。 */
-export const SNAPSHOT_MAX_FILES = 12;
-/** 单 turn 总字节上限。 */
-export const SNAPSHOT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
-/** 文本/代码类生成文件上限（读取链本身无 256KB 上传限制；给生成物一个明确边界）。 */
-const SNAPSHOT_TEXT_MAX_BYTES = 5 * 1024 * 1024;
-const SNAPSHOT_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 interface KindSpec {
   kind: 'text_file' | 'code_file' | 'image_file' | 'pdf_file' | 'docx_file' | 'sheet_file' | 'slides_file';
   storage: 'txt' | 'bin';
-  cap: number;
   /** 文档类空文件不可作为可打开附件；文本允许 0 字节。 */
   rejectEmpty: boolean;
   image?: boolean;
 }
 
 const KIND_BY_EXT: Record<string, KindSpec> = {
-  '.pdf': { kind: 'pdf_file', storage: 'bin', cap: PDF_MAX_BYTES, rejectEmpty: true },
-  '.docx': { kind: 'docx_file', storage: 'bin', cap: OFFICE_MAX_BYTES, rejectEmpty: true },
-  '.xlsx': { kind: 'sheet_file', storage: 'bin', cap: OFFICE_MAX_BYTES, rejectEmpty: true },
-  '.pptx': { kind: 'slides_file', storage: 'bin', cap: OFFICE_MAX_BYTES, rejectEmpty: true },
-  '.csv': { kind: 'sheet_file', storage: 'bin', cap: CSV_MAX_BYTES, rejectEmpty: true },
-  '.tsv': { kind: 'sheet_file', storage: 'bin', cap: CSV_MAX_BYTES, rejectEmpty: true },
-  '.png': { kind: 'image_file', storage: 'bin', cap: SNAPSHOT_IMAGE_MAX_BYTES, rejectEmpty: true, image: true },
-  '.jpg': { kind: 'image_file', storage: 'bin', cap: SNAPSHOT_IMAGE_MAX_BYTES, rejectEmpty: true, image: true },
-  '.jpeg': { kind: 'image_file', storage: 'bin', cap: SNAPSHOT_IMAGE_MAX_BYTES, rejectEmpty: true, image: true },
-  '.gif': { kind: 'image_file', storage: 'bin', cap: SNAPSHOT_IMAGE_MAX_BYTES, rejectEmpty: true, image: true },
-  '.webp': { kind: 'image_file', storage: 'bin', cap: SNAPSHOT_IMAGE_MAX_BYTES, rejectEmpty: true, image: true },
+  '.pdf': { kind: 'pdf_file', storage: 'bin', rejectEmpty: true },
+  '.docx': { kind: 'docx_file', storage: 'bin', rejectEmpty: true },
+  '.xlsx': { kind: 'sheet_file', storage: 'bin', rejectEmpty: true },
+  '.pptx': { kind: 'slides_file', storage: 'bin', rejectEmpty: true },
+  '.csv': { kind: 'sheet_file', storage: 'bin', rejectEmpty: true },
+  '.tsv': { kind: 'sheet_file', storage: 'bin', rejectEmpty: true },
+  '.png': { kind: 'image_file', storage: 'bin', rejectEmpty: true, image: true },
+  '.jpg': { kind: 'image_file', storage: 'bin', rejectEmpty: true, image: true },
+  '.jpeg': { kind: 'image_file', storage: 'bin', rejectEmpty: true, image: true },
+  '.gif': { kind: 'image_file', storage: 'bin', rejectEmpty: true, image: true },
+  '.webp': { kind: 'image_file', storage: 'bin', rejectEmpty: true, image: true },
 };
 
 export type SnapshotFailureCode =
@@ -131,7 +121,7 @@ export interface SnapshotOutcome {
   accessMode: 'full' | 'project-write' | 'readonly' | 'unavailable';
   registered: SnapshotRegistered[];
   failures: SnapshotFailure[];
-  /** 因不支持/超限等未登记的候选审计项；文件数上限项即使已声明也保留于此。 */
+  /** 因不支持/超限等未登记的候选审计项； */
   skipped: string[];
 }
 
@@ -284,7 +274,7 @@ function kindSpecOf(filename: string): KindSpec | null {
   const known = KIND_BY_EXT[ext];
   if (known != null) return known;
   if (TEXT_PREVIEW_EXTENSIONS.has(ext)) {
-    return { kind: kindForFilename(name), storage: 'txt', cap: SNAPSHOT_TEXT_MAX_BYTES, rejectEmpty: false };
+    return { kind: kindForFilename(name), storage: 'txt', rejectEmpty: false };
   }
   return null;
 }
@@ -354,7 +344,6 @@ function validateBoundMessage(input: GeneratedFileSnapshotInput, messageId: stri
  */
 function readUserFileControlled(
   path: string,
-  cap: number,
   rejectEmpty: boolean,
 ): { ok: true; bytes: Buffer } | { ok: false; code: SnapshotFailureCode; message: string } {
   let before: BigIntStats;
@@ -383,11 +372,8 @@ function readUserFileControlled(
       || opened.size !== before.size || opened.mtimeNs !== before.mtimeNs) {
       return { ok: false, code: 'CHANGED_DURING_READ', message: '打开前后文件身份/大小/修改时间不一致——拒绝用旧信息冒充当前内容，请重试' };
     }
-    if (opened.size > BigInt(cap)) {
-      return { ok: false, code: 'TOO_LARGE', message: `文件 ${opened.size}B 超过该类型上限 ${cap}B——未读取/未登记（原文件保留）` };
-    }
     if (rejectEmpty && opened.size === 0n) return { ok: false, code: 'EMPTY_FILE', message: '空文件不能作为可打开附件' };
-    const size = Number(opened.size); // 已按 cap 限幅（cap ≤ 32MiB）→ 安全转 number
+    const size = Number(opened.size);
     const bytes = Buffer.alloc(size);
     let read = 0;
     while (read < size) {
@@ -497,15 +483,7 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   }
 
   const pending: Array<SnapshotRegistered & { blobPath: string }> = [];
-  let totalBytes = 0;
   for (const candidate of candidates) {
-    if (pending.length >= SNAPSHOT_MAX_FILES) {
-      const reason = `单轮最多登记 ${SNAPSHOT_MAX_FILES} 个文件；其余未登记`;
-      // 文件数上限必须进审计 skipped，无论是否声明；声明项同时保留用户可见失败。
-      skipped.push(`${candidate.raw}（${candidate.evidence.join('+')}）：LIMIT_EXCEEDED：${reason}`);
-      if (candidate.declared) failures.push(failure(candidate.raw, 'LIMIT_EXCEEDED', reason, true, candidate.evidence));
-      continue;
-    }
     if (candidate.raw.includes('\u0000')) {
       report(candidate, 'INVALID_PATH', '路径含非法字符');
       continue;
@@ -558,32 +536,12 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
       report(candidate, 'UNSUPPORTED_TYPE', `不支持的文件类型（${basename(realTarget)}）——未生成附件卡，原文件不受影响`);
       continue;
     }
-    // 先按 stat 预估总量上限（读取前限幅），再受控读取真实字节。
-    let sizeProbe: bigint;
-    try {
-      sizeProbe = lstatSync(realTarget, { bigint: true }).size;
-    } catch {
-      report(candidate, 'UNREADABLE', '文件不可访问（权限/占用）——如实不可读');
-      continue;
-    }
-    if (sizeProbe > BigInt(kindSpec.cap)) {
-      report(candidate, 'TOO_LARGE', `文件 ${sizeProbe}B 超过该类型上限 ${kindSpec.cap}B——未读取/未登记（原文件保留）`);
-      continue;
-    }
-    if (BigInt(totalBytes) + sizeProbe > BigInt(SNAPSHOT_MAX_TOTAL_BYTES)) {
-      report(candidate, 'LIMIT_EXCEEDED', `本轮登记总量超过 ${Math.floor(SNAPSHOT_MAX_TOTAL_BYTES / 1048576)}MiB，未登记`);
-      continue;
-    }
-    const read = readUserFileControlled(realTarget, kindSpec.cap, kindSpec.rejectEmpty);
+    const read = readUserFileControlled(realTarget, kindSpec.rejectEmpty);
     if (!read.ok) {
       report(candidate, read.code, read.message);
       continue;
     }
     const bytes = read.bytes;
-    if (BigInt(totalBytes) + BigInt(bytes.length) > BigInt(SNAPSHOT_MAX_TOTAL_BYTES)) {
-      report(candidate, 'LIMIT_EXCEEDED', `本轮登记总量超过 ${Math.floor(SNAPSHOT_MAX_TOTAL_BYTES / 1048576)}MiB，未登记`);
-      continue;
-    }
     if (kindSpec.image === true) {
       const meta = validateImageBuffer(bytes);
       if (!meta.ok) {
@@ -678,7 +636,6 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
         .get(input.projectId, input.conversationId, identityPath) as {n: number};
       revision = Math.max(maxRow.n, previous.n) + 1;
     }
-    totalBytes += bytes.length;
     pending.push({
       artifactId: sameContent?.id ?? artifactId,
       sourcePath: identityPath,

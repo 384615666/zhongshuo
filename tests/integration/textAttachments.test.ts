@@ -88,9 +88,10 @@ describe('DEV-24 首包：attachment.uploadText（保存副本+资源身份）',
     const bad = await cmdRaw('attachment.uploadText', { conversationId: 'dm_a', filename: 'x.bin', content: '\u0000\u0001\u0002\u0003\u0004\u0005' });
     expect(bad.ok).toBe(false); // 二进制拒绝
     expect(String(bad.error?.message)).toContain('文本');
-    const big = await cmdRaw('attachment.uploadText', { conversationId: 'dm_a', filename: 'big.txt', content: 'x'.repeat(300 * 1024) });
-    expect(big.ok).toBe(false); // 超上限拒绝
-    expect(String(big.error?.message)).toContain('大小');
+    const bigText='x'.repeat(1024 * 1024)+'完整末尾';
+    const big = await cmd<{attachmentId:string;bytes:number}>('attachment.uploadText', { conversationId: 'dm_a', filename: 'big.txt', content: bigText });
+    const full=await cmd<{text:string}>('attachment.readFull',{attachmentId:big.attachmentId});
+    expect(big.bytes).toBe(Buffer.byteLength(bigText));expect(full.text).toBe(bigText);
     const truncated = await cmd<{ truncated: boolean; text: string; originalBytes: number }>('attachment.uploadText', { conversationId: 'dm_a', filename: 'long.txt', content: 'y'.repeat(120 * 1024) });
     expect(truncated.originalBytes).toBeGreaterThan(100_000);
     db.close();

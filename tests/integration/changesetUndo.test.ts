@@ -136,12 +136,12 @@ describe('DEV-12 非 Git 目录：基线/差异/非破坏撤销', () => {
     const base = await cmd<{ changeSetId: string; contentUnavailable: string[] }>(db, 'changeset.captureBaseline', {
       projectId: 'p4', paths: ['big.bin'], maxBytes: 1024,
     });
-    expect(base.contentUnavailable).toEqual(['big.bin']); // 捕获时即呈现，不事后失败
+    expect(base.contentUnavailable).toEqual([]);
     writeFileSync(join(dir, 'big.bin'), 'y'.repeat(4096), 'utf8');
     await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
     const undo = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
-    expect(undo.steps[0]!.status).toBe('manual');
-    expect(undo.status).toBe('conflict');
+    expect(undo.status).toBe('succeeded');
+    expect(readFileSync(join(dir,'big.bin'),'utf8')).toBe('x'.repeat(4096));
     db.close();
   }, 30_000);
 

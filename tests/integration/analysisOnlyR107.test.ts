@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -65,6 +65,9 @@ beforeAll(async () => {
   for (let index = 0; index <= 5_000; index += 1) {
     writeFileSync(join(generated, `${String(index).padStart(5, '0')}.txt`), 'x', 'utf8');
   }
+  // Count quotas are gone; retain a real boundary failure for read-only recovery.
+  const outside=join(fixtureBase,'outside');mkdirSync(outside);writeFileSync(join(outside,'keep.txt'),'outside');
+  symlinkSync(outside,join(largeProjectRoot,'outside-link'),'junction');
 }, 120_000);
 
 afterAll(() => {
@@ -355,7 +358,7 @@ describe('R107 analysisOnly formal command and worker scope', () => {
       expect(baseline).toBeDefined();
       const baselinePayload = JSON.parse(baseline!.payload_json) as { fileCount: number; truncated: boolean };
       expect(baselinePayload.fileCount).toBeGreaterThanOrEqual(5_000);
-      expect(baselinePayload.truncated).toBe(true);
+      expect(baselinePayload.truncated).toBe(false);
       expect(fixture.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({ status: 'BLOCKED' });
       expect(fixture.db.prepare(`
         SELECT payload_json FROM domain_events

@@ -6,14 +6,14 @@
  *   （计数与二进制标记），不从面向显示的 diff 头正则猜测路径；
  * - 查询用字面路径语义：GIT_LITERAL_PATHSPECS=1，文件名中的 [] 等不被当作通配/magic；
  * - 差异正文固定 `--no-textconv --no-ext-diff`——不执行仓库配置的外部 diff/textconv 程序；
- * - 容量在采集阶段控制（stdout 超过上限即终止子进程），读取后不再截字符串；截断如实标注；
+ * - 正式默认完整采集；可选限额仅供测试注入，截断如实标注；
  * - numstat 失败 ≠ 文本成功：stat 区分 text/binary/unknown（未知只表示统计不可用）；
  * - 项目根与工作树根的关系显式返回（子目录项目不悄悄扩大操作范围）；
  * - 只读——不改工作区/索引/HEAD（保留用户已有未提交内容）。
  * 写操作在 gitWrite.ts（Git 提交不等同任务验收，RT-25）。
  */
 import { spawn } from 'node:child_process';
-import { openSync, readSync, closeSync, statSync } from 'node:fs';
+import { openSync, readFileSync, closeSync, statSync, fstatSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
 // ---------- 受控采集 ----------
@@ -29,10 +29,10 @@ export interface GitCapture {
 }
 
 /**
- * 执行 git 并采集 stdout——超过 capBytes 立即终止子进程（不在读取后截字符串）。
+ * 执行 git 并完整采集 stdout；仅测试显式传 capBytes 时截断并终止。
  * stderr 上限 16KB。读取类命令统一走这里；env 需要显式传入（写命令不剥离用户配置）。
  */
-export function captureGit(args: readonly string[], options: { cwd?: string; capBytes: number; env?: NodeJS.ProcessEnv }): Promise<GitCapture> {
+export function captureGit(args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv }): Promise<GitCapture> {
   return new Promise((resolveCapture) => {
     const child = spawn('git', args as string[], { cwd: options.cwd, env: options.env ?? process.env, windowsHide: true });
     const outChunks: Buffer[] = [];
@@ -55,7 +55,7 @@ export function captureGit(args: readonly string[], options: { cwd?: string; cap
     child.stdout.on('data', (chunk: Buffer) => {
       if (truncated) return;
       outBytes += chunk.length;
-      if (outBytes > options.capBytes) {
+      if (options.capBytes != null && outBytes > options.capBytes) {
         // 保留不超过上限的前缀，终止子进程——读取阶段即控制资源。
         const headroom = options.capBytes - (outBytes - chunk.length);
         if (headroom > 0) outChunks.push(chunk.subarray(0, headroom));
@@ -87,7 +87,7 @@ function readDiffEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
 
 const GIT_TIMEOUT_MS = 15_000;
 
-async function runGitOk(args: readonly string[], options: { cwd?: string; capBytes: number; env?: NodeJS.ProcessEnv; what: string }): Promise<GitCapture> {
+async function runGitOk(args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv; what: string }): Promise<GitCapture> {
   const cap = await withTimeout(captureGit(args, options), GIT_TIMEOUT_MS, options.what);
   if (cap.spawnError != null) {
     throw new GitProtocolError('GIT_COMMAND_FAILED', `git ${options.what} 无法执行（${cap.spawnError}）`);
@@ -128,12 +128,12 @@ export interface RepoLocation {
 }
 
 export async function locateRepo(projectRoot: string): Promise<RepoLocation> {
-  const inside = await captureGit(['-C', projectRoot, 'rev-parse', '--is-inside-work-tree'], { capBytes: 1024 });
+  const inside = await captureGit(['-C', projectRoot, 'rev-parse', '--is-inside-work-tree'], { });
   if (inside.spawnError != null || inside.exitCode !== 0 || !inside.stdout.toString('utf8').trim().endsWith('true')) {
     const detail = inside.spawnError ?? (inside.stderr.trim() !== '' ? inside.stderr.trim().slice(0, 160) : `exit=${inside.exitCode}`);
     throw new GitProtocolError('NOT_A_GIT_REPO', `目录不是 git 仓库（${projectRoot}）：${detail}`);
   }
-  const top = await runGitOk(['-C', projectRoot, 'rev-parse', '--show-toplevel'], { capBytes: 4096, what: 'show-toplevel' });
+  const top = await runGitOk(['-C', projectRoot, 'rev-parse', '--show-toplevel'], { what: 'show-toplevel' });
   if (top.exitCode !== 0 || top.stdout.toString('utf8').trim() === '') {
     throw new GitProtocolError('GIT_COMMAND_FAILED', `无法确定工作树根（show-toplevel 失败）：${top.stderr.trim().slice(0, 160)}`);
   }
@@ -223,10 +223,8 @@ export type GitRepoStatus = {
   truncated: boolean;
 } | { ok: false; code: 'NOT_A_GIT_REPO' | 'GIT_COMMAND_FAILED'; message: string };
 
-const MAX_ENTRIES = 200;
-const STATUS_CAP_BYTES = 256 * 1024;
 
-export async function gitRepoStatus(root: string, maxEntries = MAX_ENTRIES): Promise<GitRepoStatus> {
+export async function gitRepoStatus(root: string, maxEntries?: number): Promise<GitRepoStatus> {
   let loc: RepoLocation;
   try {
     loc = await locateRepo(root);
@@ -236,16 +234,16 @@ export async function gitRepoStatus(root: string, maxEntries = MAX_ENTRIES): Pro
   }
   let branch = '(unknown)';
   try {
-    const symbolic = await runGitOk(['-C', loc.worktreeRoot, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { capBytes: 4096, what: 'branch' });
+    const symbolic = await runGitOk(['-C', loc.worktreeRoot, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { what: 'branch' });
     if (symbolic.exitCode === 0) branch = symbolic.stdout.toString('utf8').trim();
     else if (symbolic.exitCode === 1) {
-      const b = await runGitOk(['-C', loc.worktreeRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { capBytes: 4096, what: 'detached HEAD' });
+      const b = await runGitOk(['-C', loc.worktreeRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { what: 'detached HEAD' });
       if (b.exitCode === 0) branch = b.stdout.toString('utf8').trim();
     }
   } catch { /* 分支不可得（如空仓库）——如实标注，不失败 */ }
   const porcelain = await runGitOk(
-    ['-C', loc.worktreeRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],
-    { capBytes: STATUS_CAP_BYTES, what: 'status' },
+    ['-C', loc.worktreeRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    { what: 'status' },
   );
   if (porcelain.exitCode !== 0) {
     return { ok: false, code: 'GIT_COMMAND_FAILED', message: `git status 失败（exit=${porcelain.exitCode}）：${porcelain.stderr.trim().slice(0, 160)}` };
@@ -266,7 +264,7 @@ export async function gitRepoStatus(root: string, maxEntries = MAX_ENTRIES): Pro
     if (marked.category === 'untracked') untracked.push(marked);
     else if (marked.category === 'staged') staged.push(marked);
     else unstaged.push(marked);
-    if (staged.length + unstaged.length + untracked.length >= maxEntries) {
+    if (maxEntries != null && staged.length + unstaged.length + untracked.length >= maxEntries && parsed.length > maxEntries) {
       truncated = true;
       break;
     }
@@ -383,7 +381,7 @@ export interface GitDiffPatch {
   stat: 'text' | 'binary' | 'unknown';
   /** 兼容字段：stat==='binary'。 */
   binary: boolean;
-  /** 正文超过单文件上限（截断，含标记；完整差异走 git 客户端）。 */
+  /** 采集器是否返回截断内容（正式默认不截断）。 */
   truncated: boolean;
   /** 正文来源：diff=unified diff；worktree-content=未跟踪文件内容（新增语义）。 */
   source: 'diff' | 'worktree-content';
@@ -408,14 +406,9 @@ export type GitDiffResult =
     }
   | { ok: false; code: 'NOT_A_GIT_REPO' | 'GIT_COMMAND_FAILED' | 'PATH_OUT_OF_REPO' | 'PATH_IS_DIRECTORY'; message: string };
 
-const PER_FILE_DIFF_CAP_BYTES = 64 * 1024;
-const TOTAL_DIFF_CAP_BYTES = 512 * 1024;
-const MAX_PATCH_FILES = 50;
-const NUMSTAT_CAP_BYTES = 256 * 1024;
-const UNTRACKED_CONTENT_CAP_BYTES = 64 * 1024;
 
 /** 测试接缝：注入采集器（正式命令不传）。 */
-export type GitRunner = (args: readonly string[], options: { cwd?: string; capBytes: number; env?: NodeJS.ProcessEnv }) => Promise<GitCapture>;
+export type GitRunner = (args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv }) => Promise<GitCapture>;
 
 const CHANGE_OF_STATUS: Record<string, GitDiffPatch['change']> = {
   A: 'added', C: 'copied', D: 'deleted', M: 'modified', T: 'modified', R: 'renamed',
@@ -446,7 +439,7 @@ async function gitDiffInner(root: string, options: { staged?: boolean; path?: st
     // 未跟踪文件：diff 无输出——按新增文件语义展示工作区内容（§十轮-5：不只列文件名）。
     const statusPath = await run(
       ['-C', loc.worktreeRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', filterPath],
-      { capBytes: 64 * 1024, env: readDiffEnv({ GIT_LITERAL_PATHSPECS: '1' }) },
+      { env: readDiffEnv({ GIT_LITERAL_PATHSPECS: '1' }) },
     );
     if (statusPath.exitCode !== 0) {
       throw new GitProtocolError('GIT_COMMAND_FAILED', `未跟踪判定失败（status -- path）：${statusPath.stderr.trim().slice(0, 120)}`);
@@ -461,8 +454,8 @@ async function gitDiffInner(root: string, options: { staged?: boolean; path?: st
   const literalEnv = readDiffEnv({ GIT_LITERAL_PATHSPECS: '1' });
 
   // 身份事实源：raw -z（解析失败=命令失败，不静默降级）。
-  const rawCap = await run([...baseDiffArgs, '--raw', '-z', ...pathArgs], { capBytes: NUMSTAT_CAP_BYTES, env: literalEnv });
-  if (rawCap.spawnError != null || rawCap.truncated || (rawCap.exitCode !== 0 && rawCap.exitCode !== null)) {
+  const rawCap = await run([...baseDiffArgs, '--raw', '-z', ...pathArgs], { env: literalEnv });
+  if (rawCap.spawnError != null || rawCap.truncated || rawCap.exitCode !== 0) {
     throw new GitProtocolError('GIT_COMMAND_FAILED', `git diff --raw 失败（exit=${rawCap.exitCode}${rawCap.truncated ? '，输出超采集上限——身份列表不完整，不静默降级' : ''}）：${rawCap.stderr.trim().slice(0, 160)}`);
   }
   let rawEntries: RawDiffEntry[];
@@ -478,7 +471,7 @@ async function gitDiffInner(root: string, options: { staged?: boolean; path?: st
   // 统计事实源：numstat -z。失败不冒充文本成功——stat=unknown 并记录原因。
   let numstat = new Map<string, NumstatEntry>();
   let numstatError: string | undefined;
-  const numCap = await run([...baseDiffArgs, '--numstat', '-z', ...pathArgs], { capBytes: NUMSTAT_CAP_BYTES, env: literalEnv });
+  const numCap = await run([...baseDiffArgs, '--numstat', '-z', ...pathArgs], { env: literalEnv });
   if (numCap.spawnError != null || numCap.exitCode !== 0 || numCap.truncated) {
     numstatError = `numstat 不可用（exit=${numCap.exitCode}${numCap.truncated ? '，输出超采集上限' : ''}：${numCap.stderr.trim().slice(0, 120)}）——统计与二进制标记按 unknown 处理`;
   } else {
@@ -492,9 +485,7 @@ async function gitDiffInner(root: string, options: { staged?: boolean; path?: st
 
   const patches: GitDiffPatch[] = [];
   let truncatedOverall = false;
-  let budget = TOTAL_DIFF_CAP_BYTES;
-  let filesOmitted = 0;
-  for (const [index, entry] of rawEntries.entries()) {
+  for (const entry of rawEntries) {
     const stat = numstat.get(entry.path);
     const patch: GitDiffPatch = {
       path: entry.path,
@@ -507,78 +498,55 @@ async function gitDiffInner(root: string, options: { staged?: boolean; path?: st
       text: '',
       ...(stat != null ? { addedCount: stat.added, deletedCount: stat.deleted } : {}),
     };
-    if (index >= MAX_PATCH_FILES) {
-      // 身份与统计仍列出；正文省略（上限如实标注）。
-      patch.truncated = true;
-      filesOmitted += 1;
-      truncatedOverall = true;
-      patches.push(patch);
-      continue;
-    }
     if (patch.stat === 'binary') {
       patches.push(patch); // 二进制无文本差异（正文为空是事实，不是截断）
       continue;
     }
-    if (budget <= 0) {
-      patch.truncated = true;
-      truncatedOverall = true;
-      patch.text = '';
-      patches.push(patch);
-      continue;
-    }
-    const cap = Math.min(PER_FILE_DIFF_CAP_BYTES, budget);
     // 正文按条目自身路径取（字面 pathspec）：路径过滤命中子树多条目时不会重复取整棵子树。
-    const textCap = await run([...baseDiffArgs, '--unified=3', '--', entry.path], { capBytes: cap + 1, env: literalEnv });
-    // 被采集上限终止（exit=null 且 truncated）＝设计内截断；真实非零退出才是失败。
-    if (textCap.spawnError != null || (textCap.exitCode !== 0 && textCap.exitCode !== null)) {
+    const textCap = await run([...baseDiffArgs, '--unified=3', '--', entry.path], { env: literalEnv });
+    // 真实非零退出或异常终止必须报告失败。
+    if (textCap.spawnError != null || textCap.exitCode !== 0) {
       throw new GitProtocolError('GIT_COMMAND_FAILED', `git diff 正文失败（${entry.path}，exit=${textCap.exitCode}）：${textCap.stderr.trim().slice(0, 120)}`);
     }
-    budget -= Math.min(textCap.stdout.length, cap);
-    if (textCap.stdout.length > cap) {
-      patch.text = `${textCap.stdout.subarray(0, cap).toString('utf8')}\n…（差异超限已截断：完整差异请用 git 客户端查看）`;
-      patch.truncated = true;
-      truncatedOverall = true;
-    } else {
-      patch.text = textCap.stdout.toString('utf8');
-    }
+    patch.text = textCap.stdout.toString('utf8');
+    patch.truncated = textCap.truncated;
+    truncatedOverall ||= textCap.truncated;
     patches.push(patch);
   }
   return {
     ok: true,
     patches,
     truncatedOverall,
-    ...(filesOmitted > 0 ? { filesOmitted } : {}),
     ...(numstatError != null ? { numstatError } : {}),
     worktreeRoot: loc.worktreeRoot,
   };
 }
 
-/** 未跟踪文件内容（新增语义）：采集阶段限量读取；二进制=NUL 嗅探；目录明确拒绝。 */
+/** 未跟踪文件内容（新增语义）：完整读取；二进制=NUL 嗅探；目录明确拒绝。 */
 async function untrackedContentPatch(loc: RepoLocation, path: string): Promise<GitDiffPatch> {
   const fsPath = join(loc.worktreeRoot, ...path.split('/'));
-  let size: number;
   try {
     const st = statSync(fsPath);
     if (st.isDirectory()) throw new GitProtocolError('PATH_IS_DIRECTORY', `未跟踪路径是目录（${path}）——请指定具体文件查看内容`);
-    size = st.size;
   } catch (error) {
     if (error instanceof GitProtocolError) throw error;
     throw new GitProtocolError('GIT_COMMAND_FAILED', `未跟踪文件不可读（${path}）：${error instanceof Error ? error.message : String(error)}`);
   }
-  const truncated = size > UNTRACKED_CONTENT_CAP_BYTES;
   const fd = openSync(fsPath, 'r');
   try {
-    const buf = Buffer.alloc(Math.min(size, UNTRACKED_CONTENT_CAP_BYTES));
-    readSync(fd, buf, 0, buf.length, 0);
+    const opened = fstatSync(fd, { bigint: true });
+    const buf = readFileSync(fd);
+    const after = fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || BigInt(buf.length) !== opened.size || opened.size !== after.size || opened.mtimeNs !== after.mtimeNs || opened.ino !== after.ino || opened.dev !== after.dev) throw new GitProtocolError('GIT_COMMAND_FAILED', '未跟踪文件读取期间变化或读取不完整');
     const binary = buf.includes(0);
     return {
       path,
       change: 'added',
       stat: binary ? 'binary' : 'text',
       binary,
-      truncated,
+      truncated: false,
       source: 'worktree-content',
-      text: binary ? '' : truncated ? `${buf.toString('utf8')}\n…（内容超限已截断：完整内容请用编辑器/git 客户端查看）` : buf.toString('utf8'),
+      text: binary ? '' : buf.toString('utf8'),
       addedCount: null,
       deletedCount: null,
     };

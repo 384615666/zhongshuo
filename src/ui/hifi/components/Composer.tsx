@@ -943,8 +943,7 @@ export function Composer({
   const [imageGate, setImageGate] = useState<{ names: string[]; reason?: string } | null>(null);
 
   /**
-   * 真实附件上传：先本地分类+前置限幅（文本 256KB/图片 8MB/PDF、Office 20MiB/CSV 5MB——
-   * 服务端为最终裁决）；文本走 fatal UTF-8 解码（非法字节零上传）。成功回执经
+   * 附件按类型上传，内容校验由服务端裁决。成功回执经
    * settleUploadReady **原子结算**（r53 §3）：store 同时核 uploadId 存在/未移除/发起会话一致，
    * 通过才置 ready 并写草稿 ref——上传中被移除的回执整体丢弃，组件不再自行写草稿（那正是
    * 「芯片消失但草稿仍带已移除资源」的根因）。
@@ -2326,7 +2325,7 @@ export function Composer({
                 : inputDisabledReason
                   ? `${inputDisabledReason}（只读中不能添加附件）`
                   : attachmentUpload != null
-                    ? '添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）'
+                    ? '添加附件（文本、图片、PDF、Office、CSV）'
                     : '此处暂不支持添加附件'
             }
             onClick={() => fileInputRef.current?.click()}

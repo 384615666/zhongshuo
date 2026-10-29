@@ -219,8 +219,8 @@ describe('整进程内存（Job Object）——外部 Buffer 分配反例', () =
   }, 120_000);
 });
 
-describe('zip 实际输出上限（声明说谎的 deflate 炸弹）', () => {
-  it('local/central 声明解压 1KB、实际解出 ~40MB → 流式计数拒绝（不等整包解完）', async () => {
+describe('ZIP 完整性与旧容量边界', () => {
+  it('local/central 声明解压1KB与实际数据不符仍报完整性错误', async () => {
     // 手工构造说谎 zip：stored 的元数据声明 + deflate 真身。
     const payload = Buffer.alloc(40 * 1024 * 1024, 0x61); // 40MB 可压缩真身
     const deflated = zlib.deflateSync(payload);
@@ -258,25 +258,24 @@ describe('zip 实际输出上限（声明说谎的 deflate 炸弹）', () => {
     const t0 = Date.now();
     const r = await pool.run('docx', path, hash); // office/docx 路径必经 safeUnzip
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(['zip-size-limit', 'zip-corrupt']).toContain(r.error.code); // 说谎声明：fflate 在流内发现声明不符即错（corrupt）或计数超限（size-limit）——都不落地
+    if (!r.ok) expect(r.error.code).toBe('zip-corrupt'); // 结构或尺寸声明不符仍拒绝，不使用容量门槛
     expect(Date.now() - t0).toBeLessThan(30_000); // 拒绝发生在解压中途，非整包解完
     expect(pool.stats().liveChildren).toBe(0);
     await pool.dispose();
   }, 120_000);
-  it('单条声明合法、合计实际输出超总量上限（压缩炸弹真身）→ 流式累计拒', async () => {
-    // 30 条×20MB 零块（各自声明 20MB<64MB 单条目上限、zip 原件 ~600KB<20MB 原件上限）——
-    // 实际解压合计 600MB>160MB 总量上限：受限解压过程中累计实际输出触发（声明规模合法）。
+  it('越过旧总解压量上限后仍检查文档结构，不再容量拒绝', async () => {
+    // 9条×20MiB=180MiB，越过旧160MiB容量；ZIP合法但缺Office主文档，仍应报结构错误。
     const { zipSync } = await import('fflate');
     const entries: Record<string, Buffer> = { '[Content_Types].xml': Buffer.from('<Types/>') };
     const chunk = Buffer.alloc(20 * 1024 * 1024, 0x63);
-    for (let i = 0; i < 30; i += 1) entries[`f${i}.bin`] = chunk;
+    for (let i = 0; i < 9; i += 1) entries[`f${i}.bin`] = chunk;
     const zip = Buffer.from(zipSync(entries, { level: 9 }));
     const { path, hash } = blobOf(zip);
     const pool = new ParsePool();
     const t0 = Date.now();
     const r = await pool.run('docx', path, hash);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('zip-size-limit');
+    if (!r.ok) expect(r.error.code).toBe('office-corrupt');
     expect(Date.now() - t0).toBeLessThan(60_000);
     expect(pool.stats().liveChildren).toBe(0);
     await pool.dispose();

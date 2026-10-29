@@ -3,6 +3,8 @@ import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import {enqueueOutbox} from '../persistence/outbox.ts';
 import {appendDomainEvent} from '../persistence/events.ts';
 
+export const AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS=5;
+
 export interface RecoveryExecution {
   dispatchKey:string;
   writeScope:string;
@@ -42,7 +44,7 @@ export function hasBusinessToolEvidence(db:ZhongshuoDatabase,turnId:string):bool
 }
 function record(db:ZhongshuoDatabase,job:AutomaticRecovery,kind:string,message:string,now:number){
   const task=db.prepare('SELECT project_id,conversation_id,conversation_thread_id FROM tasks WHERE id=?').get(job.taskId) as {project_id:string;conversation_id:string;conversation_thread_id:string};
-  appendDomainEvent(db,{eventId:`evt_${randomUUID()}`,schemaVersion:1,projectId:task.project_id,conversationId:task.conversation_id,threadId:task.conversation_thread_id,taskId:job.taskId,runId:job.runId,turnId:job.sourceTurnId,kind,payload:{message,attempt:job.extraAttempts,maxExtraAttempts:2,nextAttemptAt:job.nextAttemptAt,recoveryKind:job.kind},createdAt:now});
+  appendDomainEvent(db,{eventId:`evt_${randomUUID()}`,schemaVersion:1,projectId:task.project_id,conversationId:task.conversation_id,threadId:task.conversation_thread_id,taskId:job.taskId,runId:job.runId,turnId:job.sourceTurnId,kind,payload:{message,attempt:job.extraAttempts,maxExtraAttempts:AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS,nextAttemptAt:job.nextAttemptAt,recoveryKind:job.kind},createdAt:now});
 }
 /** Only a confirmed terminal failure may create a new, bounded intent. Unknown
  * execution and failures with possible business side effects are never replayed. */
@@ -59,11 +61,11 @@ export function requestAutomaticRecovery(db:ZhongshuoDatabase,args:{taskId:strin
   if(!Number.isFinite(hintedMs)||!Number.isSafeInteger(args.now+Math.ceil(delay)))return false;
   const job:AutomaticRecovery={...execution,extraAttempts:execution.extraAttempts+1,taskId:args.taskId,runId:args.runId,sourceTurnId:args.turnId,targetDispatchKey:`task:${args.taskId}:redispatch:auto_${args.turnId}`,kind:args.kind,stopGeneration:task.stop_generation,nextAttemptAt:args.now+Math.ceil(delay),state:'waiting',reason:args.reason.slice(0,1000)};
   const noRetry=/auth|unauthori|forbidden|api.?key|credential|billing|balance|credit|insufficient|quota|usage.limit|payment|cancel|interrupt|permission|认证|余额|欠费|权限|配置|名单|代次|停止|预算|未开放|不存在|已失效|目录|成员停用/i.test(`${args.code??''} ${args.reason}`);
-  const exhausted=execution.extraAttempts>=2||source.turn_purpose==='format_repair';
+  const exhausted=execution.extraAttempts>=AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS||source.turn_purpose==='format_repair';
   const transient=/429|\b50[234]\b|rate.?limit|overloaded|temporar|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network|socket|fetch failed|upstream|网络|限流|暂时|繁忙/i.test(`${args.code??''} ${args.reason}`);
   const tool=hasBusinessToolEvidence(db,args.turnId);
   if(noRetry||exhausted||args.kind==='transient'&&(!transient||tool||args.businessChanges)){
-    if(exhausted){job.state='stopped';save(db,`automatic-recovery:${args.turnId}`,job);record(db,job,'recovery.exhausted',`自动恢复已停止（额外尝试上限2次；输出只补交一次）。最后原因：${job.reason}。已有成果保留，请处理原因后从原任务继续。`,args.now);}
+    if(exhausted){job.state='stopped';save(db,`automatic-recovery:${args.turnId}`,job);record(db,job,'recovery.exhausted',`自动恢复已停止。最后原因：${job.reason}。请处理原因后从原任务继续。`,args.now);}
     return false;
   }
   if(args.kind==='output'){
@@ -79,7 +81,7 @@ export function requestAutomaticRecovery(db:ZhongshuoDatabase,args:{taskId:strin
   db.prepare("UPDATE coordination_runs SET state=?,error_message=NULL WHERE (run_id=? OR integration_run_id=?) AND state='blocked'").run(execution.phase==='planning'?'planning':'integrating',args.runId,args.runId);
   db.prepare("UPDATE workflow_runs SET status='WAITING',stage=? WHERE id=?").run(args.kind==='output'?'等待只读补交结果':'等待自动重试',args.runId);
   db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(args.taskId);
-  record(db,job,'recovery.scheduled',`第${job.extraAttempts}/2次额外尝试将在${(job.nextAttemptAt-args.now)/1000}秒后${args.kind==='output'?'只读补交结果，不重复修改':'重试'}。上次原因：${job.reason}`,args.now);
+  record(db,job,'recovery.scheduled',`第${job.extraAttempts}/${AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS}次自动重试将在${(job.nextAttemptAt-args.now)/1000}秒后${args.kind==='output'?'补交结果':'开始'}。上次原因：${job.reason}`,args.now);
   return true;
 }
 export function pendingAutomaticRecovery(db:ZhongshuoDatabase,taskId:string):AutomaticRecovery|undefined{
@@ -145,7 +147,7 @@ export function pumpAutomaticRecoveries(db:ZhongshuoDatabase,now:number){
       const lease=db.prepare("SELECT 1 FROM workspace_leases WHERE owner_turn_id=? AND status!='released'").get(job.sourceTurnId);
       if(unsafe||lease)return;
       enqueueOutbox(db,{dispatchKey:job.targetDispatchKey,stopGenerationAtEnqueue:job.stopGeneration});markAutomaticRecovery(db,job,'queued');
-      record(db,job,'recovery.queued',`第${job.extraAttempts}/2次额外尝试已排队（${job.kind==='output'?'仅补交结果':'临时故障重试'}）。上次原因：${job.reason}`,now);
+      record(db,job,'recovery.queued',`第${job.extraAttempts}/${AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS}次自动重试已排队。上次原因：${job.reason}`,now);
     }
   })();
 }

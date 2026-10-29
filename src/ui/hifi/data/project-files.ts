@@ -1,7 +1,7 @@
 /**
  * 项目文件树（R64）：真实目录懒装载投影——project.files.list（安全根内只读列举）。
  * 替代原型 mock-tree：节点来自用户项目磁盘的真实目录项（名称/类型/大小/mtime），
- * 目录按需展开（每目录一次命令，≤500 项 truncated 如实）。不做内容读取——
+ * 目录按需展开（每目录一次命令，读取完整性如实呈现）。不做内容读取——
  * 选中文件经共享预览走 project.file.read 只读快照。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';

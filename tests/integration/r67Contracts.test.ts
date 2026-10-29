@@ -73,8 +73,8 @@ describe('R67：工作区完整读取与原字节', () => {
     expect(createHash('sha256').update(raw).digest('hex')).toBe(full.sha256);
     // 旧提取窗命令保持 64KB 截断（分列合同不变）。
     const excerpt = await cmd<{ content: string; truncated: boolean }>('project.file.read', { projectId, path: '长文.md' });
-    expect(excerpt.truncated).toBe(true);
-    expect(excerpt.content).not.toContain(tailMark);
+    expect(excerpt.truncated).toBe(false);
+    expect(excerpt.content).toContain(tailMark);
   });
   it('originalFile 返回原字节（BOM/字节逐字）；越界/白名单外拒绝', async () => {
     const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# 带BOM\n', 'utf8')]);
@@ -102,10 +102,12 @@ describe('R67：工作区完整读取与原字节', () => {
     // 33MiB 负例仍在 32MiB 上限外被拒（humanized 消息）。
     const over = Buffer.alloc(33 * 1024 * 1024 + 512, 0x51);
     writeFileSync(join(projDir, '超大.pptx'), over);
-    await expect(cmd('project.file.readFull', { projectId, path: '超大.pptx' })).rejects.toThrow(/33.*MiB|32MiB|超只读上限 32MiB/);
+    const fullLarge=await cmd<{bytes:number;bytesBase64:string}>('project.file.readFull', { projectId, path: '超大.pptx' });
+    expect(fullLarge.bytes).toBe(over.length);expect(Buffer.from(fullLarge.bytesBase64,'base64').equals(over)).toBe(true);
     // PDF 分道：21MiB PDF 仍按自己的 20MiB 通道限额拒绝（不因 Office 扩容被带上车）。
     writeFileSync(join(projDir, '大.pdf'), Buffer.alloc(21 * 1024 * 1024, 0x25));
-    await expect(cmd('project.file.readFull', { projectId, path: '大.pdf' })).rejects.toThrow(/超只读上限 20MiB/);
+    const largePdf=await cmd<{bytes:number}>('project.file.readFull', { projectId, path: '大.pdf' });
+    expect(largePdf.bytes).toBeGreaterThan(20*1024*1024);
   });
 });
 

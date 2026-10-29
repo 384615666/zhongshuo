@@ -9,7 +9,7 @@
  * 全部走正式命令（git.status/git.diff）；fixture 均为临时目录，不触用户真实工作区。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -116,14 +116,14 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     db.close();
   }, 30_000);
 
-  it('status：条目数上限截断如实标注（>200 条目）', async () => {
+  it('status：完整返回超过200条目', async () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 3; i += 1) files[`base${i}.txt`] = 'x\n';
     const { root, db, cmd } = makeRepo('many', files);
     for (let i = 0; i < 205; i += 1) writeFileSync(join(root, `u${i}.txt`), 'n\n', 'utf8');
     const s = await cmd<{ staged: unknown[]; unstaged: unknown[]; untracked: unknown[]; truncated: boolean }>('git.status', { projectId: 'p1' });
-    expect(s.untracked.length).toBe(200);
-    expect(s.truncated).toBe(true);
+    expect(s.untracked.length).toBe(205);
+    expect(s.truncated).toBe(false);
     db.close();
   }, 60_000);
 
@@ -204,7 +204,7 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     db.close();
   }, 30_000);
 
-  it('diff：二进制=字段协议（numstat -）；单文件/整体/文件数上限如实截断', async () => {
+  it('diff：二进制=字段协议（numstat -）；超过原单文件/整体/文件数上限仍完整读取', async () => {
     const { root, db, cmd } = makeRepo('caps', { 'bin.dat': 'ok\n', 'big.txt': 'x\n', 'stay.txt': 's\n' });
     // 二进制（NUL 字节）暂存。
     writeFileSync(join(root, 'bin.dat'), Buffer.from([0x00, 0x01, 0x02, 0x0a]));
@@ -219,10 +219,10 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     writeFileSync(join(root, 'big.txt'), `${'x'.repeat(60)}\n`.repeat(2000), 'utf8'); // ~120KB diff
     const big = await cmd<{ patches: Array<{ path: string; truncated: boolean; text: string }>; truncatedOverall: boolean }>('git.diff', { projectId: 'p1', path: 'big.txt' });
     const bigPatch = big.patches.find((p) => p.path === 'big.txt')!;
-    expect(bigPatch.truncated).toBe(true);
-    expect(bigPatch.text).toContain('差异超限已截断');
-    expect(bigPatch.text.length).toBeLessThan(70 * 1024);
-    expect(big.truncatedOverall).toBe(true);
+    expect(bigPatch.truncated).toBe(false);
+    expect(bigPatch.text).toContain('+' + 'x'.repeat(60));
+    expect(bigPatch.text.length).toBeGreaterThan(120 * 1024);
+    expect(big.truncatedOverall).toBe(false);
 
     // 文件数上限（50）：身份仍列出，正文省略并计数（55 个新文件暂存）。
     const many = makeRepo('capsmany', { seed: 's\n' });
@@ -230,9 +230,9 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     git(many.root, 'add', '-A');
     const manyD = await many.cmd<{ patches: Array<{ path: string; truncated: boolean }>; filesOmitted?: number; truncatedOverall: boolean }>('git.diff', { projectId: 'p1', staged: true });
     expect(manyD.patches.length).toBe(55);
-    expect(manyD.filesOmitted).toBe(5);
-    expect(manyD.truncatedOverall).toBe(true);
-    expect(manyD.patches.filter((p) => p.truncated).length).toBe(5);
+    expect(manyD.filesOmitted).toBeUndefined();
+    expect(manyD.truncatedOverall).toBe(false);
+    expect(manyD.patches.filter((p) => p.truncated).length).toBe(0);
     many.db.close();
 
     // 整体预算（512KB）：9 个已跟踪文件各 ~77KB diff → 前 8 个单文件截断，第 9 个按预算省略正文。
@@ -242,11 +242,11 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     for (let i = 0; i < 9; i += 1) writeFileSync(join(budgetRepo.root, `g${i}.txt`), `${'y'.repeat(70)}\n`.repeat(1100), 'utf8'); // 每个 ~77KB diff
     const budgetD = await budgetRepo.cmd<{ patches: Array<{ path: string; truncated: boolean; text: string }>; truncatedOverall: boolean }>('git.diff', { projectId: 'p1' });
     expect(budgetD.patches.length).toBe(9);
-    expect(budgetD.patches[0]!.truncated).toBe(true);
-    expect(budgetD.patches[0]!.text).toContain('差异超限已截断');
-    expect(budgetD.patches[8]!.truncated).toBe(true);
-    expect(budgetD.patches[8]!.text).toBe(''); // 预算耗尽：正文省略（区别于单文件截断）
-    expect(budgetD.truncatedOverall).toBe(true);
+    expect(budgetD.patches[0]!.truncated).toBe(false);
+    expect(budgetD.patches[0]!.text.length).toBeGreaterThan(77 * 1024);
+    expect(budgetD.patches[8]!.truncated).toBe(false);
+    expect(budgetD.patches[8]!.text.length).toBeGreaterThan(77 * 1024); // 预算耗尽：正文省略（区别于单文件截断）
+    expect(budgetD.truncatedOverall).toBe(false);
     budgetRepo.db.close();
     db.close();
   }, 120_000);
@@ -255,7 +255,7 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     const { root } = makeRepo('numfail', { 'a.txt': 'a\n' });
     writeFileSync(join(root, 'a.txt'), 'a2\n', 'utf8');
     // 注入 runner：numstat 命令失败，其余正常（测试接缝，正式命令不带 runner）。
-    const failing = async (args: readonly string[], opts: { cwd?: string; capBytes: number; env?: NodeJS.ProcessEnv }) => {
+    const failing = async (args: readonly string[], opts: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv }) => {
       if (args.includes('--numstat')) {
         return { exitCode: 128, stdout: Buffer.alloc(0), stderr: 'fatal: injected', truncated: false };
       }
@@ -292,8 +292,8 @@ describe('第十轮·一：Git 只读数据协议与边界', () => {
     expect(bin.patches[0]!.text).toBe('');
 
     const large = await cmd<{ patches: Array<{ truncated: boolean; text: string }> }>('git.diff', { projectId: 'p1', path: 'large.txt' });
-    expect(large.patches[0]!.truncated).toBe(true);
-    expect(large.patches[0]!.text).toContain('内容超限已截断');
+    expect(large.patches[0]!.truncated).toBe(false);
+    expect(large.patches[0]!.text).toBe(readFileSync(join(root, 'large.txt'), 'utf8'));
 
     await expect(cmd('git.diff', { projectId: 'p1', path: 'dir 新' })).rejects.toThrow('目录');
     db.close();

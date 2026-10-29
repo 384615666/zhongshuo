@@ -8,11 +8,11 @@ import type { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 import { createHash } from 'node:crypto';
 import { chatAnswer } from '../contracts/chatAnswer.ts';
 import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
-import { validateExtractCache, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
+import { validateExtractCacheForInput, extractCacheIsTruncated, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
 
 /** 组装行 → 信封附件条目（第二十九轮二/三/四）。图片=持久发送选择：include 经成员认证与原件核验后提供字节输入；
  * omit/local-only/旧记录注入**未发送说明**，不宣称已读；文档类=原件实根+实身份+sha256 核对 +
- * 提取缓存严格校验（schema v2——结构/版本/预算不符=fail-closed 不派发）后按类渲染：
+ * 提取缓存严格校验（schema v2——结构/版本/hash 校验，兼容已知历史摘录）后按类渲染：
  * PDF 页标注 / DOCX 有序文本 / 幻灯片按页+备注 / 表格按范围窗口（有界默认）。返回
  * string=组装失败原因（fail-closed）。 */
 type DocAttachmentRow = { id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec?: string | null; image_mode?: string | null };
@@ -40,8 +40,10 @@ function documentAttachmentForInput(
   if (mapping == null) return { error: `附件类型（${row.kind}）不在注入范围——拒绝组装` };
   const verified = readVerifiedBlob(row.blob_path, row.hash, blobRoot); // 原件缺失/改写/越界=拒绝
   if (!verified.ok) return { error: verified.error.message };
-  const cache = validateExtractCache(row.extracted_text_json, row.hash, mapping.cache);
+  const cache = validateExtractCacheForInput(row.extracted_text_json, row.hash, mapping.cache);
   if (cache == null || cache.kind !== mapping.cache) return { error: `提取缓存缺失/无效（${label}）——重新预览生成缓存后重试（fail-closed，不以路径冒充已读）` };
+  const cacheTruncated = extractCacheIsTruncated(cache);
+  let windowTruncated = false;
   let joined = '';
   switch (cache.kind) {
     case 'pdf': {
@@ -63,12 +65,14 @@ function documentAttachmentForInput(
       const rendered = renderSheetWindow(cache, row.range_spec ?? null, ATT_EXCERPT_BYTES);
       if (!rendered.ok) return { error: `表格注入失败（${label}）：${rendered.error}` };
       joined = rendered.text;
+      windowTruncated = rendered.truncated;
       break;
     }
   }
+  if (cacheTruncated) joined = `【历史提取缓存可能含截断，仅提供已保存摘录，不代表完整文档】${NL}${joined}`;
   const originalBytes = Buffer.byteLength(joined, 'utf8');
   const cut = truncateUtf8BytesInput(joined, ATT_EXCERPT_BYTES);
-  return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes, truncated: cut.truncated, text: cut.text } };
+  return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes, truncated: cacheTruncated || windowTruncated || cut.truncated, text: cut.text } };
 }
 
 import type { ZhongshuoDatabase } from '../persistence/db.ts';

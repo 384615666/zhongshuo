@@ -141,8 +141,30 @@ describe('R105 formal bounded recovery and completed-work handoffs',()=>{
       expect(f.count('workspace_leases',"WHERE status!='released'")).toBe(0);expect(pendingAutomaticRecovery(f.db,root.taskId)).toBeUndefined();
     }finally{await f.cleanup();}
   });
-  it('stops after two extra attempts without resetting the count on restart',async()=>{
-    const f=await fixture();try{await f.send();await f.run(failure());f.advance(2000);await f.run(failure());f.advance(8000);await f.run(failure());f.restart();f.advance(60000);expect(await f.run()).toBe(false);expect(f.adapter.startTurnLog).toHaveLength(3);expect(f.count('domain_events',"WHERE kind='recovery.exhausted'")).toBe(1);}finally{await f.cleanup();}
+  it('allows five retries across restart and stops before a sixth retry',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();await f.run(failure());
+      for(let attempt=1;attempt<=5;attempt++){
+        expect(pendingAutomaticRecovery(f.db,root.taskId)?.extraAttempts).toBe(attempt);
+        if(attempt===3||attempt===5)f.restart();
+        f.advance(attempt===1?2000:8000);await f.run(failure());
+      }
+      f.restart();f.advance(60000);expect(await f.run()).toBe(false);
+      expect(f.adapter.startTurnLog).toHaveLength(6);
+      expect(f.count('domain_events',"WHERE kind='recovery.exhausted'")).toBe(1);
+    }finally{await f.cleanup();}
+  });
+  it('can succeed on the fifth retry with the same run and matching displayed limit',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();await f.run(failure());
+      for(let attempt=1;attempt<5;attempt++){f.advance(attempt===1?2000:8000);await f.run(failure());}
+      f.restart();
+      const detail=await f.cmd<{automaticRecovery:{attempt:number;maxExtraAttempts:number}}>('task.details',{projectId:f.projectId,taskId:root.taskId});
+      expect(detail.automaticRecovery).toMatchObject({attempt:5,maxExtraAttempts:5});
+      f.advance(8000);await f.run();
+      expect(f.state(root.taskId)).toMatchObject({status:'DONE'});
+      expect(f.adapter.startTurnLog).toHaveLength(6);expect(f.count('workflow_runs')).toBe(1);
+    }finally{await f.cleanup();}
   });
   it.each(['401 authentication failed','insufficient balance','usage quota exceeded','permission denied','user cancelled'])('does not replay %s',async(reason)=>{
     const f=await fixture();try{const root=await f.send();await f.run(failure(reason));f.advance(60000);expect(await f.run()).toBe(false);expect(pendingAutomaticRecovery(f.db,root.taskId)).toBeUndefined();expect(f.adapter.startTurnLog).toHaveLength(1);}finally{await f.cleanup();}

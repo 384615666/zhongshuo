@@ -1888,29 +1888,20 @@ export async function retryUnknownSend(env: PendingSendEnvelope): Promise<Bridge
 
 /* ---------- 附件上传/预览适配（第五十一轮 H2 骨架——格式实际限制，服务端为最终裁决） ---------- */
 
-/** 格式上限与 daemon 常量同源核对（UI 只做前置拦截；正式校验在服务端）：文本 256KB、图片
- * 8MB、PDF/Office 20MiB、CSV 5MB——不把 20MiB 当所有格式上限（review-r50 §4）。 */
-export const ATTACHMENT_LIMITS = {
-  text: 256 * 1024,
-  image: 8 * 1024 * 1024,
-  pdf: 20 * 1024 * 1024,
-  office: 32 * 1024 * 1024, // R71：与 daemon OFFICE_MAX_BYTES 分道对齐（真实 22.54MiB PPT）
-  csv: 5 * 1024 * 1024,
-} as const;
-
 const TEXT_EXTS = /\.(txt|md|markdown|json|ya?ml|toml|ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|h|cpp|hpp|cs|rb|php|sh|ps1|sql|html|css|xml|log|ini|cfg)$/i;
 const OFFICE_EXTS = /\.(docx|xlsx|pptx)$/i;
 
 export type AttachmentClass = { cls: 'text' | 'image' | 'pdf' | 'office' | 'csv' | 'unsupported'; reason?: string };
 
-/** 分类+前置限幅（magic bytes 由服务端裁决——此处按扩展名给 UI 预判与说明）。 */
-export function classifyAttachmentFile(name: string, size: number): AttachmentClass {
+/** 按扩展名分类（magic bytes 由服务端裁决——此处按扩展名给 UI 预判与说明）。 */
+export function classifyAttachmentFile(name: string, _size: number): AttachmentClass {
+  void _size;
   const lower = name.toLowerCase();
-  if (TEXT_EXTS.test(lower)) return size > ATTACHMENT_LIMITS.text ? { cls: 'unsupported', reason: `文本附件超过 ${ATTACHMENT_LIMITS.text / 1024}KB 上限` } : { cls: 'text' };
-  if (/\.(png|jpe?g|gif|webp)$/.test(lower)) return size > ATTACHMENT_LIMITS.image ? { cls: 'unsupported', reason: `图片原件超过 ${ATTACHMENT_LIMITS.image / 1024 / 1024}MB 上限` } : { cls: 'image' };
-  if (/\.(pdf)$/.test(lower)) return size > ATTACHMENT_LIMITS.pdf ? { cls: 'unsupported', reason: `PDF 超过 ${ATTACHMENT_LIMITS.pdf / 1024 / 1024}MiB 上限` } : { cls: 'pdf' };
-  if (/\.(csv|tsv)$/.test(lower)) return size > ATTACHMENT_LIMITS.csv ? { cls: 'unsupported', reason: `CSV 超过 ${ATTACHMENT_LIMITS.csv / 1024 / 1024}MB 上限` } : { cls: 'csv' };
-  if (OFFICE_EXTS.test(lower)) return size > ATTACHMENT_LIMITS.office ? { cls: 'unsupported', reason: `Office 原件 ${(size / 1048576).toFixed(1)}MiB 超过 ${(ATTACHMENT_LIMITS.office / 1048576).toFixed(0)}MiB 上限` } : { cls: 'office' };
+  if (TEXT_EXTS.test(lower)) return { cls: 'text' };
+  if (/\.(png|jpe?g|gif|webp)$/.test(lower)) return { cls: 'image' };
+  if (/\.(pdf)$/.test(lower)) return { cls: 'pdf' };
+  if (/\.(csv|tsv)$/.test(lower)) return { cls: 'csv' };
+  if (OFFICE_EXTS.test(lower)) return { cls: 'office' };
   return { cls: 'unsupported', reason: '未接入的附件类型（文本/图片/PDF/Office/CSV 之外）' };
 }
 
@@ -1918,7 +1909,7 @@ export function classifyAttachmentFile(name: string, size: number): AttachmentCl
 const fileToBase64 = async (file: File): Promise<string> => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let bin = '';
-  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 };
 
@@ -1939,7 +1930,7 @@ function kindOfClass(cls: AttachmentClass['cls'], name: string): string {
 
 /**
  * 上传一个附件到目标会话（回执绑定发起项目/会话——上传时 conversationId 必填，跨会话引用
- * 由服务端 audience 拒绝）。分类→前置限幅→对应 upload 命令；失败原样抛出（页面保留草稿）。
+ * 由服务端 audience 拒绝）。分类→对应 upload 命令；失败原样抛出（页面保留草稿）。
  * receipt.kind 为 UI 侧按同一分类推导（服务端按内容嗅探为准——门禁与展示用，不作归属事实）。
  */
 export async function uploadAttachmentFile(conversationId: string, file: File): Promise<UploadReceipt> {
@@ -1950,8 +1941,6 @@ export async function uploadAttachmentFile(conversationId: string, file: File): 
     // BOM/UTF-16/GB18030 原样保存（另存原文件逐字节一致）；编码检测/0B 允许在服务端裁决
     // （同一 decodeTextBytes 检测链——旧实现 renderer 解码后重编码会剥 BOM、把正常 UTF-16
     // 当「损坏字节」拒绝、0B 一律失败）。
-    const buf = new Uint8Array(await file.arrayBuffer());
-    if (buf.length > ATTACHMENT_LIMITS.text) throw new Error(`文本附件超过 ${ATTACHMENT_LIMITS.text / 1024}KB 上限（服务端同限裁决）`);
     const contentBase64 = await fileToBase64(file);
     const r = await command<Omit<UploadReceipt, 'kind'> & { bytes?: number }>('attachment.uploadTextRaw', { conversationId, filename: file.name, contentBase64 });
     return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass('text', file.name) };

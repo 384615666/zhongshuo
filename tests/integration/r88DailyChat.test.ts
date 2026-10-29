@@ -41,11 +41,23 @@ async function fixture() {
 }
 
 describe('R88 durable appearance and real local default members', () => {
-  it('stores bounded user/member avatars and visibility, survives reopen, resets, and rejects missing subjects', async () => {
+  it('R120 uploads an avatar over 2 MiB through the command schema and preserves an explicit hidden preference', async () => {
+    const f = await fixture();
+    const bytes = Buffer.concat([
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+      Buffer.alloc(3 * 1024 * 1024),
+    ]);
+    const dataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
+    await f.cmd('app.appearance.set', { showAvatars: false });
+    await f.cmd('app.appearance.set', { avatar: { subject: 'user', dataUrl } });
+    expect(await f.cmd('app.appearance.get', {})).toEqual({ showAvatars: false, avatars: { user: dataUrl } });
+  });
+
+  it('stores user/member avatars and visibility, survives reopen, resets, and rejects missing subjects', async () => {
     const f = await fixture();
     const opened = await f.cmd<{ project: { id: string } }>('project.open', { path: f.project });
     const member = f.db.prepare('SELECT id FROM project_members WHERE project_id=? LIMIT 1').get(opened.project.id) as { id: string };
-    expect(await f.cmd('app.appearance.get', {})).toEqual({ showAvatars: false, avatars: {} });
+    expect(await f.cmd('app.appearance.get', {})).toEqual({ showAvatars: true, avatars: {} });
     const png = `data:image/png;base64,${Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]).toString('base64')}`;
     await f.cmd('app.appearance.set', { showAvatars: true, avatar: { subject: 'user', dataUrl: png } });
     await f.cmd('app.appearance.set', { avatar: { subject: `member:${member.id}`, dataUrl: png } });

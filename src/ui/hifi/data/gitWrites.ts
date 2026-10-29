@@ -14,14 +14,13 @@ function key() {
 export function pendingGitWrites(): GitWriteEnvelope[] {
   const raw = localStorage.getItem(key());
   if (raw == null) return [];
-  if (new TextEncoder().encode(raw).byteLength > 262144) throw Error('Git 操作账本超限，原件保留');
   const parsed = JSON.parse(raw) as { v: number; items: GitWriteEnvelope[] };
   if (parsed.v !== 1 || !Array.isArray(parsed.items) || parsed.items.length > 64 || parsed.items.some(p => !p || !allowed.has(p.method) || typeof p.commandId !== 'string' || typeof p.projectId !== 'string' || !p.params || p.params.projectId !== p.projectId)) throw Error('Git 操作账本不可读，保留原件且未自动执行');
   return parsed.items;
 }
 function persist(items: GitWriteEnvelope[]) {
   const raw = JSON.stringify({ v: 1, items });
-  if (items.length > 64 || new TextEncoder().encode(raw).byteLength > 262144) throw Error('待确认的 Git 操作过多，请先处理已有记录。本次操作尚未发送。');
+  if (items.length > 64) throw Error('待确认的 Git 操作过多，请先处理已有记录。本次操作尚未发送。');
   localStorage.setItem(key(), raw);
   notify();
 }

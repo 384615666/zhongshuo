@@ -1,36 +1,17 @@
 /**
- * PPTX 静态页预览（DEV-24 M3；第三十七轮四建立，第三十八轮四重写）：
- * slide XML→SVG 的**受控转换**——重活（解压+转换）在 parseWorker 可终止子进程内执行，
- * 本模块只做纯转换与**严格缓存校验**（父进程与 worker 共用——零 node 专有依赖方向）。
- *
- * 范围（此前确定）：真实幻灯片列表（sldIdLst 顺序）+ 当前页内容 + 缩放（SVG 矢量）；
- * **绑定原件版本**（输入=原件字节与 sha256；缓存 hash 不符即弃——schema 2 起校验器版本
- * 一并绑定，旧缓存全量作废）；**提取文本预览与静态页预览分列**（parseWorker 的 slides
- * 通道不变，本模块不改它）。
- *
- * 受控转换边界（如实，不冒充完整渲染）：
- * - 支持：文本框（a:txBody 段落/字号近似）/ 图片（pic→blipFill r:embed→media，base64 内联
- *   到 SVG——单图上限与总量上限）/ 简单形状（sp prstGeom 常见矩形/圆/线条→矩形近似/占位描边）；
- * - 不支持但**显式标注**（第三十八轮：图表 graphicFrame/表格/SmartArt/组合 grpSp 此前
- *   静默白页）：页面上画虚线占位框+类型标注，并计入 unsupported 计数——不静默丢失；
- * - 所有丢弃/截断都有标记：文本超形状/超字节预算→truncated；整页超 SVG 字节预算→丢图片
- *   内联再试→仍超=整页「未渲染」标注页；notes 超预算截断有 flag；
- * - XML 实体先解码再安全输出（第三十八轮：A &amp; B 曾被二次转义成 A &amp;amp; B）；
- * - 字节预算按 **UTF-8 字节** 计（第三十八轮：字符数口径下 350 形状×200 汉字=277748B
- *   超过宣称 220KB 仍放行——中文 3 字节/字符）。
- *
- * 输出结构（pptxPages JSON schema 2）：{schema, converterVersion, sourceHash, pxW, pxH,
- * slides:[{slide, svg, truncated, textTruncated, shapes, images, unsupported, unsupportedKinds,
- * notes, notesTruncated}]}——缓存键=artifact hash。
+ * PPTX 静态预览：完整页列表和受控 SVG 在可终止 worker 内生成。
+ * R120 不按页数、文本、图片或 JSON/SVG 字节数丢弃内容；保留画布数值、
+ * SVG 元素/属性/URL 白名单及结构校验。图表、表格、组合等不支持对象显式占位。
+ * 转换器版本绑定缓存，旧容量截断产物不得命中。
  */
 import { createHash } from 'node:crypto';
 
 export interface PptxPageSlide {
   slide: number;
   svg: string;
-  /** 页级截断（SVG 预算：丢图片内联/整页未渲染标注）。 */
+  /** 页级布局截断（文字超出原形状高度）。 */
   truncated: boolean;
-  /** 文本级截断（形状内文本超预算被截）。 */
+  /** 保留兼容字段；完整文本不按字节截断。 */
   textTruncated: boolean;
   shapes: number;
   images: number;
@@ -50,18 +31,7 @@ export interface PptxPages {
   slides: PptxPageSlide[];
 }
 
-export const PPTX_PAGES_CONVERTER_VERSION = 'pptx-pages-v2';
-export const PPTX_PAGES_MAX_SLIDES = 60;
-/** 单页 SVG 上限（UTF-8 **字节**——图片 base64 计入）；超限页截断标注。 */
-export const PAGE_SVG_MAX_BYTES = 220_000;
-/** 单形状文本上限（UTF-8 字节）——超出截断并标 textTruncated。 */
-const SHAPE_TEXT_MAX_BYTES = 1_200;
-/** 单形状备注上限（UTF-8 字节）。 */
-const NOTES_MAX_BYTES = 400;
-const IMAGE_MAX_BYTES = 2 * 1024 * 1024; // 单图内联上限
-const IMAGES_MAX_TOTAL = 6 * 1024 * 1024; // 全篇图片内联总量
-/** 整份 pages JSON 上限（worker 输出文件与父进程读取共用）。 */
-export const PPTX_PAGES_TOTAL_MAX_BYTES = 12 * 1024 * 1024;
+export const PPTX_PAGES_CONVERTER_VERSION = 'pptx-pages-v3';
 const EMU_PER_PX = 9525;
 /** 画布像素界（异常 sldSz 拒绝——防 0/负/超界画布进 SVG viewBox）。 */
 const PX_BOUNDS = { min: 320, max: 8192 };
@@ -93,17 +63,6 @@ function decodeXmlEntities(s: string): string {
     .replace(/&amp;/g, '&'); // amp 最后：&amp;lt; → &lt;（一次解码，不迭代）
 }
 
-/** UTF-8 字节截断（完整字符边界）——与 parseWorker 同口径的独立实现。 */
-function truncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
-  const buf = Buffer.from(text, 'utf8');
-  if (buf.length <= maxBytes) return { text, truncated: false };
-  let end = maxBytes;
-  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
-  return { text: buf.subarray(0, end).toString('utf8'), truncated: true };
-}
-function byteLen(s: string): number {
-  return Buffer.byteLength(s, 'utf8');
-}
 
 function attrsOf(tag: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -162,12 +121,11 @@ export function buildPptxPages(
   for (const m of sldIdLst.matchAll(/<p:sldId\b([^>]*)>/g)) {
     const rid = /r:id="([^"]+)"/.exec(m[1] ?? '')?.[1];
     const target = rid != null ? presRels[rid] : undefined;
-    if (target == null) continue;
+    if (target == null) throw new Error('sldIdLst 引用的幻灯片关系缺失');
     const file = 'ppt/' + target.replace(/^\.\//, '').replace(/^\/?ppt\//, '');
     slideParts.push({ file, rels: file.replace(/^ppt\/slides\//, 'ppt/slides/_rels/') + '.rels' });
   }
   if (slideParts.length === 0) throw new Error('sldIdLst 未引用任何幻灯片');
-  if (slideParts.length > PPTX_PAGES_MAX_SLIDES) throw new Error(`幻灯片数 ${slideParts.length} 超静态预览上限 ${PPTX_PAGES_MAX_SLIDES}`);
   // 画布尺寸（presentation sldSz）——异常值拒绝（不进 viewBox）。
   const sz = /<p:sldSz\s+cx="(\d+)"\s+cy="(\d+)"/.exec(presXml);
   const emuW = sz != null ? Number(sz[1]) : 12192000;
@@ -178,7 +136,6 @@ export function buildPptxPages(
     throw new Error(`画布尺寸异常（${pxW}x${pxH}px）——拒绝构建静态页预览`);
   }
 
-  let imagesTotal = 0;
   const slides: PptxPageSlide[] = [];
   for (let i = 0; i < slideParts.length; i += 1) {
     const part = slideParts[i]!;
@@ -201,24 +158,22 @@ export function buildPptxPages(
       const a = attrsOf(m[1] ?? '');
       if (a.Id != null && a.Target != null) relTargets[a.Id] = resolveFromSlide(a.Target);
     }
-    // 备注（沿页关系）——字节预算+截断 flag。
+    // 备注沿页关系读取完整文本。
     let notes = '';
-    let notesTruncated = false;
+    const notesTruncated = false;
     for (const m of rels.matchAll(/<Relationship\b([^>]*)>/g)) {
       const a = attrsOf(m[1] ?? '');
       if (!(a.Type ?? '').endsWith('/notesSlide') || a.Target == null) continue;
       const nf = resolveFromSlide(a.Target);
       const nxml = Buffer.from(files[nf] ?? Buffer.alloc(0)).toString('utf8');
-      const nt = truncateUtf8(textsOf(nxml).join(' '), NOTES_MAX_BYTES);
-      notes = nt.text;
-      notesTruncated = nt.truncated;
+      notes = textsOf(nxml).join(' ');
     }
     const body = /<p:spTree>([\s\S]*?)<\/p:spTree>/.exec(xml)?.[1] ?? '';
     const parts: string[] = [];
     let shapeCount = 0;
     let imageCount = 0;
     let truncated = false;
-    let textTruncated = false;
+    const textTruncated = false;
     const unsupportedKinds = new Map<string, number>();
     const noteUnsupported = (k: string): void => { unsupportedKinds.set(k, (unsupportedKinds.get(k) ?? 0) + 1); };
     // 逐形状（sp=文本/形状，pic=图片，graphicFrame=图表/表格，grpSp=组合——后两者显式标注）。
@@ -258,11 +213,10 @@ export function buildPptxPages(
         const ext = (mediaName ?? '').split('.').pop()?.toLowerCase() ?? '';
         const mime = MIME_BY_EXT[ext] ?? 'application/octet-stream';
         imageCount += 1;
-        if (media.byteLength > IMAGE_MAX_BYTES || imagesTotal + media.byteLength > IMAGES_MAX_TOTAL || (mime === 'image/emf' || mime === 'image/wmf')) {
-          parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#b45309" stroke-dasharray="4 3"/><text x="${x + 4}" y="${y + 14}" font-size="11" fill="#b45309">图片未内联（超限/格式 ${esc(ext)}）</text>`);
+        if (!/^image\/(png|jpeg|gif|webp|bmp)$/.test(mime)) {
+          parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#b45309" stroke-dasharray="4 3"/><text x="${x + 4}" y="${y + 14}" font-size="11" fill="#b45309">图片未内联（格式 ${esc(ext)}）</text>`);
           continue;
         }
-        imagesTotal += media.byteLength;
         const b64 = Buffer.from(media).toString('base64');
         parts.push(`<image x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="none" xlink:href="data:${mime};base64,${b64}"/>`);
         continue;
@@ -286,11 +240,7 @@ export function buildPptxPages(
         let ty = y + Math.round(fs * 1.4);
         for (const p of paras) {
           if (ty > y + h) { truncated = true; break; }
-          // 形状级字节预算（第三十八轮：此前 slice(0,300) 按字符截且不置 flag——400 个汉字
-          // 被截成 300 个却报 truncated=false）。
-          const bt = truncateUtf8(p, SHAPE_TEXT_MAX_BYTES);
-          if (bt.truncated) textTruncated = true;
-          parts.push(`<text x="${x + 5}" y="${ty}" font-size="${fs}" fill="#1e293b" font-family="system-ui,'Microsoft YaHei',sans-serif">${esc(bt.text)}</text>`);
+          parts.push(`<text x="${x + 5}" y="${ty}" font-size="${fs}" fill="#1e293b" font-family="system-ui,'Microsoft YaHei',sans-serif">${esc(p)}</text>`);
           ty += Math.round(fs * 1.45);
         }
       }
@@ -306,21 +256,9 @@ export function buildPptxPages(
     const header = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${pxW} ${pxH}" width="${pxW}" height="${pxH}">`;
     const footer = '</svg>';
     const notesLine = notes.length > 0
-      ? `<text x="8" y="${pxH - 8}" font-size="10" fill="#94a3b8">备注：${esc(truncateUtf8(notes, 240).text)}${notesTruncated ? '…（截断）' : ''}</text>`
+      ? `<text x="8" y="${pxH - 8}" font-size="10" fill="#94a3b8">备注：${esc(notes)}${notesTruncated ? '…（截断）' : ''}</text>`
       : '';
-    let svg = `${header}<rect x="0" y="0" width="${pxW}" height="${pxH}" fill="#ffffff"/>${svgBody}${notesLine}${footer}`;
-    // 字节预算（第三十八轮：按 UTF-8 字节核对——字符数口径下中文页可超宣称预算仍放行）。
-    if (byteLen(svg) > PAGE_SVG_MAX_BYTES) {
-      // 截断策略：丢弃图片内联（保布局与文本）再试；仍超=整页标注。
-      const stripped = svg.replace(/xlink:href="data:[^"]+"/g, 'xlink:href=""');
-      if (byteLen(stripped) <= PAGE_SVG_MAX_BYTES) {
-        svg = stripped.replace(/<image ([^>]*)xlink:href=""([^>]*)\/>/g, '<rect x="0" y="0" width="0" height="0" fill="none"/>');
-        truncated = true;
-      } else {
-        svg = `${header}<rect x="0" y="0" width="${pxW}" height="${pxH}" fill="#fff7ed" stroke="#ea580c"/><text x="16" y="32" font-size="14" fill="#9a3412">该页内容超静态预览上限——未渲染（原文本提取可用）</text>${footer}`;
-        truncated = true;
-      }
-    }
+    const svg = `${header}<rect x="0" y="0" width="${pxW}" height="${pxH}" fill="#ffffff"/>${svgBody}${notesLine}${footer}`;
     // 构建产物必须通过白名单校验（自检——违规即 bug，不进缓存）。
     const wellFormed = svgWellFormed(svg);
     if (!wellFormed.ok) throw new Error(`构建产物未过 SVG 白名单（${wellFormed.reason}）——转换器缺陷，拒绝输出`);
@@ -352,7 +290,6 @@ const SVG_FONT_FAMILY_WHITELIST = new Set(["system-ui,'Microsoft YaHei',sans-ser
  * 缓存命中路径用它拦截被注入/损坏的缓存（第三十八轮：异常缓存曾通过弱校验直达 innerHTML）。 */
 export function svgWellFormed(svg: string): { ok: true } | { ok: false; reason: string } {
   if (typeof svg !== 'string' || svg.length === 0) return { ok: false, reason: '空 SVG' };
-  if (byteLen(svg) > PAGE_SVG_MAX_BYTES) return { ok: false, reason: `超单页字节预算 ${PAGE_SVG_MAX_BYTES}B` };
   const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9:]*)((?:[^>"']|"[^"]*")*?)(\/?)>/g;
   let m: RegExpExecArray | null;
   let depth = 0;
@@ -408,12 +345,11 @@ export function svgWellFormed(svg: string): { ok: true } | { ok: false; reason: 
   return { ok: true };
 }
 
-/** 缓存严格校验（schema 2）：hash/转换器版本/结构/页序/尺寸/字节预算/SVG 白名单全核对——
+/** 缓存严格校验（schema 2）：hash/转换器版本/结构/页序/尺寸/SVG 白名单全核对——
  * 任一不符→null（调用方弃缓存重算）。第三十八轮：此前只查 schema/sourceHash/slides 是数组，
  * 异常缓存（非法尺寸/页序/含 foreignObject 与 onclick 的 SVG）可直达前端 innerHTML。 */
 export function validatePptxPagesCache(raw: string | null, sourceHash: string): PptxPages | null {
   if (raw == null || raw.length === 0) return null;
-  if (byteLen(raw) > PPTX_PAGES_TOTAL_MAX_BYTES) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -424,7 +360,7 @@ export function validatePptxPagesCache(raw: string | null, sourceHash: string): 
   const c = parsed as Record<string, unknown>;
   if (c.schema !== 2 || c.converterVersion !== PPTX_PAGES_CONVERTER_VERSION || c.sourceHash !== sourceHash) return null;
   if (!Number.isInteger(c.pxW) || !Number.isInteger(c.pxH) || (c.pxW as number) < PX_BOUNDS.min || (c.pxW as number) > PX_BOUNDS.max || (c.pxH as number) < PX_BOUNDS.min || (c.pxH as number) > PX_BOUNDS.max) return null;
-  if (!Array.isArray(c.slides) || c.slides.length === 0 || c.slides.length > PPTX_PAGES_MAX_SLIDES) return null;
+  if (!Array.isArray(c.slides) || c.slides.length === 0) return null;
   const slides: PptxPageSlide[] = [];
   for (let i = 0; i < c.slides.length; i += 1) {
     const s = c.slides[i];
@@ -434,9 +370,8 @@ export function validatePptxPagesCache(raw: string | null, sourceHash: string): 
     if (typeof r.svg !== 'string' || typeof r.truncated !== 'boolean' || typeof r.textTruncated !== 'boolean') return null;
     if (!Number.isInteger(r.shapes) || !Number.isInteger(r.images) || !Number.isInteger(r.unsupported) || (r.shapes as number) < 0 || (r.images as number) < 0 || (r.unsupported as number) < 0) return null;
     if (typeof r.notes !== 'string' || typeof r.notesTruncated !== 'boolean' || typeof r.unsupportedKinds !== 'string') return null;
-    if (byteLen(r.notes) > NOTES_MAX_BYTES + 8) return null;
     const well = svgWellFormed(r.svg);
-    if (!well.ok) return null; // SVG 白名单：越界元素/属性/URL/预算=缓存不可信
+    if (!well.ok) return null; // SVG 白名单：越界元素/属性/URL=缓存不可信
     slides.push({
       slide: i + 1, svg: r.svg, truncated: r.truncated, textTruncated: r.textTruncated,
       shapes: r.shapes as number, images: r.images as number, unsupported: r.unsupported as number,

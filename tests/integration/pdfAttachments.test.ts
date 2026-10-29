@@ -124,10 +124,11 @@ describe('DEV-24 PDF 首包：保存+提取+预览', () => {
     const corrupt = await env.cmdRaw('attachment.uploadPdf', { conversationId: 'dm_a', filename: '损坏.pdf', contentBase64: broken.toString('base64') });
     expect(corrupt.ok).toBe(false);
     expect(['损坏', '解析失败'].some((k) => String(corrupt.error?.message).includes(k))).toBe(true);
-    const big = Buffer.concat([Buffer.from('%PDF-1.4\n', 'latin1'), Buffer.alloc(20.5 * 1024 * 1024)]);
-    const tooBig = await env.cmdRaw('attachment.uploadPdf', { conversationId: 'dm_a', filename: '大.pdf', contentBase64: big.toString('base64') });
-    expect(tooBig.ok).toBe(false);
-    expect(String(tooBig.error?.message)).toContain('上限');
+    const big = Buffer.concat([makePdf([['Complete large PDF']]), Buffer.alloc(21 * 1024 * 1024,0x20)]);
+    const large = await env.cmd<{attachmentId:string;pages:number}>('attachment.uploadPdf', { conversationId: 'dm_a', filename: '大.pdf', contentBase64: big.toString('base64') });
+    expect(large.pages).toBe(1);
+    const largePreview=await env.cmd<{text:string}>('attachment.previewPdf',{attachmentId:large.attachmentId});
+    expect(largePreview.text).toContain('Complete large PDF');
     // 扫描件（无文本层）：合法 PDF 但内容流无文本 → 空页如实呈现（OCR 单列）。
     const scanned = makePdf([[]]); // 内容流空（无 Tj）
     const up2 = await env.cmd<{ attachmentId: string; pages: number }>('attachment.uploadPdf', { conversationId: 'dm_a', filename: '扫描件.pdf', contentBase64: scanned.toString('base64') });

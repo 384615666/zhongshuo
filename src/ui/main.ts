@@ -603,9 +603,8 @@ let dataOperationStarting = false;
     // suggestedName 只作默认文件名：取 basename（剥离任何路径成分——不接受路径注入）。
     const safeName = p.suggestedName.split(/[\\/]/).pop() ?? 'file';
     // R68 §6：**空文件按原件语义保存**（0 字节是合法原文件——工作区空文件读取通道可读 0B；
-    // 空串 base64 解码即 0 字节）。仅保留 64MB 上限。
+    // 空串 base64 解码即 0 字节）。
     const raw = Buffer.from(p.contentBase64, 'base64');
-    if (raw.length > 64 * 1024 * 1024) throw new Error(`另存为内容超限（${raw.length}B > 64MB）`);
     // 工程验证钩子（ZS_SAVEAS_AUTO_DIR，仅显式设置的测试/演练环境）：跳过对话框直写指定
     // 目录（同名自动加序号）——使保存链的**落盘字节**可被自动化逐字核验；产品默认不设该
     // 变量，用户路径始终走系统另存为对话框。

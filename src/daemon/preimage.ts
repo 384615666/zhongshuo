@@ -57,15 +57,13 @@ export interface PreimageDiff {
 export interface CaptureOptions {
   /** 内容存储目录（受管理内容引用的落点）；不传则不存内容（只有 hash 清单）。 */
   storeDir?: string;
-  /** 单文件内容存储上限（字节，默认 8MB，env ZS_PREIMAGE_MAX_BYTES）。 */
+  /** 仅测试注入的可选内容存储上限；正式默认完整存储。 */
   maxBytes?: number;
-  /** 显式工程扫描上限；默认完整扫描，env ZS_PREIMAGE_MAX_FILES 可覆盖。 */
+  /** 仅测试注入的可选扫描上限；正式默认完整扫描。 */
   maxFiles?: number;
   now?: number;
 }
 
-const DEFAULT_MAX_BYTES = envInt('ZS_PREIMAGE_MAX_BYTES', 8 * 1024 * 1024);
-const DEFAULT_MAX_FILES = envInt('ZS_PREIMAGE_MAX_FILES', Number.POSITIVE_INFINITY);
 
 /** 目录扫描默认排除（.git 的内容基线由 Git 基线承担——ref+porcelain，§14.2）。 */
 export const DIRECTORY_SCAN_EXCLUDES = new Set(['.git']);
@@ -86,7 +84,7 @@ export function normalizeWithinRoot(root: string, path: string): string {
 
 /** 捕获前像：显式路径列表（调用方圈定变更面）。 */
 export function captureFilePreimage(root: string, paths: string[], options: CaptureOptions = {}): PreimageCapture {
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const maxBytes = options.maxBytes;
   const now = options.now ?? Date.now();
   const entries: PreimageEntry[] = [];
   for (const p of paths) {
@@ -116,7 +114,7 @@ export interface ScanResult {
  *   finalize 据此把受影响路径的基线缺失判 unknown，不推导 absent。
  * - 空目录是合法基线（files 可为空——由调用方按 scopeKind 判定，不因零文件拒绝）。
  */
-export function scanDirectoryFiles(root: string, maxFiles = DEFAULT_MAX_FILES): ScanResult {
+export function scanDirectoryFiles(root: string, maxFiles?: number): ScanResult {
   const files: string[] = [];
   const failedDirs: ScanResult['failedDirs'] = [];
   const rejectedEntries: ScanResult['rejectedEntries'] = [];
@@ -166,7 +164,7 @@ export function scanDirectoryFiles(root: string, maxFiles = DEFAULT_MAX_FILES): 
         visitedRealDirs.add(realKey);
         pending.push(full);
       } else if (st.isFile()) {
-        if (files.length >= maxFiles) { truncated = true; break; }
+        if (maxFiles != null && files.length >= maxFiles) { truncated = true; break; }
         files.push(full);
       }
     }
@@ -279,7 +277,7 @@ export function scanProjectFiles(root: string, scope?: ProjectScanScope, ancesto
   return result;
 }
 
-function captureOne(root: string, userPath: string, storeDir: string | undefined, maxBytes: number): PreimageEntry {
+function captureOne(root: string, userPath: string, storeDir: string | undefined, maxBytes: number | undefined): PreimageEntry {
   let rel: string;
   try {
     rel = normalizeWithinRoot(root, userPath);
@@ -316,7 +314,7 @@ function captureOne(root: string, userPath: string, storeDir: string | undefined
   }
   const sha256 = createHash('sha256').update(content).digest('hex');
   const entry: PreimageEntry = { path: rel, state: 'present', sha256, size: content.length };
-  if (content.length > maxBytes) {
+  if (maxBytes != null && content.length > maxBytes) {
     entry.contentUnavailable = `超出内容存储上限（${content.length} > ${maxBytes} 字节），未保存可恢复的文件副本`;
     return entry;
   }
@@ -388,11 +386,4 @@ export function readStoredContent(storeDir: string, contentRef: string): { ok: t
   } catch (error) {
     return { ok: false, error: `内容读取失败：${String(error).slice(0, 120)}` };
   }
-}
-
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw.length === 0) return fallback;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : fallback;
 }

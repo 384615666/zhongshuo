@@ -11,7 +11,6 @@ import { openSync, readSync, closeSync, fstatSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-export const ATT_MAX_BYTES = 256 * 1024; // 上传上限（明确规则：超限拒绝不静默截断）
 export const ATT_EXCERPT_BYTES = 64 * 1024; // 预览/注入截断预算（字节）
 
 /** 文本类附件的两种 kind（第二十七轮六：代码附件=文本链路的第二类）：text_file=文本/
@@ -54,9 +53,6 @@ export function truncateUtf8Bytes(text: string, maxBytes: number): { text: strin
 // 解析（PNG IHDR/JPEG SOF/GIF 头/WebP VP8X）——超尺寸/截断/头部损坏明确拒绝；像素级
 // 解码与缩略图在 renderer <img>（浏览器沙箱）；OCR=未实现（明确不可用）；模型图片输入=
 // 未认证（注入链路只注入文本——runtime 图片输入能力认证属后续批次，不发文件路径冒充已读）。
-export const ATT_IMAGE_MAX_BYTES = 8 * 1024 * 1024; // 原件上限
-export const ATT_IMAGE_MAX_DIM = 12_000; // 单边上限
-export const ATT_IMAGE_MAX_PIXELS = 40_000_000; // 面积上限
 
 export interface ImageMeta { mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; width: number; height: number }
 
@@ -123,8 +119,6 @@ export function validateImageBuffer(buf: Buffer): { ok: true; meta: ImageMeta } 
   const meta = parseImageMeta(buf);
   if (meta == null) return { ok: false, message: '内容不是可识别的图片（PNG/JPEG/GIF/WebP magic 与格式头校验失败——不以扩展名冒充；损坏/截断同样拒绝）' };
   if (meta.width <= 0 || meta.height <= 0) return { ok: false, message: `图片尺寸无效（${meta.width}×${meta.height}）——损坏或声明异常` };
-  if (meta.width > ATT_IMAGE_MAX_DIM || meta.height > ATT_IMAGE_MAX_DIM) return { ok: false, message: `图片单边超限（${meta.width}×${meta.height} > ${ATT_IMAGE_MAX_DIM}px）——明确规则拒绝，不静默缩放` };
-  if (meta.width * meta.height > ATT_IMAGE_MAX_PIXELS) return { ok: false, message: `图片面积超限（${meta.width}×${meta.height} > ${ATT_IMAGE_MAX_PIXELS}px²）` };
   return { ok: true, meta };
 }
 
@@ -137,7 +131,6 @@ export function validateImageBuffer(buf: Buffer): { ok: true; meta: ImageMeta } 
 //    =链接越界拒绝；
 // 3) **受控句柄层**：openSync 一次打开→fstat→从该 fd 读全部字节→hash **实际读到的字节**——
 //    读取期间路径被替换不影响本句柄内容（内容不符=corrupted 拒绝，绝不返回未核对数据）。
-const STORE_READ_MAX_BYTES = 64 * 1024 * 1024; // 单副本读取硬界（现有各 kind 上限远小于此）
 
 function readStoreBytes(
   blobPath: string,
@@ -185,9 +178,6 @@ function readStoreBytes(
   }
   try {
     const size = fstatSync(fd).size;
-    if (size > STORE_READ_MAX_BYTES) {
-      return { ok: false, error: { code: 'attachment-corrupted', message: `副本体积 ${size}B 超读取硬界 ${STORE_READ_MAX_BYTES}B——拒绝` } };
-    }
     const raw = Buffer.alloc(size);
     let read = 0;
     while (read < size) {

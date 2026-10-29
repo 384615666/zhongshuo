@@ -5,7 +5,7 @@
  *   A 解析；且 finally 内 await 拖延原任务返回）。调度泵串行取件，A 的完成/失败/超时结算
  *   后立即取 B（B 用自己的文件/格式/hash/故障配置）。
  * - **响应与退出分别登记**：收到合法响应不立即结算——并发槽在子进程 **exit 确认收拢后**
- *   才释放；非法 jobId/超预算响应触发 kill ladder 收拢后按错误结算；成功后子进程不退
+ *   才释放；非法 jobId 响应触发 kill ladder 收拢后按错误结算；成功后子进程不退
  *   （2s 宽限后 kill 收拢）；强杀后仍未确认退出=parse-kill-unconfirmed（如实，不宣称杀净）。
  * - **排队等待纳入端到端截止**：总截止自入队起算；泵取件时剩余 ≤0 直接按超时结算（不启动）。
  * - dispose（daemon.stop 同链）：排队即取消、在途 kill 收拢；启动准备期间 dispose 也取消。
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import {
   PARSE_CONCURRENCY, PARSE_QUEUE_MAX, PARSE_DEADLINE_MS, PARSE_KILL_GRACE_MS,
-  PARSE_MEMORY_LIMIT_MB, PARSE_RESPONSE_MAX_BYTES, PARSE_TOTAL_MEMORY_LIMIT_BYTES,
+  PARSE_MEMORY_LIMIT_MB, PARSE_TOTAL_MEMORY_LIMIT_BYTES,
   type ExtractCache, type ParseJob, type ParseJobKind, type ParseResponse,
 } from './parseContracts.ts';
 import { attachMemoryJobObject } from './parseJobObject.ts';
@@ -253,11 +253,6 @@ export class ParsePool {
         if (resp == null || typeof resp !== 'object' || resp.jobId !== jobId) {
           invalidResponse = '响应不合法（jobId 不符）';
           killLadder(); // 非法响应必须收拢对应进程（不能 resolve 后只清截止）
-          return;
-        }
-        if (Buffer.byteLength(JSON.stringify(resp), 'utf8') > PARSE_RESPONSE_MAX_BYTES) {
-          invalidResponse = `解析响应超防御上限 ${PARSE_RESPONSE_MAX_BYTES}B`;
-          killLadder();
           return;
         }
         if (resp.ok && resp.result != null) pendingResult = { ok: true, result: resp.result };

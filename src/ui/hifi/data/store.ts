@@ -157,7 +157,7 @@ function makeEmptyState(): HifiState {
       runtimeLimits: { maxActiveTurns: 3, maxTurnsPerMember: 1, providerCapEnabled: false, providerCapTurns: 3 },
     },
     preview: { tabs: [], hidden: true, maximized: false, contextChangedSinceOpen: false },
-    ui: { theme: 'light', activeRoomId: '', showAvatars: false, avatars: {}, writeLog: [] },
+    ui: { theme: 'light', activeRoomId: '', showAvatars: true, avatars: {}, writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0,
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,

@@ -1,3 +1,4 @@
+import { readAvatarFile } from '../data/avatarUpload';
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 应用设置：既有设置导航 + 搜索，操作手册单独分区。
@@ -323,7 +324,7 @@ function SectionAppearance() {
           <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>深色</button>
         </div>
       </SettingsRow>
-      <SettingsRow id="appearance-avatars" label="显示头像" hint="默认关闭，姓名仍会显示；打开后使用你设置的个人或 AI 头像">
+      <SettingsRow id="appearance-avatars" label="显示头像" hint="默认显示个人和 AI 头像，姓名始终保留">
         <Switch
           checked={showAvatars}
           disabled={busy === 'visibility'}
@@ -333,7 +334,7 @@ function SectionAppearance() {
       </SettingsRow>
       <div className="card" style={{ marginTop: 14 }} data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
         <div className="card-title">头像</div>
-        <div className="small faint" style={{ padding: '0 14px 8px' }}>PNG、JPEG 或 WebP，文件不超过 256 KiB。预览始终可见，聊天中的头像遵循上方开关。</div>
+        <div className="small faint" style={{ padding: '0 14px 8px' }}>PNG、JPEG 或 WebP。预览始终可见，聊天中的头像遵循上方开关。</div>
         <AppearanceAvatarRow subject="user" name="我" color="var(--m-human)" busy={busy} onSave={save} />
         {members.map((member) => (
           <AppearanceAvatarRow
@@ -369,24 +370,9 @@ function AppearanceAvatarRow({
   const key = `avatar:${subject}`;
   const pick = (file: File | undefined): void => {
     if (file == null) return;
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      toast('请选择 PNG、JPEG 或 WebP 图片', 'warn');
-      return;
-    }
-    if (file.size === 0 || file.size > 256 * 1024) {
-      toast('头像文件须在 1 B–256 KiB 之间', 'warn');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== 'string' || !reader.result.startsWith('data:image/')) {
-        toast('图片读取失败，未保存', 'error');
-        return;
-      }
-      void onSave(key, { avatar: { subject, dataUrl: reader.result } });
-    };
-    reader.onerror = () => toast('图片读取失败，未保存', 'error');
-    reader.readAsDataURL(file);
+    void readAvatarFile(file)
+      .then((dataUrl) => onSave(key, { avatar: { subject, dataUrl } }))
+      .catch((error: unknown) => toast((error as Error).message, 'error'));
   };
   return (
     <div className="row" style={{ justifyContent: 'space-between', padding: '9px 14px', borderTop: '1px solid var(--border-subtle)' }} data-zs-avatar-subject={subject}>
