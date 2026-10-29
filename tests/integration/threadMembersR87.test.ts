@@ -324,6 +324,12 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect((await f.raw('thread.members.change',f.change('foreign','add',current.version))).error?.code).toBe('MEMBER_DISABLED');
       const commandId=randomUUID(),params=f.change(f.ids[1]!,'add',current.version);
       await f.cmd('thread.members.change',params,commandId);
+      // Archive now rejects OPEN queued roots too: finish the accepted task
+      // before testing archive/audience replay, rather than bypassing that guard.
+      const adapter=new FakeRuntimeAdapter();
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r126-members-archive',appDataDir:f.dir});
+      try{await worker.runOnce();expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(f.root.taskId)).toEqual({status:'DONE'});}
+      finally{await adapter.closeAllSessions();}
       const revision=(f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(f.room.id) as {revision:number}).revision;
       await f.cmd('room.archive',{roomId:f.room.id,expectedRevision:revision,action:'archive'});
       expect((await f.raw('thread.members.change',params,commandId)).error?.code).toBe('CONVERSATION_UNAVAILABLE');

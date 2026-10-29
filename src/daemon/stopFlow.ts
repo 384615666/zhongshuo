@@ -15,6 +15,7 @@ import { settleRealCall } from './realCallLedger.ts';
 import { evaluateStopTarget } from '../domain/scope/stopTarget.ts';
 import type { TaskStopOutcome } from '../contracts/task.ts';
 import type { RunStatus } from '../contracts/run.ts';
+import { DaemonCommandError } from './commandError.ts';
 
 export interface RequestStopInput {
   taskId: string;
@@ -64,7 +65,9 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
         throw new StopCommandError(verdict.error.code, verdict.error.message);
       }
       let stopGeneration = task.stop_generation;
-      if (verdict.value === 'stopping') {
+      // stopping is also the response to an already accepted stop. Only the
+      // first matching snapshot may advance the generation and cancel work.
+      if (verdict.value === 'stopping' && input.expectedStopGeneration === task.stop_generation && run?.status !== 'STOPPING') {
         stopGeneration = task.stop_generation + 1;
         const tx = db.transaction(() => {
           db.prepare('UPDATE tasks SET stop_generation = ? WHERE id = ?').run(stopGeneration, task.id);
@@ -99,25 +102,26 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
   }
   // 中断在途 turn（事务外执行：协议中断是外部副作用）。
   if (outcome.data.outcome === 'stopping') {
+    // A persisted stopping receipt may outlive its run. Descendants belong to
+    // the task's latest attempt; replaying an old receipt cannot interrupt them.
+    const latestRun = db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1')
+      .get(input.taskId) as {id:string}|undefined;
     const turns = db.prepare(`SELECT a.id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
-      WHERE (a.run_id=? OR t.parent_task_id=?) AND a.status='STOPPING' ORDER BY a.id LIMIT 100`).all(input.targetRunId,input.taskId) as {id:string}[];
+      WHERE (a.run_id=? OR (t.parent_task_id=? AND ?)) AND a.status='STOPPING' ORDER BY a.id LIMIT 100`).all(input.targetRunId,input.taskId,latestRun?.id===input.targetRunId?1:0) as {id:string}[];
     for(const turn of turns) await input.interruptTurn(turn.id);
   }
   return outcome.data;
 }
 
-export class StopCommandError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = 'StopCommandError';
-    this.code = code;
-  }
-}
+// Keep the daemon business-error identity recognised by both runCommand and
+// commands.ts, including errors raised inside the transaction.
+export class StopCommandError extends DaemonCommandError {}
 
 function currentRunIdOf(db: ZhongshuoDatabase, taskId: string): string | null {
+  // revision is mutable run state, not an attempt sequence; UUID lexical order
+  // cannot identify the newest run either. Match the task-history creation order.
   const row = db
-    .prepare(`SELECT id FROM workflow_runs WHERE task_id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED') ORDER BY revision DESC, id DESC LIMIT 1`)
+    .prepare(`SELECT id FROM workflow_runs WHERE task_id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED') ORDER BY rowid DESC LIMIT 1`)
     .get(taskId) as { id: string } | undefined;
   return row?.id ?? null;
 }

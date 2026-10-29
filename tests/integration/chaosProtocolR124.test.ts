@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, write
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerAdapter } from '../../src/adapter/codex/appServerAdapter.ts';
+import { AdapterCallError } from '../../src/contracts/runtime.ts';
 import type { NormalizedRuntimeEvent, SessionRef, TurnRequest } from '../../src/contracts/runtime.ts';
 import { DispatchAdmission } from '../../src/daemon/admission.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
@@ -18,15 +19,13 @@ interface TurnScript {
   after?: Frame[];
   responseError?: { code: number; message: string };
   noResponse?: boolean;
+  holdResponse?: boolean;
   exitAfterStart?: number;
 }
 type WireRow = { pid: number; role: string; type: string; at: number; frame?: Record<string, unknown>; key?: string; sequence?: number };
-const evidenceRoot = resolve('dist/r124-chaos/protocol');
-const fixtureEntry = resolve('tests/fixtures/chaosProtocolR124.mjs');
+const evidenceRoot = resolve('dist/r126-protocol/r124');
+const fixtureEntry = resolve('tests/fixtures/codexRepairR126Protocol.mjs');
 const evidenceForCurrentTest: string[] = [];
-// The opt-in mode exposes the exact healthy assertions as ordinary red tests.
-// Default registration is Vitest it.fails for explicitly titled product defects.
-const defect = process.env['ZS_R124_HEALTHY_ASSERTIONS'] === '1' ? it : it.fails;
 mkdirSync(evidenceRoot, { recursive: true });
 
 beforeEach(() => {
@@ -37,8 +36,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   try {
-    // Hooks are not inverted by it.fails: a harness/cleanup failure cannot count
-    // as an expected product counterexample without its completed evidence.
+    // Require completed evidence and confirmed cleanup for every healthy scenario.
     for (const dir of evidenceForCurrentTest) {
       expect(existsSync(join(dir, 'result.json')), `Missing completed scenario evidence: ${dir}`).toBe(true);
       expect(JSON.parse(readFileSync(join(dir, 'cleanup.json'), 'utf8'))).toMatchObject({ allOwnedChildrenClosed: true });
@@ -53,7 +51,7 @@ async function bounded<T>(promise: Promise<T>, label: string, ms = 3000): Promis
 }
 async function outcome(promise: Promise<unknown>) {
   try { await promise; return { status: 'fulfilled' as const }; }
-  catch (error) { return { status: 'rejected' as const, code: (error as { code?: string }).code, message: error instanceof Error ? error.message : String(error) }; }
+  catch (error) { return { status: 'rejected' as const, adapterCallError: error instanceof AdapterCallError, code: (error as { code?: string }).code, notStarted: (error as { notStarted?: boolean }).notStarted, message: error instanceof Error ? error.message : String(error) }; }
 }
 function frame(method: string, params: Record<string, unknown>): Frame { return { method, params }; }
 const identity = { threadId: '$THREAD', turnId: '$TURN' };
@@ -89,8 +87,8 @@ function protocol(label: string, turns: Record<string, TurnScript>, requestTimeo
   });
   const log = (): WireRow[] => existsSync(logPath) ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as WireRow) : [];
   let sequence = 0;
-  const control = async (frames: Frame[] = [], exitCode?: number) => {
-    appendFileSync(controlPath, JSON.stringify({ frames, ...(exitCode == null ? {} : { exitCode }) }) + '\n');
+  const control = async (frames: Frame[] = [], exitCode?: number, releaseStart?: string) => {
+    appendFileSync(controlPath, JSON.stringify({ frames, ...(exitCode == null ? {} : { exitCode }), ...(releaseStart == null ? {} : { releaseStart }) }) + '\n');
     const expected = ++sequence;
     await expect.poll(() => log().some(row => row.type === 'control.applied' && row.sequence === expected), { timeout: 2500, interval: 10 }).toBe(true);
     if (exitCode == null) await adapter.listModels(); // Actual pipe-response barrier after all injected frames.
@@ -122,6 +120,13 @@ function capture(f: Protocol, session: SessionRef) {
   const events: NormalizedRuntimeEvent[] = [];
   const done = (async () => { for await (const event of f.adapter.events(session)) { events.push(event); if (event.kind === 'process.exited') return; } })();
   return { events, done };
+}
+function approvalToken(events: NormalizedRuntimeEvent[], rpcId: number): string {
+  const approvals = events.filter(e => e.kind === 'approval.requested' && e.approvalId.startsWith(`appr_${rpcId}_`));
+  expect(approvals).toHaveLength(1);
+  const event = approvals[0]!;
+  if (event.kind !== 'approval.requested') throw Error('Missing observed approval token');
+  return event.approvalId;
 }
 async function workerFixture(f: Protocol) {
   const db = openDatabase(join(f.dir, 'state.sqlite'));
@@ -198,25 +203,35 @@ describe('R124 protocol combinations through the actual local Codex adapter', ()
     } finally { await f.close(); }
   }, 10000);
 
-  defect('P02 DEFECT: contradictory early-start and response IDs must not both own user-visible worker output', async () => {
+  it('P02 repaired: conflicting early-start and response IDs reject without publishing worker output or hanging consumers', async () => {
     const f = protocol('P02-start-alias-worker', {
-      TOKEN_P02: { providerTurnId: 'early-claim', responseTurnId: 'different-response', before: [started()], after: [message('POISON_EARLY_ALIAS'), terminal('$FINAL', '$RESPONSE')] },
+      TOKEN_P02: { providerTurnId: 'early-claim', responseTurnId: 'different-response', before: [started(), message('POISON_EARLY_ALIAS'), terminal()], after: [message('POISON_EARLY_ALIAS'), terminal('$FINAL', '$RESPONSE')] },
       TOKEN_P02_PEER: { before: [started()], after: [terminal()] },
     });
     const w = await workerFixture(f);
+    const start = vi.spyOn(f.adapter, 'startTurn');
     try {
       const root = await w.send('TOKEN_P02'), peer = await w.send('TOKEN_P02_PEER');
-      await w.worker.runOnce(); await w.worker.runOnce();
-      await expect.poll(() => [w.status(root.taskId), w.status(peer.taskId)], { timeout: 3000 }).toEqual(['DONE', 'DONE']);
+      const firstRun = await outcome(w.worker.runOnce());
+      await w.worker.runOnce();
+      await expect.poll(() => w.status(peer.taskId), { timeout: 3000 }).toBe('DONE');
+      const rejection = await outcome(start.mock.results[0]!.value as Promise<void>);
+      const remaining = await w.worker.awaitInFlightTurns(1000);
       const visiblePoison = w.replies(root.threadId).some(row => row.body_json.includes('POISON_EARLY_ALIAS'));
-      f.save({ classification: 'defect-reproduced', visiblePoison, root, peer, databaseBeforeCleanup: w.snapshot() });
+      const snapshot = w.snapshot();
+      f.save({ classification: 'repaired', rejection, firstRun, remaining, visiblePoison, root, peer, databaseBeforeCleanup: snapshot });
+      expect(rejection).toMatchObject({ status: 'rejected', adapterCallError: true, code: 'CAPABILITY_UNSUPPORTED', notStarted: false });
+      expect(remaining.remaining).toEqual([]);
       expect(w.snapshot().realCalls).toBe(0);
+      expect(w.status(root.taskId)).not.toBe('DONE');
+      expect(w.replies(root.threadId)).toHaveLength(0);
+      expect(w.replies(peer.threadId).some(row => row.body_json.includes('SAFE_TOKEN_P02_PEER'))).toBe(true);
       expect(w.replies(peer.threadId).every(row => !row.body_json.includes('POISON_'))).toBe(true);
       expect(visiblePoison, 'Conflicting provider IDs must fail closed before publishing either alias').toBe(false);
-    } finally { await w.close(); }
+    } finally { start.mockRestore(); await w.close(); }
   }, 12000);
 
-  defect('P03 DEFECT: shared process exit after half the workers finish must settle the remaining in-flight turn', async () => {
+  it('P03 repaired: shared process exit settles unfinished work as UNKNOWN and retains its protection', async () => {
     const f = protocol('P03-half-complete-crash', { TOKEN_P03_DONE: { before: [started()] }, TOKEN_P03_LIVE: { before: [started()] } });
     const w = await workerFixture(f);
     try {
@@ -229,11 +244,17 @@ describe('R124 protocol combinations through the actual local Codex adapter', ()
       await bounded(Promise.all(streams.map(stream => stream.done)), 'P03 exit broadcast');
       const remaining = await w.worker.awaitInFlightTurns(650);
       const snapshot = w.snapshot();
-      f.save({ classification: 'defect-reproduced', done, live, remaining, rawAdapterEvents: streams.map(stream => stream.events), databaseBeforeCleanup: snapshot, exitCode: 23, observationWindowMs: 650, deadline: 'production default disabled' });
+      const states = w.db.prepare('SELECT a.id,a.status AS turnStatus,r.status AS workflowStatus FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?').all(live.taskId) as Array<{ id: string; turnStatus: string; workflowStatus: string }>;
+      f.save({ classification: 'repaired', done, live, remaining, states, rawAdapterEvents: streams.map(stream => stream.events), databaseBeforeCleanup: snapshot, exitCode: 23, observationWindowMs: 650, deadline: 'production default disabled' });
       expect(snapshot.realCalls).toBe(0);
       expect(w.status(done.taskId)).toBe('DONE');
       expect(w.replies(done.threadId).some(row => row.body_json.includes('SAFE_TOKEN_P03_DONE'))).toBe(true);
       expect(remaining.remaining, 'A confirmed shared carrier exit must not leave its consumer running indefinitely').toEqual([]);
+      expect(states).toMatchObject([{ turnStatus: 'UNKNOWN', workflowStatus: 'INTERRUPTED' }]);
+      expect(w.status(live.taskId)).not.toBe('DONE');
+      expect(w.replies(live.threadId)).toEqual([]);
+      expect(w.admission.has(states[0]!.id), 'UNKNOWN keeps its admission protection after consumer settlement').toBe(true);
+      expect(snapshot.admission.global).toBe(1);
     } finally { await w.close(); }
   }, 12000);
 
@@ -260,43 +281,66 @@ describe('R124 protocol combinations through the actual local Codex adapter', ()
       expect(replies).toHaveLength(1);
       expect(replies[0]!.body_json).toContain('SAFE_TOKEN_P04');
       expect(JSON.stringify(replies)).not.toContain('POISON_AFTER_TERMINAL');
+      expect(raw.some(e => e.kind === 'message.completed' && e.text === 'POISON_AFTER_TERMINAL')).toBe(true);
       expect(raw.filter(e => e.kind === 'turn.completed')).toHaveLength(2);
       expect(raw.filter(e => e.kind === 'turn.failed')).toHaveLength(1);
     } finally { await w.close(); }
   }, 12000);
 
-  defect('P05 DEFECT [DeepSeek cross-discovery]: contradictory v2/legacy approval identities must deny', async () => {
+  it('P05 repaired [DeepSeek cross-discovery]: every contradictory approval identity must deny without delivery', async () => {
     const f = protocol('P05-conflicting-approval', { a: { before: [started()] }, b: { before: [started()] } });
     try {
       const a = await open(f, 'a'), b = await open(f, 'b'), sa = capture(f, a), sb = capture(f, b);
       await f.adapter.startTurn(a, request('a')); await f.adapter.startTurn(b, request('b'));
-      await f.control([approval(7501, 'a', { conversationId: '$THREAD{b}', turn: { id: '$TURN{b}' } })]);
-      const approvals = sa.events.filter(e => e.kind === 'approval.requested');
-      const response = await outcome(f.adapter.respondApproval(a, 'appr_7501', 'allow_once'));
+      const conflicts = [
+        { conversationId: '$THREAD{b}' },
+        { turn: { id: '$TURN{b}' } },
+        { conversationId: '$THREAD{b}', turn: { id: '$TURN{b}' } },
+        { threadId: '$THREAD{b}', conversationId: '$THREAD{a}' },
+        { turnId: '$TURN{b}', turn: { id: '$TURN{a}' } },
+      ];
+      await f.control(conflicts.map((extra, index) => approval(7501 + index, 'a', extra)));
+      const approvals = [...sa.events, ...sb.events].filter(e => e.kind === 'approval.requested');
+      const responses = [];
+      for (let index = 0; index < conflicts.length; index++) responses.push(await outcome(f.adapter.respondApproval(a, `appr_${7501 + index}`, 'allow_once')));
       await f.adapter.listModels();
       await f.exit(); await bounded(Promise.all([sa.done, sb.done]), 'P05 streams');
-      const accepted = f.log().filter(row => row.type === 'in' && row.frame?.['id'] === 7501 && (row.frame['result'] as { decision?: string } | undefined)?.decision === 'accept');
-      f.save({ classification: 'defect-reproduced', response, approvals, accepted, streams: [sa.events, sb.events], deepSeekCrossDiscovery: 'design item 6' });
+      const wireReplies = f.log().filter(row => row.type === 'in' && Number(row.frame?.['id']) >= 7501 && Number(row.frame?.['id']) <= 7505 && row.frame?.['result'] != null);
+      const accepted = wireReplies.filter(row => (row.frame?.['result'] as { decision?: string })?.decision === 'accept');
+      f.save({ classification: 'repaired', responses, approvals, wireReplies, streams: [sa.events, sb.events], deepSeekCrossDiscovery: 'design item 6' });
+      expect(approvals).toEqual([]);
+      expect(responses).toHaveLength(conflicts.length);
+      for (const response of responses) expect(response).toMatchObject({ status: 'rejected', adapterCallError: true });
+      expect(wireReplies.map(row => row.frame)).toEqual(conflicts.map((_, index) => expect.objectContaining({ id: 7501 + index, result: { decision: 'decline' } })));
       expect(accepted, 'Conflicting identity fields must never produce an accepted request').toHaveLength(0);
     } finally { await f.close(); }
   }, 10000);
 
-  defect('P06 DEFECT [DeepSeek cross-discovery]: duplicate approval RPC id must not replace the original session owner', async () => {
+  it('P06 repaired [DeepSeek cross-discovery]: duplicate outstanding approval RPC id retains the original owner', async () => {
     const f = protocol('P06-duplicate-approval-id', { a: { before: [started()] }, b: { before: [started()] } });
     try {
       const a = await open(f, 'a'), b = await open(f, 'b'), sa = capture(f, a), sb = capture(f, b);
       await f.adapter.startTurn(a, request('a')); await f.adapter.startTurn(b, request('b'));
       await f.control([approval(7601, 'a'), approval(7601, 'b')]);
-      const originalReply = await outcome(f.adapter.respondApproval(a, 'appr_7601', 'deny'));
-      const replacementReply = await outcome(f.adapter.respondApproval(b, 'appr_7601', 'allow_once'));
+      const token = approvalToken(sa.events, 7601);
+      const foreignReply = await outcome(f.adapter.respondApproval(b, token, 'allow_once'));
+      const originalReply = await outcome(f.adapter.respondApproval(a, token, 'deny'));
+      const replacementReply = await outcome(f.adapter.respondApproval(b, token, 'allow_once'));
       await f.adapter.listModels(); await f.exit(); await bounded(Promise.all([sa.done, sb.done]), 'P06 streams');
       const accepted = f.log().filter(row => row.type === 'in' && row.frame?.['id'] === 7601 && (row.frame['result'] as { decision?: string } | undefined)?.decision === 'accept');
-      f.save({ classification: 'defect-reproduced', originalReply, replacementReply, accepted, streams: [sa.events, sb.events], deepSeekCrossDiscovery: 'design item 7' });
+      const wireReplies = f.log().filter(row => row.type === 'in' && row.frame?.['id'] === 7601 && row.frame['result'] != null);
+      f.save({ classification: 'repaired', foreignReply, originalReply, replacementReply, accepted, wireReplies, streams: [sa.events, sb.events], deepSeekCrossDiscovery: 'design item 7' });
+      expect(sa.events.filter(e => e.kind === 'approval.requested')).toMatchObject([{ approvalId: token, sessionId: a.id, turnId: 'internal-a' }]);
+      expect(sb.events.filter(e => e.kind === 'approval.requested')).toEqual([]);
+      expect(foreignReply).toMatchObject({ status: 'rejected', code: 'THREAD_SCOPE_MISMATCH' });
+      expect(originalReply).toEqual({ status: 'fulfilled' });
+      expect(replacementReply).toMatchObject({ status: 'rejected' });
+      expect(wireReplies.map(row => row.frame)).toEqual([expect.objectContaining({ id: 7601, result: { decision: 'decline' } })]);
       expect(accepted, 'Repeated outstanding RPC ids must quarantine or retain the original binding').toHaveLength(0);
     } finally { await f.close(); }
   }, 10000);
 
-  defect('P07 DEFECT: explicit turn/start failure must not permanently poison a later clean retry on the thread', async () => {
+  it('P07 repaired: explicit turn/start failure clears awaiting and permits a clean retry', async () => {
     const f = protocol('P07-failed-start-retry', { rejected: { responseError: { code: -32000, message: 'SYNTHETIC rejected before any turn exists' } }, retry: { before: [started()], after: [terminal('SAFE_RETRY')] } });
     try {
       const session = await open(f, 'retry'), stream = capture(f, session);
@@ -304,13 +348,16 @@ describe('R124 protocol combinations through the actual local Codex adapter', ()
       const retry = await outcome(f.adapter.startTurn(session, request('retry')));
       await f.exit(); await bounded(stream.done, 'P07 stream');
       const starts = f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'turn/start');
-      f.save({ classification: 'defect-reproduced', first, retry, actualTurnStartRequests: starts.length, events: stream.events });
+      f.save({ classification: 'repaired', first, retry, actualTurnStartRequests: starts.length, events: stream.events });
       expect(first).toMatchObject({ status: 'rejected', code: 'CAPABILITY_UNSUPPORTED' });
       expect(retry, 'Rejected start must not leave an unclaimable awaitingTurn forever').toMatchObject({ status: 'fulfilled' });
+      expect(starts).toHaveLength(2);
+      expect(stream.events.filter(e => e.turnId === 'internal-rejected')).toEqual([]);
+      expect(stream.events.filter(e => e.kind === 'turn.completed')).toMatchObject([{ turnId: 'internal-retry', finalText: 'SAFE_RETRY' }]);
     } finally { await f.close(); }
   }, 10000);
 
-  defect('P08 DEFECT: unbound old-generation start must not block a fresh generation with reused provider thread id', async () => {
+  it('P08 repaired: unbound old-generation start does not block a fresh generation with reused provider thread id', async () => {
     const f = protocol('P08-old-unbound-generation', {
       old: { noResponse: true, exitAfterStart: 17 },
       fresh: { before: [started()], after: [terminal('SAFE_FRESH')] },
@@ -322,37 +369,39 @@ describe('R124 protocol combinations through the actual local Codex adapter', ()
       const fresh = await open(f, 'fresh'), stream = capture(f, fresh);
       expect(fresh.providerSessionId).toBe(old.providerSessionId);
       const firstFreshAttempt = await outcome(f.adapter.startTurn(fresh, request('fresh')));
-      // Removing the old local session is an explicit diagnostic recovery action.
       await f.adapter.close(old);
-      const afterClosingOldSession = await outcome(f.adapter.startTurn(fresh, request('fresh')));
       await bounded(f.closed[0]!, 'old process close');
       const oldStartResult = await oldStart;
       await f.exit(); await bounded(stream.done, 'P08 fresh stream');
-      f.save({ classification: 'defect-reproduced', firstFreshAttempt, afterClosingOldSession, oldStartResult, sameProviderThread: old.providerSessionId, freshEvents: stream.events, launches: f.children.length });
-      expect(afterClosingOldSession.status).toBe('fulfilled');
+      f.save({ classification: 'repaired', firstFreshAttempt, oldStartResult, sameProviderThread: old.providerSessionId, freshEvents: stream.events, launches: f.children.length });
+      expect(oldStartResult.status).toBe('rejected');
+      expect(f.children).toHaveLength(2);
+      expect(stream.events.filter(e => e.kind === 'turn.completed')).toMatchObject([{ turnId: 'internal-fresh', finalText: 'SAFE_FRESH' }]);
+      expect(stream.events.filter(e => e.turnId === 'internal-old')).toEqual([]);
       expect(stream.events.filter(e => e.kind === 'process.exited')).toHaveLength(1);
       expect(firstFreshAttempt, 'Old pending session state must be excluded from the new process generation').toMatchObject({ status: 'fulfilled' });
     } finally { await f.close(); }
   }, 10000);
 
-  defect('P09 DEFECT [DeepSeek design 4]: responding to a dead-generation approval must not spawn/write to an uninitialized new process', async () => {
+  it('P09 repaired [DeepSeek design 4]: dead-generation approval rejects without spawning or writing to a new process', async () => {
     const f = protocol('P09-old-approval-generation', { old: { before: [started()] } });
     try {
       const old = await open(f, 'old'), stream = capture(f, old);
       await f.adapter.startTurn(old, request('old'));
       await f.control([approval(7901, 'old')]);
+      const token = approvalToken(stream.events, 7901);
+      expect(stream.events.filter(e => e.kind === 'approval.requested')).toMatchObject([{ approvalId: token, turnId: 'internal-old' }]);
       await f.exit(29); await bounded(stream.done, 'P09 old stream');
-      const staleReply = await outcome(f.adapter.respondApproval(old, 'appr_7901', 'allow_once'));
-      await expect.poll(() => f.log().filter(row => row.type === 'server.ready').length, { timeout: 2000 }).toBe(2);
-      await expect.poll(() => f.log().some(row => row.pid === f.children[1]!.pid && row.type === 'in' && row.frame?.['id'] === 7901), { timeout: 2000 }).toBe(true);
-      const newProcessInput = f.log().filter(row => row.pid === f.children[1]!.pid && row.type === 'in');
-      f.save({ classification: 'defect-reproduced', staleReply, launches: f.children.length, oldPid: f.children[0]!.pid, newPid: f.children[1]!.pid, newProcessInput, oldEvents: stream.events, deepSeekProposedBeforeImplementation: 'design item 4' });
-      expect(newProcessInput[0]!.frame).toMatchObject({ id: 7901, result: { decision: 'accept' } });
+      const staleReply = await outcome(f.adapter.respondApproval(old, token, 'allow_once'));
+      const accepted = f.log().filter(row => row.type === 'in' && row.frame?.['id'] === 7901 && (row.frame['result'] as { decision?: string })?.decision === 'accept');
+      f.save({ classification: 'repaired', staleReply, launches: f.children.length, accepted, oldPid: f.children[0]!.pid, oldEvents: stream.events, deepSeekProposedBeforeImplementation: 'design item 4' });
+      expect(staleReply).toMatchObject({ status: 'rejected', adapterCallError: true });
+      expect(accepted).toEqual([]);
       expect(f.children, 'Stale approval must be invalidated at generation death; a reply cannot create a new carrier').toHaveLength(1);
     } finally { await f.close(); }
   }, 10000);
 
-  defect('P10 DEFECT [DeepSeek design 5]: late started from a closed old session must not claim a resumed session awaiting its own response', async () => {
+  it('P10 repaired [DeepSeek design 5]: a closed session tombstone rejects late started while a legitimate new ID completes', async () => {
     const f = protocol('P10-closed-resume-late-start', {
       old: { providerTurnId: 'closed-old-turn', before: [started()], after: [terminal('SAFE_OLD')] },
       keepalive: { before: [started()] },
@@ -366,10 +415,56 @@ describe('R124 protocol combinations through the actual local Codex adapter', ()
       await f.adapter.startTurn(resumed, request('resumed'));
       await f.exit(); await bounded(Promise.all([stream.done, other.done]), 'P10 streams');
       const leaked = stream.events.filter(e => e.kind === 'message.completed' && e.text.includes('POISON_CLOSED_OLD_SESSION'));
-      f.save({ classification: 'defect-reproduced', launches: f.children.length, oldSessionId: old.id, resumedSessionId: resumed.id, sameProviderThread: old.providerSessionId === resumed.providerSessionId, resumedEvents: stream.events, keepaliveEvents: other.events, leaked, deepSeekProposedBeforeImplementation: 'design item 5' });
+      f.save({ classification: 'repaired', launches: f.children.length, oldSessionId: old.id, resumedSessionId: resumed.id, sameProviderThread: old.providerSessionId === resumed.providerSessionId, resumedEvents: stream.events, keepaliveEvents: other.events, leaked, deepSeekProposedBeforeImplementation: 'design item 5' });
       expect(f.children).toHaveLength(1);
+      expect(resumed.providerSessionId).toBe(old.providerSessionId);
+      expect(stream.events.filter(e => e.kind === 'turn.started')).toMatchObject([{ turnId: 'internal-resumed', providerTurnId: 'real-new-turn' }]);
+      expect(stream.events.filter(e => e.kind === 'turn.completed')).toMatchObject([{ turnId: 'internal-resumed', finalText: 'SAFE_RESUMED' }]);
       expect(JSON.stringify(other.events)).not.toContain('POISON_CLOSED_OLD_SESSION');
       expect(leaked, 'A closed session must retain enough retired identity to reject its delayed start').toHaveLength(0);
     } finally { await f.close(); }
   }, 10000);
+
+  for (const conflicting of [false, true]) {
+    it(`R126 buffers start, message, tool, usage and terminal events until response validation (conflict=${conflicting})`, async () => {
+      const f = protocol(`R126-buffer-${conflicting ? 'conflict' : 'valid'}`, {
+        a: { holdResponse: true, ...(conflicting ? { responseTurnId: 'conflicting-response' } : {}), before: [
+          started(),
+          frame('item/agentMessage/delta', { ...identity, itemId: 'early-delta', delta: 'BUFFERED_BODY' }),
+          message('BUFFERED_BODY'), tool('item/started', 'echo BUFFERED_TOOL'), tool('item/completed'),
+          frame('thread/tokenUsage/updated', { ...identity, tokenUsage: { total: { inputTokens: 13, outputTokens: 7 } } }),
+          terminal('BUFFERED_FINAL'),
+        ] },
+        retry: { before: [started()], after: [terminal('SAFE_AFTER_BUFFER')] },
+      });
+      try {
+        const session = await open(f, 'a'), stream = capture(f, session);
+        const pending = outcome(f.adapter.startTurn(session, request('a')));
+        await expect.poll(() => f.log().some(row => row.type === 'turn.registered' && row.key === 'a')).toBe(true);
+        await f.control(); // A real response on the same pipe proves all early frames were parsed.
+        const beforeResponse = [...stream.events];
+        await f.control([], undefined, 'a');
+        const startResult = await pending;
+        const afterResponse = [...stream.events];
+        const retry = await outcome(f.adapter.startTurn(session, request('retry')));
+        await f.exit(); await bounded(stream.done, 'R126 buffered stream');
+        f.save({ classification: 'repaired', conflicting, beforeResponse, afterResponse, startResult, retry, events: stream.events });
+        expect(beforeResponse.map(e => e.kind)).toEqual(['session.ready']);
+        if (conflicting) {
+          expect(startResult).toMatchObject({ status: 'rejected', adapterCallError: true, code: 'CAPABILITY_UNSUPPORTED', notStarted: false });
+          expect(afterResponse.map(e => e.kind)).toEqual(['session.ready']);
+          expect(JSON.stringify(stream.events)).not.toContain('BUFFERED_');
+          expect(stream.events.filter(e => e.turnId === 'internal-a')).toEqual([]);
+        } else {
+          expect(startResult).toEqual({ status: 'fulfilled' });
+          expect(afterResponse.map(e => e.kind)).toEqual(['session.ready', 'turn.started', 'message.delta', 'message.completed', 'tool.started', 'tool.completed', 'usage.updated', 'turn.completed']);
+          expect(afterResponse.slice(1).every(e => e.turnId === 'internal-a' && e.sessionId === session.id && e.stage === 'r124.a')).toBe(true);
+          expect(afterResponse.find(e => e.kind === 'tool.completed')).toMatchObject({ target: 'echo BUFFERED_TOOL' });
+          expect(afterResponse.find(e => e.kind === 'usage.updated')).toMatchObject({ inputTokens: 13, outputTokens: 7 });
+        }
+        expect(retry).toEqual({ status: 'fulfilled' });
+        expect(stream.events.filter(e => e.kind === 'turn.completed' && e.turnId === 'internal-retry')).toMatchObject([{ finalText: 'SAFE_AFTER_BUFFER' }]);
+      } finally { await f.close(); }
+    }, 10000);
+  }
 });

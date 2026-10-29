@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, write
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerAdapter } from '../../src/adapter/codex/appServerAdapter.ts';
+import { AdapterCallError } from '../../src/contracts/runtime.ts';
 import type { NormalizedRuntimeEvent, SessionRef, TurnRequest } from '../../src/contracts/runtime.ts';
 import { DispatchAdmission } from '../../src/daemon/admission.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
@@ -13,7 +14,7 @@ import { openDatabase } from '../../src/persistence/db.ts';
 type Frame = { method: string; params: Record<string, unknown> };
 type Script = { providerTurnId?: string; before?: Frame[]; after?: Frame[]; holdResponse?: boolean };
 type WireRow = { type: string; pid: number; key?: string; sequence?: number; frame?: Record<string, unknown>; context?: { THREAD: string; TURN: string; FINAL: string } };
-const evidenceRoot = resolve('dist/r125-protocol-followup');
+const evidenceRoot = resolve('dist/r126-protocol-followup');
 const fixtureEntry = resolve('tests/fixtures/chaosProtocolFollowupR125.mjs');
 const executionSourceHashes = Object.fromEntries(['tests/integration/chaosProtocolFollowupR125.test.ts', 'tests/fixtures/chaosProtocolFollowupR125.mjs'].map(file => [file, createHash('sha256').update(readFileSync(resolve(file))).digest('hex')]));
 const directories: string[] = [];
@@ -37,7 +38,7 @@ afterAll(() => {
   for (const { dir, name } of audits) {
     expect(existsSync(join(dir, 'result.json')), `Completed business evidence required: ${name}`).toBe(true);
     const result = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8')) as { businessAssertion?: string };
-    if (name.includes('DEFECT')) {
+    if (/DEFECT|REPAIRED/.test(name)) {
       expect(reached.has(name), `Business invariant not reached: ${name}`).toBe(true);
       expect(result.businessAssertion).toBeTypeOf('string');
     }
@@ -47,9 +48,9 @@ afterAll(() => {
 });
 afterEach(({ task }) => {
   try {
-    if (task.name.includes('DEFECT')) {
+    if (/DEFECT|REPAIRED/.test(task.name)) {
       expect(directories).toHaveLength(1);
-      expect(reached.has(task.name), 'The exact healthy business assertion must be reached before an expected failure').toBe(true);
+      expect(reached.has(task.name), 'The exact business assertion must be reached; setup errors cannot establish a defect or repair').toBe(true);
     }
     for (const dir of directories) {
       expect(existsSync(join(dir, 'result.json')), 'A harness exception is not a product counterexample').toBe(true);
@@ -65,7 +66,7 @@ async function bounded<T>(promise: Promise<T>, label: string, ms = 4000): Promis
 }
 async function outcome(promise: Promise<unknown>) {
   try { await promise; return { status: 'fulfilled' }; }
-  catch (error) { return { status: 'rejected', message: error instanceof Error ? error.message : String(error) }; }
+  catch (error) { return { status: 'rejected', message: error instanceof Error ? error.message : String(error), ...(error instanceof AdapterCallError ? { code: error.code, notStarted: error.notStarted } : {}) }; }
 }
 const frame = (method: string, params: Record<string, unknown>): Frame => ({ method, params });
 const started = (key?: string) => frame('turn/started', { threadId: key ? `$THREAD{${key}}` : '$THREAD', turn: { id: key ? `$TURN{${key}}` : '$TURN', status: 'inProgress' } });
@@ -122,11 +123,12 @@ async function scenario(label: string, turns: Record<string, Script>) {
   const { conversationId } = await cmd<{ conversationId: string }>('conversation.create', { projectId: project.id, peerMemberId: memberId });
   const snapshot = () => ({
     tasks: db.prepare('SELECT id,conversation_id,status FROM tasks ORDER BY rowid').all(),
-    turns: db.prepare('SELECT id,session_id,status,exec_started_at,protection_state FROM agent_turns ORDER BY rowid').all(),
+    turns: db.prepare('SELECT id,run_id,session_id,status,exec_started_at,protection_state FROM agent_turns ORDER BY rowid').all(),
+    workflows: db.prepare('SELECT id,task_id,status FROM workflow_runs ORDER BY rowid').all(),
     sessions: db.prepare('SELECT id,scope_kind,conversation_id,provider_session_id,session_generation FROM runtime_sessions ORDER BY rowid').all(),
     messages: db.prepare('SELECT id,conversation_id,thread_id,task_id,author_type,body_json FROM messages ORDER BY rowid').all(),
     events: db.prepare('SELECT seq,turn_id,kind,payload_json FROM domain_events ORDER BY seq').all(),
-    outbox: db.prepare('SELECT id,status,attempt_epoch FROM outbox ORDER BY id').all(),
+    outbox: db.prepare('SELECT id,turn_id,status,attempt_epoch FROM outbox ORDER BY id').all(),
     dmQueue: db.prepare("SELECT t.id,t.status FROM tasks t WHERE t.kind='dm_turn' AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id=t.id) ORDER BY t.rowid").all(),
     admission: admission.snapshot(), realCalls: (db.prepare('SELECT count(*) n FROM real_calls').get() as { n: number }).n,
   });
@@ -170,7 +172,7 @@ async function scenario(label: string, turns: Record<string, Script>) {
   };
 }
 
-describe('R125 follow-up to the two unexecuted DeepSeek protocol hypotheses', () => {
+describe('R126 protocol follow-up: deferred overlap and repaired completed-ID reuse', () => {
   defect('S1 adapter DEFECT: a bound but unfinished provider thread must reject a second resumed start', async ({ task }) => {
     const f = await scenario('S1-adapter-overlap', { first: { before: [started()] }, second: { before: [started()] }, other: { before: [started()] } });
     try {
@@ -234,18 +236,24 @@ describe('R125 follow-up to the two unexecuted DeepSeek protocol hypotheses', ()
     } finally { await f.close(); }
   }, 15000);
 
-  defect('S2 same-session adapter DEFECT: reused completed provider ID must not overwrite old ownership or relabel late old output', async ({ task }) => {
-    const f = await scenario('S2-adapter-reused-id', { old: { providerTurnId: 'reused-provider-id', before: [started()] }, fresh: { providerTurnId: 'reused-provider-id', holdResponse: true, before: [started()] } });
+  it('S2 same-session adapter REPAIRED: reject completed provider ID reuse without overwriting ownership or relabeling late output', async ({ task }) => {
+    const f = await scenario('S2-adapter-reused-id', {
+      old: { providerTurnId: 'reused-provider-id', before: [started()] },
+      fresh: { providerTurnId: 'reused-provider-id', holdResponse: true, before: [started()] },
+      recovery: { providerTurnId: 'distinct-recovery-id', before: [started(), message('SAFE_RECOVERY_BEFORE_RESPONSE', 'recovery-before')] },
+    });
     try {
       const session = await f.open('same-session'), stream = f.capture(session);
       await f.adapter.startTurn(session, request('old'));
       await f.control([terminal('old', 'SAFE_OLD_COMPLETE')]);
+      const originalCompletion = stream.events.find(e => e.kind === 'turn.completed' && e.turnId === 'internal-old');
+      expect(originalCompletion).toMatchObject({ kind: 'turn.completed', finalText: 'SAFE_OLD_COMPLETE' });
       const freshStart = outcome(f.adapter.startTurn(session, request('fresh')));
       await expect.poll(() => f.log().some(row => row.type === 'response.held' && row.key === 'fresh')).toBe(true);
       await f.control([message('POISON_OLD_BEFORE_RESPONSE', 'old-before', 'old'), message('SAFE_NEW_BEFORE_RESPONSE', 'new-before', 'fresh'), terminal('old', 'OLD_TERMINAL_BEFORE_RESPONSE')]);
       const beforeResponse = stream.events.slice();
       await f.control([], ['fresh']);
-      expect(await freshStart).toEqual({ status: 'fulfilled' });
+      const freshResult = await bounded(freshStart, 'same-session reused-ID response');
       const afterResponseOffset = stream.events.length;
       await f.control([message('POISON_OLD_AFTER_RESPONSE', 'old-after', 'old'), message('SAFE_NEW_AFTER_RESPONSE', 'new-after', 'fresh'), terminal('old', 'POISON_OLD_TERMINAL_AFTER_RESPONSE'), terminal('fresh', 'SAFE_FRESH_TERMINAL')]);
       const interruptsBefore = f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'turn/interrupt').length;
@@ -253,20 +261,29 @@ describe('R125 follow-up to the two unexecuted DeepSeek protocol hypotheses', ()
       const interruptsAfterOld = f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'turn/interrupt').length;
       await f.adapter.interrupt(session, 'internal-fresh'); await f.adapter.listModels();
       const interruptsAfterFresh = f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'turn/interrupt').length;
-      expect(beforeResponse.some(e => e.kind === 'message.completed' && e.text === 'POISON_OLD_BEFORE_RESPONSE' && e.turnId === 'internal-old')).toBe(true);
-      expect(interruptsAfterOld).toBe(interruptsBefore);
-      expect(interruptsAfterFresh).toBe(interruptsBefore + 1);
+      // A later distinct ID must still start normally. Buffered output from the
+      // rejected attempt must not be replayed into this subsequent turn either.
+      await f.adapter.startTurn(session, request('recovery'));
+      await f.control([message('POISON_OLD_DURING_RECOVERY', 'old-during-recovery', 'old'), terminal('recovery', 'SAFE_RECOVERY_COMPLETE')]);
       await f.control([], [], 0); await bounded(stream.done, 'S2 same-session event drain');
       const afterResponse = stream.events.slice(afterResponseOffset);
-      f.save({ classification: 'adapter-counterexample-only', beforeResponse, afterResponse, interruptsBefore, interruptsAfterOld, interruptsAfterFresh, businessAssertion: 'do-not-relabel-retired-provider-id' });
+      f.save({ classification: 'repaired', freshResult, originalCompletion, beforeResponse, afterResponse, events: stream.events, interruptsBefore, interruptsAfterOld, interruptsAfterFresh, businessAssertion: 'reject-reused-completed-id-without-relabeling-or-buffer-replay' });
       reached.add(task.name);
+      expect(freshResult, 'A real turn/start response reusing a completed ID must explicitly reject with uncertain execution semantics').toMatchObject({ status: 'rejected', code: 'CAPABILITY_UNSUPPORTED', notStarted: false });
+      expect(f.log().some(row => row.type === 'response.released' && row.key === 'fresh')).toBe(true);
+      expect(stream.events.filter(e => e.turnId === 'internal-fresh'), 'Rejected attempt must publish no buffered or subsequent turn events').toEqual([]);
+      expect(interruptsAfterOld, 'Original ownership must remain mapped after rejected reuse').toBe(interruptsBefore + 1);
+      expect(interruptsAfterFresh, 'Rejected attempt must acquire no provider mapping').toBe(interruptsAfterOld);
       expect(afterResponse.filter(e => e.turnId === 'internal-fresh' && JSON.stringify(e).includes('POISON_OLD')), 'Response ID reuse must not assign old messages or old terminals to the new internal turn').toEqual([]);
+      expect(stream.events.filter(e => e.turnId === 'internal-recovery' && /POISON_OLD|SAFE_NEW|OLD_TERMINAL|SAFE_FRESH_TERMINAL/.test(JSON.stringify(e))), 'Rejected response buffers and late old messages must not leak into the next distinct turn').toEqual([]);
+      expect(stream.events.filter(e => e.turnId === 'internal-recovery' && e.kind === 'turn.completed')).toEqual([expect.objectContaining({ finalText: 'SAFE_RECOVERY_COMPLETE' })]);
+      expect(stream.events.filter(e => e.turnId === 'internal-recovery' && e.kind === 'message.completed')).toEqual([expect.objectContaining({ text: 'SAFE_RECOVERY_BEFORE_RESPONSE' })]);
+      expect(originalCompletion).toMatchObject({ kind: 'turn.completed', turnId: 'internal-old', finalText: 'SAFE_OLD_COMPLETE' });
     } finally { await f.close(); }
   }, 15000);
 
   for (const reused of [false, true]) {
-    const register = reused ? defect : it;
-    register(`S2 worker ${reused ? 'DEFECT' : 'CONTROL'}: ${reused ? 'reused' : 'distinct'} provider ID across completed DM and resumed session`, async ({ task }) => {
+    it(`S2 worker ${reused ? 'REPAIRED' : 'CONTROL'}: ${reused ? 'reused' : 'distinct'} provider ID across completed DM and resumed session`, async ({ task }) => {
       const f = await scenario(reused ? 'S2-worker-reused-id' : 'S2-worker-distinct-id', {
         TOKEN_ID_OLD: { providerTurnId: 'provider-first', before: [started()] },
         TOKEN_ID_NEW_SECOND: { providerTurnId: reused ? 'provider-first' : 'provider-second', before: [started()], holdResponse: true },
@@ -279,6 +296,9 @@ describe('R125 follow-up to the two unexecuted DeepSeek protocol hypotheses', ()
         expect((await f.worker.awaitInFlightTurns(3000)).remaining).toEqual([]);
         expect(f.status(first.taskId)).toBe('DONE');
         const originalReply = f.replies()[0]!;
+        // Observe the actual transport returned by the real adapter. Rejection
+        // precedes the worker's successful-start session_id persistence.
+        const sessionOpens = vi.spyOn(f.adapter, 'openSession');
         const second = await f.sendDm('TOKEN_ID_NEW_SECOND');
         const startup = outcome(f.worker.runOnce());
         await expect.poll(() => f.log().some(row => row.type === 'response.held' && row.key === 'TOKEN_ID_NEW_SECOND')).toBe(true);
@@ -286,25 +306,69 @@ describe('R125 follow-up to the two unexecuted DeepSeek protocol hypotheses', ()
         await f.control([message('POISON_OLD_BEFORE_RESPONSE', 'old-before', 'TOKEN_ID_OLD'), message('SAFE_NEW_BEFORE_RESPONSE', 'new-before', 'TOKEN_ID_NEW_SECOND'), terminal('TOKEN_ID_OLD', 'OLD_TERMINAL_BEFORE_RESPONSE')]);
         await f.control([], ['TOKEN_ID_NEW_SECOND']);
         const startupResult = await bounded(startup, 'formal second startup');
-        if (!reused) expect(startupResult).toEqual({ status: 'fulfilled' });
-        const newSessionId = (f.db.prepare('SELECT session_id FROM agent_turns ORDER BY rowid DESC LIMIT 1').get() as { session_id: string }).session_id;
+        const newSession = await sessionOpens.mock.results.at(-1)!.value as SessionRef;
+        sessionOpens.mockRestore();
+        const newSessionId = newSession.id;
         expect(newSessionId).not.toBe(oldSessionId);
-        const newStream = startupResult.status === 'fulfilled' ? f.capture({ id: newSessionId } as SessionRef) : undefined;
+        const newStream = f.capture({ id: newSessionId } as SessionRef);
+        const afterStartup = f.snapshot();
+        const afterStartupRemaining = await f.worker.awaitInFlightTurns(reused ? 250 : 0);
+        const afterStartupSettlement = reused ? await f.worker.awaitSettlement(250) : undefined;
+        const secondTurn = f.db.prepare('SELECT t.id,t.run_id,t.session_id,t.status,t.exec_started_at FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id WHERE r.task_id=? ORDER BY t.rowid DESC LIMIT 1').get(second.taskId) as { id: string; run_id: string; session_id: string | null; status: string; exec_started_at: number | null };
+        const failureEvent = f.db.prepare("SELECT payload_json FROM domain_events WHERE turn_id=? AND kind='turn.startupFailed' ORDER BY seq DESC LIMIT 1").get(secondTurn.id) as { payload_json: string } | undefined;
+        const startupFailure = failureEvent ? JSON.parse(failureEvent.payload_json) as { phase?: string; classification?: string; message?: string } : null;
+        const unknownProtection = reused ? {
+          admissionHeld: f.admission.has(secondTurn.id),
+          workflow: f.db.prepare('SELECT id,status FROM workflow_runs WHERE id=?').get(secondTurn.run_id),
+          outbox: f.db.prepare('SELECT turn_id,status,attempt_epoch FROM outbox WHERE turn_id=?').all(secondTurn.id),
+        } : undefined;
         expect(f.registered('TOKEN_ID_NEW_SECOND')!.context!.THREAD).toBe(f.registered('TOKEN_ID_OLD')!.context!.THREAD);
         expect(f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'thread/resume')).toHaveLength(1);
         await f.control([message('POISON_OLD_AFTER_RESPONSE', 'old-after', 'TOKEN_ID_OLD'), message('SAFE_NEW_AFTER_RESPONSE', 'new-after', 'TOKEN_ID_NEW_SECOND'), terminal('TOKEN_ID_OLD', 'OLD_TERMINAL_AFTER_RESPONSE'), terminal('TOKEN_ID_NEW_SECOND')]);
         const remaining = await f.worker.awaitInFlightTurns(reused ? 250 : 3000);
+        const afterLateFrames = f.snapshot();
         const replies = f.replies();
         expect(replies.filter(row => row.task_id === first.taskId)).toEqual([originalReply]);
         expect(JSON.stringify(replies)).not.toContain('POISON_OLD');
-        // Freeze the defect while the shared server is still alive. Its later
-        // harness exit is cleanup, not the source of this observed stall.
-        f.save({ classification: reused ? 'formal-worker-counterexample' : 'guarded-control', reused, first, second, startupResult, oldTransportSessionId: oldSessionId, newTransportSessionId: newSessionId, beforeResponse, remaining, replies, oldEvents: oldStream.events, newEvents: newStream?.events ?? [], observationWindowMs: reused ? 250 : 3000, turnDeadline: 'production default disabled', businessAssertion: 'resume-without-hanging-or-mixing-completed-identity' });
-        await f.control([], [], 0); await bounded(Promise.all([oldStream.done, ...(newStream ? [newStream.done] : [])]), 'formal streams drain');
-        writeFileSync(join(f.dir, 'streams-after-harness-exit.json'), JSON.stringify({ oldEvents: oldStream.events, newEvents: newStream?.events ?? [] }, null, 2));
+        let afterLeaseReclaim: ReturnType<typeof f.snapshot> | undefined;
+        if (reused) {
+          const startsBefore = f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'turn/start').length;
+          const turnsBefore = afterLateFrames.turns.length;
+          // Expire only this isolated DB's lease; the production existing-turn
+          // reconciliation path must not create another provider execution.
+          f.db.prepare('UPDATE outbox SET lease_until=0 WHERE turn_id=?').run(secondTurn.id);
+          await f.worker.runOnce(); await f.worker.runOnce();
+          expect((await f.worker.awaitSettlement(250)).remaining).toEqual([]);
+          afterLeaseReclaim = f.snapshot();
+          expect(f.log().filter(row => row.type === 'in' && row.frame?.['method'] === 'turn/start')).toHaveLength(startsBefore);
+          expect(afterLeaseReclaim.turns).toHaveLength(turnsBefore);
+          expect(afterLeaseReclaim.turns.find(row => (row as { id: string }).id === secondTurn.id)).toMatchObject({ status: 'UNKNOWN' });
+          expect(f.admission.has(secondTurn.id)).toBe(true);
+        }
+        // Observe rejection/settlement while the shared server is still alive;
+        // the later harness exit must not supply the consumer cleanup evidence.
+        f.save({ classification: reused ? 'repaired' : 'guarded-control', reused, first, second, startupResult, startupFailure, secondTurn, unknownProtection, oldTransportSessionId: oldSessionId, newTransportSessionId: newSessionId, beforeResponse, afterStartup, afterStartupRemaining, afterStartupSettlement, afterLateFrames, afterLeaseReclaim, remaining, replies, oldEvents: oldStream.events, newEvents: newStream.events, observationWindowMs: reused ? 250 : 3000, turnDeadline: 'production default disabled', businessAssertion: 'resume-without-hanging-or-mixing-completed-identity' });
+        const observedNewEvents = newStream.events.slice();
+        await f.control([], [], 0); await bounded(Promise.all([oldStream.done, newStream.done]), 'formal streams drain');
+        writeFileSync(join(f.dir, 'streams-after-harness-exit.json'), JSON.stringify({ oldEvents: oldStream.events, newEvents: newStream.events }, null, 2));
         if (reused) reached.add(task.name);
         expect(remaining.remaining, 'Reused terminal provider identity must be rejected or safely handled; parsed terminal frames must not leave the formal consumer running').toEqual([]);
-        if (!reused) {
+        expect(f.log().some(row => row.type === 'response.released' && row.key === 'TOKEN_ID_NEW_SECOND')).toBe(true);
+        if (reused) {
+          expect(startupResult, 'Formal DM must expose the actual response validation rejection, rather than an unrelated setup error').toMatchObject({ status: 'rejected', code: 'CAPABILITY_UNSUPPORTED', notStarted: false });
+          expect(afterStartupRemaining.remaining, 'Rejected startup must never leave a formal consumer attached').toEqual([]);
+          expect(afterStartupSettlement?.remaining, 'Unknown protection must have neither a starting dispatch nor an active consumer').toEqual([]);
+          expect(secondTurn).toMatchObject({ status: 'UNKNOWN', exec_started_at: null });
+          expect(afterLateFrames.turns.find(row => (row as { id: string }).id === secondTurn.id)).toMatchObject({ status: 'UNKNOWN', exec_started_at: null });
+          expect(startupFailure).toMatchObject({ phase: 'startTurn', classification: 'uncertain', message: expect.any(String) });
+          expect(startupFailure?.message?.trim(), 'Persist a readable startup rejection reason').toBeTruthy();
+          expect(unknownProtection).toMatchObject({ admissionHeld: true, workflow: { status: 'INTERRUPTED' }, outbox: [expect.objectContaining({ turn_id: secondTurn.id, status: 'leased' })] });
+          expect(afterStartup.admission.global, 'Only the rejected UNKNOWN turn retains an admission protection slot').toBe(1);
+          expect(afterLateFrames.admission.global).toBe(1);
+          expect(replies.filter(row => row.task_id === second.taskId), 'Rejected DM must publish no buffered or late response as its own reply').toEqual([]);
+          expect(observedNewEvents.filter(e => e.turnId != null), 'Rejected transport session must not publish attempt buffers or old output').toEqual([]);
+        } else {
+          expect(startupResult).toEqual({ status: 'fulfilled' });
           expect(f.status(second.taskId)).toBe('DONE');
           const secondReplies = replies.filter(row => row.task_id === second.taskId);
           expect(secondReplies).toHaveLength(2); // Two deliberately distinct item IDs; final text appends to the last message.

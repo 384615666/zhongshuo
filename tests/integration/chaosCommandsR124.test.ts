@@ -129,7 +129,7 @@ async function removeThread(f:Fixture,root:Root,memberId:string){
 function noDuplicateStarts(f:Fixture){expect(new Set(f.adapter.starts.map(t=>t.turnId)).size).toBe(f.adapter.starts.length);}
 
 describe('R124 command order and scheduler chaos; isolated Fake only',()=>{
-  it.fails('A01 [DEFECT: stop conflict error is STORAGE_UNAVAILABLE] cross-target IDs must reject with IDEMPOTENCY_CONFLICT and preserve the original execution',async()=>{
+  it('A01 cross-target IDs reject with IDEMPOTENCY_CONFLICT and preserve the original execution',async()=>{
     const adapter=new CommandAdapter({turnScriptSequencer:()=>complete('本串专属答复',{},200)});
     const f=await fixture('a01-cross-target-id',{adapter,projects:2});
     try{
@@ -176,7 +176,7 @@ describe('R124 command order and scheduler chaos; isolated Fake only',()=>{
     }finally{await f.close();}
   });
 
-  it.fails('A03 [DEFECT: five stop IDs advance generation five times] repeated stops during one session-open window must advance only once',async()=>{
+  it('A03 repeated stops during one session-open window advance only once',async()=>{
     const gate=latch(),entered=latch();const adapter=new CommandAdapter({turnScriptSequencer:()=>complete('不会启动')});
     const f=await fixture('a03-stop-generation',{adapter,projects:2});let opening:Promise<boolean>|undefined;
     try{
@@ -217,7 +217,7 @@ describe('R124 command order and scheduler chaos; isolated Fake only',()=>{
     }finally{await f.close();}
   });
 
-  it.fails('A05 [DEFECT: queued writer runs after room archive] archived room must fence accepted queued work and reject replay',async()=>{
+  it('A05 room archive rejects OPEN queued work; accepted work and replay remain valid until completion',async()=>{
     const adapter=new CommandAdapter({turnScriptSequencer:({text})=>text.includes('A05_QUEUED_ROOT')?[{kind:'writeFile',path:'archived-output.txt',content:'A05_WRITTEN_AFTER_ARCHIVE'},...complete('A05_WRITER_DONE')]:complete('A05_OTHER_DONE')});
     const f=await fixture('a05-archive-queued',{adapter,writable:true});
     try{
@@ -225,6 +225,7 @@ describe('R124 command order and scheduler chaos; isolated Fake only',()=>{
       const a=await f.cmd<Root>('message.submit',params,id);
       const roomId=f.projects[0]!.rooms[0]!.id;
       const {revision}=f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(roomId) as {revision:number};
+      expect(f.status(a.taskId)).toBe('OPEN');expect(adapter.starts).toHaveLength(0);
       const archived=await f.raw('room.archive',{roomId,expectedRevision:revision,action:'archive'});
       const replay=await f.raw('message.submit',params,id);
       const b=await f.send(0,1,[2],'A05_OTHER_ROOM');await f.pump(()=>f.status(b.taskId)==='DONE');
@@ -233,6 +234,14 @@ describe('R124 command order and scheduler chaos; isolated Fake only',()=>{
       const archivedStarted=archived.ok&&queuedStarts>0;
       if(archived.ok){expect(replay.ok).toBe(false);expect(replay.error?.code).toBe('CONVERSATION_UNAVAILABLE');}
       else expect(archived.error?.code).toBe('WORKER_STILL_RUNNING');
+      expect(archived).toMatchObject({ok:false,error:{code:'WORKER_STILL_RUNNING'}});
+      expect(f.db.prepare('SELECT archived_at,revision FROM rooms WHERE id=?').get(roomId)).toEqual({archived_at:null,revision});
+      expect(replay).toMatchObject({ok:true,replayed:true,data:{taskId:a.taskId}});
+      expect(queuedStarts).toBe(1);
+      expect(readFileSync(join(f.projects[0]!.path,'archived-output.txt'),'utf8')).toBe('A05_WRITTEN_AFTER_ARCHIVE');
+      await f.pump(()=>f.status(a.taskId)==='DONE');
+      expect(await f.raw('room.archive',{roomId,expectedRevision:revision,action:'archive'})).toMatchObject({ok:true});
+      expect(await f.raw('message.submit',params,id)).toMatchObject({ok:false,error:{code:'CONVERSATION_UNAVAILABLE'}});
       if(archivedStarted)expect(readFileSync(join(f.projects[0]!.path,'archived-output.txt'),'utf8')).toBe('A05_WRITTEN_AFTER_ARCHIVE');
       noDuplicateStarts(f);
       f.save({outcome:archivedStarted?'defect-reproduced':'guarded',oracle:'no task starts in successfully archived room',archived,replay,queuedStarts,actualProjectFileWritten:existsSync(join(f.projects[0]!.path,'archived-output.txt')),unrelatedDone:1});

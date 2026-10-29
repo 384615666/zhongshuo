@@ -1159,7 +1159,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const cur = deps.db.prepare('SELECT revision, status, root_path, canonical_path, directory_identity FROM projects WHERE id = ?').get(params.projectId) as { revision: number; status: string; root_path: string; canonical_path: string; directory_identity: string } | undefined;
           if (cur == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
           if (cur.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `项目已变更（当前 revision ${cur.revision}）——请刷新后重试`);
-          const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks WHERE project_id = ? AND status IN ('ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.projectId) as { c: number }).c;
+          const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks WHERE project_id = ? AND status IN ('OPEN','ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.projectId) as { c: number }).c;
           if ((params.action === 'archive' || params.action === 'remove') && unfinished > 0) {
             throw new DaemonCommandError('WORKER_STILL_RUNNING', `项目还有 ${unfinished} 个未结束的任务——先在房间/看板处理（停止或等完成）；归档/移除不会自动停止或派发`);
           }
@@ -1274,7 +1274,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (room.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `房间已变更（当前 revision ${room.revision}）——请刷新后重试`);
           if (params.action === 'archive') {
             if (room.archived_at != null) return { room: { id: params.roomId, archivedAt: room.archived_at } };
-            const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks t JOIN conversations c2 ON c2.id = t.conversation_id WHERE t.room_id = ? AND t.kind = 'room_task' AND t.status IN ('ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.roomId) as { c: number }).c;
+            const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks t JOIN conversations c2 ON c2.id = t.conversation_id WHERE t.room_id = ? AND t.kind = 'room_task' AND t.status IN ('OPEN','ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.roomId) as { c: number }).c;
             if (unfinished > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `房间还有 ${unfinished} 个未结束的任务——先处理（停止/验收/等待完成）；归档不会自动停止`);
             const now = Date.now();
             deps.db.prepare('UPDATE rooms SET archived_at = ?, revision = revision + 1 WHERE id = ?').run(now, params.roomId);
@@ -5212,6 +5212,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           now: Date.now(),
           interruptTurn: deps.interruptTurn,
           commitGate: (): void => { if (deps.remoteGate != null) { const g = deps.remoteGate(); if (!g.ok) throw new DaemonCommandError(g.code, g.message); } },
+        }).catch((error: unknown) => {
+          if (error instanceof DaemonCommandError && error.code !== 'STORAGE_UNAVAILABLE') throw error;
+          // Storage/interrupt failures remain failures without exposing raw DB
+          // or adapter diagnostics through the command response.
+          throw new DaemonCommandError('STORAGE_UNAVAILABLE', '停止请求未能完整处理；请刷新任务状态后重试');
         });
         return withCommandId({ ok: true, data });
       }

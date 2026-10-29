@@ -7,12 +7,14 @@ import {ClaudeCliAdapter} from '../../src/adapter/claude/cliAdapter.ts';
 import type {OpenSessionInput,TurnRequest} from '../../src/contracts/runtime.ts';
 import {renderStandingPrompt,selectStageInstruction} from '../../src/contracts/prompts.ts';
 const turn:TurnRequest={turnId:'t',dispatchKey:'d',inputBundleId:'b',text:'synthetic protocol only',policyId:'policy-project-write',taskRevision:0};
+// Parameter-only interceptors explicitly model an already-live transport.
+// They spawn nothing; actual lifecycle behavior is covered by the local R126 protocol tests.
 describe('R82 actual adapter permission inputs; intercepted before CLI/model execution',()=>{
   it.each([false,true])('Codex explicit thread and turn sandbox writable=%s',async writable=>{
     const calls:Array<{method:string;params:Record<string,unknown>}>=[];
     const adapter=new CodexAppServerAdapter({sandboxMode:'workspace-write',model:'gpt-6-luna'});
-    const wire=adapter as unknown as {ensureProcess:()=>void;writeLine:()=>void;request:(method:string,params:Record<string,unknown>,onReply?:(value:unknown)=>void)=>Promise<unknown>};
-    wire.ensureProcess=()=>{};wire.writeLine=()=>{};wire.request=async(method,params,cb)=>{calls.push({method,params});const reply=method==='turn/start'?{turn:{id:'provider-turn'}}:{thread:{id:'provider-thread'}};cb?.(reply);return reply;};
+    const wire=adapter as unknown as {child:{exitCode:null;signalCode:null};ensureProcess:()=>unknown;writeLine:()=>void;request:(method:string,params:Record<string,unknown>,onReply?:(value:unknown)=>void)=>Promise<unknown>};
+    wire.child={exitCode:null,signalCode:null};wire.ensureProcess=()=>wire.child;wire.writeLine=()=>{};wire.request=async(method,params,cb)=>{calls.push({method,params});const reply=method==='turn/start'?{turn:{id:'provider-turn'}}:{thread:{id:'provider-thread'}};cb?.(reply);return reply;};
     const input:OpenSessionInput={projectId:'p',memberId:'m',taskId:'t',threadId:'th',sessionGeneration:0,cwd:'D:\\独立工程',policyId:'p',writeAccess:{modificationAuthorized:writable,allowedWriteRoots:writable?['D:\\独立工程']:[],identityKey:'frozen'}};
     const session=await adapter.openSession(input);await adapter.startTurn(session,turn);
     expect(calls.find(c=>c.method==='thread/start')!.params).toMatchObject({model:'gpt-6-luna',sandbox:writable?'workspace-write':'read-only',approvalPolicy:'never'});
@@ -22,8 +24,8 @@ describe('R82 actual adapter permission inputs; intercepted before CLI/model exe
   it('Codex real adapter request-parameter stub carries full developer instructions and full-access turn text',async()=>{
     const calls:Array<{method:string;params:Record<string,unknown>}>=[];
     const adapter=new CodexAppServerAdapter({sandboxMode:'danger-full-access',model:'gpt-6-luna'});
-    const wire=adapter as unknown as {ensureProcess:()=>void;writeLine:()=>void;request:(method:string,params:Record<string,unknown>,onReply?:(value:unknown)=>void)=>Promise<unknown>};
-    wire.ensureProcess=()=>{};wire.writeLine=()=>{};wire.request=async(method,params,cb)=>{calls.push({method,params});const reply=method==='turn/start'?{turn:{id:'provider-turn'}}:{thread:{id:'provider-thread'}};cb?.(reply);return reply;};
+    const wire=adapter as unknown as {child:{exitCode:null;signalCode:null};ensureProcess:()=>unknown;writeLine:()=>void;request:(method:string,params:Record<string,unknown>,onReply?:(value:unknown)=>void)=>Promise<unknown>};
+    wire.child={exitCode:null,signalCode:null};wire.ensureProcess=()=>wire.child;wire.writeLine=()=>{};wire.request=async(method,params,cb)=>{calls.push({method,params});const reply=method==='turn/start'?{turn:{id:'provider-turn'}}:{thread:{id:'provider-thread'}};cb?.(reply);return reply;};
     const standingResult=renderStandingPrompt({conversationKind:'room',vars:{memberId:'m',memberDisplayName:'成员',projectId:'p',projectName:'项目',roomId:'r',roomName:'房间',threadId:'th',taskId:'t',workspacePath:'D:\\独立工程',draftDir:'D:\\drafts'}});
     expect(standingResult.ok).toBe(true);if(!standingResult.ok)return;
     const standing=standingResult.value.text;

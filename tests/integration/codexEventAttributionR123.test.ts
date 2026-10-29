@@ -148,17 +148,40 @@ describe('R123 local Codex protocol attribution', () => {
     } finally { await f.close(); }
   });
 
-  it('rejects ambiguous resumed thread/turn mappings while keeping the shared process exit broadcast', async () => {
-    const f = fixture({ a: {}, b: { after: [message('PRIVATE_POISON'), terminal('PRIVATE_POISON')], exitCode: 7 } });
+  it('explicitly rejects an active provider ID reused by another resumed session and keeps the shared process exit broadcast', async () => {
+    const f = fixture({ a: {}, b: { after: [message('LATE_ORIGINAL'), terminal('LATE_ORIGINAL')], exitCode: 7 } });
+    try {
+      const a = await open(f.adapter, 'a'), readA = readUntil(f.adapter, a, 'process.exited');
+      await f.adapter.startTurn(a, request('a'));
+      const b = await open(f.adapter, 'b', a), readB = readUntil(f.adapter, b, 'process.exited');
+      await expect(f.adapter.startTurn(b, request('b'))).rejects.toMatchObject({ name: 'AdapterCallError', code: 'CAPABILITY_UNSUPPORTED', notStarted: false });
+      const [eventsA, eventsB] = await Promise.all([readA, readB]);
+      expect(eventsA.map(e => e.kind)).toEqual(['session.ready', 'message.completed', 'turn.completed', 'process.exited']);
+      expect(eventsA.slice(1, -1).every(e => e.sessionId === a.id && e.turnId === 'internal-a')).toBe(true);
+      expect(eventsA.find(e => e.kind === 'message.completed')).toMatchObject({ text: 'LATE_ORIGINAL' });
+      expect(eventsB.map(e => e.kind)).toEqual(['session.ready', 'process.exited']);
+      for (const events of [eventsA, eventsB]) expect(events.at(-1)).toMatchObject({ exitCode: 7 });
+    } finally { await f.close(); }
+  });
+
+  it('allows overlapping active resumed sessions with different provider IDs on the same thread', async () => {
+    const f = fixture({
+      a: { providerTurnId: 'active-a', before: [started], after: [message('SAFE_A')] },
+      b: { providerTurnId: 'active-b', before: [started], after: [message('SAFE_B'), terminal('SAFE_B')], exitCode: 7 },
+    });
     try {
       const a = await open(f.adapter, 'a'), readA = readUntil(f.adapter, a, 'process.exited');
       await f.adapter.startTurn(a, request('a'));
       const b = await open(f.adapter, 'b', a), readB = readUntil(f.adapter, b, 'process.exited');
       await f.adapter.startTurn(b, request('b'));
-      for (const events of await Promise.all([readA, readB])) {
-        expect(events.map(e => e.kind)).toEqual(['session.ready', 'process.exited']);
-        expect(events.at(-1)).toMatchObject({ exitCode: 7 });
-      }
+      const [eventsA, eventsB] = await Promise.all([readA, readB]);
+      expect(a.providerSessionId).toBe(b.providerSessionId);
+      expect(eventsA.map(e => e.kind)).toEqual(['session.ready', 'turn.started', 'message.completed', 'process.exited']);
+      expect(eventsB.map(e => e.kind)).toEqual(['session.ready', 'turn.started', 'message.completed', 'turn.completed', 'process.exited']);
+      expect(eventsA.find(e => e.kind === 'message.completed')).toMatchObject({ text: 'SAFE_A', turnId: 'internal-a', sessionId: a.id });
+      expect(eventsB.find(e => e.kind === 'turn.completed')).toMatchObject({ finalText: 'SAFE_B', turnId: 'internal-b', sessionId: b.id });
+      expect(JSON.stringify(eventsA)).not.toContain('SAFE_B');
+      expect(JSON.stringify(eventsB)).not.toContain('SAFE_A');
     } finally { await f.close(); }
   });
 
@@ -169,24 +192,31 @@ describe('R123 local Codex protocol attribution', () => {
       { id: 1001, method: approvalMethod, params: { ...identity, command: 'echo v2' } },
       { id: 1002, method: approvalMethod, params: { conversationId: '$THREAD', command: 'echo legacy' } },
       { id: 1003, method: approvalMethod, params: { threadId: 'unknown-thread', turnId: '$TURN' } },
-    ], after: [terminal('a')] } });
+    ] } }, 1, [terminal('a')]);
     try {
       const a = await open(f.adapter, 'a'), b = await open(f.adapter, 'b');
-      const read = readUntil(f.adapter, a, 'turn.completed');
       await f.adapter.startTurn(a, request('a'));
-      const approvals = (await read).filter(e => e.kind === 'approval.requested');
+      const seen: NormalizedRuntimeEvent[] = [];
+      const read = (async () => { for await (const event of f.adapter.events(a)) { seen.push(event); if (event.kind === 'turn.completed') return; } })();
+      await expect.poll(() => seen.filter(e => e.kind === 'approval.requested').length).toBe(2);
+      const approvals = seen.filter(e => e.kind === 'approval.requested');
       expect(approvals).toHaveLength(2);
-      expect(approvals[0]).toMatchObject({ sessionId: a.id, turnId: 'internal-a', approvalId: 'appr_1001' });
-      expect(approvals[1]).toMatchObject({ sessionId: a.id, approvalId: 'appr_1002' });
-      await expect(f.adapter.respondApproval(b, 'appr_1001', 'allow_once')).rejects.toMatchObject({ code: 'THREAD_SCOPE_MISMATCH' });
-      await f.adapter.respondApproval(a, 'appr_1001', 'allow_once');
-      await f.adapter.respondApproval(a, 'appr_1002', 'deny');
+      expect(approvals[0]).toMatchObject({ sessionId: a.id, turnId: 'internal-a', approvalId: expect.stringMatching(/^appr_1001_/) });
+      expect(approvals[1]).toMatchObject({ sessionId: a.id, turnId: 'internal-a', approvalId: expect.stringMatching(/^appr_1002_/) });
+      expect(seen.some(e => e.kind === 'turn.completed')).toBe(false);
+      await expect(f.adapter.respondApproval(b, approvals[0]!.approvalId, 'allow_once')).rejects.toMatchObject({ code: 'THREAD_SCOPE_MISMATCH' });
+      await f.adapter.respondApproval(a, approvals[0]!.approvalId, 'allow_once');
+      await f.adapter.respondApproval(a, approvals[1]!.approvalId, 'deny');
       await expect.poll(() => f.log().filter(row => row['result'] != null).length).toBe(3);
       expect(f.log().filter(row => row['result'] != null)).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 1001, result: { decision: 'accept' } }),
-        expect.objectContaining({ id: 1002, result: { decision: 'deny' } }),
-        expect.objectContaining({ id: 1003, result: { decision: 'deny' } }),
+        expect.objectContaining({ id: 1002, result: { decision: 'decline' } }),
+        expect.objectContaining({ id: 1003, result: { decision: 'decline' } }),
       ]));
+      f.releaseModels();
+      await f.adapter.listModels();
+      await read;
+      expect(seen.at(-1)).toMatchObject({ kind: 'turn.completed', turnId: 'internal-a', finalText: 'a' });
     } finally { await f.close(); }
   });
 

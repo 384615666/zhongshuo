@@ -382,7 +382,7 @@ describe('R124 memory chaos: actual local command/worker flows, zero remote call
     f.record({classification:'guarded',faultInjection:'SQL changes only synthetic frozen inputs after startTurn',observations});
   });
 
-  it.fails('C08 [DEFECT] a formal late success after UNKNOWN must merge its notes once across pump replay and database reopen',async()=>{
+  it('C08 repaired: a formal late success after UNKNOWN merges its notes once across pump replay and database reopen',async()=>{
     mkdirSync(evidenceRoot,{recursive:true});
     const store=mkdtempSync(join(evidenceRoot,'c08-event-log-'));
     const adapter=new MemoryFake({sessionStoreDir:store}),f=await fixture('c08-late-success',{adapter,deadlineMs:60});
@@ -408,10 +408,10 @@ describe('R124 memory chaos: actual local command/worker flows, zero remote call
       after=readRoleMemory(secondDb,f.scope());expect(fresh.startTurnLog).toHaveLength(0);
     }finally{await fresh.closeAllSessions();secondDb.close();}
     expect(f.count('SELECT count(*) n FROM late_event_receipts WHERE turn_id=? AND outcome=\'applied\'',b.turnId)).toBe(1);
-    f.record({classification:'defect-reproduced',expected:'Successful accepted late output merges LATE_SUCCESS_NOTE exactly once',
+    f.record({classification:'guarded',expected:'Successful accepted late output merges LATE_SUCCESS_NOTE exactly once',
       first,replay,turnId:b.turnId,deliveryCount,beforeReopen:before,afterReopen:after!,freshAdapterStarts:0,
       pending:f.count("SELECT count(*) n FROM daemon_state WHERE key LIKE 'role-memory-pending:%'"),finalText});
-    counterexample(f,'C08',()=>expect(texts(after!)).toEqual(['LATE_SUCCESS_NOTE']));
+    expect(texts(after!)).toEqual(['LATE_SUCCESS_NOTE']);
   });
 
   it.fails('C09 [DEFECT] swapping another same-scope newer frozen bundle after start must not relabel the accepted memory base',async()=>{

@@ -177,6 +177,8 @@ export class DispatchWorker {
    * while turn.completed carries only the visible natural text. Cache only validated,
    * turn-bound control objects for that terminal reconciliation. */
   private readonly controlFromMessages = new Map<string, string>();
+  /** A note-store outage must not prevent unrelated work or daemon startup. */
+  private readonly roleMemoryRetryAfter = new Map<string, number>();
   /** E4 解耦：detached 模式的在途 turn 消费器（成员级互斥+stop 收敛依据）。 */
   private readonly detached: boolean;
   private readonly admission: DispatchAdmission;
@@ -487,6 +489,14 @@ export class DispatchWorker {
       //——同任务其他合法提醒（排队等待中）的预占不动，不按 task 一次释放。
       releaseUnlinkedReminderReservationsForDispatch(this.db, claimed.dispatch_key);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    if (this.roomIsArchived(task)) {
+      if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked','房间已归档；恢复房间后再继续');
+      else this.transitionTask(task.id,'BLOCKED');
+      releaseUnlinkedReminderReservationsForDispatch(this.db,claimed.dispatch_key);
+      this.audit(task,null,null,'room.archivedDispatchHeld',{roomId:task.room_id,note:'房间已归档，未启动任务'});
+      await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);
       return;
     }
     if (taskBusy && (!automatic&&coordination?.kind!=='integration'||this.db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING') LIMIT 1`).get(task.id))) {
@@ -1115,6 +1125,7 @@ export class DispatchWorker {
         await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
         return;
       }
+      if(this.roomIsArchived(task))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','房间已归档；本次尚未开始，恢复房间后再继续',true);
 
       const imageCapabilityAtLaunch = memberImageCapability(this.db, member.id);
       if ((assembled.value.images?.length ?? 0) > 0 && (imageCapabilityAtLaunch.status !== 'supported'
@@ -1919,6 +1930,11 @@ export class DispatchWorker {
     this.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(key, value, Date.now());
   }
 
+  private roomIsArchived(task:TaskRow):boolean {
+    if(task.kind==='dm_turn'||task.room_id==null)return false;
+    return (this.db.prepare('SELECT archived_at FROM rooms WHERE id=? AND project_id=?').get(task.room_id,task.project_id) as {archived_at:number|null}|undefined)?.archived_at!=null;
+  }
+
   private settleDelibBudget(runId: string): void {
     const row = this.db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(runId) as { budget_json: string } | undefined;
     if (row?.budget_json == null) return;
@@ -2109,6 +2125,13 @@ export class DispatchWorker {
         .get(turnId) as { status: string } | undefined;
       if (turnRow == null) break;
       if (isTurnTerminalStatus(turnRow.status)) break;
+      if(event.kind==='process.exited'){
+        this.audit(task,runId,turnId,'turn.runtimeProcessExited',{exitCode:event.exitCode,expected:event.expected});
+        // Carrier exit alone cannot establish a result or prove all tool children
+        // have stopped. End the consumer while keeping UNKNOWN recovery protection.
+        this.settleUnknown(task,runId,turnId,'runtime-process-exited');
+        return;
+      }
 
       if((event.kind==='turn.completed'||event.kind==='turn.failed') && this.kvGet(`write-lease:${turnId}`)) {
         const ref={id:sessionId} as SessionRef;
@@ -2186,24 +2209,58 @@ export class DispatchWorker {
     const proposals=this.db.prepare("SELECT key,value FROM daemon_state WHERE key LIKE 'role-memory-pending:%'").all() as Array<{key:string;value:string}>;
     for(const row of proposals){
       const turnId=row.key.slice('role-memory-pending:'.length);if(onlyTurnId&&onlyTurnId!==turnId)continue;
+      if((this.roleMemoryRetryAfter.get(turnId)??0)>this.clock())continue;
       const turn=this.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(turnId) as {status:string}|undefined;
-      if(!turn||['FAILED','CANCELLED'].includes(turn.status)){this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(row.key);continue;}
+      if(!turn||['FAILED','CANCELLED'].includes(turn.status)){this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(row.key);this.roleMemoryRetryAfter.delete(turnId);continue;}
       if(turn.status!=='SUCCEEDED')continue;
+      let proposal:MergeRoleMemoryInput|undefined;
       try{
-        const proposal=mergeRoleMemoryInputSchema.parse(JSON.parse(row.value));
+        proposal=mergeRoleMemoryInputSchema.parse(JSON.parse(row.value));
         if(proposal.turnId!==turnId)throw new RoleMemoryError('ROLE_MEMORY_PROPOSAL_MISMATCH');
+        const acceptedProposal=proposal;
         this.db.transaction(()=>{
-          mergeRoleMemory(this.db,proposal);
+          mergeRoleMemory(this.db,acceptedProposal);
           this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(row.key);
         })();
+        this.roleMemoryRetryAfter.delete(turnId);
       }catch(error){
+        if(error instanceof RoleMemoryError&&error.code==='ROLE_MEMORY_TURN_CANCELLED_OR_PROTECTED'&&proposal&&this.roleMemoryWaitsForProtection(proposal)){
+          // A valid late success can precede proof that its writer stopped.
+          // Keep the delta durable until the existing recovery path releases
+          // protection; never bypass the store's stop/scope/input checks.
+          this.roleMemoryRetryAfter.set(turnId,this.clock()+1000);
+          continue;
+        }
         if(error instanceof RoleMemoryError||error instanceof SyntaxError||error instanceof Error&&error.name==='ZodError'){
           this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(row.key);
+          this.roleMemoryRetryAfter.delete(turnId);
           const task=this.db.prepare('SELECT t.* FROM tasks t JOIN workflow_runs r ON r.task_id=t.id JOIN agent_turns a ON a.run_id=r.id WHERE a.id=?').get(turnId) as TaskRow|undefined;
           if(task)this.audit(task,null,turnId,'roleMemory.rejected',{reason:error instanceof RoleMemoryError?error.code:'invalid-proposal'});
-        }else throw error;
+        }else{
+          const retryAt=this.clock()+1000;
+          this.roleMemoryRetryAfter.set(turnId,retryAt);
+          // The pending delta remains durable. Keep failures in this optional
+          // settlement isolated; core admission/dispatch reads still fail closed.
+          try{
+            const task=this.db.prepare('SELECT t.* FROM tasks t JOIN workflow_runs r ON r.task_id=t.id JOIN agent_turns a ON a.run_id=r.id WHERE a.id=?').get(turnId) as TaskRow|undefined;
+            if(task)this.audit(task,null,turnId,'roleMemory.deferred',{reason:'storage-unavailable',retryAt});
+          }catch{/* Optional diagnostic failure cannot disable the work queue. */}
+        }
       }
     }
+  }
+
+  private roleMemoryWaitsForProtection(proposal:MergeRoleMemoryInput):boolean {
+    const source=this.db.prepare(`SELECT a.status,a.protection_state,a.stop_generation_snapshot,
+      t.stop_generation,t.status task_status,r.status run_status FROM agent_turns a
+      JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+      WHERE a.id=? AND t.id=?`).get(proposal.turnId,proposal.taskId) as {
+        status:string;protection_state:string|null;stop_generation_snapshot:number;
+        stop_generation:number;task_status:string;run_status:string;
+      }|undefined;
+    if(!source||source.status!=='SUCCEEDED'||source.protection_state!=='retained'
+      ||source.task_status==='CANCELLED'||['STOPPING','CANCELLED'].includes(source.run_status))return false;
+    return source.stop_generation_snapshot<0?source.stop_generation===0:source.stop_generation<=source.stop_generation_snapshot;
   }
 
   /** UNKNOWN 收尾（§10.2 结果不确定，不伪造）：截止后无终态/强制退出中止共用。 */
@@ -2248,6 +2305,14 @@ export class DispatchWorker {
   applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent, context?: { deadlineInterruptSent?: boolean }): void {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key, turn_purpose FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null; turn_purpose: string } | undefined;
+    if(event.kind==='turn.failed'&&event.code==='CODEX_INVALID_TERMINAL_STATUS'){
+      // A contradictory/unknown provider status proves neither a successful
+      // result nor that a writer stopped. Preserve the same recovery protection
+      // as a lost carrier, including the deliberate and late-event paths.
+      this.audit(task,runId,turnId,'turn.providerTerminalUnconfirmed',{code:event.code,message:event.message});
+      this.settleUnknown(task,runId,turnId,'provider-terminal-unconfirmed');
+      return;
+    }
     if (event.kind === 'turn.started') {
       this.db.prepare('UPDATE agent_turns SET exec_started_at = ? WHERE id = ? AND exec_started_at IS NULL').run(this.clock(), turnId);
     }
@@ -2814,6 +2879,7 @@ export class DispatchWorker {
       try {
         const tx = this.db.transaction(() => {
           recordReceipt.run(sourceScope, turnId, event.eventKey, 'applied', null, this.clock());
+          if(event.kind==='turn.completed')this.prepareRoleMemoryProposal(task,turnId,event.finalText);
           this.applyEvent(task, turn.run_id, turnId, event);
         });
         tx();
@@ -2840,6 +2906,7 @@ export class DispatchWorker {
         note: '写入租约保护不随业务收口解除——仍按进程保护判定处理（业务结果确定≠执行载体已停止）',
       });
     }
+    this.settleRoleMemoryProposals(turnId);
     return { status: 'pumped', applied };
   }
 

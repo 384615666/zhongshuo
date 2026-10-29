@@ -177,13 +177,15 @@ describe('回放：轮次归属（两轮/迟到/通知先于响应）', () => {
         expect(events.filter(e => e.kind === 'tool.started')).toHaveLength(1);
         expect(events.some(e => e.kind === 'message.completed' && e.text === 'ghost')).toBe(false);
         if (approval?.kind === 'approval.requested') {
-          await expect(adapter.respondApproval(first, approval.approvalId, 'deny')).rejects.toThrow();
-          await adapter.respondApproval(second, approval.approvalId, 'deny');
+          // The terminal was consumed above: both sessions must now see an expired token.
+          await expect(adapter.respondApproval(first, approval.approvalId, 'deny')).rejects.toMatchObject({ code: 'RESOURCE_NOT_FOUND' });
+          await expect(adapter.respondApproval(second, approval.approvalId, 'deny')).rejects.toMatchObject({ code: 'RESOURCE_NOT_FOUND' });
         }
         // The adapter write completes before the child has necessarily consumed
         // stdin and appended its receipt. Wait for that evidence, not a timer.
         await expect.poll(() => rpcLogEntries().find(e => e['id'] === 9000), {timeout:2000,interval:10})
-          .toMatchObject({ result: { decision: 'deny' } });
+          .toMatchObject({ result: { decision: 'decline' } });
+        expect(rpcLogEntries().filter(e => e['id'] === 9001 && e['result'] != null)).toEqual([]);
         const late = await firstReader.next(500);
         expect(late).toMatchObject({ value: { kind: 'message.completed', text: 'late first', sessionId: first.id, turnId: 'first' } });
       } finally {
@@ -239,21 +241,26 @@ describe('回放：审批归属', () => {
   it('threadId 定位正确会话；错会话答复被拒；答复走对应 RPC id', async () => {
     scenario([{ notifications: [
       { kind: 'approvalRequest', method: 'item/commandExecution/requestApproval', params: { command: 'rm -rf' } },
-      { kind: 'turn.completed', status: 'completed', finalText: '已拒绝' },
     ] }]);
     adapter = mockAdapter();
-    const sessionA = await openMockSession(adapter); // mock-thread-1
-    const sessionB = await openMockSession(adapter); // mock-thread-2
-    const events = await runOneTurn(adapter, sessionA, 'turn_appr', 6_000);
-    const approval = events.find((e) => e.kind === 'approval.requested');
-    expect(approval).toBeDefined();
-    expect(approval?.turnId).toBe('turn_appr');
-
-    await expect(
-      adapter.respondApproval(sessionB, (approval as { approvalId: string }).approvalId, 'allow_once'),
-    ).rejects.toMatchObject({ code: 'THREAD_SCOPE_MISMATCH' });
-    await adapter.respondApproval(sessionA, (approval as { approvalId: string }).approvalId, 'deny');
-    await adapter.dispose();
+    try {
+      const sessionA = await openMockSession(adapter); // mock-thread-1
+      const sessionB = await openMockSession(adapter); // mock-thread-2
+      const reader = new SessionReader(adapter, sessionA);
+      await adapter.startTurn(sessionA, turnRequest('turn_appr'));
+      let approval: Extract<NormalizedRuntimeEvent, { kind: 'approval.requested' }> | undefined;
+      for (;;) {
+        const next = await reader.next();
+        if (next === 'timeout' || next.done) throw Error('Missing live approval before terminal');
+        expect(['turn.completed', 'turn.failed']).not.toContain(next.value.kind);
+        if (next.value.kind === 'approval.requested') { approval = next.value; break; }
+      }
+      expect(approval).toMatchObject({ turnId: 'turn_appr', sessionId: sessionA.id });
+      await expect(adapter.respondApproval(sessionB, approval.approvalId, 'allow_once')).rejects.toMatchObject({ code: 'THREAD_SCOPE_MISMATCH' });
+      await adapter.respondApproval(sessionA, approval.approvalId, 'deny');
+      await expect.poll(() => rpcLogEntries().find(e => e['id'] === 9000 && e['result'] != null)).toMatchObject({ result: { decision: 'decline' } });
+      expect(rpcLogEntries().filter(e => (e['result'] as { decision?: string } | undefined)?.decision === 'accept')).toEqual([]);
+    } finally { await adapter.dispose(); }
   });
 });
 

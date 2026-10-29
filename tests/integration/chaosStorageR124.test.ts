@@ -9,16 +9,13 @@ import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {openDatabase} from '../../src/persistence/db.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
 
-const reached=new Set<string>();
-afterEach(({task})=>{try{if(task.name.includes('OPEN BUG'))expect(reached.has(task.name),'the documented business oracle must be reached; fixture errors cannot count as expected failures').toBe(true);}finally{vi.unstubAllEnvs();}});
+afterEach(()=>vi.unstubAllEnvs());
 function simulation(){vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');vi.stubEnv('ZS_REAL_DISPATCH_GUARD','1');}
 const evidence=resolve('dist/r124-chaos/storage');
 function save(name:string,facts:Record<string,unknown>){mkdirSync(evidence,{recursive:true});writeFileSync(join(evidence,name+'.json'),JSON.stringify(facts,null,2));}
 const noteResult=JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',answer:'已提交共同笔记',responseKind:'conversation',changeSummary:'',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],memoryUpdates:[{key:'schedule',text:'周六下午'}]});
 
-/** Expected failures assert the desired invariant. They reproduce open V65 bugs;
- * their green expected-failure status must not be counted as product success. */
-it.fails('OPEN BUG: a failed memory merge must not starve unrelated projects on every subsequent queue tick',async({task})=>{
+it('a failed memory merge does not starve unrelated projects and retries without repeating successful work',async()=>{
   simulation();const adapter=new ObservedAdapter({turnScriptSequencer:({text})=>finish(text.includes('TOKEN_NOTE')?noteResult:'独立工作完成',10)});
   const f=await collisionFixture('r124-memory-outage-global',{projects:2,adapter});
   try{
@@ -29,18 +26,20 @@ it.fails('OPEN BUG: a failed memory merge must not starve unrelated projects on 
     const independent=await Promise.all(Array.from({length:8},(_,i)=>f.send(1,i%3,[i%3],`TOKEN_UNRELATED_${i} 独立项目工作`)));
     const failures:string[]=[];
     for(let i=0;i<6;i++){try{await f.worker.runOnce();}catch(error){failures.push(String(error));}}
-    const during={failedQueueTicks:failures.length,independentStarts:adapter.turns.filter(t=>independent.some(r=>r.taskId===t.taskId)).length,pending:f.count("SELECT count(*) n FROM daemon_state WHERE key LIKE 'role-memory-pending:%'")};
-    f.db.exec('DROP TRIGGER r124_memory_fault');
     await f.pumpUntil(()=>independent.every(r=>f.taskStatus(r.taskId)==='DONE'));
+    const during={failedQueueTicks:failures.length,independentStarts:adapter.turns.filter(t=>independent.some(r=>r.taskId===t.taskId)).length,pending:f.count("SELECT count(*) n FROM daemon_state WHERE key LIKE 'role-memory-pending:%'")};
+    expect(during).toEqual({failedQueueTicks:0,independentStarts:8,pending:1});
+    expect(f.count('SELECT count(*) n FROM role_memory_commits')).toBe(0);
+    expect(f.count("SELECT count(*) n FROM domain_events WHERE kind='roleMemory.deferred'")).toBeGreaterThan(0);
+    f.db.exec('DROP TRIGGER r124_memory_fault');
+    await f.pumpUntil(()=>f.count("SELECT count(*) n FROM daemon_state WHERE key LIKE 'role-memory-pending:%'")===0);
     expect(f.count('SELECT count(*) n FROM role_memory_commits')).toBe(1);
     expect(adapter.turns).toHaveLength(9);
-    save('memory-outage-global',{fixture:f.dir,classification:'open-defect',...during,afterRecoveryDone:8,realCalls:f.count('SELECT count(*) n FROM real_calls')});
-    reached.add(task.name);
-    expect(during.failedQueueTicks,'a room note outage must not abort the global work queue').toBe(0);
+    save('memory-outage-global',{fixture:f.dir,classification:'guarded',...during,afterRecoveryDone:8,realCalls:f.count('SELECT count(*) n FROM real_calls')});
   }finally{await f.close();}
 });
 
-it.fails('OPEN BUG: a pending room note with a persistent storage fault must not prevent a restarted worker from starting',async({task})=>{
+it('a pending room note with a persistent storage fault allows restart and new work before the note store recovers',async()=>{
   simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish(noteResult,10)});
   const f=await collisionFixture('r124-memory-outage-restart',{adapter});let closed=false;
   try{
@@ -48,20 +47,22 @@ it.fails('OPEN BUG: a pending room note with a persistent storage fault must not
     const root=await f.send(0,0,[0],'TOKEN_NOTE 保存后重启');
     await f.worker.runOnce();await f.worker.awaitInFlightTurns(3000);
     expect(f.taskStatus(root.taskId)).toBe('DONE');
+    const independent=await f.send(0,1,[1],'TOKEN_NEW_WORK 新任务不依赖共同笔记');
     await adapter.closeAllSessions();f.db.close();closed=true;
     const reopened=openDatabase(join(f.dir,'state.sqlite')),next=new FakeRuntimeAdapter();
-    let error:string|null=null;
     try{
-      try{new DispatchWorker({db:reopened,adapter:next,leaseOwner:randomUUID(),appDataDir:f.dir});}catch(e){error=String(e);}
+      const restarted=new DispatchWorker({db:reopened,adapter:next,leaseOwner:randomUUID(),appDataDir:f.dir,detachedTurnConsumption:true});
       const pending=(reopened.prepare("SELECT count(*) n FROM daemon_state WHERE key LIKE 'role-memory-pending:%'").get() as {n:number}).n;
+      expect(pending).toBe(1);
+      await restarted.drain();await restarted.awaitInFlightTurns(3000);
+      expect(reopened.prepare('SELECT status FROM tasks WHERE id=?').get(independent.taskId)).toEqual({status:'DONE'});
       reopened.exec('DROP TRIGGER r124_memory_persistent_fault');
       new DispatchWorker({db:reopened,adapter:next,leaseOwner:randomUUID(),appDataDir:f.dir});
       expect((reopened.prepare('SELECT count(*) n FROM role_memory_commits').get() as {n:number}).n).toBe(1);
-      expect(next.startTurnLog).toHaveLength(0);
-      save('memory-outage-restart',{fixture:f.dir,classification:'open-defect',startupError:error,pending,recoversAfterFaultRemoval:true,realCalls:0});
+      expect(next.startTurnLog).toHaveLength(1);
+      expect((reopened.prepare('SELECT count(*) n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?').get(root.taskId) as {n:number}).n).toBe(1);
+      save('memory-outage-restart',{fixture:f.dir,classification:'guarded',startupError:null,pending,independentWorkDone:true,recoversAfterFaultRemoval:true,realCalls:0});
     }finally{await next.closeAllSessions();reopened.close();}
-    reached.add(task.name);
-    expect(error,'nonessential note settlement must not prevent all work from starting').toBeNull();
   }finally{if(!closed)await f.close();}
 });
 
