@@ -53,4 +53,14 @@ Codex 通知要求 thread/turn 身份完整且唯一，不再默认归入第一�
 
 新增四种输出变更回归；重启故障用例同时实际写入 out.txt，验证失败时附件字节、成功事实、租约释放与重启后恰好一次。独立复核另验证待处理项本身写入失败会收为 UNKNOWN 并保留准入。复验未发现其他必修项。
 
-最终包身份在交付后补入。详细原件位于 ignored 的 `dist/r123-session-parallel/`，不包含用户原业务。
+## V65 交付
+
+- 目录：`dist/desktop/desktop-daily-win-v65-r123-session-parallel-20261029`。
+- clean 源码：`1cfee2214d0f7bb09e82efe226819504696c1094`；BUILD：`bld_b2d6e7d9f27a4b65`。
+- 615 程序文件 SHA256 一致；ZIP 648 文件，CRC 通过，220741877 字节。
+- ZIP：`zhongshuo-v65-windows-x64-20261029.zip`；SHA256：`ae03a855a21f23aa60877e72deec7c0ca9b57b87663247dbb64b298e98c61ea2`。
+- 实际包内 Electron/daemon 隔离启动、手册 14 章 19 图及新增笔记说明加载、原界面命令桥、正常退出和 daemon.pid 清理通过。0 turn、0 real_call。
+- 本机 `start-existing-data.bat/.vbs` 与 V64 逐字节相同；本轮未启动该入口、未改写或搬迁用户原数据。用户正常退出旧版后自行切换；新程序首次正式打开时按已有机制备份并迁移到 schema60。
+- 通用 ZIP 不包含本机专用入口、升级说明、运行数据库或认证文件。源码实现及交付记录均为本地提交，本轮未推送远端。
+
+详细原件位于 ignored 的 `dist/r123-session-parallel/`，不包含用户原业务。
