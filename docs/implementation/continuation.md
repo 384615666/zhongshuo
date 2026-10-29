@@ -2,6 +2,14 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-10-29：R125 执行会话补齐两项协议猜想（仅测试）
+
+用户直接指定执行会话01a18789-6fdc-7773-88be-1ec675bbf7b6由本会话指挥；已读取其用户原话确认跨会话派活授权。派发R124尚未认证的两项：同provider thread首轮已响应但未终态再启动、已完成provider turn ID重用。仅测试/证据，不修产品。执行会话实际验证原生spawn可选newapi/deepseek-flash/max，后续无需仅凭本会话早先的旧model列表判定不可用。
+
+五例2守住/3预期反例（不是三个独立漏洞）。S1底层openSession(resume)/startTurn放行重叠，但正式DM队列阻止同会话同时执行，不同房间串可并行。S2同SessionRef底层覆写Map后旧正文归新轮，该分支无正常worker入口；正式DM两轮使用不同transport session、同provider thread时，重用已完成ID导致旧/新映射冲突，新任务ACTIVE/RUNNING、无新回复、占名额；旧回复不变。仅换新ID的正式对照DONE；存活期250ms快照及代码等待路径佐证，不归因于随后清理退出进程。
+
+执行会话和主会话各复跑五例，主审日志parent-review；完整tsc、新代码lint通过，冻结五组47个文件SHA全部一致，全部合成子进程及消费者已清理。详见 [R125](../reviews/r125-protocol-followup-20261029.md)。新增 [当前异常清单](../reviews/anomaly-list-20261029.md) 保留对用户的1–18编号并补19/20；明确正式入口、底层、直接改库和语义边界，不等于20独立漏洞。产品源码/V65包/原数据未改，只有测试与文档，本轮本地收口。
+
 ## 2026-10-29：R124 用户要求继续破坏性测试（仅测试）
 
 用户进一步要求发散异常场景并明确指定 `newapi/deepseek-flash`。内置agent工具无该型号，但本机Claude渠道可用；经CLI实际完成两份DeepSeek max隔离上下文设计（一次长请求超时后短重试成功），返回modelUsage记录。三名gpt-6.1-sol代理实际测命令乱序、协议和记忆；主代理实测存储故障蔓延/真实Windows文件锁/DeepSeek终态状态猜想，整合复跑。设计推测不当实测；DeepSeek状态方向几项“缺陷”经复核为既有保护/语义/未证，不计确认问题。
