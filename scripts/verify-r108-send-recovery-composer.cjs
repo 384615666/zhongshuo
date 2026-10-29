@@ -34,6 +34,11 @@ const send=()=>document.querySelector('.composer-send').click();
 const query=()=>document.querySelector('[data-zs-send-recovery] button').click();
 function edit(text){const editor=document.querySelector('.composer-editor');editor.textContent=text;editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));}
 window.run=async()=>{
+ await mount();const ordinary=envelope({commandId:'ordinary-send-command',body:'正常发送'});
+ store.stageOutbound('room:r1',ordinary);await sleep(25);
+ check('normal_sending_does_not_show_recovery',!document.querySelector('[data-zs-send-recovery]'));
+ store.dropOutbound('room:r1',ordinary);store.updateSendReference('room:r1',ordinary,'rejected',{error:'已明确拒绝'});await sleep(25);
+ check('known_rejection_does_not_show_recovery',!document.querySelector('[data-zs-send-recovery]'));
  await mount();send();await until(()=>document.body.innerText.includes('发送结果未知'));
  check('unknown_error_visible_before_lookup',document.body.innerText.includes('第一条回执丢失'));
  query();await until(()=>pendingLookup!==null);pendingLookup();await until(()=>store.getState().pendingSends['room:r1']==null&&!document.querySelector('[data-zs-send-recovery]'));

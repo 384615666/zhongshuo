@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { resolveMemberRuntime } from './memberRuntime.ts';
 import { claudeLaunchIdentity, resolveClaudeConfiguration } from '../adapter/claude/cliAdapter.ts';
-import {codexConfigurationIdentity,legacyCodexConfigurationIdentity} from '../adapter/codex/configuration.ts';
+import {codexConfigurationIdentity,codexConfigurationIdentityV2,legacyCodexConfigurationIdentity} from '../adapter/codex/configuration.ts';
 import {CLAUDE_PROJECT_WRITE_POLICY_HASH} from '../adapter/writeCapability.ts';
 
 export interface WriteScope {
@@ -34,7 +34,8 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
   const snapshot = JSON.parse(requestSnapshot??row.write_scope_json) as Partial<WriteScope> & {memberRevision?:number;memberPermission?:string;launchIdentity?:string;launchFingerprintVersion?:number;runtime?:unknown};
   const legacyClaudeSnapshot=runtime.kind==='claude'&&snapshot.launchIdentity!=null&&snapshot.launchFingerprintVersion==null;
   const legacyCodexSnapshot=runtime.kind==='codex'&&snapshot.launchIdentity!=null&&(snapshot.launchFingerprintVersion==null||snapshot.launchFingerprintVersion===1);
-  if(snapshot.launchFingerprintVersion!=null&&snapshot.launchFingerprintVersion!==2&&!(runtime.kind==='codex'&&snapshot.launchFingerprintVersion===1))throw Error('执行配置指纹版本不受支持；旧输入保留，请明确重新提交');
+  const previousCodexSnapshot=runtime.kind==='codex'&&snapshot.launchIdentity!=null&&snapshot.launchFingerprintVersion===2;
+  if(snapshot.launchFingerprintVersion!=null&&snapshot.launchFingerprintVersion!==2&&!(runtime.kind==='codex'&&[1,3].includes(snapshot.launchFingerprintVersion)))throw Error('执行配置指纹版本不受支持；旧输入保留，请明确重新提交');
   const member=db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(memberId) as {project_id:string;settings_revision:number}|undefined;
   if(!member || member.project_id!==row.project_id) throw Error('执行成员不属于该项目');
   if('analysisOnly' in snapshot&&snapshot.analysisOnly===true){
@@ -45,7 +46,8 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
     if(analysis.root!==root||analysis.physicalIdentity!==physicalRootIdentity(root))throw Error('项目物理身份已变化；仅分析请求保留，请明确重新提交');
     const configuration=runtime.kind==='claude'?claudeLaunchIdentity({executable:runtime.executable??undefined,model:runtime.model??undefined,permissionMode:'plan',effort:runtime.effort??undefined},root):null;
     const identityKey=createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'analysis-readonly-v1',configuration:configuration?.identityKey??(runtime.kind==='codex'?codexConfigurationIdentity(root):null)})).digest('hex');
-    if(analysis.launchIdentity&&analysis.launchIdentity!==identityKey)throw Error('有效执行配置已变化；未沿用旧只读分析请求');
+    const comparisonIdentity=previousCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'analysis-readonly-v1',configuration:codexConfigurationIdentityV2(root)})).digest('hex'):identityKey;
+    if(analysis.launchIdentity&&analysis.launchIdentity!==comparisonIdentity)throw Error('有效执行配置已变化；未沿用旧只读分析请求');
     return {fullAccess:false,modificationAuthorized:false,analysisOnly:true,allowedWriteRoots:[],identityKey,root,launchConfigurationKey:configuration?.identityKey,tier:'plan' as const,intent:'analyze' as const,policyId:'policy-analysis-readonly'};
   }
   if('executionMode' in snapshot && snapshot.executionMode==='readonly' && JSON.stringify(snapshot.runtime)!==JSON.stringify(runtime))throw Error('成员执行配置已变化；旧只读任务保留，请明确重新提交');
@@ -58,7 +60,7 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
     if (snapshot.root !== root || fullSnapshot.physicalIdentity !== physicalRootIdentity(root)) throw Error('项目物理身份已变化；请明确重新提交');
     const configuration = runtime.kind === 'claude' ? claudeLaunchIdentity({executable:runtime.executable??undefined,model:runtime.model??undefined,permissionMode:'bypassPermissions',effort:runtime.effort??undefined},root) : null;
     const identityKey = createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:configuration?.identityKey ?? (runtime.kind==='codex'?codexConfigurationIdentity(root):null)})).digest('hex');
-    const comparisonIdentity=legacyClaudeSnapshot||legacyCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:legacyCodexSnapshot?legacyCodexConfigurationIdentity(root):configuration?.legacyIdentityKey??null})).digest('hex'):identityKey;
+    const comparisonIdentity=previousCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:codexConfigurationIdentityV2(root)})).digest('hex'):legacyClaudeSnapshot||legacyCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:legacyCodexSnapshot?legacyCodexConfigurationIdentity(root):configuration?.legacyIdentityKey??null})).digest('hex'):identityKey;
     if(snapshot.launchIdentity && snapshot.launchIdentity!==comparisonIdentity) throw Error('有效执行配置已变化；未沿用旧会话');
     return {fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey,root,launchConfigurationKey:configuration?.identityKey,tier:'auto_edit' as const,intent:'modify' as const,policyId:'policy-full-access'};
   }
@@ -73,7 +75,7 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
   const launchConfigurationKey=configuration && 'identityKey' in configuration ? configuration.identityKey as string : undefined;
   const identityKey = createHash('sha256').update(JSON.stringify({projectId:row.project_id,grant:current,snapshot:{authorized:snapshot.authorized,root:snapshot.root,revision:snapshot.revision,memberRevision:snapshot.memberRevision,memberPermission:snapshot.memberPermission},root,runtime,configurationKey:runtime.kind==='codex'?codexConfigurationIdentity(root):launchConfigurationKey??configuration?.configurationKey??null,writable,writePolicyHash:writable?CLAUDE_PROJECT_WRITE_POLICY_HASH:null})).digest('hex');
   const legacyConfiguration=configuration&&'legacyIdentityKey' in configuration?configuration.legacyIdentityKey:configuration?.legacyConfigurationKey;
-  const comparisonIdentity=legacyClaudeSnapshot||legacyCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,grant:current,snapshot:{authorized:snapshot.authorized,root:snapshot.root,revision:snapshot.revision,memberRevision:snapshot.memberRevision,memberPermission:snapshot.memberPermission},root,runtime,configurationKey:legacyCodexSnapshot?legacyCodexConfigurationIdentity(root):legacyConfiguration??null,writable,writePolicyHash:writable?CLAUDE_PROJECT_WRITE_POLICY_HASH:null})).digest('hex'):identityKey;
+  const comparisonIdentity=previousCodexSnapshot||legacyClaudeSnapshot||legacyCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,grant:current,snapshot:{authorized:snapshot.authorized,root:snapshot.root,revision:snapshot.revision,memberRevision:snapshot.memberRevision,memberPermission:snapshot.memberPermission},root,runtime,configurationKey:previousCodexSnapshot?codexConfigurationIdentityV2(root):legacyCodexSnapshot?legacyCodexConfigurationIdentity(root):legacyConfiguration??null,writable,writePolicyHash:writable?CLAUDE_PROJECT_WRITE_POLICY_HASH:null})).digest('hex'):identityKey;
   if(snapshot.launchIdentity && snapshot.launchIdentity!==comparisonIdentity) throw Error('有效渠道、执行程序、模型或权限已变化；未沿用旧任务授权');
   return { fullAccess:false, modificationAuthorized:Boolean(writable), allowedWriteRoots:writable?[root]:[], identityKey, root, launchConfigurationKey,
     tier:writable?'auto_edit' as const:'plan' as const, intent:writable?'modify' as const:'analyze' as const,
@@ -96,7 +98,7 @@ export function snapshotConversationWriteAccess(db:ZhongshuoDatabase,taskId:stri
     snapshot={authorized:grant.authorized,root:grant.root,revision:grant.revision,memberRevision:member.settings_revision,memberPermission:runtime.permissionMode,runtime,...(!grant.authorized?{executionMode:'readonly'}:{})};
   }
   const effective=effectiveTaskWriteAccess(db,taskId,row.owner_member_id,defaultKind,JSON.stringify(snapshot));
-  return JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:2}:{})});
+  return JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:runtime.kind==='codex'?3:2}:{})});
 }
 /** Called inside the original formal send transaction, never after returning its receipt. */
 export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null,options?:{analysisOnly?:boolean}) {
@@ -115,7 +117,7 @@ export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null,
     snapshot={executionMode:'full',root,physicalIdentity:physicalRootIdentity(root),runtime};
     db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify(snapshot),taskId);
     const effective=effectiveTaskWriteAccess(db,taskId,task.owner_member_id,process.env.ZS_RUNTIME??null);
-    db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:2}:{})}),taskId);
+    db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:runtime.kind==='codex'?3:2}:{})}),taskId);
     return;
   }
   if(!snapshot.authorized){
@@ -123,5 +125,5 @@ export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null,
     return;
   }
   const effective=effectiveTaskWriteAccess(db,taskId,task.owner_member_id,process.env.ZS_RUNTIME??null);
-  db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,runtime:resolveMemberRuntime(db,task.owner_member_id,process.env.ZS_RUNTIME??null),launchIdentity:effective.identityKey,...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:2}:{})}),taskId);
+  db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,runtime:resolveMemberRuntime(db,task.owner_member_id,process.env.ZS_RUNTIME??null),launchIdentity:effective.identityKey,...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:runtime.kind==='codex'?3:2}:{})}),taskId);
 }

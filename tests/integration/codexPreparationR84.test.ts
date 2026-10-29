@@ -64,7 +64,7 @@ describe('R84 Codex new-intent configuration preparation, isolated adapter fixtu
       expect(f.open).toHaveBeenCalledTimes(1);expect(f.start).not.toHaveBeenCalled();
       expect(f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId)).toEqual(scope);
       const execution=JSON.parse((f.db.prepare("SELECT payload_json FROM domain_events WHERE task_id=? AND kind='task.redispatchEnqueued'").get(taskId) as {payload_json:string}).payload_json) as {execution:{writeScope:string}};
-      expect(JSON.parse(execution.execution.writeScope)).toMatchObject({launchFingerprintVersion:2});
+      expect(JSON.parse(execution.execution.writeScope)).toMatchObject({launchFingerprintVersion:3});
       await f.raw('task.redispatch',{taskId,reason:'manual-dm-continue'},id,true);expect(f.open).toHaveBeenCalledTimes(1);
     }finally{f.db.close();}
   });

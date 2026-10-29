@@ -4,7 +4,8 @@
  * 协议：连接后首帧必须是 {"type":"auth","token":"..."}；token 与 daemon 生成的
  * 本地凭据一致才接受后续命令，否则拒绝该连接（不执行任何命令）。
  * 任何能连上管道的主体 ≠ 可信调用者——CallerContext 只在凭据验证后构造。
- * 通过验证后：每行一个请求 envelope，回一行 result（同 socket FIFO 串行）。
+ * 通过验证后：每行一个请求 envelope，回一行 result；写命令按 FIFO 串行，
+ * 权限提示查询独立处理，客户端按 commandId 对应响应。
  */
 import { createServer, type Server, type Socket } from 'node:net';
 
@@ -62,7 +63,7 @@ export function startNamedPipeIpc(
             continue;
           }
           const requestLine = line;
-          enqueue(async () => {
+          const processRequest = async () => {
             let response: unknown;
             try {
               response = await handleLine(JSON.parse(requestLine));
@@ -92,8 +93,14 @@ export function startNamedPipeIpc(
                 await new Promise((r) => setTimeout(r, Number(ms)));
               }
             }
-            socket.write(`${JSON.stringify(response)}\n`);
-          });
+            if(!socket.destroyed)socket.write(`${JSON.stringify(response)}\n`);
+          };
+          // Advisory permission reads must not wait behind CLI initialization
+          // during a send. Responses carry commandId; all writes retain FIFO.
+          let advisory=false;
+          try{advisory=(JSON.parse(requestLine) as {method?:string}).method==='message.writeCapability';}catch{/* Invalid JSON follows the normal error path. */}
+          if(advisory)void processRequest();
+          else enqueue(processRequest);
         }
       });
       socket.on('close', () => {

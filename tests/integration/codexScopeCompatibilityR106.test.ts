@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { effectiveTaskWriteAccess } from '../../src/daemon/projectWriteAccess.ts';
-import { codexConfigurationIdentity } from '../../src/adapter/codex/configuration.ts';
+import { codexConfigurationIdentity,codexConfigurationIdentityV2 } from '../../src/adapter/codex/configuration.ts';
 import { CLAUDE_PROJECT_WRITE_POLICY_HASH } from '../../src/adapter/writeCapability.ts';
 
 type Mode = 'full' | 'scoped';
@@ -139,9 +139,9 @@ async function createFixture(mode: Mode) {
   const writeScope = (scope: ScopeSnapshot) => {
     db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify(scope), submitted.taskId);
   };
-  const legacyScope = (): ScopeSnapshot => {
+  const legacyScope = (version:1|2=1): ScopeSnapshot => {
     const scope = readScope();
-    const configurationKey = legacyCodexIdentityReference(project);
+    const configurationKey = version===2?codexConfigurationIdentityV2(project):legacyCodexIdentityReference(project);
     const root = realpathSync.native(project);
     const launchIdentity = mode === 'full'
       ? digest(JSON.stringify({
@@ -184,7 +184,8 @@ async function createFixture(mode: Mode) {
         }));
       })();
     const legacy = { ...scope, launchIdentity };
-    delete legacy.launchFingerprintVersion;
+    if(version===2)legacy.launchFingerprintVersion=2;
+    else delete legacy.launchFingerprintVersion;
     return legacy;
   };
 
@@ -206,6 +207,46 @@ async function createFixture(mode: Mode) {
 }
 
 describe('R106 Codex v1 scope compatibility through formal task persistence', () => {
+  it.each(['full','scoped'] as const)('%s keeps a v2 snapshot immutable, including its stricter array/trust comparison',async mode=>{
+    const f=await createFixture(mode);
+    try{
+      const base=configText+'\n[[skills.config]]\npath = "fixture-skill"\nenabled = true\n';
+      writeFileSync(f.config,base);f.writeScope(f.legacyScope(2));
+      const saved=f.storedScope().write_scope_json;
+      expect(effectiveTaskWriteAccess(f.db,f.taskId,f.memberId,null).modificationAuthorized).toBe(true);
+      expect(f.storedScope().write_scope_json).toBe(saved);
+      const other=join(f.root,'other');mkdirSync(other);
+      writeFileSync(f.config,`${base}\n[projects."${other.replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\n`);
+      expect(()=>effectiveTaskWriteAccess(f.db,f.taskId,f.memberId,null)).toThrow(/已变化/);
+      expect(f.storedScope().write_scope_json).toBe(saved);
+    }finally{f.close();}
+  });
+
+  it.each(['full','scoped'] as const)('%s v3 task survives unrelated trust initialization with configured skills',async mode=>{
+    const f=await createFixture(mode);
+    try{
+      const base=configText+'\n[[skills.config]]\npath = "fixture-skill"\nenabled = true\n';
+      writeFileSync(f.config,base);
+      // Explicitly authorize the current configuration, as a new send does.
+      const scope=f.readScope(),configuration=codexConfigurationIdentity(f.project);
+      const v2=f.legacyScope(2);
+      // Reuse the same frozen scope fields with the new-version digest.
+      if(mode==='full')scope.launchIdentity=digest(JSON.stringify({projectId:f.projectId,root:scope.root,runtime:scope.runtime,mode:'full',configuration}));
+      else {
+        // scoped digest is obtained from the actual access computation without a prior launch identity.
+        const fresh={...scope} as Partial<ScopeSnapshot>;delete fresh.launchIdentity;
+        scope.launchIdentity=effectiveTaskWriteAccess(f.db,f.taskId,f.memberId,null,JSON.stringify(fresh)).identityKey;
+      }
+      f.writeScope(scope);const saved=f.storedScope().write_scope_json;
+      const other=join(f.root,'other');mkdirSync(other);
+      writeFileSync(f.config,`${base}\n[projects."${other.replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\n`);
+      expect(effectiveTaskWriteAccess(f.db,f.taskId,f.memberId,null).modificationAuthorized).toBe(true);
+      expect(()=>effectiveTaskWriteAccess(f.db,f.taskId,f.memberId,null,JSON.stringify(v2))).toThrow(/已变化/);
+      writeFileSync(f.config,base.replace('enabled = true','enabled = false'));
+      expect(()=>effectiveTaskWriteAccess(f.db,f.taskId,f.memberId,null)).toThrow(/已变化/);
+      expect(f.storedScope().write_scope_json).toBe(saved);
+    }finally{f.close();}
+  });
   it.each(['full','scoped'] as const)('%s explicitly versioned v1 also uses the exact old comparison',async mode=>{
     const f=await createFixture(mode);
     try{
@@ -290,13 +331,13 @@ describe('R106 Codex v1 scope compatibility through formal task persistence', ()
   );
 
   it.each(['full', 'scoped'] as const)(
-    '%s newly submitted Codex task opts into v2 and validates normally',
+    '%s newly submitted Codex task opts into v3 and validates normally',
     (mode) => {
       return createFixture(mode).then((f) => {
         try {
           const scope = f.readScope();
           const before = f.storedScope().write_scope_json;
-          expect(scope.launchFingerprintVersion).toBe(2);
+          expect(scope.launchFingerprintVersion).toBe(3);
           expect(scope.launchIdentity).toMatch(/^[a-f0-9]{64}$/);
           const access = effectiveTaskWriteAccess(f.db, f.taskId, f.memberId, null);
           expect(access.fullAccess).toBe(mode === 'full');

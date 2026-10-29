@@ -3,8 +3,8 @@ import {createHash} from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
-export const CODEX_CONFIGURATION_FINGERPRINT_VERSION = 2 as const;
-export const CODEX_CONFIGURATION_FINGERPRINT_LABEL = 'codex-configuration-v2' as const;
+export const CODEX_CONFIGURATION_FINGERPRINT_VERSION = 3 as const;
+export const CODEX_CONFIGURATION_FINGERPRINT_LABEL = 'codex-configuration-v3' as const;
 const digest = (value: string|Uint8Array) => createHash('sha256').update(value).digest('hex');
 
 interface TomlFacts {
@@ -76,6 +76,12 @@ interface TomlSection {
   path:string[]|null;
 }
 
+function independentSkillArray(section:TomlSection):boolean {
+  // v3 recognizes this CLI array without weakening unknown/project arrays.
+  // v2 remains byte-for-byte compatible with previously frozen snapshots.
+  return section.kind==='array'&&section.path?.length===2&&section.path[0]==='skills'&&section.path[1]==='config';
+}
+
 function tomlSection(line:string):TomlSection|null {
   const arrayTable=/^\s*\[\[(.+?)\]\]\s*(?:#.*)?$/.exec(line);
   if(arrayTable){
@@ -126,7 +132,7 @@ function tomlLineState(line:string,active:'"""'|"'''"|null):TomlLineState {
  * verified trust-only block for an unrelated path cannot affect execution in
  * cwd; omit only that exact form. Any possible TOML ambiguity falls back to
  * hashing every byte so unknown execution configuration remains guarded. */
-function stableCodexConfiguration(text:string,cwd:string):string|null {
+function stableCodexConfiguration(text:string,cwd:string,version:2|3):string|null {
   const lines=text.replace(/\r\n?/g,'\n').split('\n');
   const chunks:string[][]=[[]];
   let multiline:'"""'|"'''"|null=null;
@@ -134,7 +140,7 @@ function stableCodexConfiguration(text:string,cwd:string):string|null {
   for(const line of lines){
     const section=multiline==null?tomlSection(line):null;
     if(section!=null){
-      if(section.path==null||section.kind==='array')filteringSafe=false;
+      if(section.path==null||section.kind==='array'&&(version===2||!independentSkillArray(section)))filteringSafe=false;
       chunks.push([line]);
     }else chunks[chunks.length-1]!.push(line);
     const state=tomlLineState(line,multiline);
@@ -209,15 +215,15 @@ function legacyCodexConfigurationIdentityFromState(state:CodexConfigurationState
   return digest(JSON.stringify({home:state.home,cwd:state.cwd,facts,env:state.environment}));
 }
 
-function currentCodexConfigurationIdentity(state:CodexConfigurationState):string {
+function currentCodexConfigurationIdentity(state:CodexConfigurationState,version:2|3=3):string {
   const facts=state.files.map(file=>{
     if(!file.present)return[file.path,'absent'];
     const text=new TextDecoder('utf-8',{fatal:true}).decode(file.bytes!);
-    const stable=stableCodexConfiguration(text,state.cwd);
+    const stable=stableCodexConfiguration(text,state.cwd,version);
     return[file.path,stable==null?digest(file.bytes!):digest(stable)];
   });
   return digest(JSON.stringify({
-    fingerprintVersion:CODEX_CONFIGURATION_FINGERPRINT_LABEL,
+    fingerprintVersion:`codex-configuration-v${version}`,
     home:state.home,
     cwd:state.cwd,
     facts,
@@ -287,7 +293,7 @@ function directProjectTableRoots(text:string):string[]|null {
       if(/^\s*projects\s*[.=]/.test(line))return null;
       const section=tomlSection(line);
       if(section!=null){
-        if(section.path==null||section.kind==='array')return null;
+        if(section.path==null||section.kind==='array'&&!independentSkillArray(section))return null;
         if(section.path[0]==='projects'){
           if(section.path.length<2)return null;
           roots.push(section.path[1]!);
@@ -343,7 +349,7 @@ export function captureCodexConfigurationPreparation(cwd:string):CodexPreparatio
   const evidence=Object.freeze({
     fingerprintVersion:CODEX_CONFIGURATION_FINGERPRINT_VERSION,
     identityV1:legacyCodexConfigurationIdentityFromState(state),
-    identityV2:currentCodexConfigurationIdentity(state),
+    identityV2:currentCodexConfigurationIdentity(state,2),
     fileCount:state.files.length,
     environmentEntryCount:state.environment.length,
   });
@@ -480,11 +486,11 @@ function parseTomlFacts(text: string): TomlFacts {
 
 /** Conservative invalidation of local source changes; not a capability certification. */
 export function codexConfigurationIdentityV2(cwd:string) {
-  return currentCodexConfigurationIdentity(collectCodexConfigurationState(cwd));
+  return currentCodexConfigurationIdentity(collectCodexConfigurationState(cwd),2);
 }
 
 export function codexConfigurationIdentity(cwd:string) {
-  return codexConfigurationIdentityV2(cwd);
+  return currentCodexConfigurationIdentity(collectCodexConfigurationState(cwd));
 }
 
 /** Exact pre-R106 Codex v1 identity. This function intentionally hashes raw

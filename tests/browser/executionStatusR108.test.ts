@@ -576,6 +576,7 @@ async function verifyExecutionStatusInChromium(
       harnessPath,
       `import { createRoot } from 'react-dom/client';
 import { ExecutionStatus, taskExecutionStatusSummary } from ${JSON.stringify(componentPath)};
+import { TaskExecutionStatusView } from ${JSON.stringify(resolve('src/ui/hifi/components/TaskExecutionStatusView.tsx').replaceAll('\\', '/'))};
 import type { TaskExecutionAction, TaskExecutionStatus } from ${JSON.stringify(resolve('src/contracts/executionStatus.ts').replaceAll('\\', '/'))};
 const status = ${JSON.stringify(status)} as TaskExecutionStatus;
 const completed = ${JSON.stringify(completed)} as TaskExecutionStatus;
@@ -592,6 +593,9 @@ createRoot(document.getElementById('root')!).render(
     <div id="completed">
       <ExecutionStatus status={completed} onAction={(action) => { actions.push(action); document.body.dataset.clicked = action.kind; }} />
     </div>
+    <div id="finished-replies"><TaskExecutionStatusView status={{...completed,waitingForUser:null}} hideThreadNavigation /></div>
+    <div id="review-replies"><TaskExecutionStatusView status={completed} hideThreadNavigation /></div>
+    <div id="finished-details"><TaskExecutionStatusView status={{...completed,waitingForUser:null}} density="detail" /></div>
   </div>,
 );
 requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -606,6 +610,9 @@ requestAnimationFrame(() => requestAnimationFrame(() => {
   const detailText = detailCard?.textContent ?? '';
   (window as any).__R108 = {
     mounted: card != null,
+    finishedReplyBannerHidden: document.querySelector('#finished-replies [data-zs-execution-status]') == null,
+    reviewReplyBannerVisible: document.querySelector('#review-replies [data-zs-execution-status]') != null,
+    finishedDetailVisible: document.querySelector('#finished-details [data-zs-execution-status]') != null,
     phase: card?.dataset.zsExecutionPhase ?? null,
     performing: card?.dataset.zsPerformingMembers ?? null,
     waiting: card?.dataset.zsWaitingMembers ?? null,
@@ -879,6 +886,9 @@ describe('R108 authoritative task execution status', () => {
       const result = await verifyExecutionStatusInChromium(statuses.peerBefore, statuses.completed);
       expect(result).toMatchObject({
         mounted: true,
+        finishedReplyBannerHidden: true,
+        reviewReplyBannerVisible: true,
+        finishedDetailVisible: true,
         phase: 'RUNNING',
         performing: '执行乙',
         waiting: '执行甲',

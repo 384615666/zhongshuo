@@ -50,14 +50,14 @@ function fixture(){
 }
 
 describe('R106 Codex configuration fingerprint',()=>{
-  it('exports numeric v2 and an exact historical v1 identity without aliasing either way',()=>{
+  it('exports v3 while preserving exact historical v1 and v2 identities',()=>{
     const f=fixture(),text='model = "fixture-model"\n';
     writeFileSync(f.config,text);
     const v1=codexConfigurationIdentityV1(f.project),v2=f.identity();
-    expect(CODEX_CONFIGURATION_FINGERPRINT_VERSION).toBe(2);
-    expect(CODEX_CONFIGURATION_FINGERPRINT_LABEL).toBe('codex-configuration-v2');
+    expect(CODEX_CONFIGURATION_FINGERPRINT_VERSION).toBe(3);
+    expect(CODEX_CONFIGURATION_FINGERPRINT_LABEL).toBe('codex-configuration-v3');
     expect(legacyCodexConfigurationIdentity(f.project)).toBe(v1);
-    expect(codexConfigurationIdentityV2(f.project)).toBe(v2);
+    expect(codexConfigurationIdentityV2(f.project)).not.toBe(v2);
     expect(v1).toBe(legacyIdentityReference(f.project));
     expect(v2).not.toBe(v1);
     mkdirSync(join(f.root,'other-project'));
@@ -82,6 +82,26 @@ describe('R106 Codex configuration fingerprint',()=>{
     expect(f.identity()).toBe(before);
     writeFileSync(f.config,`model = "fixture-model"\n\n[projects."${join(f.root,'other-project').replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\n`);
     expect(f.identity()).toBe(before);
+  });
+
+  it('ignores unrelated trust with skill arrays while retaining array configuration changes and v2 comparison',()=>{
+    const f=fixture(),other=join(f.root,'other-project');mkdirSync(other);
+    const base='model = "fixture-model"\n[[skills.config]]\npath = "fixture-skill"\nenabled = true\n';
+    writeFileSync(f.config,base);
+    const before=f.identity(),v2=codexConfigurationIdentityV2(f.project);
+    const trust=`\n[projects."${other.replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\n`;
+    writeFileSync(f.config,base+trust);
+    expect(f.identity()).toBe(before);
+    expect(codexConfigurationIdentityV2(f.project)).not.toBe(v2);
+    writeFileSync(f.config,base.replace('enabled = true','enabled = false')+trust);
+    expect(f.identity()).not.toBe(before);
+  });
+
+  it('prepares current-project trust alongside independent array tables',()=>{
+    const f=fixture(),base='[[skills.config]]\npath = "fixture-skill"\nenabled = true\n';
+    writeFileSync(f.config,base);const before=f.snapshot();
+    writeFileSync(f.config,`${base}\n[projects."${f.project.replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\n`);
+    expect(compareCodexPreparationConfiguration(before,f.project,[f.project])).toMatchObject({ok:true,outcome:'trust-initialized'});
   });
 
   it.each(['current','ancestor'])('keeps %s project trust guarded',which=>{

@@ -15,7 +15,7 @@ export function SendRecoveryAction({draftKey,onRecovered}:{draftKey:string;onRec
   const identity=JSON.stringify([draftKey,reference?.commandId]);
   current.current=identity;
   useEffect(()=>{generation.current+=1;},[identity]);
-  if(!reference||!pending&&last?.outcome==='accepted')return null;
+  if(!reference||!pending&&last?.outcome!=='unknown')return null;
   const visible=state?.identity===identity?state:null;
   const found=visible?.result?.status==='found'?visible.result:null;
   const query=async()=>{

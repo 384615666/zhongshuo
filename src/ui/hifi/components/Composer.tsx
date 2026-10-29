@@ -1115,7 +1115,7 @@ export function Composer({
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
       try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,...(collaboration?{collaboration}:{}),mentions:effectiveMentionIds.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
-      catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${userFacingSystemText((e as Error).message ?? '')}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
+      catch(e){if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint(old=>old?.key===writeContext?{...old,error:(e as Error).message}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
     void read();const timer=window.setInterval(()=>void read(),5000),visible=()=>void read();document.addEventListener('visibilitychange',visible);
@@ -2072,7 +2072,7 @@ export function Composer({
       ) : null}
 
       {/* 发送前说明真实协作路由；不更改草稿中的提及或发送意图。 */}
-      {writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip composer-info-chip">{userFacingSystemText(writeHint.error ?? '')}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
+      {writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="status"><span className="chip composer-info-chip" title={userFacingSystemText(writeHint.error)}>权限暂未刷新，发送时会重新核对。</span></div>:null}
       {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-runtime-hint="1">
           <span className="chip composer-info-chip" title={runtimeHint.text}>

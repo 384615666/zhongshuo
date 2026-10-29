@@ -1,7 +1,7 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 import {useRef,useState} from 'react';
 import type {TaskExecutionAction,TaskExecutionStatus} from '../../../contracts/executionStatus.ts';
-import {ExecutionStatus} from './ExecutionStatus';
+import {ExecutionStatus,taskExecutionNeedsReview} from './ExecutionStatus';
 import {sendCommand} from '../bridge';
 import {loadRoomPool,refreshDms,refreshThreadTask,openExternalDeepLink} from '../loader';
 import {requestRecoveryOpen} from '../lib/recovery';
@@ -13,6 +13,7 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
   const pending=useRef<{key:string;commandId:string}|null>(null);
   const busy=useRef(false);
   if(!status)return null;
+  if(density==='compact'&&hideThreadNavigation&&status.phase==='COMPLETED'&&!taskExecutionNeedsReview(status))return null;
   const handle=async(action:TaskExecutionAction)=>{
     if(busy.current)return;
     busy.current=true;setError(null);

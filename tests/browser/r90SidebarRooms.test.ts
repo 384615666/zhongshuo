@@ -56,6 +56,21 @@ function installWindow(command: Command): { location: { hash: string } } {
 }
 
 describe('R90 independent project room index', () => {
+  it('navigates within the loaded project without refreshing members or replacing the sidebar projection',async()=>{
+    const calls:string[]=[];
+    const {location}=installWindow(async envelope=>{
+      calls.push(envelope.method);
+      return{ok:true,data:{items:[{id:'roomA',name:'房间 A',conversationId:'convA',revision:0}]}};
+    });
+    const previous=getState();
+    expect(await openSidebarRoom('projA','roomA')).toBe(true);
+    expect(location.hash).toBe('#/project/projA/room/roomA');
+    expect(calls).toEqual(['room.list']);
+    expect(getState().rooms).toBe(previous.rooms);
+    expect(getState().members).toBe(previous.members);
+    expect(getState().loadGen).toBe(previous.loadGen);
+    expect(getState().openInFlight).toBe(false);
+  });
   beforeEach(() => {
     initial = getState();
     const a = project('projA', '项目 A');

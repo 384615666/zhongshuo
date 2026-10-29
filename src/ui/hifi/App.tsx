@@ -492,7 +492,7 @@ export default function App() {
                 return visibleProjects.map((p) => {
                   const isCurrent = p.id === s.activeProjectId;
                   const expanded = s.expandedProjectIds.includes(p.id);
-                  const roomIndex = isCurrent
+                  const roomIndex = isCurrent && !s.openInFlight
                     ? { status: 'ready' as const, rooms: roomsOfProject(s, p.id), error: undefined }
                     : sidebarRooms[p.id];
                   const rooms = roomIndex?.rooms ?? [];

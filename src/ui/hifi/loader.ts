@@ -884,6 +884,14 @@ export async function openSidebarRoom(projectId: string, roomId: string): Promis
       toast('目标房间不存在或已归档，项目与草稿均未切换', 'error');
       return false;
     }
+    // Room navigation within the loaded project does not reload its entire
+    // roster or replace the sidebar with an intermediate opening state.
+    if (getState().activeProjectId === projectId && !getState().openInFlight
+      && getState().rooms.some(room => room.id === roomId && room.projectId === projectId)) {
+      releaseNavIntent(intent);
+      navigate(`/project/${projectId}/room/${roomId}`);
+      return true;
+    }
     const nextGen = (getState().loadGen ?? 0) + 1;
     gen = nextGen;
     setState((state) => ({
