@@ -2,6 +2,7 @@
 import {z} from 'zod';
 import {coordinationPlanSchema,memberHandoffSchema} from './coordination.ts';
 import {documentSchema} from './document.ts';
+import {memoryUpdateSchema} from './roleMemory.ts';
 
 export const TASK_COMPLETE_SCHEMA_VERSION='task-complete-v1';
 export const taskCompleteSchema=z.strictObject({
@@ -24,6 +25,7 @@ export const taskCompleteSchema=z.strictObject({
   remainingIssues:z.array(z.string()),
   coordinationPlan:coordinationPlanSchema.nullable().optional(),
   handoffs:z.array(memberHandoffSchema).optional(),
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
 });
 export type TaskComplete=z.infer<typeof taskCompleteSchema>;
 
@@ -38,6 +40,7 @@ export function taskCompleteOutputSchema(resultKey:string,planning=false){
     replyDisposition:z.enum(['reply','none']),
     userQuestion:z.string().trim().min(1).nullable(),
     handoffs:z.array(memberHandoffSchema),
+    memoryUpdates:z.array(memoryUpdateSchema),
   });
   // Claude CLI validates draft-07; Codex shares the same closed object schema.
   return z.toJSONSchema(planning?common.extend({coordinationPlan:coordinationPlanSchema.nullable()}):common,{target:'draft-7'});

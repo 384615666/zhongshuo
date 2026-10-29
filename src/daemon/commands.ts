@@ -40,7 +40,7 @@ import { commandEnvelopeSchema } from '../contracts/commands.ts';
 import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHistoryParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
-import {readPreDispatchFailure} from './preDispatchFailure.ts';
+import {readPreDispatchFailure,unstartedPreparationCounts} from './preDispatchFailure.ts';
 import {readTaskExecutionStatus} from './executionStatus.ts';
 import {readMessageRepairLineages} from './repairLineage.ts';
 import {lookupSubmittedMessage} from './sendRecovery.ts';
@@ -5258,7 +5258,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         let preparedAnalysisTask:{revision:number;stopGeneration:number;memberId:string;projectId:string}|null=null;
         if(params.analysisOnly&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)){
           const original=deps.db.prepare(`SELECT revision,stop_generation,owner_member_id,project_id,status FROM tasks WHERE id=?`).get(params.taskId) as {revision:number;stop_generation:number;owner_member_id:string|null;project_id:string;status:string}|undefined;
-          if(!original?.owner_member_id||original.status!=='BLOCKED'||deps.db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=?').get(params.taskId)||!deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND kind IN ('task.contextAssemblyFailed','task.deliberationPrepareFailed','task.memberDisabledBlocked')").get(params.taskId))throw new DaemonCommandError('STALE_REVISION','原请求并非未启动的准备失败；请刷新后按实际执行记录处理');
+          if(!original?.owner_member_id||original.status!=='BLOCKED'||!unstartedPreparationCounts(deps.db,params.taskId)||!deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND kind IN ('task.contextAssemblyFailed','task.deliberationPrepareFailed','task.memberDisabledBlocked')").get(params.taskId))throw new DaemonCommandError('STALE_REVISION','原请求并非未启动的准备失败；请刷新后按实际执行记录处理');
           if(original.stop_generation>0||params.expectedTaskRevision!=null&&params.expectedTaskRevision!==original.revision||params.expectedStopGeneration!=null&&params.expectedStopGeneration!==original.stop_generation)throw new DaemonCommandError('STALE_REVISION','原请求版本或停止代次变化；未准备会话');
           if(!readPreDispatchFailure(deps.db,params.taskId)?.recoveryBinding)throw new DaemonCommandError('STALE_REVISION','原请求当前不具备仅分析继续条件；请刷新查看具体原因');
           const blocked=assessTaskRedispatchReadiness(deps.db,params.taskId);if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
@@ -5310,7 +5310,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             .prepare('SELECT id, status, revision, stop_generation, conversation_id FROM tasks WHERE id = ?')
             .get(params.taskId) as { id: string; status: string; revision: number; stop_generation: number; conversation_id: string } | undefined;
           if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
-          if(params.analysisOnly&&(task.status!=='BLOCKED'||task.stop_generation>0||deps.db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=?').get(task.id)))throw new DaemonCommandError('STALE_REVISION','原请求已开始执行或状态变化；不以只读意图重播');
+          if(params.analysisOnly&&(task.status!=='BLOCKED'||task.stop_generation>0||!unstartedPreparationCounts(deps.db,task.id)))throw new DaemonCommandError('STALE_REVISION','原请求已开始执行或状态变化；不以只读意图重播');
           if(preparedAnalysisTask&&(task.revision!==preparedAnalysisTask.revision||task.stop_generation!==preparedAnalysisTask.stopGeneration||!deps.db.prepare('SELECT 1 FROM tasks WHERE id=? AND owner_member_id=? AND project_id=?').get(task.id,preparedAnalysisTask.memberId,preparedAnalysisTask.projectId)))throw new DaemonCommandError('STALE_REVISION','准备期间原请求身份变化；原消息保留');
           if(preparedUnstartedDm&&(task.revision!==preparedUnstartedDm.revision||task.stop_generation!==preparedUnstartedDm.stopGeneration||deps.db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=?').get(params.taskId)||!deps.db.prepare('SELECT 1 FROM tasks WHERE id=? AND owner_member_id=? AND project_id=?').get(params.taskId,preparedUnstartedDm.memberId,preparedUnstartedDm.projectId)))throw new DaemonCommandError('STALE_REVISION','准备期间原请求状态变化；请刷新后重新决定，原消息保留');
           assertConversationAudience(deps.db, deps.localUserId, task.conversation_id);

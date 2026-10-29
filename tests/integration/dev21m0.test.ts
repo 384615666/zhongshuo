@@ -161,7 +161,7 @@ describe('③ 必要材料组装失败 → 不派发', () => {
     const adapter = new FakeRuntimeAdapter();
     await new DispatchWorker({ db, adapter, leaseOwner: 'w1' }).runOnce();
 
-    expect(db.prepare('SELECT count(*) c FROM workflow_runs').get()).toMatchObject({ c: 0 });
+    expect(db.prepare("SELECT count(*) c FROM workflow_runs WHERE status='FAILED'").get()).toMatchObject({ c: 1 });
     expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_4')).toMatchObject({ status: 'BLOCKED' });
     const audit = db.prepare("SELECT payload_json FROM domain_events WHERE kind = 'task.contextAssemblyFailed'").get() as { payload_json: string };
     expect(JSON.parse(audit.payload_json)).toMatchObject({ reason: 'sensitive-content' });

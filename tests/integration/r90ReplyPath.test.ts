@@ -280,9 +280,9 @@ describe('R90 ordinary reply dispatch', () => {
       });
       await worker.runOnce();
       expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(submitted.taskId)).toEqual({ status: 'BLOCKED' });
-      expect(db.prepare('SELECT count(*) n FROM workflow_runs WHERE task_id=?').get(submitted.taskId)).toEqual({ n: 0 });
+      expect(db.prepare("SELECT count(*) n FROM workflow_runs WHERE task_id=? AND status='FAILED'").get(submitted.taskId)).toEqual({ n: 1 });
       expect(db.prepare('SELECT count(*) n FROM agent_turns WHERE dispatch_key=?')
-        .get(`dmtask:${submitted.taskId}:initial`)).toEqual({ n: 0 });
+        .get(`dmtask:${submitted.taskId}:initial`)).toEqual({ n: 1 });
       const failure = db.prepare(`SELECT payload_json FROM domain_events
         WHERE task_id=? AND kind='task.contextAssemblyFailed' ORDER BY seq DESC LIMIT 1`)
         .get(submitted.taskId) as { payload_json: string } | undefined;

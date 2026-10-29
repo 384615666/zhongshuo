@@ -570,7 +570,7 @@ describe('R108 durable desktop task notifications', () => {
     scratch.push(dir);
     const file = join(dir, 'state.sqlite');
     const first = openDatabase(file);
-    expect(first.pragma('user_version', { simple: true })).toBe(59);
+    expect(first.pragma('user_version', { simple: true })).toBe(60);
     seedRoom(first);
     pollTaskNotifications(first, VIEWER, { limit: 10 }, 1_000);
     setTaskStatus(first, 'task1', 'DONE', 1);

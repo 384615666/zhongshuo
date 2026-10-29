@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import { documentSchema } from './document.ts';
+import {memoryUpdateSchema} from './roleMemory.ts';
 import type { FrozenCallBudgetPolicy } from './callBudget.ts';
 
 // ---------- 名单与缺席（§4.3/E4） ----------
@@ -85,6 +86,7 @@ export const analysisClaimSchema = z.strictObject({
  */
 /** INDEPENDENT 阶段模型输出（artifactId/memberId/revision/baselineId 由程序赋值）。 */
 export const analysisDraftPayloadSchema = z.strictObject({
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
   schemaVersion: z.literal(ANALYSIS_DRAFT_SCHEMA_VERSION),
   summary: z.string().min(1),
   detailMarkdown: z.string().optional(),
@@ -111,6 +113,7 @@ export interface AnalysisReport {
 
 /** CROSS_REVIEW 阶段模型输出：对他人初稿 claim 的逐条评审（三元组绑定，防跨成员/跨版本混并）。 */
 export const reviewPayloadSchema = z.strictObject({
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
   schemaVersion: z.literal(CROSS_REVIEW_SCHEMA_VERSION),
   summary: z.string().optional(),
   detailMarkdown: z.string().optional(),
@@ -129,6 +132,7 @@ export type ReviewPayload = z.infer<typeof reviewPayloadSchema>;
 
 /** ISSUE_DISCUSSION 轮次模型输出：对冻结争议列表的立场与（可选）新证据。 */
 export const issuePositionPayloadSchema = z.strictObject({
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
   schemaVersion: z.literal(ISSUE_POSITION_SCHEMA_VERSION),
   summary: z.string().min(1).optional(),
   detailMarkdown: z.string().optional(),
@@ -147,6 +151,7 @@ export type IssuePositionPayload = z.infer<typeof issuePositionPayloadSchema>;
 
 /** 第 3 轮主持复核（turn_purpose=checkpoint）输出：继续或停止由主持者按证据判断（决策 06）。 */
 export const checkpointVerdictPayloadSchema = z.strictObject({
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
   schemaVersion: z.literal(CHECKPOINT_VERDICT_SCHEMA_VERSION),
   summary: z.string().min(1).optional(),
   detailMarkdown: z.string().optional(),
@@ -160,6 +165,7 @@ export type CheckpointVerdictPayload = z.infer<typeof checkpointVerdictPayloadSc
 
 /** SYNTHESIS 整合稿模型输出：claimId 由程序赋值（`clm_N`），sourceRefs 引用分析 claimId。 */
 export const synthesisPayloadSchema = z.strictObject({
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
   schemaVersion: z.literal(SYNTHESIS_SCHEMA_VERSION),
   summary: z.string().min(1),
   detailMarkdown: z.string().optional(),
@@ -185,6 +191,7 @@ export type SynthesisPayload = z.infer<typeof synthesisPayloadSchema>;
 
 /** RATIFY 模型输出：逐结论确认/异议；提交事务验证 claimId 全覆盖且无重复（§6.5）。 */
 export const ratifyPayloadSchema = z.strictObject({
+  memoryUpdates:z.array(memoryUpdateSchema).optional(),
   schemaVersion: z.literal(RATIFY_SCHEMA_VERSION),
   summary: z.string().optional(),
   detailMarkdown: z.string().optional(),

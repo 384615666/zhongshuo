@@ -6,7 +6,7 @@
  * - global：应用级总在途 turn 上限；
  * - project：项目级在途上限（一项目占满不饿死其他项目——拒绝方进入 skip 重试，其他项目照常领取）；
  * - provider：runtime kind/installation 级上限（渠道/CLI 并发保护）；
- * - member：成员级串行（恒 1——同成员 runtime 会话串行语义）；
+ * - member：同成员同 executionScopeKey 会话串行；任一方无 key 时保守按成员串行；
  * - writeRoot：需要写入时的物理目录单写者（同 canonical_path 组串行）。当前全只读档
  *   （plan/analyze）不占写槽；写档接入点就绪（B6 扩展时把 tier=写 的任务带 writeRootKey 准入），
  *   本轮不恢复延期的并行写入增强（默认单写者语义不变）。
@@ -20,6 +20,8 @@
  */
 export interface AdmissionDimensions {
   memberId: string;
+  /** 调用方提供的执行会话标识；缺省兼容旧调用/旧恢复记录的成员互斥。 */
+  executionScopeKey?: string;
   projectId: string;
   providerKey: string;
   /** 写类任务的物理目录（canonical_path）；只读为 null（不占写槽）。 */
@@ -32,6 +34,7 @@ export interface AdmissionLimits {
   perProviderMaxInFlight: number;
 }
 
+/** member 兼容既有拒绝原因，现指同会话或 legacy 成员互斥。 */
 export type AdmissionDeniedReason = 'global' | 'project' | 'provider' | 'member' | 'write-root';
 
 export type AdmissionDecision = { granted: true } | { granted: false; reason: AdmissionDeniedReason };
@@ -50,7 +53,10 @@ export class DispatchAdmission {
 
   /** 判定并占位（原子）：任一维度满即拒绝且不占位。 */
   tryAcquire(turnId: string, dims: AdmissionDimensions): AdmissionDecision {
-    if (this.count((d) => d.memberId === dims.memberId) >= 1) return { granted: false, reason: 'member' };
+    // 同 turnId 不得用另一 scope 覆盖既有占位（尤其是 UNKNOWN 恢复事实）。
+    if (this.held.has(turnId) || this.count((d) => d.memberId === dims.memberId && (
+      d.executionScopeKey == null || dims.executionScopeKey == null || d.executionScopeKey === dims.executionScopeKey
+    )) >= 1) return { granted: false, reason: 'member' };
     if (dims.writeRootKey != null && this.count((d) => d.writeRootKey === dims.writeRootKey) >= 1) {
       return { granted: false, reason: 'write-root' };
     }

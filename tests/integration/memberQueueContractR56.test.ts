@@ -1,18 +1,9 @@
 /**
- * 同成员任务排队合同（R56 §3 起；r57 按 review-r56 §2 重写②）：
- *  ① 同 Agent、两个不同房间任务：忙时真实等待（admissionDeferred member 留证+回 pending+
- *     startTurn 恰 1）；释放后按合同继续（恰 2、不复活）。
- *  ② 「崩溃」重启后的**准入继承**（r57 核心）：新 worker 的 admission 内存为空，但
- *     UNKNOWN/retained/在途 turn 的占用是持久合同——dispatch.resume{confirm:true} 只确认调度，
- *     不是退出证明；同成员另一任务在旧 turn 未收口期间零新增 startTurn（文件库关闭重开与
- *     全新 worker 双重证明）；notStarted 对账后 FAILED+refunded 但 retained 期间继续占用；
- *     recovery.releaseProtection 正式解除（no-os-process 服务端证据）后排队项**恰一次**续跑。
- *     （r56 版②曾把「旧 UNKNOWN 未收口时另一任务成功派发」当正例——独立复核
- *     queue-retained-result.json 证伪，本文件按修复后合同重写；历史报告保留。）
- *  ④ 恢复读取失败防护（r58，review-r57 §2 独立反例）：占位 SELECT 失败或行级绑定读失败
- *     （部分恢复）都**拒绝启动**——不吞错按空账本放行；重试成功后占位继承、正式解除恰一次、
- *     预算/审计事实不被改写。
- *  ③ 同一 DM 连续消息：串行排队、恰一次派发/入库。
+ * R123：新冻结 executionScopeKey 允许同成员跨独立串并行；同一 DM scope 仍串行。
+ * ① 验证真实在途重叠、独立 session、回复归属及重复 tick 不重复派发。
+ * ②/④ 旧库兼容：仅从冻结 bundle 删除 executionScopeKey，保留原恢复 SQL、
+ * UNKNOWN/retained、读失败拒绝启动、文件库重开及正式解除后恰一次的保护证据。
+ * 无冻结 key 的旧记录必须保守按 member 恢复，不能被新 scope 绕过。
  */
 import { describe, expect, it, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
@@ -36,9 +27,9 @@ const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-mq57-'));
 mkdirSync(join(tmpRoot, 'app'), { recursive: true });
 afterAll(() => { for (let i = 0; i < 5; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* Windows 句柄延迟 */ } } });
 
-const validDone = (): FakeTurnScript => [
-  { kind: 'event', event: { kind: 'message.completed', messageId: `m_${randomUUID().slice(0, 8)}`, text: '完成' } },
-  { kind: 'event', event: { kind: 'turn.completed', finalText: JSON.stringify({ schemaVersion: TASK_COMPLETE_SCHEMA_VERSION, resultKey: 'rk', changeSummary: '完成', files: [], executedVerifications: [], unexecutedVerifications: [], remainingIssues: [] }) } },
+const validDone = (text = '完成'): FakeTurnScript => [
+  { kind: 'event', event: { kind: 'message.completed', messageId: `m_${randomUUID().slice(0, 8)}`, text } },
+  { kind: 'event', event: { kind: 'turn.completed', finalText: JSON.stringify({ schemaVersion: TASK_COMPLETE_SCHEMA_VERSION, resultKey: 'rk', changeSummary: text, files: [], executedVerifications: [], unexecutedVerifications: [], remainingIssues: [] }) } },
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -80,7 +71,7 @@ function makeEnv(opts: { fileDb?: string; scripts?: FakeTurnScript[]; adapter?: 
   const scripts: FakeTurnScript[] = opts.scripts ?? [];
   const adapter: FakeRuntimeAdapter = opts.adapter ?? new FakeRuntimeAdapter({ turnScriptSequencer: () => scripts.shift() ?? validDone() });
   /** 每个 worker() 都是新实例（独立 admission——重启后的 worker 由构造器按持久事实恢复占用）。 */
-  const worker = () => new DispatchWorker({ db, adapter, leaseOwner: `w-${randomUUID().slice(0, 4)}`, appDataDir: join(tmpRoot, 'app') });
+  const worker = (detachedTurnConsumption = false) => new DispatchWorker({ db, adapter, detachedTurnConsumption, leaseOwner: `w-${randomUUID().slice(0, 4)}`, appDataDir: join(tmpRoot, 'app') });
   const submit = (body: string) =>
     cmd<{ taskId: string; threadId: string }>('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body, intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] });
   const q1 = (sql: string, ...a: unknown[]): Row => must<Row>(db.prepare(sql).get(...a) as Row | undefined, sql);
@@ -96,39 +87,62 @@ function makeEnv(opts: { fileDb?: string; scripts?: FakeTurnScript[]; adapter?: 
   };
 }
 
-describe('同成员任务排队合同（r57：准入继承+受控忙碌，不绕租约/恢复保护）', () => {
-  it('① 同 Agent 两个房间任务：忙时真实等待（admissionDeferred 留证），释放后按合同继续', async () => {
+/** 旧库夹具：只移除新增字段，保留原冻结上下文与 SQL 恢复证据。 */
+function legacyBundle(db: ZhongshuoDatabase, turnId: string): void {
+  const row = must(db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(turnId) as { included_refs_json: string } | undefined, '冻结 bundle');
+  const bundle = JSON.parse(row.included_refs_json) as Record<string, unknown>;
+  expect(typeof bundle.executionScopeKey).toBe('string');
+  delete bundle.executionScopeKey;
+  expect(db.prepare('UPDATE context_bundles SET included_refs_json=? WHERE turn_id=?').run(JSON.stringify(bundle), turnId).changes).toBe(1);
+  expect(JSON.parse((db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(turnId) as { included_refs_json: string }).included_refs_json)).not.toHaveProperty('executionScopeKey');
+}
+
+describe('同成员 R123 scope 并行与 legacy member 恢复保护合同', () => {
+  it('① R123 同 Agent 独立串真实并行：session/回复各归原串、重复 tick 恰一次', async () => {
     const env = makeEnv();
-    const w = env.worker();
-    env.scripts.push([{ kind: 'stall', ms: 600 }, ...validDone()]);
-    const t1 = await env.submit('R57 排队·任务一（先占用成员）');
-    void w.runOnce();
-    await until(() => env.taskTurns(t1.taskId).length, (n) => n === 1, 8000, '任务一 turn 建立');
-    const t2 = await env.submit('R57 排队·任务二（等待成员释放）');
-    const key1 = `task:${t1.taskId}:initial`;
-    const key2 = `task:${t2.taskId}:initial`;
+    const w = env.worker(true);
+    env.scripts.push([{ kind: 'stall', ms: 1_200 }, ...validDone('REPLY_SCOPE_ONE')]);
+    env.scripts.push([{ kind: 'stall', ms: 1_200 }, ...validDone('REPLY_SCOPE_TWO')]);
+    const t1 = await env.submit('TOKEN_SCOPE_ONE 独立任务一');
     await w.runOnce();
-    const deferred = env.events('run.admissionDeferred');
-    const ob2 = env.outbox(key2);
-    expect(deferred.length).toBe(1);
-    expect(JSON.parse(must(deferred[0], 'admissionDeferred 事件').payload_json)).toMatchObject({ reason: 'member', dispatchKey: key2 });
-    expect(ob2?.status).toBe('pending');
-    expect(env.taskRuns(t2.taskId)).toHaveLength(0);
-    expect(env.taskTurns(t2.taskId)).toHaveLength(0);
-    expect(env.adapter.startTurnLog).toHaveLength(1);
-    await until(() => env.task(t1.taskId).status, (s) => s === 'REVIEW' || s === 'DONE', 8000, '任务一终态');
-    env.scripts.push(validDone());
+    await until(() => env.adapter.startTurnLog.length, (n) => n === 1, 8000, '任务一真实启动');
+    const t2 = await env.submit('TOKEN_SCOPE_TWO 独立任务二');
     await w.runOnce();
-    await until(() => env.task(t2.taskId).status, (s) => s === 'REVIEW' || s === 'DONE', 8000, '任务二终态（按合同继续）');
+    await until(() => env.adapter.startTurnLog.length, (n) => n === 2, 8000, '任务二并行启动');
+    expect(t1.threadId).not.toBe(t2.threadId);
+    expect(env.count("SELECT count(*) c FROM agent_turns WHERE status='RUNNING'")).toBe(2);
+    expect(env.events('run.admissionDeferred')).toHaveLength(0);
+    expect(env.adapter.openSessionLog).toHaveLength(2);
+    const sessions = env.db.prepare('SELECT t.session_id, s.thread_id, s.member_id, s.task_id FROM agent_turns t JOIN runtime_sessions s ON s.id=t.session_id ORDER BY t.rowid').all() as Array<{session_id:string;thread_id:string;member_id:string;task_id:string}>;
+    expect(new Set(sessions.map(s => s.session_id)).size).toBe(2);
+    for (const [root, own, other] of [[t1, 'ONE', 'TWO'], [t2, 'TWO', 'ONE']] as const) {
+      expect(sessions).toContainEqual(expect.objectContaining({thread_id:root.threadId,task_id:root.taskId,member_id:'mA'}));
+      const turn = must(env.taskTurns(root.taskId)[0], '本串 turn');
+      const input = must(env.adapter.startTurnLog.find(t => t.turnId === turn.id), '本串输入');
+      expect(input.text).toContain(`TOKEN_SCOPE_${own}`);
+      expect(input.text).not.toContain(`TOKEN_SCOPE_${other}`);
+    }
+    expect((await w.awaitInFlightTurns(8000)).remaining).toEqual([]);
+    for (const [root, own, other] of [[t1, 'ONE', 'TWO'], [t2, 'TWO', 'ONE']] as const) {
+      expect(env.task(root.taskId).status).toMatch(/^(REVIEW|DONE)$/);
+      expect(env.taskRuns(root.taskId)).toHaveLength(1);
+      expect(env.taskTurns(root.taskId)).toHaveLength(1);
+      expect(env.outbox(`task:${root.taskId}:initial`)?.status).toBe('done');
+      const replies = env.db.prepare("SELECT body_json FROM messages WHERE thread_id=? AND author_type='agent'").all(root.threadId) as Array<{body_json:string}>;
+      expect(replies).toHaveLength(1);
+      expect(replies[0]!.body_json).toContain(`REPLY_SCOPE_${own}`);
+      expect(replies[0]!.body_json).not.toContain(`REPLY_SCOPE_${other}`);
+    }
+    await w.runOnce();
+    await w.runOnce();
     expect(env.adapter.startTurnLog).toHaveLength(2);
-    expect(env.outbox(key1)?.status).toBe('done');
-    expect(env.outbox(key2)?.status).toBe('done');
-    await w.runOnce();
-    await w.runOnce();
-    expect(env.adapter.startTurnLog).toHaveLength(2);
+    expect(env.count("SELECT count(*) c FROM messages WHERE author_type='agent'")).toBe(2);
+    expect(env.count('SELECT count(*) c FROM real_calls')).toBe(0);
+    await env.adapter.closeAllSessions();
+    env.db.close();
   }, 30_000);
 
-  it('② 崩溃重启准入继承：UNKNOWN/retained 期间同成员零新增 startTurn（含文件库重开）；正式解除后恰一次', async () => {
+  it('② legacy 无冻结 scope key：崩溃重启准入继承：UNKNOWN/retained 期间同成员零新增 startTurn（含文件库重开）；正式解除后恰一次', async () => {
     // 文件库（真实关闭/重开）。声明：fresh-worker+恢复库状态模拟，非 OS 级崩溃重启（后续批次补）。
     const fileDb = join(tmpRoot, 'mq57-file.sqlite');
     rmSync(fileDb, { force: true });
@@ -144,6 +158,7 @@ describe('同成员任务排队合同（r57：准入继承+受控忙碌，不绕
     const t2 = await env.submit('R57 重启·任务二（崩溃时排队）');
     const key2 = `task:${t2.taskId}:initial`;
     const turn1 = must(env.taskTurns(t1.taskId)[0], 'turn1');
+    legacyBundle(env.db, turn1.id);
 
     // 崩溃+重启（applyRecovery 同 entry 启动路径）：UNKNOWN+门禁；redispatch 在收口前拒绝。
     const snap = applyRecovery(env.db, Date.now());
@@ -194,7 +209,7 @@ describe('同成员任务排队合同（r57：准入继承+受控忙碌，不绕
     expect(env.adapter.startTurnLog).toHaveLength(2);
   }, 60_000);
 
-  it('④ 恢复读取失败防护（r58）：SELECT 失败/部分恢复失败均拒绝启动不按空账本放行；重试成功后占位继承、正式解除恰一次、预算审计不改写', async () => {
+  it('④ legacy 无冻结 scope key：恢复读取失败防护（r58）：SELECT 失败/部分恢复失败均拒绝启动不按空账本放行；重试成功后占位继承、正式解除恰一次、预算审计不改写', async () => {
     // 文件库（真实关闭/重开；Proxy 只注入指定 SELECT 的失败，其余 DB 操作原样——对应
     // review-r57 §2 独立反例的注入形态：仅占位恢复读失败一次，后续操作正常）。
     const fileDb = join(tmpRoot, 'mq58-restore.sqlite');
@@ -204,7 +219,7 @@ describe('同成员任务排队合同（r57：准入继承+受控忙碌，不绕
     // entry 同款进程内联动占位：worker 构造后接 reconcileRelease（对账/解除命令→内存账本）。
     let releaseHook: (turnId: string) => void = () => {};
     const openEnv = () => makeEnv({ fileDb, scripts, adapter, releaseAdmission: (turnId) => releaseHook(turnId) });
-    let env = openEnv();
+    const env = openEnv();
     scripts.push([{ kind: 'stall', ms: 120_000 }, ...validDone()]);
     const t1 = await env.submit('R58 恢复失败·任务一（在途→UNKNOWN）');
     void env.worker().runOnce();
@@ -212,13 +227,14 @@ describe('同成员任务排队合同（r57：准入继承+受控忙碌，不绕
     const t2 = await env.submit('R58 恢复失败·任务二（排队）');
     const key2 = `task:${t2.taskId}:initial`;
     const turn1 = must(env.taskTurns(t1.taskId)[0], 'turn1');
+    legacyBundle(env.db, turn1.id);
     applyRecovery(env.db, Date.now());
     expect(env.turnRow(turn1.id).status).toBe('UNKNOWN');
 
     // 注入器：armed 时匹配 SQL 的 prepare 直接抛错（其余透传原库）。
     const arm = { sql: '', hits: 0 };
     const dbProxy = new Proxy(env.db, {
-      get(target, prop, _receiver) {
+      get(target, prop) {
         if (prop === 'prepare') {
           return (sql: string, ...rest: unknown[]) => {
             if (arm.sql !== '' && arm.hits > 0 && sql.includes(arm.sql)) {

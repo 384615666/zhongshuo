@@ -333,7 +333,7 @@ function submit(
 }
 
 describe('R107 analysisOnly formal command and worker scope', () => {
-  it('keeps the default full AUTO request fail-closed above 5,000 ignored files, then recovers the same zero-run task through an explicit analysisOnly redispatch', async () => {
+  it('keeps a full AUTO request fail-closed on an external link, then recovers its confirmed unstarted preparation through an explicit analysisOnly redispatch', async () => {
     const fixture = await createFixture({ large: true });
     try {
       expect(readdirSync(join(fixture.projectRoot, 'dist', 'generated'))).toHaveLength(5_001);
@@ -365,8 +365,8 @@ describe('R107 analysisOnly formal command and worker scope', () => {
         WHERE task_id=? AND kind='task.contextAssemblyFailed'
         ORDER BY seq DESC LIMIT 1
       `).get(root.taskId)).toMatchObject({ payload_json: expect.stringContaining('write-baseline-incomplete') });
-      expect(taskCount(fixture.db, 'workflow_runs', root.taskId)).toBe(0);
-      expect(count(fixture.db, 'agent_turns')).toBe(0);
+      expect(taskCount(fixture.db, 'workflow_runs', root.taskId)).toBe(1);
+      expect(count(fixture.db, 'agent_turns',"WHERE status='FAILED' AND exec_started_at IS NULL")).toBe(1);
       expect(count(fixture.db, 'runtime_sessions')).toBe(0);
       expect(count(fixture.db, 'real_calls')).toBe(0);
       expect(fixture.openedSessions).toHaveLength(0);
@@ -401,7 +401,7 @@ describe('R107 analysisOnly formal command and worker scope', () => {
       expect(recoveredAccess.analysisOnly).toBe(true);
       expect(recoveredAccess.fullAccess).toBe(false);
       expect(recoveredAccess.modificationAuthorized).toBe(false);
-      expect(taskCount(fixture.db, 'workflow_runs', root.taskId)).toBe(1);
+      expect(taskCount(fixture.db, 'workflow_runs', root.taskId)).toBe(2);
       expect(taskCount(fixture.db, 'change_sets', root.taskId)).toBe(1);
       expect(taskCount(fixture.db, 'real_calls', root.taskId)).toBe(0);
       expect(count(fixture.db, 'workspace_leases', "WHERE status!='released'")).toBe(0);

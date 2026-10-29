@@ -83,7 +83,7 @@ export interface PreDispatchFailureRecoveryBinding {
   sourceRunId: null;
 }
 
-/** A confirmed failure that stopped a request before any run, turn, or model call. */
+/** A confirmed failure before model start; preparation records may already exist. */
 export interface PreDispatchFailureProjection {
   state: 'NOT_STARTED';
   taskId: string;
@@ -99,8 +99,8 @@ export interface PreDispatchFailureProjection {
     reason: string;
     message: string;
   };
-  runCount: 0;
-  turnCount: 0;
+  runCount: number;
+  turnCount: number;
   callCount: 0;
   callStarted: false;
   outbox: {

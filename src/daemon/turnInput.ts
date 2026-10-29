@@ -5,6 +5,7 @@
  */
 import type { TurnRequest } from '../contracts/runtime.ts';
 import type { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
+import {readRoleMemory} from '../persistence/stores/roleMemory.ts';
 import { createHash } from 'node:crypto';
 import { chatAnswer } from '../contracts/chatAnswer.ts';
 import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
@@ -346,6 +347,8 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   const rawRemaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
   const remaining = input.budget.callBudget?.enforcement === 'disabled' ? Math.max(0, rawRemaining) : rawRemaining;
   const envelope: TurnBundleEnvelope = {
+    executionScopeKey:JSON.stringify([task.projectId,task.conversationId,task.threadId,input.identity.member.id]),
+    roleMemory:readRoleMemory(db,{projectId:task.projectId,memberId:input.identity.member.id,conversationId:task.conversationId}),
     bundleVersion: TURN_BUNDLE_VERSION,
     promptVersion: STANDING_PROMPT_VERSION,
     turnId: input.turnId,
@@ -567,6 +570,8 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   const rawRemaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
   const remaining = input.budget.callBudget?.enforcement === 'disabled' ? Math.max(0, rawRemaining) : rawRemaining;
   const envelope: TurnBundleEnvelope = {
+    executionScopeKey:JSON.stringify([task.projectId,task.conversationId,null,input.identity.member.id]),
+    roleMemory:readRoleMemory(db,{projectId:task.projectId,memberId:input.identity.member.id,conversationId:task.conversationId}),
     bundleVersion: TURN_BUNDLE_VERSION,
     promptVersion: DM_STANDING_PROMPT_VERSION,
     turnId: input.turnId,

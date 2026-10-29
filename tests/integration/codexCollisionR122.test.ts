@@ -33,7 +33,7 @@ it('24 actual protocol sessions of the same role tolerate interleaved notificati
   }finally{await adapter.dispose();}
 },10000);
 
-it('checks whether an unattributed completed message can reach the wrong conversation through the production worker',async()=>{
+it('rejects unattributed completed messages without contaminating either conversation through the production worker',async()=>{
   vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');vi.stubEnv('ZS_REAL_DISPATCH_GUARD','1');
   const f=await collisionFixture('unattributed-worker-message'),adapter=makeAdapter();
   const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'collision-protocol-worker',appDataDir:f.dir,detachedTurnConsumption:true});
@@ -44,8 +44,12 @@ it('checks whether an unattributed completed message can reach the wrong convers
     for(let i=0;i<200;i++){await worker.drain();if([victim,source].every(r=>f.taskStatus(r.taskId)==='DONE'))break;await pause(10);}
     const replies=f.db.prepare("SELECT body_json FROM messages WHERE thread_id=? AND author_type='agent'").all(victim.threadId) as Array<{body_json:string}>;
     const visibleLeak=replies.some(r=>r.body_json.includes('UNATTRIBUTED_VISIBLE_POISON'));
-    f.save({knownDefectReproduced:visibleLeak,workerCrossThreadDeliveryProven:visibleLeak,missingIdentity:'threadId and turnId',tasks:[f.taskStatus(victim.taskId),f.taskStatus(source.taskId)]});
-    expect(visibleLeak).toBe(true);
+    expect([victim,source].map(r=>f.taskStatus(r.taskId))).toEqual(['DONE','DONE']);
+    expect(replies.length).toBeGreaterThan(0);
+    expect(visibleLeak).toBe(false);
+    const allReplies=f.db.prepare("SELECT body_json FROM messages WHERE thread_id IN (?,?) AND author_type='agent'").all(victim.threadId,source.threadId) as Array<{body_json:string}>;
+    expect(allReplies.every(r=>!r.body_json.includes('UNATTRIBUTED_'))).toBe(true);
+    f.save({ok:true,workerCrossThreadContamination:false,missingIdentity:'threadId and turnId',tasks:[f.taskStatus(victim.taskId),f.taskStatus(source.taskId)]});
   }finally{await adapter.dispose();await worker.awaitInFlightTurns(3000);await f.close();vi.unstubAllEnvs();}
 },10000);
 
@@ -62,16 +66,17 @@ it('a shared adapter subprocess crash is visible to every live session rather th
   }finally{await adapter.dispose();}
 },10000);
 
-it('records whether a malformed notification without thread identity is incorrectly attached to the first session',async()=>{
+it('drops malformed notifications without thread identity and preserves both correctly attributed results',async()=>{
   const adapter=makeAdapter();
   try{
     const a=await open(adapter,1),b=await open(adapter,2),eventsA=readTurn(adapter,a),eventsB=readTurn(adapter,b);
     await Promise.all([adapter.startTurn(a,request(1)),adapter.startTurn(b,request(2,'inject-unattributed'))]);
     const [aEvents,bEvents]=await Promise.all([eventsA,eventsB]);
     const contaminated=aEvents.some(e=>e.kind==='turn.completed'&&e.finalText==='UNATTRIBUTED_POISON');
-    // Characterize the current adapter flaw, without treating it as a product pass.
-    expect(contaminated).toBe(true);
-    expect(bEvents.find(e=>e.kind==='turn.completed'&&e.turnId!=null)).toMatchObject({turnId:'internal-2'});
-    writeFileSync(resolve('dist/r122-collisions/codex-unattributed.json'),JSON.stringify({knownDefectReproduced:contaminated,rawSessionContamination:true,workerCrossThreadDeliveryProven:false,realModelCalls:0}));
+    expect(contaminated).toBe(false);
+    expect(aEvents.find(e=>e.kind==='turn.completed'&&e.turnId!=null)).toMatchObject({turnId:'internal-1',finalText:'SESSION_SECRET_1'});
+    expect(bEvents.find(e=>e.kind==='turn.completed'&&e.turnId!=null)).toMatchObject({turnId:'internal-2',finalText:'inject-unattributed'});
+    for(const events of [aEvents,bEvents])expect(JSON.stringify(events)).not.toContain('UNATTRIBUTED_');
+    writeFileSync(resolve('dist/r122-collisions/codex-unattributed.json'),JSON.stringify({ok:true,rawSessionContamination:false,realModelCalls:0}));
   }finally{await adapter.dispose();}
 },10000);

@@ -3,8 +3,8 @@
  * - 阶段泵与单个 turn 事件消费解耦：队首成员在途（stall）不阻塞 drain——后续成员照常派发
  *   （inline 语义下此处会被阻塞）；泵经**真实 runOnce 路径**（非测试直调 pumpDeliberation）
  *   在成员在途超过 absenceGrace 时仍等待，实际完成后才入队互评；
- * - 同成员在途互斥：该成员新步骤/任务放回 pending（skipIds 跳过、不阻塞其他成员），
- *   在途终态后解除并正常派发；
+ * - R123 新 scope：同成员独立串真实并行，各自 session/回复不串线、不重复；
+ *   同 scope 互斥及无冻结 key 的旧库恢复保护分别由 sessionWorkerR123/memberQueueContractR56 覆盖；
  * - 正常完成：慢成员完成仍正常计入，不误标 late；
  * - stop 收敛：awaitInFlightTurns 全部收敛后返回空剩余（不确定时如实返回剩余，不假装）。
  * 审批暂停/单轮截止/排队截止/用户停止语义在消费器与泵内部，未改（deliberationE4 既有用例覆盖）。
@@ -35,7 +35,7 @@ async function waitUntil(cond: () => boolean, timeoutMs = 5_000, label = ''): Pr
   throw new Error(`等待超时：${label}`);
 }
 
-describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟到（真实 runOnce 路径）', () => {
+describe('E4 调度解耦（detached）：泵在途推进 + 同成员独立串并行 + 迟到（真实 runOnce 路径）', () => {
   it('队首 m1 在途不阻塞 m2/m3 派发；泵跨宽限仍等待；m1 完成正常计入', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2', 'm3']);
@@ -97,7 +97,7 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
     db.close();
   }, 30_000);
 
-  it('同成员在途互斥：新任务放回 pending（不阻塞其他成员），在途终态后解除派发', async () => {
+  it('R123 同成员独立串在途并行：session/回复隔离，其他成员继续，重复 tick 不重复派发', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['mA', 'mB']);
     const scripts: FakeTurnScript[] = [];
@@ -118,24 +118,44 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
       return ids.taskId;
     };
     makeDirect(1, 'mA'); // t1：mA 先
-    makeDirect(2, 'mA'); // t2：mA 同成员（应排队）
+    makeDirect(2, 'mA'); // t2：同成员但独立 thread/scope，允许并行
     makeDirect(3, 'mB'); // t3：另一成员（不应被饿死）
 
-    scripts.push([{ kind: 'stall', ms: 700 }, { kind: 'event', event: { kind: 'turn.completed', finalText: 't1 完成' } }]); // t1 慢后终态
-    expect(await worker.runOnce()).toBe(true);  // t1 派发（立即返回）
-    expect(await worker.runOnce()).toBe(true);  // t2 领取→mA 在途→放回 pending（跳过）
-    // t2 未建 turn、outbox 仍 pending；t3 照常派发完成（跨成员不饿死）。
-    expect(db.prepare("SELECT count(*) c FROM agent_turns WHERE member_id = 'mA'").get()).toMatchObject({ c: 1 }); // 只有 t1
-    const t2outbox = db.prepare("SELECT status FROM outbox WHERE dispatch_key = 'task:dtk2:initial'").get() as { status: string };
-    expect(['pending', 'leased']).toContain(t2outbox.status); // 已放回（lease 由放回语义清空）
-    expect(await worker.runOnce()).toBe(true); // t3 派发
-    await waitUntil(() => (db.prepare('SELECT status FROM tasks WHERE id = ?').get('dtk3') as { status: string }).status === 'DONE', 5_000, 't3 DONE');
-
-    // t1 完成（stall 结束）→ 互斥解除 → t2 派发完成。
+    // 新 scope 合同：两个同成员 turn 都 stall，直接核验 RUNNING 重叠。
+    scripts.push([{ kind: 'stall', ms: 1_200 }, { kind: 'event', event: { kind: 'turn.completed', finalText: 'REPLY_T1' } }]);
+    scripts.push([{ kind: 'stall', ms: 1_200 }, { kind: 'event', event: { kind: 'turn.completed', finalText: 'REPLY_T2' } }]);
+    scripts.push([{ kind: 'event', event: { kind: 'turn.completed', finalText: 'REPLY_T3' } }]);
+    expect(await worker.runOnce()).toBe(true);
+    expect(await worker.runOnce()).toBe(true);
+    expect(adapter.startTurnLog).toHaveLength(2);
+    expect(db.prepare("SELECT count(*) c FROM agent_turns WHERE member_id='mA' AND status='RUNNING'").get()).toMatchObject({c:2});
+    const sessions = db.prepare("SELECT t.session_id,s.thread_id,s.task_id,s.member_id FROM agent_turns t JOIN runtime_sessions s ON s.id=t.session_id WHERE t.member_id='mA' ORDER BY t.rowid").all() as Array<{session_id:string;thread_id:string;task_id:string;member_id:string}>;
+    expect(new Set(sessions.map(s => s.session_id)).size).toBe(2);
+    for (const n of [1, 2]) {
+      expect(sessions).toContainEqual(expect.objectContaining({thread_id:`dth${n}`,task_id:`dtk${n}`,member_id:'mA'}));
+      expect(adapter.startTurnLog[n-1]!.text).toContain(`B${n}`);
+      expect(adapter.startTurnLog[n-1]!.text).not.toContain(`B${3-n}`);
+    }
+    // project/provider 容量可暂缓第三项；同成员两串完成后 tick 继续跨成员任务。
+    await worker.runOnce();
+    expect((await worker.awaitInFlightTurns(6_000)).remaining).toEqual([]);
+    await worker.runOnce();
     await worker.awaitInFlightTurns(6_000);
-    await waitUntil(() => (db.prepare('SELECT status FROM tasks WHERE id = ?').get('dtk1') as { status: string }).status === 'DONE', 3_000, 't1 DONE');
-    expect(await worker.runOnce()).toBe(true); // t2 现在可派发（脚本走 sequencer 默认回退=合法终态）
-    await waitUntil(() => (db.prepare('SELECT status FROM tasks WHERE id = ?').get('dtk2') as { status: string }).status === 'DONE', 5_000, 't2 DONE');
+    await waitUntil(() => (db.prepare("SELECT count(*) c FROM tasks WHERE id IN ('dtk1','dtk2','dtk3') AND status='DONE'").get() as {c:number}).c === 3, 5_000, '三任务完成');
+    for (const n of [1, 2, 3]) {
+      expect(db.prepare('SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id WHERE r.task_id=?').get(`dtk${n}`)).toMatchObject({c:1});
+      expect(db.prepare('SELECT count(*) c FROM workflow_runs WHERE task_id=?').get(`dtk${n}`)).toMatchObject({c:1});
+      expect(db.prepare('SELECT status FROM outbox WHERE dispatch_key=?').get(`task:dtk${n}:initial`)).toMatchObject({status:'done'});
+      const replies = db.prepare("SELECT body_json FROM messages WHERE thread_id=? AND author_type='agent'").all(`dth${n}`) as Array<{body_json:string}>;
+      expect(replies).toHaveLength(1);
+      expect(replies[0]!.body_json).toContain(`REPLY_T${n}`);
+      for (const other of [1, 2, 3].filter(i => i !== n)) expect(replies[0]!.body_json).not.toContain(`REPLY_T${other}`);
+    }
+    await worker.runOnce();
+    await worker.runOnce();
+    expect(adapter.startTurnLog).toHaveLength(3);
+    expect(db.prepare("SELECT count(*) c FROM messages WHERE author_type='agent'").get()).toMatchObject({c:3});
+    expect(db.prepare('SELECT count(*) c FROM real_calls').get()).toMatchObject({c:0});
     const settled = await worker.awaitInFlightTurns(1_000);
     expect(settled.remaining).toEqual([]);
     await adapter.closeAllSessions();

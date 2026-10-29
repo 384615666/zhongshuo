@@ -103,11 +103,33 @@ interface OutboxRow {
   status: 'done' | 'failed';
 }
 
+/** R123 acquires the physical lease through durable preparation records before
+ * scanning. Only explicit, process-free preparation failures qualify here. */
+export function unstartedPreparationCounts(db:ZhongshuoDatabase,taskId:string):{runs:number;turns:number;calls:number}|null {
+  const counts=db.prepare(`SELECT
+    (SELECT count(*) FROM workflow_runs WHERE task_id=?) runs,
+    (SELECT count(*) FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?) turns,
+    (SELECT count(*) FROM real_calls WHERE task_id=?) calls`).get(taskId,taskId,taskId) as {runs:number;turns:number;calls:number};
+  if(counts.calls!==0)return null;
+  if(counts.runs===0&&counts.turns===0)return counts;
+  if(counts.runs!==counts.turns)return null;
+  const unsafe=db.prepare(`SELECT 1 FROM workflow_runs r JOIN agent_turns a ON a.run_id=r.id
+    WHERE r.task_id=? AND (r.status!='FAILED' OR a.status!='FAILED' OR a.exec_started_at IS NOT NULL
+      OR a.protection_state='retained'
+      OR EXISTS(SELECT 1 FROM runtime_sessions s WHERE s.task_id=r.task_id)
+      OR EXISTS(SELECT 1 FROM runtime_process_registry p WHERE p.turn_id=a.id)
+      OR NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.startupFailed'
+        AND json_extract(e.payload_json,'$.classification')='confirmed-not-started'
+        AND json_extract(e.payload_json,'$.phase') IN ('records','standing-prompt')))
+    LIMIT 1`).get(taskId);
+  return unsafe?null:counts;
+}
+
 /**
  * Read the one current, confirmed pre-dispatch failure for a task.
  *
- * This projection deliberately requires zero workflow runs, agent turns, and
- * real-call ledger rows. It also refuses queued/leased work and superseded
+ * Requires zero model calls and either no preparation records or explicitly
+ * confirmed, process-free preparation failures. Refuses queued/leased work and superseded
  * failure events, so an UNKNOWN/in-flight attempt or a later redispatch can
  * never be relabelled as NOT_STARTED from an older event.
  */
@@ -130,14 +152,8 @@ export function readPreDispatchFailure(
   `).get(taskId) as TaskRow | undefined;
   if (task == null || task.status !== 'BLOCKED') return null;
 
-  const counts = db.prepare(`
-    SELECT
-      (SELECT count(*) FROM workflow_runs WHERE task_id = ?) AS runs,
-      (SELECT count(*) FROM agent_turns a JOIN workflow_runs r ON r.id = a.run_id
-        WHERE r.task_id = ?) AS turns,
-      (SELECT count(*) FROM real_calls WHERE task_id = ?) AS calls
-  `).get(taskId, taskId, taskId) as { runs: number; turns: number; calls: number };
-  if (counts.runs !== 0 || counts.turns !== 0 || counts.calls !== 0) return null;
+  const counts=unstartedPreparationCounts(db,taskId);
+  if(counts==null)return null;
 
   const pending = db.prepare(`
     SELECT 1 FROM outbox
@@ -244,8 +260,8 @@ export function readPreDispatchFailure(
       reason,
       message,
     },
-    runCount: 0,
-    turnCount: 0,
+    runCount: counts.runs,
+    turnCount: counts.turns,
     callCount: 0,
     callStarted: false,
     outbox: outbox == null ? null : {

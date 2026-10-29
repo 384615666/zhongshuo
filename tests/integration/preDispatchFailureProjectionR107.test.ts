@@ -144,12 +144,12 @@ describe('R107 shared pre-dispatch failure projection', () => {
       await worker.runOnce();
       const task = fx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(fx.sent.taskId);
       expect(task).toEqual({ status: 'BLOCKED' });
-      expect(fx.db.prepare('SELECT count(*) n FROM workflow_runs WHERE task_id = ?').get(fx.sent.taskId)).toEqual({ n: 0 });
+      expect(fx.db.prepare('SELECT count(*) n FROM workflow_runs WHERE task_id = ?').get(fx.sent.taskId)).toEqual({ n: 1 });
       expect(fx.db.prepare(`
         SELECT count(*) n FROM agent_turns a
         JOIN workflow_runs r ON r.id = a.run_id
         WHERE r.task_id = ?
-      `).get(fx.sent.taskId)).toEqual({ n: 0 });
+      `).get(fx.sent.taskId)).toEqual({ n: 1 });
       expect(adapter.startTurnLog).toHaveLength(0);
 
       const failure = fx.db.prepare(`
@@ -175,8 +175,8 @@ describe('R107 shared pre-dispatch failure projection', () => {
           reason: 'write-baseline-incomplete',
           message: actualFailureMessage,
         },
-        runCount: 0,
-        turnCount: 0,
+        runCount: 1,
+        turnCount: 1,
         callCount: 0,
         outbox: { status: 'done' },
         recoveryBinding: {

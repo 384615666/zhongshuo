@@ -38,6 +38,8 @@ function fixture(c: ExtractCache) {
   const db = openDatabase(':memory:');
   db.prepare("INSERT INTO projects (id,display_name,root_path,canonical_path,directory_identity,created_at) VALUES ('p','P',?,?,'{}',0)").run(root, root);
   db.prepare("INSERT INTO conversations (id,project_id,kind) VALUES ('dm','p','dm')").run();
+  db.prepare("INSERT INTO project_members(id,project_id,display_name,principal_type,enabled) VALUES('m','p','M','agent',1)").run();
+  db.prepare("INSERT INTO dm_participants(project_id,conversation_id,principal_type,principal_id) VALUES('p','dm','agent','m')").run();
   db.prepare(`INSERT INTO messages (id,project_id,conversation_id,conversation_seq,task_id,author_type,author_id,body_json,created_at)
     VALUES ('msg','p','dm',1,'task','human','u','{"text":"read"}',0)`).run();
   db.prepare("INSERT INTO dm_participants (project_id,conversation_id,principal_type,principal_id) VALUES ('p','dm','human','u')").run();

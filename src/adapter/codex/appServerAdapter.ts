@@ -7,7 +7,7 @@
  *   {code:'INTERRUPTED'}；failed→turn.failed{code:error.kind,message}。工具 item 按
  *   status（completed/failed/declined）映射 outcome，不再一律 success。
  * - 事件归属：provider turnId↔内部 turnId 映射；startTurn 先登记 awaiting turn，
- *   通知早于响应也能建立映射；未知 provider turn 的事件按迟到处理（不带内部 turnId）。
+ *   turn/started 早于响应也能建立映射；缺失、未知或歧义身份的通知仅记无正文诊断。
  * - 审批绑定：v2 请求带 threadId/turnId → 精确定位会话与轮次；legacy conversationId →
  *   会话；无法定位的请求按协议 deny，不投递、不悬挂。
  * - 生命周期：进程代次（generation）管理；旧子进程 close 回调不清新代次的 child/pending；
@@ -59,6 +59,7 @@ interface JsonRpcRequest {
 type DistOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 
 interface SessionState {
+  processGeneration: number;
   memberId: string;
   writeAccess?: OpenSessionInput['writeAccess'];
   ref: SessionRef;
@@ -173,14 +174,18 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     const child = this.options.cwd ? spawnServer(entry.command,args,this.options.cwd) : spawnServer(entry.command,args);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
+    child.stdout.on('data', (chunk: string) => {
+      if (generation === this.childGeneration) this.onStdout(chunk);
+    });
     child.stderr.on('data', (chunk: string) => {
+      if (generation !== this.childGeneration) return;
       this.stderrTail = (this.stderrTail + chunk).slice(-2000);
       process.stderr.write(`[codex-appserver] ${chunk}`);
     });
     child.on('close', (code) => {
-      // 旧代次回调：只广播退出，不清理新代次的 child/pending（修复轮）。
+      // 共享进程退出仅通知其自身代次，不能终结重连后创建的新会话。
       for (const session of [...this.sessions.values()]) {
+        if (session.processGeneration !== generation) continue;
         session.seq += 1;
         session.stream.push({
           kind: 'process.exited',
@@ -304,17 +309,32 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     const p = params ?? {};
     const threadKey = typeof p['threadId'] === 'string' ? p['threadId'] : null;
     const nestedTurnId = (p['turn'] as { id?: unknown } | undefined)?.id;
-    const notificationTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : typeof nestedTurnId === 'string' ? nestedTurnId : undefined;
-    const session = threadKey != null ? this.sessionByThread(threadKey, notificationTurnId, method === 'turn/started') : [...this.sessions.values()][0];
-    if (session == null) return;
-    const providerTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : undefined;
+    const providerTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : typeof nestedTurnId === 'string' ? nestedTurnId : undefined;
+    if (!threadKey || !providerTurnId) {
+      this.ignoredNotification('missing-identity');
+      return;
+    }
+    if (p['turnId'] != null && nestedTurnId != null && p['turnId'] !== nestedTurnId) {
+      this.ignoredNotification('conflicting-turn');
+      return;
+    }
+    const session = this.sessionByThread(threadKey, providerTurnId, method === 'turn/started');
+    if (session == null) {
+      this.ignoredNotification('unknown-or-ambiguous');
+      return;
+    }
+    // 只有带完整身份的 turn/started 可认领唯一待启动轮次；普通消息不能猜测 awaiting。
+    if (method === 'turn/started') this.registerTurnMapping(session, providerTurnId);
+    const internalTurnId = session.providerTurnToInternal.get(providerTurnId);
+    if (internalTurnId == null) {
+      this.ignoredNotification('unknown-or-ambiguous');
+      return;
+    }
 
     switch (method) {
       case 'turn/started': {
         // 真实协议：TurnStartedNotification = { threadId, turn }——provider ID 只在 turn.id。
-        const providerId = (p['turn'] as { id?: string } | undefined)?.['id'];
-        if (providerId != null) this.registerTurnMapping(session, providerId);
-        session.stream.push(this.event(session, { kind: 'turn.started', providerTurnId: providerId }, this.internalTurnOf(session, providerId)));
+        session.stream.push(this.event(session, { kind: 'turn.started', providerTurnId }, internalTurnId));
         break;
       }
       case 'item/agentMessage/delta': {
@@ -322,13 +342,12 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
           kind: 'message.delta',
           messageId: String(p['itemId'] ?? randomUUID()),
           text: String(p['delta'] ?? ''),
-        }, this.internalTurnOf(session, providerTurnId)));
+        }, internalTurnId));
         break;
       }
       case 'item/completed': {
         const item = p['item'] as ToolLikeItem | undefined;
         const type = item?.['type'];
-        const internalTurnId = this.internalTurnOf(session, providerTurnId);
         if (type === 'agentMessage') {
           session.stream.push(this.event(session, {
             kind: 'message.completed',
@@ -368,7 +387,6 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
           const toolCallId=String(item?.['id'] ?? randomUUID());
           const activity=codexToolActivity(item,session.ref.cwd);
           if(activity==null)break;
-          const internalTurnId=this.internalTurnOf(session, providerTurnId);
           session.toolSummaries.set(toolActivityKey(internalTurnId??providerTurnId,toolCallId),activity.summary);
           session.stream.push(this.event(session, {
             kind: 'tool.started',
@@ -392,16 +410,14 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
           cachedTokens: total?.['cachedInputTokens'],
           outputTokens: total?.['outputTokens'],
           costQuality: 'unknown',
-        }, this.internalTurnOf(session, providerTurnId)));
+        }, internalTurnId));
         break;
       }
       case 'turn/completed': {
         // 按真实终态映射；provider ID 只在 turn.id（TurnCompletedNotification 无顶层 turnId）。
         const turn = p['turn'] as { id?: string; status?: string; error?: { kind?: string; message?: string }; items?: Array<Record<string, unknown>> } | undefined;
         const status = turn?.status ?? 'completed';
-        const providerTurnId = typeof turn?.id === 'string' ? turn.id : null;
-        const exactlyMappedInternalTurnId = providerTurnId == null ? undefined : session.providerTurnToInternal.get(providerTurnId);
-        const internalTurnId = this.internalTurnOf(session, turn?.['id']);
+        const exactlyMappedInternalTurnId = internalTurnId;
         if (status === 'failed' || status === 'interrupted') {
           session.stream.push(this.event(session, {
             kind: 'turn.failed',
@@ -433,13 +449,18 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
             code: String(err?.['kind'] ?? 'CODEX_ERROR'),
             message: String(err?.['message'] ?? 'codex 通知错误'),
             retryable: false,
-          }, this.internalTurnOf(session, providerTurnId)));
+          }, internalTurnId));
         }
         break;
       }
       default:
         break;
     }
+  }
+
+  /** 固定原因码；不记录通知正文、工具参数、错误文本或原始身份。 */
+  private ignoredNotification(reason: 'missing-identity' | 'conflicting-turn' | 'unknown-or-ambiguous'): void {
+    process.stderr.write(`[codex-appserver] ignored notification: ${reason}\n`);
   }
 
   /** turn 映射（修复轮）：awaiting 未绑定则认领；未知 provider turn 不猜归属。 */
@@ -459,19 +480,19 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   private sessionByThread(threadId: string, providerTurnId?: string, allowAwaiting = false): SessionState | undefined {
-    const candidates = [...this.sessions.values()].filter(s => s.providerThreadId === threadId);
+    const candidates = [...this.sessions.values()].filter(s => s.processGeneration === this.childGeneration && s.providerThreadId === threadId);
     // resume 创建新的本地 session，但 provider thread 不变。已知旧轮仍送回旧流；
     // 新轮通知可能先于 start 响应，此时只认领唯一待绑定的启动者。
     if (providerTurnId != null) {
-      const mapped = candidates.find(s => s.providerTurnToInternal.has(providerTurnId));
-      if (mapped != null) return mapped;
+      const mapped = candidates.filter(s => s.providerTurnToInternal.has(providerTurnId));
+      if (mapped.length > 0) return mapped.length === 1 ? mapped[0] : undefined;
       if (allowAwaiting) {
         const awaiting = candidates.filter(s => s.awaitingTurn?.providerTurnId === null);
         if (awaiting.length === 1) return awaiting[0];
       }
       return undefined;
     }
-    // 仅无 turn ID 的线程通知归最新会话；未知轮次不投递给任何会话。
+    // 仅供 legacy conversationId 审批绑定；通知必须同时有 thread + turn。
     return candidates.at(-1);
   }
 
@@ -577,6 +598,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       cwd: input.cwd,
     };
     const state: SessionState = {
+      processGeneration: this.childGeneration,
       memberId: input.memberId,
       writeAccess: input.writeAccess,
       ref,

@@ -2,7 +2,7 @@ import {afterEach,describe,expect,it,vi} from 'vitest';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {collisionFixture,finish,ObservedAdapter,pause,SessionAdmissionExperiment} from '../helpers/collisionHarnessR122.ts';
+import {collisionFixture,finish,ObservedAdapter,pause} from '../helpers/collisionHarnessR122.ts';
 import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
@@ -36,12 +36,12 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       expect(f.adapter.turns).toHaveLength(10);f.save({ok:true,requests:10,independentTasks:10,executions:10});
     }finally{await f.close();}
   });
-  it('36 simultaneous requests across three rooms keep the same role serialized and every reply in its original thread',async()=>{
+  it('36 simultaneous requests across three rooms run the same role at peak two and keep every reply in its original thread',async()=>{
     simulation();const f=await collisionFixture('same-role-burst',{members:1});
     try{
       const roots=await Promise.all(Array.from({length:36},(_,i)=>f.send(0,i%3,[0],`TOKEN_A_${i} 独立处理这件事`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
-      expect(f.adapter.turns).toHaveLength(36);expect(f.adapter.peakMember).toBe(1);
+      expect(f.adapter.turns).toHaveLength(36);expect(f.adapter.peakMember).toBe(2);
       expect(new Set(f.adapter.turns.map(t=>t.sessionId)).size).toBe(36);
       for(let i=0;i<roots.length;i++){
         const root=roots[i]!,turn=f.adapter.turns.find(t=>t.taskId===root.taskId)!;
@@ -92,6 +92,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       const started=Date.now();await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'),90000);await Promise.all(writes);
       expect(readFileSync(file,'utf8')).toBe('24');expect(adapter.peakWritableRoot).toBe(1);expect(adapter.turns).toHaveLength(24);
       expect(f.count("SELECT count(*) n FROM workspace_leases WHERE status!='released'")).toBe(0);
+      expect(f.count("SELECT count(*) n FROM domain_events WHERE kind='changeset.baselineCaptured'")).toBe(24);
       f.save({ok:true,requests:24,finalCounter:24,peakWritableRoot:adapter.peakWritableRoot,elapsedMs:Date.now()-started,baselines:f.count("SELECT count(*) n FROM domain_events WHERE kind='changeset.baselineCaptured'")});
     }finally{await f.close();}
   },100000);
@@ -137,31 +138,30 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     }finally{await f.close();}
   },30000);
 
-  it('session-scoped role slots allow two same-role read-only threads to run concurrently without mixing context (experiment)',async()=>{
+  it('production session-scoped role slots allow two same-role read-only threads to run concurrently without mixing context',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:({text})=>finish(/TOKEN_[A-Za-z0-9_]+/.exec(text)?.[0]??'done',120)});
-    const admission=new SessionAdmissionExperiment({globalMaxInFlight:4,perProjectMaxInFlight:2,perProviderMaxInFlight:2});
-    const f=await collisionFixture('session-parallel-experiment',{members:1,adapter,admission});
+    const f=await collisionFixture('session-parallel-production',{members:1,adapter});
     try{
       const roots=await Promise.all(Array.from({length:12},(_,i)=>f.send(0,i%3,[0],`TOKEN_SESSION_${i} 独立分析`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
       expect(adapter.peakMember).toBe(2);expect(new Set(adapter.turns.map(t=>t.sessionId)).size).toBe(12);
       for(let i=0;i<roots.length;i++)expect(new Set([...adapter.turns.find(t=>t.taskId===roots[i]!.taskId)!.text.matchAll(/TOKEN_SESSION_(\d+)\b/g)].map(m=>Number(m[1])))).toEqual(new Set([i]));
-      f.save({ok:true,experimentalOnly:true,requests:12,peakSameRole:adapter.peakMember,threadLeaks:0});
+      f.save({ok:true,productionAdmission:true,requests:12,peakSameRole:adapter.peakMember,threadLeaks:0});
     }finally{await f.close();}
   },30000);
 
-  it('session-scoped role slots still serialize same-project writes (experiment)',async()=>{
+  it('production session-scoped role slots still serialize same-project writes',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('已更新',50)});
-    const f=await collisionFixture('session-write-experiment',{members:1,writable:true,adapter,admission:new SessionAdmissionExperiment()});
+    const f=await collisionFixture('session-write-production',{members:1,writable:true,adapter});
     try{
       const roots=await Promise.all(Array.from({length:8},(_,i)=>f.send(0,i%3,[0],`TOKEN_SERIAL_${i} 修改文件`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
       expect(adapter.peakMember).toBe(1);expect(adapter.peakWritableRoot).toBe(1);
-      f.save({ok:true,experimentalOnly:true,requests:8,peakSameRole:adapter.peakMember,peakWritableRoot:adapter.peakWritableRoot});
+      f.save({ok:true,productionAdmission:true,requests:8,peakSameRole:adapter.peakMember,peakWritableRoot:adapter.peakWritableRoot});
     }finally{await f.close();}
   },30000);
 
-  it('shared mutable memory outside project locks loses an update even with distinct sessions and otherwise successful tasks',async()=>{
+  it('unmanaged external JSON read-modify-write loses an update; this is not the product role-memory API',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('记忆已更新',30)});
     const f=await collisionFixture('shared-memory-collision',{projects:2,writable:true,adapter});
     const memory=join(f.dir,'shared-role-memory.json');writeFileSync(memory,JSON.stringify({entries:[]}));
@@ -177,7 +177,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
       await Promise.all(writes);const stored=JSON.parse(readFileSync(memory,'utf8')) as {entries:string[]};
       expect(captured).toHaveLength(2);expect(stored.entries).toHaveLength(1);expect(adapter.peak).toBe(2);
-      f.save({ok:true,knownLimitationReproduced:true,successfulTasks:2,expectedMemoryEntries:2,actualMemoryEntries:stored.entries.length,lostUpdates:1});
+      f.save({ok:true,unmanagedExternalJson:true,productMemoryApi:false,successfulTasks:2,expectedMemoryEntries:2,actualMemoryEntries:stored.entries.length,lostUpdates:1});
     }finally{release();await f.close();}
   });
 
@@ -197,7 +197,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     }finally{await f.close();}
   },30000);
 
-  it('queued writes also repeat baselines in a fresh standalone Git repository with a captured real file',async()=>{
+  it('12 queued writes capture exactly 12 baselines in a fresh standalone Git repository with a captured real file',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('计数已更新',20)});
     const f=await collisionFixture('standalone-git-write-pressure',{writable:true,adapter,isolatedGit:true});
     const file=join(f.projects[0]!.path,'counter.txt');writeFileSync(file,'0');
@@ -206,7 +206,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       const roots=await Promise.all(Array.from({length:12},(_,i)=>f.send(0,i%3,[i%3],`TOKEN_GIT_${i} 更新计数`)));
       const started=Date.now();await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'),45000);
       const baselines=f.count("SELECT count(*) n FROM domain_events WHERE kind='changeset.baselineCaptured'");
-      expect(readFileSync(file,'utf8')).toBe('12');expect(baselines).toBeGreaterThan(12);
+      expect(readFileSync(file,'utf8')).toBe('12');expect(baselines).toBe(12);
       const captured=f.db.prepare("SELECT json_extract(payload_json,'$.fileCount') n FROM domain_events WHERE kind='changeset.baselineCaptured' ORDER BY seq LIMIT 1").get() as {n:number};expect(captured.n).toBe(1);
       f.save({ok:true,standaloneGit:true,requests:12,finalCounter:12,baselines,elapsedMs:Date.now()-started,capturedFiles:captured.n});
     }finally{await f.close();}
