@@ -40,7 +40,7 @@ import {
   anchorOf, byId, childTasksOf, coordinatorOfRoom,
   firstUnreadSeq, lockOfProject, memberLabel, processNotesOfThread, replyCount,
   replyPreview, replyThreadMessages, roomOf, rootMessages, roomUnread,
-  taskOfThread, threadOf, unreadCount,
+  taskOfThread, threadOf, unreadCount, threadExecutionStatusOf,
 } from '../data/selectors';
 import {
   toggleThreadSubscription, markThreadReadReal, reactMessageReal, createRoomReal, exportThreadReal,
@@ -956,7 +956,7 @@ export function RootCard({
   const executionBlocker = thread
     ? taskExecutionBlocker(s.threadTasks[thread.id],s.roomPool[message.roomId]?.find((card) => card.threadId === thread.id))
     : null;
-  const executionStatus=thread?(s.threadTasks[thread.id]?.executionStatus??s.roomPool[message.roomId]?.find(card=>card.threadId===thread.id)?.executionStatus):null;
+  const executionStatus=thread?threadExecutionStatusOf(s,thread.id):null;
   const preDispatchFailure=thread&&task?.status==='BLOCKED'&&!run?(s.threadTasks[thread.id]?.preDispatchFailure??s.roomPool[message.roomId]?.find(card=>card.threadId===thread.id)?.preDispatchFailure):null;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
@@ -1464,6 +1464,7 @@ function ThreadPanel({
   /** 线程归属会话（正式 thread.get 实体——发送信封 target 用，不从 UI 目标重造）。 */
   const entityConversationId = (s as AppState & { threadEntities?: Record<string, { conversationId?: string }> }).threadEntities?.[threadId]?.conversationId ?? '';
   const threadRoom = thread ? roomOf(s, thread.roomId) : undefined;
+  const executionStatus=threadExecutionStatusOf(s,threadId);
   const task = thread ? taskOfThread(s, thread) : undefined;
   const run = task ? s.runs.find((r) => r.taskId === task.id) ?? task.latestRun ?? undefined : undefined;
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
@@ -1905,7 +1906,7 @@ function ThreadPanel({
        * 「回复」「成果」保持原样。URL 仍写既有 tab 键，旧深链不动。
        */}
 
-      {s.threadTasks[thread.id]?.executionStatus?<TaskExecutionStatusView status={s.threadTasks[thread.id]?.executionStatus} hideThreadNavigation={view==='replies'}/>:null}
+      <TaskExecutionStatusView status={executionStatus} hideThreadNavigation={view==='replies'}/>
       <div className="list-wrap">
         {view === 'replies' ? (
           <>

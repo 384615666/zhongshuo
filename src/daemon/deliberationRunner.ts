@@ -1065,14 +1065,30 @@ function runHasToolActivity(db: ZhongshuoDatabase, runId: string): boolean {
   });
 }
 
-function restoreDeferredDraftMessages(db: ZhongshuoDatabase, taskId: string, runId: string, now: number): void {
+/** Only a frozen seat's actual successful IND turn can supply its current reply. */
+function completedIndependentDrafts(db: ZhongshuoDatabase, runId: string): Array<DraftArtifact & {turnId: string}> {
+  const drafts = frozenDrafts(db, runId);
+  return rosterOf(db, runId).members.filter((m) => m.expected).flatMap((member) => {
+    const turn = db.prepare(`SELECT t.id,t.rowid turnOrder FROM agent_turns t JOIN artifacts a ON a.id='art_'||t.id
+      AND a.run_id=t.run_id AND a.author_id=t.member_id AND a.kind='analysis_draft'
+      WHERE t.run_id=? AND t.member_id=? AND t.stage_key LIKE 'delib.independent%' AND t.status='SUCCEEDED'
+      ORDER BY t.rowid DESC LIMIT 1`).get(runId, member.memberId) as {id: string; turnOrder: number} | undefined;
+    const draft = turn == null ? undefined : drafts.find((d) => d.artifactId === `art_${turn.id}`);
+    return draft == null || turn == null ? [] : [{...draft, turnId: turn.id, turnOrder: turn.turnOrder}];
+  }).sort((a, b) => a.turnOrder - b.turnOrder);
+}
+
+function restoreDeferredDraftMessages(db: ZhongshuoDatabase, taskId: string, runId: string, now: number): string[] {
   const task = db.prepare('SELECT id,project_id,conversation_id,conversation_thread_id,room_id FROM tasks WHERE id=?').get(taskId) as
     {id:string;project_id:string;conversation_id:string;conversation_thread_id:string|null;room_id:string|null};
-  for (const draft of frozenDrafts(db, runId)) {
-    if (draft.payload.completion == null || draft.payload.completion.disposition === 'continue') continue;
-    const turn = db.prepare("SELECT id FROM agent_turns WHERE run_id=? AND member_id=? AND stage_key LIKE 'delib.independent%' AND status='SUCCEEDED' ORDER BY rowid DESC LIMIT 1").get(runId,draft.memberId) as {id:string}|undefined;
-    if (turn != null) insertVisibleStageMessage(db,{task,runId,step:{taskId,runId,memberId:draft.memberId,stage:'IND',roundNo:0,purpose:'stage_work'},turnId:turn.id,text:draft.payload.summary,now});
+  const messages: string[] = [];
+  for (const draft of completedIndependentDrafts(db, runId)) {
+    const disposition = draft.payload.completion?.disposition;
+    if (disposition == null || disposition === 'continue' || disposition === 'no_reply') continue;
+    const messageId = insertVisibleStageMessage(db,{task,runId,step:{taskId,runId,memberId:draft.memberId,stage:'IND',roundNo:0,purpose:'stage_work'},turnId:draft.turnId,text:draft.payload.summary,now});
+    if (messageId != null) messages.push(messageId);
   }
+  return messages;
 }
 
 /** Conversation completion preserves previous work and never creates acceptance work. */
@@ -1080,20 +1096,13 @@ function completeShortExchange(db: ZhongshuoDatabase, taskId: string, runId: str
   const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId) as
     {id:string;project_id:string;conversation_id:string;conversation_thread_id:string;room_id:string;current_delivery_id:string|null};
   const disposition = draft.payload.completion!.disposition;
-  const messageId = `msg_report_${runId}`;
   db.transaction(() => {
-    if (disposition !== 'no_reply' && !db.prepare('SELECT 1 FROM messages WHERE id=?').get(messageId)) {
-      const conv=db.prepare('UPDATE conversations SET last_message_seq=last_message_seq+1 WHERE id=? RETURNING last_message_seq').get(task.conversation_id) as {last_message_seq:number};
-      const thread=db.prepare('UPDATE conversation_threads SET last_message_seq=last_message_seq+1,revision=revision+1 WHERE id=? RETURNING last_message_seq').get(task.conversation_thread_id) as {last_message_seq:number};
-      db.prepare(`INSERT INTO messages(id,project_id,conversation_id,conversation_seq,room_id,thread_id,task_id,thread_message_seq,author_type,author_id,body_json,status,created_at)
-        VALUES(?,?,?,?,?,?,?,?,'agent',?,?,'final',?)`).run(messageId,task.project_id,task.conversation_id,conv.last_message_seq,task.room_id,task.conversation_thread_id,taskId,thread.last_message_seq,draft.memberId,JSON.stringify({text:draft.payload.summary}),now);
-      appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:task.conversation_id,threadId:task.conversation_thread_id,taskId,runId,kind:'thread.replyAdded',createdAt:now,payload:{messageId}});
-    }
+    const messageIds = restoreDeferredDraftMessages(db, taskId, runId, now);
     const delivery=task.current_delivery_id?db.prepare('SELECT review_status FROM task_deliveries WHERE id=?').get(task.current_delivery_id) as {review_status:string}|undefined:undefined;
     const status=delivery?.review_status==='pending'?'REVIEW':delivery?.review_status==='changes_requested'?'ACTIVE':delivery&& !['accepted','not_required'].includes(delivery.review_status)?'WAITING_USER':'DONE';
     db.prepare("UPDATE tasks SET status=?,response_kind=?,revision=revision+1 WHERE id=?").run(status,delivery?'work':'conversation',taskId);
     db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='PUBLISH',stage_started_at=? WHERE id=?").run(now,runId);
-    settleThreadReplyForRun(db,runId,'succeeded',undefined,disposition==='no_reply'?undefined:messageId);
+    settleThreadReplyForRun(db,runId,'succeeded',undefined,messageIds.at(-1));
     appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:task.conversation_id,threadId:task.conversation_thread_id,taskId,runId,kind:'run.shortExchangeCompleted',createdAt:now,payload:{disposition,reason:draft.payload.completion!.reason,sourceArtifactId:draft.artifactId,skippedStages:['CROSS_REVIEW','ISSUE_DISCUSSION','SYNTHESIS','RATIFY'],createdDelivery:false}});
   })();
 }
@@ -1233,22 +1242,21 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       }));
       const decision = decideIndependentBarrier(roster, facts);
       if (decision.decision === 'advance') {
-        const hostDraft = drafts.find((d) => d.memberId === hostOf(roster));
-        const disposition = hostDraft?.payload.completion?.disposition;
+        const completedDrafts = completedIndependentDrafts(db, run.id);
+        const hostDraft = completedDrafts.find((d) => d.memberId === hostOf(roster));
         const expected = roster.members.filter((m) => m.expected);
         // Every frozen seat must actually submit; absence is never assent. Compare
         // explicit claims only as a conservative veto, never infer intent from prose.
         const claimStatements = (d: DraftArtifact) => JSON.stringify(d.payload.claims.map((c) =>
           JSON.stringify({statement:c.statement,kind:c.kind,evidenceIds:[...c.evidenceIds].sort()})).sort());
-        const canComplete = hostDraft != null && (disposition === 'direct_answer' || disposition === 'conversation' || disposition === 'no_reply')
+        const answers = completedDrafts.filter((d) => d.payload.completion?.disposition === 'direct_answer');
+        const canComplete = hostDraft != null && completedDrafts.length === expected.length
           && !runHasToolActivity(db,run.id)
-          && expected.every((m) => drafts.some((d) => d.memberId === m.memberId
-            && (d.payload.completion?.disposition === disposition
-              || (disposition !== 'direct_answer' && ['conversation','no_reply'].includes(d.payload.completion?.disposition ?? '')))
+          && completedDrafts.every((d) => ['direct_answer','conversation','no_reply'].includes(d.payload.completion?.disposition ?? '')
             && d.payload.openQuestions.length === 0 && d.payload.recommendations.length === 0
-            && d.payload.document == null && !d.payload.claims.some((c) => c.uncertainty?.trim())
-            && (disposition === 'direct_answer' ? d.payload.claims.length > 0 : d.payload.claims.length === 0)
-            && claimStatements(d) === claimStatements(hostDraft)));
+            && d.payload.document == null && !d.payload.detailMarkdown?.trim() && !d.payload.claims.some((c) => c.uncertainty?.trim())
+            && (d.payload.completion?.disposition === 'direct_answer' ? d.payload.claims.length > 0 : d.payload.claims.length === 0))
+          && answers.every((d) => claimStatements(d) === claimStatements(answers[0]!));
         if (canComplete) {
           completeShortExchange(db,taskId,run.id,hostDraft,now);
           return { advanced: true };

@@ -1517,8 +1517,8 @@ export const msgOfReply = (projectId: string, roomId: string, threadId: string, 
 };
 
 /**
- * 装载线程视图：thread.get（实体+根消息+水位）→ thread.history（回复+根附件）→
- * task.get（有根任务才查）。readGate 独立水位：thread.markRead 只在**发起此刻**门通过才发
+ * 装载线程视图：thread.get（实体+根消息+水位）→ 并行读取 task.get 与
+ * thread.history；状态不等待历史（有根任务才查 task.get）。readGate 独立水位：thread.markRead 只在**发起此刻**门通过才发
  * （当前线程+前台/贴底/接管——ThreadPage 注册；与 DM conversationSeq 门分开，review-r50 §4）。
  */
 export async function loadThread(
@@ -1605,23 +1605,9 @@ export async function loadThread(
       });
     }
     hydrateThreadFromSnapshots(threadId, ticket);
-    const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
-    if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
-    const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
-    // r56：**合并**而非整表替换——可见期轻量刷新（5s）会把补读出的更早历史整页冲掉
-    //（长历史定位后元素消失）。按 id 去重合并、seq 升序，保留已补读窗口。
-    setState((prev) => {
-      const cur = prev.threadMessages[threadId] ?? [];
-      const byId = new Map(cur.map((m) => [m.id, m]));
-      for (const m of replies) byId.set(m.id, m);
-      const merged = [...byId.values()].sort((a, b) => (a.threadMessageSeq ?? 0) - (b.threadMessageSeq ?? 0));
-      return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: merged } };
-    });    // thread.get owns the atomic root projection. Legacy missing attachments are unread,
-    // while [] is authoritative; history failures must never clear confirmed roots.
-    if (anchor != null && got.anchor?.attachments == null && hist.rootAttachments != null) {
-      setState((prev) => ({ ...prev, threadAnchors: { ...prev.threadAnchors,
-        [threadId]: { ...anchor, formalAttachments: hist.rootAttachments } } }));
-    }
+    // Task status is independent of potentially slow/failed history reads. Issue
+    // it first on the shared bridge, and hydrate as soon as its response arrives.
+    const taskRead=(async()=>{
     // 任务详情（记录串无根任务——不查不写键；「详情」分组如实显示记录串说明）。
     if (thread.rootTaskId != null) {
       const tg = await command<TaskGetData>('task.get', { taskId: thread.rootTaskId });
@@ -1646,6 +1632,26 @@ export async function loadThread(
     } else {
       setState((prev) => { const next = { ...prev.threadTasks }; delete next[threadId]; return { ...prev, threadTasks: next }; });
     }
+      hydrateThreadFromSnapshots(threadId,ticket);
+    })();
+    const historyRead=(async()=>{
+    const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
+    if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
+    const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
+    // r56：**合并**而非整表替换——可见期轻量刷新（5s）会把补读出的更早历史整页冲掉
+    //（长历史定位后元素消失）。按 id 去重合并、seq 升序，保留已补读窗口。
+    setState((prev) => {
+      const cur = prev.threadMessages[threadId] ?? [];
+      const byId = new Map(cur.map((m) => [m.id, m]));
+      for (const m of replies) byId.set(m.id, m);
+      const merged = [...byId.values()].sort((a, b) => (a.threadMessageSeq ?? 0) - (b.threadMessageSeq ?? 0));
+      return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: merged } };
+    });    // thread.get owns the atomic root projection. Legacy missing attachments are unread,
+    // while [] is authoritative; history failures must never clear confirmed roots.
+    if (anchor != null && got.anchor?.attachments == null && hist.rootAttachments != null) {
+      setState((prev) => ({ ...prev, threadAnchors: { ...prev.threadAnchors,
+        [threadId]: { ...anchor, formalAttachments: hist.rootAttachments } } }));
+    }
     // R64：真实快照 → AppState 视图模型水合（原型线程面板消费 threads/messages/tasks/readStates）。
     hydrateThreadFromSnapshots(threadId, ticket);
     // 阅读水位（独立门）：最新回复 seq ≤ thread.lastMessageSeq（未来序号服务端拒绝）。
@@ -1659,6 +1665,10 @@ export async function loadThread(
         })
         .catch(() => { /* 下次进入再推进 */ });
     }
+    })();
+    const loaded=await Promise.allSettled([taskRead,historyRead]);
+    const failed=loaded.find(result=>result.status==='rejected');
+    if(failed?.status==='rejected')throw failed.reason;
   } catch (e) {
     const s = getState();
     // 归属未变才记错（迟到失败不污染当前线程）。

@@ -85,7 +85,7 @@ describe('R104 semantic completion through formal worker dispatch',()=>{
       expect(f.adapter.startTurnLog).toHaveLength(2);
       expect(f.state(root.taskId)).toMatchObject({status:'DONE',response_kind:'conversation',current_delivery_id:null});
       expect(f.count('task_deliveries')).toBe(0);
-      expect(f.count('messages',"WHERE author_type='agent'")).toBe(disposition==='no_reply'?0:1);
+      expect(f.count('messages',"WHERE author_type='agent'")).toBe(disposition==='no_reply'?0:2);
       expect(f.count('domain_events',"WHERE kind='run.shortExchangeCompleted'")).toBe(1);
     }finally{await f.cleanup();}
   });
@@ -96,7 +96,7 @@ describe('R104 semantic completion through formal worker dispatch',()=>{
     const f=await fixture();try{await f.send('25×80=?');await f.worker.runOnce();await f.run(draft('direct_answer','2000',['25×80=2000']));await f.run(draft('direct_answer','2001',['25×80=2001']));expect(f.count('messages',"WHERE author_type='agent'")).toBe(2);expect(f.db.prepare('SELECT stage FROM workflow_runs').get()).toEqual({stage:'CROSS_REVIEW'});expect(f.count('task_deliveries')).toBe(0);}finally{await f.cleanup();}
   });
   it('completes matching simple answers without claiming a ratification consensus',async()=>{
-    const f=await fixture();try{const root=await f.send('25×80=?');await f.worker.runOnce();await f.run(draft('direct_answer','2000',['25×80=2000']));await f.run(draft('direct_answer','结果为2000',['25×80=2000']));expect(f.adapter.startTurnLog).toHaveLength(2);expect(f.state(root.taskId)).toMatchObject({status:'DONE',response_kind:'conversation'});const body=JSON.parse((f.db.prepare("SELECT body_json FROM messages WHERE author_type='agent'").get() as {body_json:string}).body_json);expect(body).toEqual({text:'2000'});expect(f.count('ratification_records')).toBe(0);}finally{await f.cleanup();}
+    const f=await fixture();try{const root=await f.send('25×80=?');await f.worker.runOnce();await f.run(draft('direct_answer','2000',['25×80=2000']));await f.run(draft('direct_answer','结果为2000',['25×80=2000']));expect(f.adapter.startTurnLog).toHaveLength(2);expect(f.state(root.taskId)).toMatchObject({status:'DONE',response_kind:'conversation'});const bodies=(f.db.prepare("SELECT body_json FROM messages WHERE author_type='agent' ORDER BY thread_message_seq").all() as {body_json:string}[]).map(row=>JSON.parse(row.body_json));expect(bodies).toMatchObject([{text:'2000'},{text:'结果为2000'}]);expect(f.count('ratification_records')).toBe(0);}finally{await f.cleanup();}
   });
   it('does not shortcut a draft with unfinished work',async()=>{
     const f=await fixture();try{await f.send();await f.worker.runOnce();await f.run(draft('conversation'));await f.run(draft('continue','仍需检查',['资料待核验'],{openQuestions:['尚未得到材料']}));expect(f.db.prepare('SELECT stage FROM workflow_runs').get()).toEqual({stage:'CROSS_REVIEW'});expect(f.count('messages',"WHERE author_type='agent'")).toBe(2);}finally{await f.cleanup();}

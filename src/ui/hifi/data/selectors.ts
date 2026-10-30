@@ -8,6 +8,7 @@ import type {
   RuntimeInstallation, Artifact, ThreadCard,
 } from './types';
 import type { HifiState } from './store.ts';
+import type { TaskExecutionStatus } from '../../../contracts/executionStatus.ts';
 
 export const byId = <T extends { id: string }>(list: T[], id: string | undefined) =>
   id ? list.find((x) => x.id === id) : undefined;
@@ -20,6 +21,23 @@ export const threadOf = (s: AppState, id: string | undefined) => byId(s.threads,
 
 export const roomsOfProject = (s: AppState, projectId: string) =>
   s.rooms.filter((r) => r.projectId === projectId);
+
+/** The pool already carries the server's status. Opening a thread must not
+ * hide it while its entity, history and full task details are still loading. */
+export function threadExecutionStatusOf(s:HifiState,threadId:string):TaskExecutionStatus|null{
+  const entity=s.threadEntities[threadId];
+  const thread=entity??s.threads.find(item=>item.id===threadId);
+  if(thread?.projectId!==s.activeProjectId||entity!=null&&entity.rootTaskId==null)return null;
+  const pool=s.roomPool[thread.roomId]?.find(card=>card.threadId===threadId);
+  const taskId=entity?.rootTaskId??thread.rootTaskId??pool?.taskId;
+  if(!taskId)return null;
+  const candidates=[s.threadTasks[threadId]?.executionStatus,pool?.executionStatus].filter((status):status is TaskExecutionStatus=>
+    status!=null&&status.taskId===taskId&&status.scope.threadId===threadId
+    &&status.scope.projectId===s.activeProjectId&&status.scope.roomId===thread.roomId);
+  return candidates.sort((a,b)=>b.evidence.taskRevision-a.evidence.taskRevision
+    ||b.evidence.stopGeneration-a.evidence.stopGeneration
+    ||b.evidence.sourceHighWatermark-a.evidence.sourceHighWatermark||b.observedAt-a.observedAt)[0]??null;
+}
 
 /* ---------- 项目生命周期（第十七批 §八/§九） ---------- */
 
