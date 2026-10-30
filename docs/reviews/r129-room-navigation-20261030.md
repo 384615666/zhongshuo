@@ -31,4 +31,11 @@
 
 ## 交付与推送
 
-V69待clean源码构建与包内校验完成后补记；随后推送全部待发布提交。
+- V69目录：`dist/desktop/desktop-daily-win-v69-r129-room-navigation-20261030/`。
+- clean源码：`2a1ff387e8bc11a5af0e522f449a25af923b9545`；BUILD：`bld_b60bd4e89a047661`。
+- 615程序文件逐项SHA256一致；ZIP648文件、220830706字节，CRC通过。ZIP SHA256：`92396128bc190637742cddae617ae5e06ecf78d3762af7ce84a2eacfb6e468e3`。
+- 包内实际Electron/daemon、手册14章19图及新导航/浅色说明、原界面命令桥、正常退出和daemon清理通过，0 turn / 0 real_call。应用内与离线手册正文一致。
+- 本机 `start-existing-data.bat/.vbs` 与V68逐字节一致，继续使用原数据目录。正常退出旧版后，从V69的 `start-existing-data.vbs` 启动。通用ZIP不含运行数据库、凭据或本机入口。
+- 发布到公开仓库 `origin/main`，连同原14个未推送提交及本轮实现/交付记录共16个提交；仅推送公开克隆的清理历史。实现提交后15个待发布提交Gitleaks扫描约1.02MB、0告警，最后交付文档另复扫后推送并核对远端SHA。
+
+包内与归档证据：`dist/r129-feedback/package-smoke.json`、`package-final.json`；推送凭据扫描与远端核对记录也在同目录。
