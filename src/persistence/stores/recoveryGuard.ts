@@ -29,7 +29,7 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
   // Existing formal UNKNOWN / process-exit / lease checks remain authoritative.
   const children=db.prepare(`SELECT DISTINCT child.id FROM tasks child JOIN workflow_runs r ON r.task_id=child.id
     LEFT JOIN agent_turns a ON a.run_id=r.id WHERE child.parent_task_id=? AND
-    (r.status IN ('RUNNING','WAITING','STOPPING','QUEUED') OR a.status IN ('RUNNING','WAITING','STOPPING','QUEUED','UNKNOWN')
+    (r.status IN ('RUNNING','WAITING','STOPPING','QUEUED') OR a.status NOT IN ('SUCCEEDED','FAILED','CANCELLED')
       OR a.protection_state='retained' OR EXISTS(SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id=a.id AND l.status!='released'))`).all(taskId) as {id:string}[];
   for(const child of children){const blocked=assessTaskRedispatchReadiness(db,child.id,options);if(blocked)return {...blocked,message:`协作子任务尚未安全收口：${blocked.message}`};}
   const inFlightRuns = db.prepare(
@@ -40,7 +40,7 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
   }
   const inFlightTurns = db.prepare(
     `SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
-     WHERE r.task_id = ? AND t.status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
+     WHERE r.task_id = ? AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`,
   ).get(taskId) as { c: number };
   if (inFlightTurns.c > 0 && !options.queueOnly) {
     return { code: 'WORKER_STILL_RUNNING', message: `该任务已有在途/未收口 turn（${inFlightTurns.c} 个）：不得并发追加`, fact: { kind: 'in-flight-turns', count: inFlightTurns.c } };

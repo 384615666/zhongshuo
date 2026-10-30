@@ -16,7 +16,7 @@ import { userFacingSystemText } from '../../contracts/userFacingText';
  * saved.add（独立保存，不改动原内容）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { MessageView } from './components/MessageView';
+import { latestReadableAgentMessageId, MessageView } from './components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
@@ -82,6 +82,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const [subBusy, setSubBusy] = useState(false);
   const isRecordThread = entity != null && entity.rootTaskId == null;
   const msgs = replies ?? EMPTY;
+  const latestReadableAgentId = useMemo(() => latestReadableAgentMessageId(msgs), [msgs]);
   const projectIdOfRoom = useMemo(() => allRooms.find((r) => r.id === entity?.roomId)?.projectId ?? null, [allRooms, entity?.roomId]);
 
   // 装载（含任务详情）+ 阅读水位（门在发起此刻重查——ThreadPage 注册的独立线程门）。
@@ -451,6 +452,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     message={{ ...m, saved: savedRefs[m.id] === true }}
                     author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)}
                     readingAids
+                    forceExpanded={m.id === latestReadableAgentId}
                     onOpenAttachment={(att) => openPreviewAtt(att)}
                     onSave={() => void saveMessage(m)}
                     onQuote={() => quoteMessage(m)}

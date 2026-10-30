@@ -738,6 +738,15 @@ function ConversationQuoteDock({
     }
   }, []);
 
+  const removeAllFromChip = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    clearCloseTimer();
+    setOpen(false);
+    setPosition(null);
+    onClear();
+  }, [clearCloseTimer, onClear]);
+
   const updatePosition = useCallback(() => {
     const trigger = triggerRef.current;
     const popover = popoverRef.current;
@@ -943,7 +952,12 @@ function ConversationQuoteDock({
   ) : null;
 
   return (
-    <div className="composer-quote-dock" data-zs-conversation-quote-count={quotes.length}>
+    <div
+      className="composer-quote-dock"
+      role="group"
+      aria-label={`${quotes.length} 条对话引用`}
+      data-zs-conversation-quote-count={quotes.length}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -951,7 +965,7 @@ function ConversationQuoteDock({
         aria-expanded={open}
         aria-controls={popoverId}
         aria-haspopup="dialog"
-        aria-label={`${quotes.length} 条对话引用；查看或移除`}
+        aria-label={`${quotes.length} 条对话引用；查看详情`}
         title="引用将随消息发送"
         onMouseEnter={() => showPopover()}
         onMouseLeave={scheduleClose}
@@ -977,6 +991,30 @@ function ConversationQuoteDock({
       >
         <Icon name="quote" size={14} />
         <span>{quotes.length} 条对话引用</span>
+      </button>
+      <button
+        type="button"
+        className="composer-quote-remove-all"
+        aria-label={quotes.length === 1 ? '删除对话引用（1 条，删除全部引用）' : `删除全部 ${quotes.length} 条对话引用`}
+        title={quotes.length === 1 ? '删除这条对话引用；正文与附件保留' : `删除全部 ${quotes.length} 条对话引用；正文与附件保留`}
+        data-zs-conversation-quote-remove-all={quotes.length}
+        onMouseEnter={() => {
+          clearCloseTimer();
+          setOpen(false);
+        }}
+        onFocus={() => {
+          clearCloseTimer();
+          setOpen(false);
+        }}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          clearCloseTimer();
+          setOpen(false);
+        }}
+        onClick={removeAllFromChip}
+      >
+        <Icon name="x" size={12} />
       </button>
       {popover}
     </div>

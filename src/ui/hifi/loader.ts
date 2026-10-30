@@ -1963,17 +1963,25 @@ export function setDraftAttachmentRange(draftKey: string, attachmentId: string, 
 
 /** 停止任务：targetRunId/expectedStopGeneration 取自**已装载的任务详情**（服务端核对——
  * 过时绑定会被正式链拒绝，不静默套用到新 run）。 */
-export async function stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }> {
+export async function stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string;closed?:boolean;outcome?:string }> {
   const s = getState();
   const detail = s.threadTasks[threadId];
   if (detail == null) return { ok: false, error: '任务详情未装载——先打开详情刷新' };
   if (['DONE', 'CANCELLED'].includes(detail.status)) return { ok: false, error: `任务已终态（${detail.status}）——无可停止的执行` };
-  if (detail.activeRun == null) return { ok: false, error: '当前没有活跃 run（任务可能已结束）' };
   try {
-    await command('task.stop', { taskId: detail.id, targetRunId: detail.activeRun.id, expectedStopGeneration: detail.stopGeneration });
+    const closure=detail.executionStatus?.actions.find(action=>action.kind==='close');
+    if(closure?.kind==='close'){
+      await command('task.close',{...closure.binding});
+      recordWrite('task.close',`结束任务 #${detail.roomTaskNumber}，原回复和文件保留`);
+      await Promise.allSettled([refreshThreadTask(threadId),loadRoomPool(detail.roomId)]);
+      return{ok:true,closed:true};
+    }
+    if(detail.activeRun==null)return{ok:false,error:'当前没有可停止的执行；请刷新后查看结束任务或核对结果入口'};
+    const result=await command<{outcome:string}>('task.stop', { taskId: detail.id, targetRunId: detail.activeRun.id, expectedStopGeneration: detail.stopGeneration });
     recordWrite('task.stop', `停止任务 #${detail.roomTaskNumber}（run ${detail.activeRun.id}）`);
     await refreshThreadTask(threadId).catch(() => { /* 刷新失败保留旧详情并就地报错 */ });
-    return { ok: true };
+    if(result.outcome==='target_obsolete')return{ok:false,error:'这次执行已被后续执行替代，请按刷新后的状态操作'};
+    return { ok: true,outcome:result.outcome };
   } catch (e) {
     await refreshThreadTask(threadId).catch(() => { /* 停止失败后重查事实 */ });
     return { ok: false, error: (e as Error).message };

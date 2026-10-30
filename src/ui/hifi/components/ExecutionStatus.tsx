@@ -34,6 +34,7 @@ const ACTION_ICON: Record<TaskExecutionAction['kind'], IconName> = {
   recover: 'help-circle',
   review: 'clipboard-check',
   retry: 'play',
+  close: 'x',
 };
 
 export interface TaskExecutionStatusSummary {
@@ -198,7 +199,7 @@ export function ExecutionStatus({
   const presentation = taskExecutionNeedsReview(status)?{label:'待你验收',tone:'warning' as const,icon:'eye' as const}:PHASE[status.phase];
   const summary = taskExecutionStatusSummary(status);
   const firstAction = status.actions.find(action =>
-    action.kind === 'recover' || action.kind === 'review' || action.kind === 'retry')
+    action.kind === 'recover' || action.kind === 'review' || action.kind === 'retry' || action.kind==='close')
     ?? status.actions[0];
   const remainingActions = status.actions.filter(action => action !== firstAction);
 
@@ -215,7 +216,7 @@ export function ExecutionStatus({
       data-zs-heartbeat-used={status.evidence.heartbeatUsedAsActivity ? '1' : '0'}
       style={{ margin: 0, padding: '8px 10px', overflow: 'hidden' }}
     >
-      <div className="row tight" style={{ alignItems: 'center', gap: 7, minHeight: 22 }}>
+      <div className="row tight wrap" style={{ alignItems: 'center', gap: 7, minHeight: 22 }}>
         <Tag tone={presentation.tone} icon={presentation.icon}>{summary.label}</Tag>
         {summary.main!==summary.label?<span className="small strong truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-summary>
           {summary.main}
@@ -239,6 +240,11 @@ export function ExecutionStatus({
             {firstAction.label}
           </button>
         ) : null}
+        {density==='compact'?remainingActions.filter(action=>action.kind==='close').map(action=><button
+          type="button" key={action.id} className="btn sm ghost" data-zs-execution-action="close" data-zs-action-id={action.id}
+          disabled={onAction==null} onClick={onAction==null?undefined:()=>onAction(action)}>
+          <Icon name="x" size={12}/>{action.label}
+        </button>):null}
       </div>
 
       {density === 'detail' ? (

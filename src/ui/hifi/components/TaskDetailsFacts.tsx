@@ -1,4 +1,5 @@
 import { userFacingSystemText,userFacingSystemEventText } from '../../../contracts/userFacingText';
+import {isRetryRunStatus} from '../../../contracts/taskRecovery.ts';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskDetailsResult, TaskHistoryPage, TaskDetailEvent, TaskDetailRun } from '../../../contracts/taskDetails.ts';
 import { command } from '../bridge';
@@ -113,11 +114,11 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   if(latest.status==='WAITING'&&latest.mode==='AUTO'&&latest.stage==='分工执行')return '协作正在等待分工步骤完成；查看分工与活动进展。无需重新发送或重复派发。';
   if (latest.status === 'WAITING') return '本次运行正在等待输入或批准；到回复串查看明确的待处理请求。';
   if (latest.status === 'STOPPING') return '停止请求正在收敛；先等待状态刷新，避免重复派发。';
-  if (latest.status === 'INTERRUPTED') return '本次回复中断，尚未确认结束。先检查上次回复状态，再决定是否继续。';
-  if (latest.status === 'FAILED' && detail.failedRetry.pending) return '上次回复失败；继续请求已排队，等待成员接续处理。请勿重复提交。';
-  if (latest.status === 'FAILED' && detail.failedRetry.blockReason) return `最近一次运行失败，任务仍未完成。当前不能继续：${userFacingSystemText(detail.failedRetry.blockReason ?? '')}`;
-  if (latest.status === 'FAILED') return `最近一次运行失败；任务仍是${detail.task.status === 'ACTIVE' ? '待继续处理' : detail.task.status}。查看诊断、修复原因后，在「运行详情」点“${detail.failedRetry.formatRepair ? '修复输出格式' : '继续最近失败运行'}”。`;
-  if (latest.status === 'PARTIAL') return '最近一次运行只完成一部分；查看诊断与已有成果，再从原回复串明确补充需要处理的部分。';
+  if (latest.status === 'INTERRUPTED'&&!detail.failedRetry.available&&!detail.failedRetry.pending) return '本次回复中断，尚未确认结束。先检查上次回复状态，再决定是否继续。';
+  if (isRetryRunStatus(latest.status) && detail.failedRetry.pending) return '上次执行未完成；继续请求已排队，等待成员接续处理。请勿重复提交。';
+  if (isRetryRunStatus(latest.status) && detail.failedRetry.blockReason) return `最近一次执行未完成。当前不能继续：${userFacingSystemText(detail.failedRetry.blockReason ?? '')}`;
+  if (latest.status==='FAILED') return `最近一次运行失败；任务仍是${detail.task.status==='ACTIVE'?'待继续处理':'未完成'}。查看诊断和已有成果后，可继续任务或结束任务。${detail.failedRetry.formatRepair?'本次继续只补交已保存的结果。':''}`;
+  if (isRetryRunStatus(latest.status)) return `最近一次执行未完成；查看诊断和已有成果后，可继续任务或结束任务。${detail.failedRetry.formatRepair?'本次继续只补交已保存的结果。':''}`;
   return '查看活动、交付及验收记录，确认任务下一步。';
 }
 

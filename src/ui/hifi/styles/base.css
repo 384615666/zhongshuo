@@ -364,27 +364,17 @@ code, pre, .mono {
   display: grid;
   place-items: center;
 }
-/* 等待 / 受阻 / 待验收：低饱和琥珀色，靠图标形状区分（手 / 八角 / 眼睛）。
+/* 受阻空心八角与执行三角使用项目强调色；执行三角保持静态，不新增旋转。
+   等待 / 待验收：低饱和琥珀色，靠图标形状区分（手 / 眼睛）。
    这里**不用 --danger**：当前数据模型里 TaskStatus 没有失败态、种子也没有
    FAILED/INTERRUPTED 运行，把"受阻"一律画成红色等于把"等一个条件"说成"严重故障"。
    红色只留给数据确实表示失败的情况（届时按数据驱动另加判断，见施工报告）。 */
+.side-state.accent,
+.side-state.active {
+  color: var(--accent);
+}
 .side-state.alert {
   color: var(--warning);
-}
-/* 只有**实际执行中**才转（等待/受阻/待验收都是静态的）。颜色用主题强调色，
-   不因为参考图是青绿色就新增一套主题颜色。 */
-.side-state.running {
-  color: var(--accent);
-  animation: side-spin 0.9s linear infinite;
-}
-@keyframes side-spin {
-  to { transform: rotate(360deg); }
-}
-/* 减少动画：停转，但形状与颜色仍在 —— 状态提示不能因为"别动"就消失 */
-@media (prefers-reduced-motion: reduce) {
-  .side-state.running {
-    animation: none;
-  }
 }
 
 /* 行尾统一提示区（固定宽度：有没有提示都占位） */

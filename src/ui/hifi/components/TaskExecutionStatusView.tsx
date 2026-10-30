@@ -19,12 +19,23 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
     busy.current=true;setError(null);
     try{
       if(action.kind==='recover'){requestRecoveryOpen();return;}
+      if(action.kind==='close'){
+        const key=JSON.stringify(action.binding);
+        if(pending.current?.key!==key)pending.current={key,commandId:crypto.randomUUID()};
+        const result=await sendCommand(pending.current.commandId,'task.close',{...action.binding});
+        if(result.status!=='ok'){if(result.status==='failed')pending.current=null;throw Error(result.error);}
+        pending.current=null;
+        await Promise.allSettled([...(status.scope.roomId?[loadRoomPool(status.scope.roomId)]:[refreshDms(status.scope.projectId)]),...(status.scope.threadId?[refreshThreadTask(status.scope.threadId)]:[])]);
+        return;
+      }
       if(action.kind==='retry'){
         const key=JSON.stringify(action.binding);
         if(pending.current?.key!==key)pending.current={key,commandId:crypto.randomUUID()};
         const result=await sendCommand(pending.current.commandId,'task.redispatch',{
           taskId:action.binding.taskId,expectedTaskRevision:action.binding.expectedTaskRevision,
           expectedStopGeneration:action.binding.expectedStopGeneration,reason:'execution-status-continue-original',
+          ...(action.binding.sourceRunId!=null?{sourceRunId:action.binding.sourceRunId,expectedRunStatus:action.binding.expectedRunStatus,
+            ...(action.binding.formatRepair?{formatRepair:true,useCurrentExecutionSnapshot:true}:{})}:{}),
         });
         if(result.status!=='ok'){if(result.status==='failed')pending.current=null;throw Error(result.error);}
         pending.current=null;

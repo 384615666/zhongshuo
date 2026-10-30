@@ -62,7 +62,11 @@ async function main(){
   script=output('座位安排和阅读流程已整理好。茶点费用需要你决定后再安排。',undefined,'是否准备茶点？建议只提供饮用水，节省预算。');
   const question=await command<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请安排读书会场地和茶点，费用由我确认。',intent:'default',mentions:[{kind:'member',memberId:claude}]});
   await worker.drain();
-  const meta={projectId,roomId:room.id,conversationId:room.conversationId,otherRoomId:room2.room.id,claude,codex,chat,work,question,dm,attachmentId:uploaded.attachmentId,delivery};
+  script=[{kind:'event',event:{kind:'turn.failed',code:'PROVIDER_ERROR',message:'示例渠道暂时不可用，请处理后继续，或结束这件事。',retryable:false}}];
+  const failed=await command<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请核对活动预算。',intent:'default',mentions:[{kind:'member',memberId:claude}]});
+  await worker.drain();
+  db.prepare("UPDATE tasks SET status='BLOCKED' WHERE id=?").run(failed.taskId);
+  const meta={projectId,roomId:room.id,conversationId:room.conversationId,otherRoomId:room2.room.id,claude,codex,chat,work,question,failed,dm,attachmentId:uploaded.attachmentId,delivery};
   writeFileSync(join(dir,'guide-fixture.json'),JSON.stringify(meta,null,2));
   console.log(JSON.stringify(meta));
 }

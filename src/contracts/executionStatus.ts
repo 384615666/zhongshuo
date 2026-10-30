@@ -1,4 +1,6 @@
 import type { TaskExecutionBlocker } from './executionBlockers.ts';
+import type {FailedTaskRecoveryBinding} from './taskRecovery.ts';
+import type {TaskClosureBinding} from './taskClosure.ts';
 import type {RuntimeToolAction} from './runtime.ts';
 import type {
   PreDispatchFailureProjection,
@@ -225,7 +227,13 @@ export type TaskExecutionAction =
       id: string;
       kind: 'retry';
       label: string;
-      binding: PreDispatchFailureRecoveryBinding;
+      binding: PreDispatchFailureRecoveryBinding | FailedTaskRecoveryBinding;
+    }
+  | {
+      id:string;
+      kind:'close';
+      label:string;
+      binding:TaskClosureBinding;
     };
 
 export interface TaskRecoveryEvidence {

@@ -17,6 +17,8 @@ import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGua
 import { readPreDispatchFailure } from './preDispatchFailure.ts';
 import { readExecutionBlocker } from './taskDetails.ts';
 import { readDmProgress, readThreadProgress } from './threadMembers.ts';
+import {readFailedTaskRetry} from './taskRetry.ts';
+import {readTaskClosure} from './taskClosure.ts';
 
 interface TaskRow {
   id: string;
@@ -1194,7 +1196,13 @@ export function readTaskExecutionStatus(
       label: '按原请求继续',
       binding: preDispatchFailure.recoveryBinding,
     });
+  } else {
+    const retry=readFailedTaskRetry(db,task.id);
+    if(retry.binding)addAction({id:`retry:${task.id}:${retry.binding.sourceRunId}`,kind:'retry',
+      label:retry.formatRepair?'补交已有结果':'继续任务',binding:retry.binding});
   }
+  const closure=readTaskClosure(db,task.id);
+  if(closure.binding)addAction({id:`close:${task.id}:${task.revision}`,kind:'close',label:'结束任务',binding:closure.binding});
 
   return {
     schemaVersion: 'task-execution-status-v1',

@@ -8,7 +8,7 @@ import {TaskNotificationController} from './components/TaskNotificationControlle
  */
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
-import { NavUnreadDot } from './components/NavMarks';
+import { NavTaskMark, NavUnreadDot } from './components/NavMarks';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms, pickAndOpenFolder } from './shell';
@@ -569,9 +569,7 @@ export default function App() {
                             onClick={() => { void openSidebarRoom(p.id, room.id); }}
                           >
                             {rState.state ? (
-                              <span className="side-icon-slot" title={`房间任务状态：${rState.state}（${rState.total} 个未结束）`}>
-                                <Icon name={rState.state === 'BLOCKED' ? 'octagon' : rState.state === 'WAITING_USER' ? 'hand' : rState.state === 'REVIEW' ? 'eye' : 'play'} size={12} style={{ color: 'var(--warning,#b45309)' }} />
-                              </span>
+                              <NavTaskMark summary={rState} where={room.name} size={12} />
                             ) : (
                               <span className="side-icon-slot" aria-hidden="true" />
                             )}

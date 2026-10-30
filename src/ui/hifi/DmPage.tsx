@@ -15,7 +15,7 @@ import {TaskExecutionStatusView} from './components/TaskExecutionStatusView';
  * 保存当前预览文件）；待验收/返工/中断/停止等**状态动作**保持在正文上方原位（就地反馈）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { MessageView } from './components/MessageView';
+import { latestReadableAgentMessageId, MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
@@ -58,6 +58,7 @@ export function DmPage() {
   const activeId = path.startsWith('/dm/') ? path.slice('/dm/'.length) : dms[0]?.id ?? '';
   const active = useMemo(() => dms.find((d) => d.id === activeId), [dms, activeId]);
   const msgs = historyMap[activeId] ?? EMPTY;
+  const latestReadableAgentId = useMemo(() => latestReadableAgentMessageId(msgs), [msgs]);
   const dmProgress = st.threadProgress[`dm:${activeId}`]?.items ?? EMPTY;
   const readError = useStore((s) => s.readErrors[activeId]);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -627,6 +628,7 @@ export function DmPage() {
                         message={{ ...m, saved: savedRefs[m.id] === true }}
                         author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}
                         readingAids
+                        forceExpanded={m.id === latestReadableAgentId}
                         onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话', revisionHint: att.revision, hashHint: att.hash })}
                         onSave={() => void toggleSavedMessage(m, active.projectId).then((r) => {
                           if (r.ok) { toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏（原消息不受影响）', 'success'); return; }

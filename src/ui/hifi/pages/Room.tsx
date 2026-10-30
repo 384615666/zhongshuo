@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Composer } from '../components/Composer';
 import type { FormalSendOutcome } from '../components/Composer';
 import { Icon } from '../components/Icon';
-import { MessageView, RootMessagePreview } from '../components/MessageView';
+import { latestReadableAgentMessageId, MessageView, RootMessagePreview } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
@@ -1460,6 +1460,7 @@ function ThreadPanel({
   const urlTabRef = useRef<ThreadTabLocal>(initialTab ?? 'replies');
   const anchor = (thread ? anchorOf(s, thread) : undefined) ?? (s as AppState & { threadAnchors?: Record<string, Message | null> }).threadAnchors?.[threadId] ?? undefined;
   const list = useMemo(()=>{const replies=thread?replyThreadMessages(s,thread.id):[];return anchor?[anchor,...replies.filter(m=>m.id!==anchor.id)]:replies;},[s,thread?.id,anchor]);
+  const latestReadableAgentId = useMemo(() => latestReadableAgentMessageId(list), [list]);
   /** 线程归属会话（正式 thread.get 实体——发送信封 target 用，不从 UI 目标重造）。 */
   const entityConversationId = (s as AppState & { threadEntities?: Record<string, { conversationId?: string }> }).threadEntities?.[threadId]?.conversationId ?? '';
   const threadRoom = thread ? roomOf(s, thread.roomId) : undefined;
@@ -1505,7 +1506,9 @@ function ThreadPanel({
    * 停止按钮自然消失，仅保留"停止中…"直到活跃 turn 真正结束。
    */
   const canStop = Boolean(
-    task && (['ACTIVE', 'WAITING_USER', 'BLOCKED'] as Task['status'][]).includes(task.status),
+    task && !['DONE','CANCELLED'].includes(task.status)
+    && (run!=null&&['QUEUED','RUNNING','WAITING','STOPPING'].includes(run.status)
+      ||s.threadTasks[threadId]?.executionStatus?.actions.some(action=>action.kind==='close')),
   );
   const stopping = run?.status === 'STOPPING';
 
@@ -1947,6 +1950,7 @@ function ThreadPanel({
                       domId={`thread-msg-${m.id}`}
                       linkThreadId={thread.id}
                       readingAids
+                      forceExpanded={m.id === latestReadableAgentId}
                       author={m.authorType === 'human' ? undefined : byId(s.members, m.authorId)}
                       mode={task?.mode}
                       isMentioned={Boolean(m.payload?.mentionIds?.includes('you') || m.payload?.mentionIds?.some((id) => id === m.authorId))}
@@ -2067,7 +2071,7 @@ function ThreadPanel({
             ? {
               onStop: () => {
                 void stopThreadTask(threadId).then((r) => {
-                  if (r.ok) toast('停止请求已提交，正在等待执行结束', 'success');
+                  if (r.ok) toast(r.closed?'任务已结束，原回复和文件保留':r.outcome==='already_stopped'||r.outcome==='stopped'?'本次执行已结束':'停止请求已提交，正在等待执行结束', 'success');
                   else toast(`停止失败：${userFacingSystemText(r.error ?? '')}`, 'error');
                 });
               },
@@ -2139,10 +2143,10 @@ function ThreadDetails({
   const retryFailed = () => {
     const details = formal.data;
     const latest = details?.runs.find((r) => r.id === details.latestRunId);
-    if (task == null || details == null || !(latest?.status==='FAILED'&&details.failedRetry.available||latest?.status==='SUCCEEDED'&&details.clarificationRetry?.available) || acceptedRetryRun === latest.id) return;
+    if (task == null || details == null || latest==null || !(['FAILED','PARTIAL','INTERRUPTED'].includes(latest.status)&&details.failedRetry.available||latest.status==='SUCCEEDED'&&details.clarificationRetry?.available) || acceptedRetryRun === latest.id) return;
     const snapshot = { taskId: details.task.id, sourceRunId: latest.id,
       expectedTaskRevision: details.task.revision, expectedStopGeneration: details.task.stopGeneration,
-      expectedRunStatus: latest.status as 'FAILED'|'SUCCEEDED' };
+      expectedRunStatus: latest.status as 'FAILED'|'PARTIAL'|'INTERRUPTED'|'SUCCEEDED' };
     setRetryBusyTask(snapshot.taskId);
     void (async () => {
       try {
@@ -2373,9 +2377,9 @@ function ThreadPendingStrip({
   const pendingDelivery = task.currentDeliveryId
     ? s.taskDeliveries.find((d) => d.id === task.currentDeliveryId)
     : undefined;
-  const deliveryPending = pendingDelivery?.status === 'pending';
+  const deliveryPending = !['DONE','CANCELLED'].includes(task.status)&&pendingDelivery?.status === 'pending';
   const blocked = task.status === 'BLOCKED';
-  const runTrouble = task.status !== 'WAITING_USER' && (run?.status === 'FAILED' || run?.status === 'PARTIAL' || run?.status === 'INTERRUPTED');
+  const runTrouble = !['WAITING_USER','DONE','CANCELLED'].includes(task.status) && (run?.status === 'FAILED' || run?.status === 'PARTIAL' || run?.status === 'INTERRUPTED');
   if (!deliveryPending && !blocked && !runTrouble) return null;
 
   return (

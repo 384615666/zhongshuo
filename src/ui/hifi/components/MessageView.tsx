@@ -25,6 +25,24 @@ import type { MessageRepairLineage } from '../../../contracts/repairLineage';
 /* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
 export { ATTACHMENT_KIND_LABEL };
 
+/**
+ * The latest readable AI reply is the last agent message with visible prose in
+ * the exact array the current view renders. It deliberately ignores later
+ * system notices and relies on callers to pass the already filtered render
+ * list, so a hidden process message cannot make the visible answer fold again.
+ */
+export function latestReadableAgentMessageId(
+  messages: Array<Pick<Message, 'id' | 'authorType' | 'body'>>,
+): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.authorType !== 'agent') continue;
+    const readable = chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType).trim();
+    if (readable.length > 0) return message.id;
+  }
+  return undefined;
+}
+
 /** 只接受完整落在本条消息内的非折叠选区；跨消息或空白选区不打开菜单。 */
 export function messageSelectionText(root: Node | null, selection: Selection | null): string {
   if (root == null || selection == null || selection.isCollapsed || selection.rangeCount === 0) return '';
@@ -143,6 +161,7 @@ export function MessageView({
   author,
   isMentioned,
   readingAids,
+  forceExpanded,
   mode,
   onOpenSubtask,
   onOpenArtifact,
@@ -161,6 +180,8 @@ export function MessageView({
   author?: ProjectMember;
   isMentioned?: boolean;
   readingAids?: boolean;
+  /** Latest readable AI reply: keep long prose visible while older replies retain the fold. */
+  forceExpanded?: boolean;
   mode?: RouteMode;
   onOpenSubtask?: (subtask: { taskId: string; number: number; title: string }) => void;
   onOpenThread?: () => void;
@@ -220,7 +241,7 @@ export function MessageView({
   };
   const primaryContent = (
     <>
-      <MessageBody message={message} mode={mode} readingAids={readingAids === true} hasDetail={hasDetail} memberName={author?.displayName} onOpenSubtask={onOpenSubtask} onOpenArtifact={onOpenArtifact} onApproval={onApproval} />
+      <MessageBody message={message} mode={mode} readingAids={readingAids === true} forceExpanded={forceExpanded === true} hasDetail={hasDetail} memberName={author?.displayName} onOpenSubtask={onOpenSubtask} onOpenArtifact={onOpenArtifact} onApproval={onApproval} />
       {typeof message.detailMarkdown === 'string' && message.detailMarkdown.trim().length > 0 ? (
         <details className="msg-detail-fallback">
           <summary>完整详情（附件不可用，原文已保留）</summary>
@@ -254,6 +275,7 @@ export function MessageView({
       id={domId??`msg-${message.id}`}
       data-zs-repair-lineage={repairRole}
       data-zs-message-selection-surface="1"
+      data-zs-reading-mode={readingAids === true && forceExpanded === true && !isSystem ? 'latest-expanded' : undefined}
       onContextMenu={(event) => {
         const text = messageSelectionText(rootRef.current, window.getSelection());
         if (text.length === 0) return;
@@ -335,6 +357,7 @@ function MessageBody({
   memberName,
   hasDetail,
   readingAids,
+  forceExpanded,
   mode,
   onOpenSubtask,
   onOpenArtifact,
@@ -344,6 +367,7 @@ function MessageBody({
   memberName?: string;
   hasDetail?: boolean;
   readingAids?: boolean;
+  forceExpanded?: boolean;
   mode?: RouteMode;
   onOpenSubtask?: (s: { taskId: string; number: number; title: string }) => void;
   onOpenArtifact?: (id: string) => void;
@@ -361,7 +385,7 @@ function MessageBody({
     <>
       {/* 正文（任何 kind 都只渲染一次；进度消息的正文同样在这里） */}
       {message.body ? (
-        <MessageText message={message} text={visibleBody} readingAids={readingAids === true} hasDetail={hasDetail === true} />
+        <MessageText message={message} text={visibleBody} readingAids={readingAids === true} forceExpanded={forceExpanded === true} hasDetail={hasDetail === true} />
       ) : null}
 
       {message.kind === 'progress' && p?.status ? (
@@ -678,14 +702,20 @@ export function RootMessagePreview({ message }: { message: Message }) {
   );
 }
 
-function MessageText({ message, text, readingAids, hasDetail }: { message: Message; text: string; readingAids: boolean; hasDetail: boolean }) {
+function MessageText({ message, text, readingAids, forceExpanded, hasDetail }: {
+  message: Message;
+  text: string;
+  readingAids: boolean;
+  forceExpanded: boolean;
+  hasDetail: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const foldId = useId();
   const isHuman = message.authorType === 'human';
   /* 流式中一律不折叠、不出目录、不转字段表：内容还在变，版面不能跟着跳。 */
   const aids = readingAids && message.streaming !== true;
-  const foldable = aids && exceedsFoldLimit(text, FOLD_LINES, FOLD_CHARS);
+  const foldable = aids && !forceExpanded && exceedsFoldLimit(text, FOLD_LINES, FOLD_CHARS);
   const outline = useMemo(() => (aids && !isHuman ? outlineOf(text) : []), [aids, isHuman, text]);
   const jumpTo = (index: number): void => {
     const reveal = (): void => {

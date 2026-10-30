@@ -42,6 +42,9 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import {readPreDispatchFailure,unstartedPreparationCounts} from './preDispatchFailure.ts';
 import {readTaskExecutionStatus} from './executionStatus.ts';
+import {isRetryRunStatus} from '../contracts/taskRecovery.ts';
+import {taskClosureParamsSchema} from '../contracts/taskClosure.ts';
+import {closeIdleTask} from './taskClosure.ts';
 import {readMessageRepairLineages} from './repairLineage.ts';
 import {lookupSubmittedMessage} from './sendRecovery.ts';
 import { readExecutionBlocker, readTaskDetails, readTaskHistory, taskRunBelongsToDetails } from './taskDetails.ts';
@@ -5198,6 +5201,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         });
         return withCommandId({ok:true,data:result.data,replayed:result.replayed});
       }
+      case 'task.close': {
+        const params=taskClosureParamsSchema.parse(env.params);
+        assertTaskAudience(deps.db,deps.localUserId,params.taskId);
+        const result=run(()=>closeIdleTask(deps.db,params,Date.now()));
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
+      }
       case 'task.stop': {
         const params = z.strictObject({ taskId: z.string().min(1), targetRunId: z.string().min(1), expectedStopGeneration: z.number().int().nonnegative() }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 操作面同样不绕过（第三十二轮一）
@@ -5255,7 +5264,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           useCurrentExecutionSnapshot:z.boolean().optional(),
           analysisOnly:z.boolean().optional(),
           sourceRunId: z.string().min(1).optional(), expectedTaskRevision: z.number().int().nonnegative().optional(),
-          expectedStopGeneration: z.number().int().nonnegative().optional(), expectedRunStatus: z.enum(['FAILED','SUCCEEDED']).optional(),
+          expectedStopGeneration: z.number().int().nonnegative().optional(), expectedRunStatus: z.enum(['FAILED','PARTIAL','INTERRUPTED','SUCCEEDED']).optional(),
         }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 回执重放也不能绕过 DM audience
         assertTaskDispatchScope(deps.db, params.taskId);
@@ -5329,8 +5338,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (params.expectedRunStatus != null) {
             if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
             const expected = deps.db.prepare('SELECT status FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.sourceRunId, params.taskId, task.conversation_id) as { status: string } | undefined;
-            const failedState=task.status==='ACTIVE'||task.status==='BLOCKED'&&deps.db.prepare("SELECT 1 FROM coordination_runs WHERE task_id=? AND state='blocked'").get(params.taskId)!=null;
-            if (expected == null || expected.status !== params.expectedRunStatus || (params.expectedRunStatus==='FAILED'?!failedState:task.status!=='WAITING_USER'||params.expectedTaskRevision==null||params.expectedStopGeneration==null||deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(params.taskId,params.sourceRunId)==null)) {
+            const failedState=task.status==='ACTIVE'||task.status==='BLOCKED';
+            if (expected == null || expected.status !== params.expectedRunStatus || (isRetryRunStatus(params.expectedRunStatus)?!failedState:task.status!=='WAITING_USER'||params.expectedTaskRevision==null||params.expectedStopGeneration==null||deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(params.taskId,params.sourceRunId)==null)) {
               throw new DaemonCommandError('STALE_REVISION', '失败运行或任务状态已变化——请刷新后重新决定');
             }
           }

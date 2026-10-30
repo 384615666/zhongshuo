@@ -2,6 +2,7 @@ import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { TaskDetailEvent, TaskDetailFailure, TaskDetailMemberRun, TaskDetailRun, TaskDetailsResult, TaskHistoryParams, TaskHistoryPage } from '../contracts/taskDetails.ts';
 import type { TaskExecutionBlocker } from '../contracts/executionBlockers.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
+import {readFailedTaskRetry} from './taskRetry.ts';
 import { readCoordination } from './coordination.ts';
 import { lockDomainsOverlap } from './directoryIdentity.ts';
 import {pendingAutomaticRecovery,AUTOMATIC_RECOVERY_MAX_EXTRA_ATTEMPTS} from './automaticRecovery.ts';
@@ -313,16 +314,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const selectedIsOutsideWindow = selectedParentRunId != null && !runRows.items.some((r) => r.id === selectedParentRunId);
   const selectedRow = selectedIsOutsideWindow ? db.prepare(`SELECT rowid AS cursor_id, id, mode, status, stage, round_no, revision, budget_json
     FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedParentRunId, taskId, conversationId) as RunRow | undefined : undefined;
-  const coordinationBlocked=task.status==='BLOCKED'&&db.prepare("SELECT 1 FROM coordination_runs WHERE task_id=? AND state='blocked'").get(taskId)!=null;
-  const latestTurnGeneration=(db.prepare('SELECT stop_generation_snapshot g FROM agent_turns WHERE run_id=? ORDER BY rowid DESC LIMIT 1').get(latestRunId) as {g:number}|undefined)?.g;
-  const failedLatest = (task.status === 'ACTIVE'||coordinationBlocked) && (latestTurnGeneration==null?task.stop_generation===0:latestTurnGeneration===task.stop_generation) && runRows.items[0]?.status === 'FAILED';
-  const integrationRepair=failedLatest&&db.prepare(`SELECT 1 FROM coordination_integration_attempts i JOIN agent_turns a ON a.run_id=i.execution_run_id
-    WHERE i.execution_run_id=? AND a.status='FAILED' AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.outputInvalid')
-    AND NOT EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.source_turn_id=a.id OR f.consumed_turn_id=a.id)`).get(latestRunId)!=null;
-  const directOutputRepair=failedLatest&&db.prepare(`SELECT 1 FROM agent_turns a
-    WHERE a.run_id=? AND a.status='FAILED'
-      AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.outputInvalid')
-      AND NOT EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.source_turn_id=a.id OR f.consumed_turn_id=a.id)`).get(latestRunId)!=null;
+  const failedRetry=readFailedTaskRetry(db,taskId);
   const availability = db.prepare(`SELECT p.status AS project_status, c.archived_at AS conversation_archived,
     r.archived_at AS room_archived FROM tasks t JOIN projects p ON p.id = t.project_id
     JOIN conversations c ON c.id = t.conversation_id LEFT JOIN rooms r ON r.id = t.room_id WHERE t.id = ?`)
@@ -330,9 +322,6 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const scopeBlock = availability.project_status !== 'active' ? '项目已归档或不可用；先恢复项目。'
     : availability.conversation_archived != null ? '会话已归档；先恢复会话。'
       : availability.room_archived != null ? '房间已归档；先恢复房间。' : null;
-  const pendingRedispatch = failedLatest && (db.prepare(`SELECT 1 FROM outbox WHERE dispatch_key = ? AND status IN ('pending','leased')`)
-    .get(`task:${taskId}:redispatch:${latestRunId}`) != null || db.prepare(`SELECT 1 FROM format_repair_workitems f JOIN outbox o ON o.dispatch_key=f.target_dispatch_key WHERE f.task_id=? AND f.status='pending' AND o.status IN ('pending','leased')`).get(taskId)!=null);
-  const blockedRetry = failedLatest && !pendingRedispatch && scopeBlock == null ? assessTaskRedispatchReadiness(db, taskId) : null;
   const clarificationLatest=task.status==='WAITING_USER'&&task.stop_generation===0&&runRows.items[0]?.status==='SUCCEEDED'&&db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(taskId,latestRunId)!=null;
   const clarificationPending=clarificationLatest&&db.prepare("SELECT 1 FROM outbox WHERE dispatch_key=? AND status!='done'").get(`task:${taskId}:redispatch:${latestRunId}`)!=null;
   const clarificationBlock=clarificationLatest&&!clarificationPending&&scopeBlock==null?assessTaskRedispatchReadiness(db,taskId):null;
@@ -449,8 +438,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       ownerDisplayName: task.owner_display_name as string | null,
       parentTaskId: task.parent_task_id as string | null, currentDeliveryId: task.current_delivery_id as string | null },
     clarificationRetry:{available:clarificationLatest&&!clarificationPending&&scopeBlock==null&&clarificationBlock==null,pending:clarificationPending,blockReason:scopeBlock??clarificationBlock?.message??null},
-    failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,...(integrationRepair||directOutputRepair?{formatRepair:true}:{}),
-      pending: Boolean(pendingRedispatch), blockReason: scopeBlock ?? blockedRetry?.message ?? null },
+    failedRetry: {available:failedRetry.available,pending:failedRetry.pending,blockReason:failedRetry.blockReason,...(failedRetry.formatRepair?{formatRepair:true}:{})},
     coordination,
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),
     latestRunId, currentRunId, selectedRunId, runs,
