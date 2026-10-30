@@ -34,3 +34,16 @@
 后端首轮仅两个旧串行断言不符新策略，分别保留原意改为受限编辑排队、项目容量1；第一默认全套另发现主池元数据被提前放进 thread.get 专属实体，已保留其原始边界：最新序号进入房间投影供即时标读，完整实体仍等 thread.get。相关18项及18项实际Electron交互重新通过，之后最终全套全部通过。
 
 检查使用独立临时项目、SQLite 和本地协议/Fake，不发起真实业务模型调用，不修改原聊天或重新执行原任务。使用 DeepSeek/GPT 子代理进行开发与复核的请求不计作应用业务执行。
+
+## V67 交付
+
+- 目录：`dist/desktop/desktop-daily-win-v67-r127-thread-feedback-20261030/`。
+- clean 源码：`624b829ce5bacb45fedd1e02c64b62d0e6148024`；BUILD：`bld_6bffb21dda811d8e`。
+- 615 程序文件逐项 SHA256 一致；ZIP 648 文件、220789958 字节，CRC 通过。
+- ZIP：`zhongshuo-v67-windows-x64-20261030.zip`；SHA256：`107a4bd9702aadd0702f0cbdf0d0a5576da97b413d1ddcf7a68a7ae88bac6be5`。
+- 实际包内 Electron/daemon 独立数据根启动，手册14章19图及新增引用/并行/未读说明、原界面命令桥、正常退出和 daemon.pid 清理通过，0 turn/0 real_call。
+- 应用内与离线手册正文一致，图片均可加载。相关06图已在正式界面重采集并目视确认。
+- 本机 `start-existing-data.bat/.vbs` 与V66逐字节相同；原运行数据保持原位。用户正常退出旧版后，用新目录的 `start-existing-data.vbs` 沿用数据，在原串明确继续。旧失败与待核实记录保留，未知结果不自动重放。
+- 通用ZIP不包含本机启动入口、运行数据库或凭据。源码实现及交付记录仅本地提交，未推送。
+
+原始回归、lint对比、UI、包内启动和校验结果在 ignored 的 `dist/r127-feedback/`，宽屏矩阵在 `dist/r115-layout-review/r127-scale-1.25-a9bbef/`。
