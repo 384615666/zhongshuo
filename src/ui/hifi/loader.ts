@@ -810,8 +810,11 @@ export async function switchFocusProject(projectId: string): Promise<boolean> {
   const p = s.projects.find((x) => x.id === projectId);
   if (p == null) return false;
   if (s.activeProjectId === projectId) return true;
-  setState((st) => ({ ...st, activeProjectId: projectId, visibleProjectIds: [...new Set([...st.visibleProjectIds, projectId])], expandedProjectIds: [...new Set([...st.expandedProjectIds, projectId])] }));
+  cancelAllNavIntents();
+  const gen=s.loadGen+1;
+  setState((st) => ({ ...st, loadGen:gen, activeProjectId: projectId, visibleProjectIds: [...new Set([...st.visibleProjectIds, projectId])], expandedProjectIds: [...new Set([...st.expandedProjectIds, projectId])] }));
   await Promise.all([refreshRooms(projectId), refreshMembers(projectId), refreshDms(projectId)]);
+  if(!stillCurrent(gen,projectId))return false;
   const { persistNav } = await import('./data/store');
   persistNav(getState());
   return true;
@@ -824,10 +827,33 @@ export interface SidebarRoomSummary {
   revision: number;
 }
 
+const roomIndexTickets=new Map<string,number>();
+const roomProjectionTickets=new Map<string,number>();
+
+/** Cache only actual room.list responses for their requested project. A focus
+ * change cannot manufacture an empty list, and older reads cannot erase newer
+ * room creations/renames. A failed refresh keeps its last successful rooms. */
+async function readRoomList(projectId:string):Promise<RoomListData>{
+  const ticket=(roomIndexTickets.get(projectId)??0)+1;
+  roomIndexTickets.set(projectId,ticket);
+  setState(state=>({...state,sidebarRoomIndexes:{...state.sidebarRoomIndexes,
+    [projectId]:{status:'loading',rooms:state.sidebarRoomIndexes[projectId]?.rooms??[]}}}));
+  try{
+    const data=await command<RoomListData>('room.list',{projectId});
+    if(roomIndexTickets.get(projectId)===ticket)setState(state=>({...state,sidebarRoomIndexes:{...state.sidebarRoomIndexes,
+      [projectId]:{status:'ready',rooms:(data.items??[]).map(room=>({id:room.id,name:room.name,archivedAt:room.archivedAt??undefined,revision:room.revision??0}))}}}));
+    return data;
+  }catch(error){
+    if(roomIndexTickets.get(projectId)===ticket)setState(state=>({...state,sidebarRoomIndexes:{...state.sidebarRoomIndexes,
+      [projectId]:{status:'error',rooms:state.sidebarRoomIndexes[projectId]?.rooms??[],error:(error as Error).message}}}));
+    throw error;
+  }
+}
+
 /** Sidebar-only room index. It is deliberately independent of AppState.rooms,
  * which represents the active project's full roster-bearing projection. */
 export async function loadSidebarRooms(projectId: string): Promise<SidebarRoomSummary[]> {
-  const data = await command<RoomListData>('room.list', { projectId });
+  const data = await readRoomList(projectId);
   return (data.items ?? []).map((room) => ({
     id: room.id,
     name: room.name,
@@ -909,6 +935,14 @@ export async function openSidebarRoom(projectId: string, roomId: string): Promis
     if (project.archivedAt != null) {
       toast('该项目已归档，历史只读，不能进入日常房间', 'warn');
       return false;
+    }
+    // Loaded rooms can switch synchronously, even while an unrelated command
+    // delays advisory reads. The real page/submit paths still enforce scope.
+    const loadedTarget=getState().rooms.find(room=>room.id===roomId&&room.projectId===projectId&&room.archivedAt==null);
+    if(getState().activeProjectId===projectId&&!getState().openInFlight&&loadedTarget){
+      releaseNavIntent(intent);
+      navigate(`/project/${projectId}/room/${roomId}`);
+      return true;
     }
     const rooms = await loadSidebarRooms(projectId);
     if (!operationActive()) return false;
@@ -1015,8 +1049,10 @@ export async function refreshRooms(projectIdArg?: string): Promise<void> {
   const gen = getState().loadGen;
   const projectId = projectIdArg ?? getState().activeProjectId;
   if (projectId === '') return;
-  const data = await command<RoomListData>('room.list', { projectId });
-  if (!stillCurrent(gen, projectId)) return;
+  const ticket=(roomProjectionTickets.get(projectId)??0)+1;
+  roomProjectionTickets.set(projectId,ticket);
+  const data = await readRoomList(projectId);
+  if (!stillCurrent(gen, projectId)||roomProjectionTickets.get(projectId)!==ticket) return;
   const rooms = data.items ?? [];
   // 房间名单（@ 候选唯一来源——review-r46 §3）：每房间 member.list({projectId, roomId})。
   // 读取失败**保留旧名单**并就地报错（review-r47 §5——不呈现成「暂无成员」）；协调者不伪造
@@ -1032,7 +1068,7 @@ export async function refreshRooms(projectIdArg?: string): Promise<void> {
       return { roomId: r.id, memberIds: oldRoom?.memberIds ?? [] }; // 旧名单兜底
     }
   }));
-  if (!stillCurrent(gen, projectId)) return;
+  if (!stillCurrent(gen, projectId)||roomProjectionTickets.get(projectId)!==ticket) return;
   setState((prev) => ({
     ...prev,
     rooms: rooms.map((r, i) => {

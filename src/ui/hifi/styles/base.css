@@ -125,7 +125,7 @@ code, pre, .mono {
   width: 22px;
   height: 22px;
   border-radius: var(--r-sm);
-  /* 品牌标识是 --grad 除主按钮外**唯一**的合法去处（规范 §5.9）。
+  /* 品牌标识是 --grad 唯一保留的用途；主按钮与交互控件统一使用 --grad-soft。
      底色与渐变分开写：`background-color` 是**兜底实色**，
      `--grad` 一旦解析失败（自定义属性缺失/被覆盖/引擎异常），
      只剩实色也不会出现"白底白字"（见 .btn.primary 同款注释）。 */
@@ -1099,10 +1099,10 @@ code, pre, .mono {
   cursor: not-allowed;
 }
 /**
- * 主按钮 = `--grad` 深渐变（规范 §5.8）。
+ * 主按钮 = `--grad-soft` 浅渐变（R129 起）。
  *
- * `--grad` 与 `--grad-soft` 分工：深渐变只给品牌标识与浮层操作（新回复 pill）；
- * 浅渐变给选中态与主按钮。深色主题下 --grad 是亮渐变，文字须用深字。
+ * `--grad` 与 `--grad-soft` 分工：深渐变只给品牌标识；浅渐变给选中态、
+ * 主按钮与浮层操作。深色主题下 --grad 是亮渐变，品牌标识文字须用深字。
  *
  * ⚠ **必须分开写 `background-color` 与 `background-image`，不能用 `background`
  * 简写**：一旦渐变令牌解析失败（自定义属性缺失、被覆盖、或引擎异常），

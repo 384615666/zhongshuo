@@ -24,6 +24,7 @@ import { Icon } from './Icon';
 import { Menu } from './ui';
 import { useStore, toast } from '../data/store';
 import { switchFocusProject } from '../loader';
+import { getState } from '../data/store';
 import { toggleProjectVisible } from '../data/actions-nav';
 import { navigate } from '../lib/router';
 
@@ -246,10 +247,12 @@ function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: numb
               title={p.rootPath}
               onClick={() => {
                 const first = rooms.find((r) => r.projectId === p.id && r.archivedAt == null);
-                void switchFocusProject(p.id).then((ok) => {
-                  if (!ok) { toast('切换失败（未注册）', 'error'); return; }
-                  navigate(first ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`);
+                // Hand off the URL in the click itself. A late refresh must not
+                // navigate back after the user has chosen another room/project.
+                void switchFocusProject(p.id).catch((error:unknown)=>{
+                  if(getState().activeProjectId===p.id)toast(`项目读取失败：${(error as Error).message}`,'error');
                 });
+                navigate(first ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`);
                 onClose();
               }}
             >

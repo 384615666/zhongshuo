@@ -18,7 +18,7 @@ import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { OPEN_RECOVERY_EVENT } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
-import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom, type SidebarRoomSummary } from './loader';
+import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
 import { MemberDetailPage } from './pages/MemberDetailPage';
@@ -26,7 +26,7 @@ import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
-import { dmUnreadTotal, navTaskStateOfRoom, roomUnread, roomsOfProject } from './data/selectors';
+import { dmUnreadTotal, navTaskStateOfRoom, roomUnread } from './data/selectors';
 import { RoomPage, CreateRoomModal } from './pages/Room';
 import { FilesGitPage } from './pages/pages-misc';
 import { SettingsPage } from './pages/SettingsPage';
@@ -222,11 +222,6 @@ export default function App() {
   const [createRoomFor, setCreateRoomFor] = useState<string | null>(null);
   const [folderPickerBusy, setFolderPickerBusy] = useState(false);
   const folderIntentRef = useRef(0);
-  const [sidebarRooms, setSidebarRooms] = useState<Record<string, {
-    status: 'loading' | 'ready' | 'error';
-    rooms: SidebarRoomSummary[];
-    error?: string;
-  }>>({});
   const sidebarRoomRequests = useRef(new Set<string>());
 
   const chooseFolder = async () => {
@@ -242,56 +237,16 @@ export default function App() {
   useEffect(() => {
     if (s.boot !== 'ready') return;
     for (const candidate of s.projects) {
-      if (candidate.id === s.activeProjectId || !s.expandedProjectIds.includes(candidate.id)) continue;
-      if (sidebarRooms[candidate.id] != null || sidebarRoomRequests.current.has(candidate.id)) continue;
+      if (!s.expandedProjectIds.includes(candidate.id)) continue;
+      if (s.sidebarRoomIndexes[candidate.id] != null || sidebarRoomRequests.current.has(candidate.id)) continue;
       sidebarRoomRequests.current.add(candidate.id);
-      setSidebarRooms((prev) => ({
-        ...prev,
-        [candidate.id]: { status: 'loading', rooms: prev[candidate.id]?.rooms ?? [] },
-      }));
       void loadSidebarRooms(candidate.id)
-        .then((rooms) => {
-          if (!sidebarRoomRequests.current.has(candidate.id)) return;
-          setSidebarRooms((prev) => ({ ...prev, [candidate.id]: { status: 'ready', rooms } }));
-        })
-        .catch((error: unknown) => {
-          setSidebarRooms((prev) => ({
-            ...prev,
-            [candidate.id]: {
-              status: 'error',
-              rooms: prev[candidate.id]?.rooms ?? [],
-              error: (error as Error).message,
-            },
-          }));
-        })
+        .catch(() => { /* The project index keeps the error and previous rooms. */ })
         .finally(() => {
           sidebarRoomRequests.current.delete(candidate.id);
         });
     }
-  }, [s.boot, s.projects, s.expandedProjectIds, s.activeProjectId, sidebarRooms]);
-
-  // Keep the independent sidebar cache in sync with room mutations performed
-  // while a project is active (create/archive/rename). Caches for other
-  // projects remain independently loaded by the effect above.
-  useEffect(() => {
-    if (s.boot !== 'ready' || s.activeProjectId === '' || s.openInFlight) return;
-    const rooms = roomsOfProject(s, s.activeProjectId).map((room) => ({
-      id: room.id,
-      name: room.name,
-      archivedAt: room.archivedAt,
-      revision: room.revision,
-    }));
-    setSidebarRooms((prev) => {
-      const current = prev[s.activeProjectId];
-      if (current?.status === 'ready'
-        && current.rooms.length === rooms.length
-        && current.rooms.every((room, index) => room.id === rooms[index]?.id
-          && room.name === rooms[index]?.name
-          && room.archivedAt === rooms[index]?.archivedAt
-          && room.revision === rooms[index]?.revision)) return prev;
-      return { ...prev, [s.activeProjectId]: { status: 'ready', rooms } };
-    });
-  }, [s.boot, s.activeProjectId, s.rooms, s.openInFlight]);
+  }, [s.boot, s.projects, s.expandedProjectIds, s.sidebarRoomIndexes]);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
 
@@ -492,9 +447,7 @@ export default function App() {
                 return visibleProjects.map((p) => {
                   const isCurrent = p.id === s.activeProjectId;
                   const expanded = s.expandedProjectIds.includes(p.id);
-                  const roomIndex = isCurrent && !s.openInFlight
-                    ? { status: 'ready' as const, rooms: roomsOfProject(s, p.id), error: undefined }
-                    : sidebarRooms[p.id];
+                  const roomIndex = s.sidebarRoomIndexes[p.id];
                   const rooms = roomIndex?.rooms ?? [];
                   return (
                     <div key={p.id} className="side-project">
@@ -546,11 +499,7 @@ export default function App() {
                           房间加载失败：{userFacingSystemText(roomIndex.error ?? '未知原因')}
                           <button
                             className="btn ghost sm"
-                            onClick={() => setSidebarRooms((prev) => {
-                              const next = { ...prev };
-                              delete next[p.id];
-                              return next;
-                            })}
+                            onClick={() => { void loadSidebarRooms(p.id).catch(()=>{}); }}
                           >
                             重试
                           </button>

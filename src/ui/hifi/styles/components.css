@@ -3484,7 +3484,8 @@ button.composer-file-token-open:hover {
 }
 
 /* 滚动到底部提示（§17.5：不抢滚动位置）
-   它是**操作按钮**，不是选中态，所以用 --grad 深渐变 + 白字（规范 §5.3）。 */
+   R129：浮层操作也沿用主按钮/选中态的浅蓝绿渐变 + 强调色文字，
+   避免旧深色 CTA 与房间选中项、发送按钮形成两套交互语言。 */
 .new-msg-pill {
   position: absolute;
   bottom: 12px;
@@ -3496,20 +3497,18 @@ button.composer-file-token-open:hover {
   gap: 6px;
   padding: 6px 14px;
   border-radius: var(--r-full);
-  /* 与 .btn.primary 同款兜底：实色打底 + 渐变叠图。
-     用 `background` 简写时，--grad 一旦失效会整条丢弃 → 白底白字。 */
-  background-color: var(--accent);
-  background-image: var(--grad);
-  color: #fff;
-  border: none;
+  /* 与 .btn.primary 同款兜底：主题面打底 + 浅渐变叠图。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
   font-size: var(--fs-12);
   font-weight: 600;
   cursor: pointer;
   box-shadow: var(--shadow-md);
 }
-/* 深色下 --grad 为亮渐变，白字不达标 → 深字（规范 §2.8） */
-:root[data-theme='dark'] .new-msg-pill {
-  color: var(--text-inverse);
+.new-msg-pill:hover:not(:disabled) {
+  filter: brightness(0.97);
 }
 
 .list-wrap {

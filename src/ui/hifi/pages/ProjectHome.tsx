@@ -11,6 +11,7 @@ import { EmptyState, ErrorState, Tag, TaskStatusTag, Avatar, memberColor } from 
 import { useStore, toast } from '../shell';
 import { coordinatorOfRoom, memberLabel, roomsOfProject } from '../data/selectors';
 import { switchFocusProject, projectLifecycleReal, pickAndOpenFolder } from '../loader';
+import { getState } from '../data/store';
 import { command } from '../bridge';
 import { refreshGitState } from '../data/actions-git';
 import type { TaskStatus } from '../data/types';
@@ -65,11 +66,11 @@ export function WelcomePage() {
                   style={{ cursor: p.status === 'missing' ? 'default' : 'pointer' }}
                   onClick={() => {
                     if (p.status === 'missing') return;
-                    void switchFocusProject(p.id).then((ok) => {
-                      if (!ok) { toast('项目不可用（未注册？）——重新打开', 'error'); return; }
-                      const first = rooms.find((r) => !r.archivedAt);
-                      navigate(first != null ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`);
+                    void switchFocusProject(p.id).catch((error:unknown)=>{
+                      if(getState().activeProjectId===p.id)toast(`项目读取失败：${(error as Error).message}`,'error');
                     });
+                    const first = rooms.find((r) => !r.archivedAt);
+                    navigate(first != null ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`);
                   }}
                 >
                   <div className="row tight">

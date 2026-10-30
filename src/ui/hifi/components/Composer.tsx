@@ -36,6 +36,8 @@ import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
 import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
 import { command } from '../bridge';
+import { watchComposerWriteCapability } from '../lib/composerWriteCapability';
+import type { ComposerWriteCapability } from '../lib/composerWriteCapability';
 import { uploadAttachmentFile, classifyAttachmentFile, defaultDeliberationMaxTurns } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
 import {
@@ -1433,26 +1435,40 @@ export function Composer({
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
     mentions: effectiveMentionIds, collaboration, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
   const threadFactRevision=useStore(s=>target.kind==='thread'&&target.threadId?s.threadTasks[target.threadId]?.revision:null);
-  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions:effectiveMentionIds,collaboration,threadFactRevision});
-  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;willDispatch?:boolean;blocked?:boolean;reason:string;readAt:number;error?:string}|null>(null);
+  const writeConversationId=attachmentUpload?.conversationId??target.dmId;
+  const writeTarget=target.kind==='room_root'
+    ?{kind:target.kind,projectId:imageProjectId,conversationId:writeConversationId,roomId:target.roomId}
+    :target.kind==='thread'
+      ?{kind:target.kind,projectId:imageProjectId,conversationId:writeConversationId,threadId:target.threadId}
+      :{kind:target.kind,projectId:imageProjectId,conversationId:writeConversationId};
+  // Only command identity belongs in the key: subtask labels and task revisions
+  // must not cancel a pending read. Incomplete loading state is not a query.
+  const writeContext=imageProjectId&&writeConversationId&&(target.kind!=='thread'||target.threadId)
+    ?JSON.stringify({target:writeTarget,...(collaboration?{collaboration}:{}),mentions:effectiveMentionIds.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})})
+    :null;
+  const [writeHint,setWriteHint]=useState<{key:string;reason:string;error?:string}|null>(null);
+  const refreshWriteHint=useRef<(()=>void)|null>(null);
   useEffect(()=>{
-    if(!formalLimits?.access||sendAs!=='ai')return;
-    if (sendDisabledReason != null || inputDisabledReason != null) {
+    if(!formalLimits?.access||sendAs!=='ai'||writeContext==null||sendDisabledReason!=null||inputDisabledReason!=null){
       setWriteHint(null);
       return;
     }
-    let cancelled=false,reading=false;
-    const read=async()=>{
-      if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
-      const conversationId=attachmentUpload?.conversationId??target.dmId??'';
-      const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
-      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,...(collaboration?{collaboration}:{}),mentions:effectiveMentionIds.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
-      catch(e){if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint(old=>old?.key===writeContext?{...old,error:(e as Error).message}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
-      finally{reading=false;}
-    };
-    void read();const timer=window.setInterval(()=>void read(),5000),visible=()=>void read();document.addEventListener('visibilitychange',visible);
-    return()=>{cancelled=true;window.clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
+    const watcher=watchComposerWriteCapability(
+      ()=>command<ComposerWriteCapability>('message.writeCapability',JSON.parse(writeContext)),
+      c=>{if(draftKeyRef.current===draftKey)setWriteHint({key:writeContext,reason:c.reason});},
+      e=>{if(draftKeyRef.current===draftKey){const error=e instanceof Error?e.message:String(e);setWriteHint(old=>old?.key===writeContext?{...old,error}:{key:writeContext,reason:'尚未确认执行权限',error});}},
+      {
+        visible:()=>document.visibilityState==='visible',
+        every:read=>{const timer=window.setInterval(read,5000);return()=>window.clearInterval(timer);},
+        onVisible:read=>{document.addEventListener('visibilitychange',read);return()=>document.removeEventListener('visibilitychange',read);},
+      },
+    );
+    refreshWriteHint.current=watcher.refresh;
+    return()=>{refreshWriteHint.current=null;watcher.cancel();};
   },[writeContext,draftKey,sendAs,formalLimits?.access,sendDisabledReason,inputDisabledReason]);
+  useEffect(()=>{
+    refreshWriteHint.current?.();
+  },[writeContext,draftKey,sendAs,formalLimits?.access,sendDisabledReason,inputDisabledReason,threadFactRevision]);
   useEffect(() => {
     if (!attachments.some(a => a.status === 'ready' && a.kind === 'image_file')) return;
     let cancelled = false; let reading = false;
@@ -2432,7 +2448,6 @@ export function Composer({
       ) : null}
 
       {/* 发送前说明真实协作路由；不更改草稿中的提及或发送意图。 */}
-      {writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="status"><span className="chip composer-info-chip" title={userFacingSystemText(writeHint.error)}>权限暂未刷新，发送时会重新核对。</span></div>:null}
       {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-runtime-hint="1">
           <span className="chip composer-info-chip" title={runtimeHint.text}>
@@ -2840,10 +2855,10 @@ export function Composer({
                   className={`access-trigger${accessOpen ? ' open' : ''}`}
                   disabled={Boolean(inputDisabledReason) || Boolean(formalLimits?.access)}
                   onClick={() => setAccessOpen((v) => !v)}
-                  title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${userFacingSystemText(writeHint.error ?? '')}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务使用的文件访问权限'}
+                  title={inputDisabledReason ?? '本次任务使用的文件访问权限'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 成员权限':'多人研讨 · 成员权限' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'仅保存草稿':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
+                  {currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 
@@ -2994,7 +3009,7 @@ export function Composer({
           <div className="menu-note">
             <div className="row tight"><Icon name="shield" size={12} /> 权限档位</div>
             <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-              {formalLimits?.access?(writeHint?.key===writeContext?writeHint.reason:'正在读取 AI 执行权限'):<>当前：{currentMode.label} · {currentMode.v01.available?currentMode.desc:currentMode.v01.reason}</>}
+              {formalLimits?.access?(writeHint?.key===writeContext?userFacingSystemText(writeHint.error??writeHint.reason):'正在读取 AI 执行权限'):<>当前：{currentMode.label} · {currentMode.v01.available?currentMode.desc:currentMode.v01.reason}</>}
             </div>
           </div>
           {canUseDeliberate&&!inputDisabledReason?<MenuItem icon="users" onClick={()=>{

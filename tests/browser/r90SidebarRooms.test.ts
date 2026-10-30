@@ -65,7 +65,7 @@ describe('R90 independent project room index', () => {
     const previous=getState();
     expect(await openSidebarRoom('projA','roomA')).toBe(true);
     expect(location.hash).toBe('#/project/projA/room/roomA');
-    expect(calls).toEqual(['room.list']);
+    expect(calls).toEqual([]);
     expect(getState().rooms).toBe(previous.rooms);
     expect(getState().members).toBe(previous.members);
     expect(getState().loadGen).toBe(previous.loadGen);

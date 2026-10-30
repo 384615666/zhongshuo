@@ -52,6 +52,8 @@ export interface ThreadTaskDetail {
 
 /** 正式侧扩展状态（挂在 AppState 之上的真实投影层）。 */
 export interface HifiExtension {
+  /** Per-project server room indexes; never inferred from the active roster. */
+  sidebarRoomIndexes: Record<string, {status:'loading'|'ready'|'error';rooms:Array<{id:string;name:string;archivedAt?:number;revision:number}>;error?:string}>;
   /** 装载代次：openProject +1；迟到的旧项目响应按代次+项目身份双重门丢弃（review-r46 §5）。 */
   loadGen: number;
   /** 房间主池快照（第五十一轮起）：roomId → 线程卡（room.pool 真实投影）。 */
@@ -159,7 +161,7 @@ function makeEmptyState(): HifiState {
     preview: { tabs: [], hidden: true, maximized: false, contextChangedSinceOpen: false },
     ui: { theme: 'light', activeRoomId: '', showAvatars: true, avatars: {}, writeLog: [] },
     // —— 正式侧扩展 ——
-    loadGen: 0,
+    loadGen: 0, sidebarRoomIndexes: {},
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
     readErrors: {}, pendingSends: {}, lastSendReferences:{}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
