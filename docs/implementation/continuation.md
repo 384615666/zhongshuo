@@ -2,6 +2,14 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-10-30：R132 待处理横幅与全体短交流修复，V70交付
+
+用户反馈进入串后待处理横幅迟到、@全体仍吞成员回复。只读现场确认两位成员均SUCCEEDED且各有analysis_draft，旧短交流只发主持人消息；write-root延期解释启动等待，未改同串写锁。现ThreadPanel即时显示主池已确认的正式状态并按版本/停止代次/事件水位择新，task.get与history独立收敛；短交流复用阶段消息逐真实成功成员发布，no_reply静默，真实作者/turn/run绑定，失败缺席不伪造、重启幂等、原交付状态保留。旧隐藏稿不自动补发。详见 [R132](../reviews/r132-thread-feedback-20261030.md)。
+
+独立worktree基于干净1416cd2实施，原目录R130/R131未提交审计与并行站点工作不纳入本轮。297文件2578普通通过+3保留预期反例+1权限跳过，无失败；双types、9变更代码文件lint对照均12项既有/无新增；状态7项、短交流20项及相关173项通过。正式Electron/daemon25检查：1400ms延迟下横幅20ms即显，3200ms/失败history不挡task，长问句/详情入口/双作者/刷新去重通过，0真实业务调用；宽屏UI66项和手册19新图目视通过。V69基线失败保留。
+
+V70：desktop-daily-win-v70-r132-thread-feedback-20261030，clean源码cd1525b019b2340a25230bd0620f670ca3169aa1，BUILD bld_cb97c8eba0dcbb86。615程序hash一致、ZIP648文件CRC通过/220837918字节，SHA256 e94b5186977f8c1132dfa923e75c1dc95861bc6dc49b60c012c22f05d4a5e281。实际包内Electron/daemon、14章19图/新说明/原界面/正常退出通过；开发Electron加载包内代码25项复验通过(横幅17ms)，0真实业务调用。首次封装Electron忽略夹具入口未产报告作为验收方式失败保留并正常退出。沿用数据入口与V69字节相同；用户正常退出旧版后start-existing-data.vbs。实现/交付两提交发布公开main，凭据扫描与远端核对证据在dist/r132-feedback；测试证据在dist/r132-source/dist/r132-feedback。
+
 ## 2026-10-30：R129 侧栏/导航与权限说明完成，V69交付并推送
 
 用户反馈权限未刷新提示、切房间卡住、旧深色新消息按钮、房间消失，明确要求本轮与前几版一起推送。原DB只读确认claude-zh-cn默认房间未删除/归档，当前窗口只读观察显示“暂无房间”；V68正式UI已复现active先变而rooms仍旧→侧栏缓存空、每次同项目点击先等room.list、顶栏迟到then导航回抢。现sidebarRoomIndexes只接真实按项目room.list回包，错误保旧、ticket隔离；同项目已载房间同步切换，顶栏/欢迎页同步URL交接，项目刷新代次防串线。权限说明等身份完整才读，revision刷新保留在途/合并重读；移除未请求的输入框常驻chip，错误进已有运行菜单，实际发送授权不改。新消息按钮使用浅色家族，审计其他同类控件无深渐变残留。见 [R129](../reviews/r129-room-navigation-20261030.md)。

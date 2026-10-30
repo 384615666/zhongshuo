@@ -31,4 +31,12 @@
 
 ## 交付
 
-准备V70 clean源码构建、包内验证与Git推送。原数据沿用原位；另一轮审计文件不提交到本轮。
+- V70目录：`dist/desktop/desktop-daily-win-v70-r132-thread-feedback-20261030/`。
+- clean源码：`cd1525b019b2340a25230bd0620f670ca3169aa1`；BUILD：`bld_cb97c8eba0dcbb86`。独立worktree构建后原样复制到主交付目录。
+- 615程序文件逐项SHA256一致；ZIP648文件、220837918字节，CRC通过。SHA256：`e94b5186977f8c1132dfa923e75c1dc95861bc6dc49b60c012c22f05d4a5e281`。
+- 包内实际Electron/daemon启动，手册14章19图及新增说明、原界面命令桥、正常退出与清理通过，0 turn / 0 real_call。
+- 直接加载包内main/renderer/daemon代码复验上述25项通过，正常退出。首次给封装Electron传夹具入口时它仍启动自身应用，未产生夹具报告；该次作为验收启动方式错误保留，正常关闭后用开发Electron加载包内代码完成复验，不把未执行夹具记为通过。
+- 本机沿用数据入口与V69逐字节一致。正常退出旧版后，用V70的 `start-existing-data.vbs` 启动；原聊天、文件和草稿原位保留，旧隐藏稿不自动补发。
+- 本轮实现和交付记录两次提交发布至公开 `main`，推送后核对远端SHA。R130/R131未提交审计与并行站点文件不纳入本轮提交。
+
+主交付证据在 `dist/r132-feedback/package-smoke.json`、`package-final.json`、`package-code-thread-ui/summary.json` 与 `push-final.json`；源码验证保存在原独立worktree的ignored目录。
