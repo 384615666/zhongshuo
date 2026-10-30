@@ -32,4 +32,13 @@ DeepSeek Flash/max 子代理处理界面，GPT-6.1-sol 子代理实现结束内�
 
 ## 交付
 
-V68 待 clean 源码构建与包内启动、手册和逐文件校验完成后补记。
+- V68 目录：`dist/desktop/desktop-daily-win-v68-r128-task-actions-20261030/`。
+- clean 源码：`26d17ca28eadbba21c62e41a635195096e094e49`；BUILD：`bld_547074af932c287e`。
+- 615 程序文件逐项 SHA256 一致；ZIP 648 文件、220830082 字节，CRC 通过。
+- ZIP：`zhongshuo-v68-windows-x64-20261030.zip`；SHA256：`bfa4ba2830e127a76ec1c7a07814ea1d6240c3ff7382f876986b2782748ce331`。
+- 实际包内 Electron/daemon 在独立数据根启动；手册14章19图、新结束/常显×/最新展开说明、原界面命令桥与正常退出通过，daemon.pid 清理，0 turn / 0 real_call。
+- 应用内与离线手册正文一致，图片均可加载。02/06/08 图已在正式界面重采集并目视核对。
+- 本机 `start-existing-data.bat/.vbs` 与V67逐字节相同，原运行数据保持原位。用户正常退出旧版后，用V68目录中的 `start-existing-data.vbs` 沿用数据；在原串选择结束、继续或补充要求。未知执行仍先核实，不自动重放。
+- 通用ZIP不包含本机入口、运行数据库或凭据。源码实现与交付记录仅本地提交，未推送。
+
+包内启动与最终校验记录在 `dist/r128-feedback/package-smoke.json`、`package-final.json`。
