@@ -330,6 +330,9 @@ export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainRe
   const row = loadChangeSet(db, input.changeSetId);
   if (row == null) return domainErr('RESOURCE_NOT_FOUND', `改动集不存在：${input.changeSetId}`);
   if (row.after_ref.length === 0) return domainErr('STALE_REVISION', `改动集未定型（缺 after 前像）：${input.changeSetId}`);
+  if ((safeParse(row.manifest_json ?? '{}') as {concurrentWriteObservation?:boolean}).concurrentWriteObservation === true) {
+    return domainErr('STALE_REVISION','此快照在跨串并行写入期间捕获，目录差异可能包含其他对话串的成果；保留前后版本供人工核对，不自动撤销');
+  }
   const project = lookupProject(db, row.project_id);
   if (project == null) return domainErr('RESOURCE_NOT_FOUND', `项目不存在：${row.project_id}`);
   const now = input.now ?? Date.now();

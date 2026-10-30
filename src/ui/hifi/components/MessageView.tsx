@@ -12,7 +12,7 @@ import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {chatAnswer} from '../../../contracts/chatAnswer';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
-import { Avatar, ConsensusTag, CostText, Tag, memberColor } from './ui';
+import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
 import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageCopy, stageLabel } from '../lib/format';
 import type { CollaborationStage, Message, ProjectMember, RouteMode } from '../data/types';
 import { recordLocalOnly, stripInlineAttachmentTokens, useStore } from '../data/store';
@@ -24,6 +24,15 @@ import type { MessageRepairLineage } from '../../../contracts/repairLineage';
 
 /* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
 export { ATTACHMENT_KIND_LABEL };
+
+/** 只接受完整落在本条消息内的非折叠选区；跨消息或空白选区不打开菜单。 */
+export function messageSelectionText(root: Node | null, selection: Selection | null): string {
+  if (root == null || selection == null || selection.isCollapsed || selection.rangeCount === 0) return '';
+  if (selection.anchorNode == null || selection.focusNode == null
+    || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return '';
+  const text = selection.toString();
+  return text.trim().length === 0 ? '' : text;
+}
 
 /* ---------------- 研讨阶段标签（R91 模块3） ---------------- */
 
@@ -165,10 +174,12 @@ export function MessageView({
   onRetry?: () => void;
   onAllowMissing?: () => void;
   onSteer?: () => void;
-  onQuote?: (message: Message) => void;
+  onQuote?: (message: Message, selectedText?: string) => void;
   onCorrection?: (message: Message) => void;
 }) {
   const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [selectionMenu, setSelectionMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
@@ -193,6 +204,19 @@ export function MessageView({
       setCopyState('failed');
       window.setTimeout(()=>setCopyState('idle'),1800);
     }
+  };
+  const copySelected=async():Promise<void>=>{
+    if (selectionMenu == null) return;
+    try {
+      if (navigator.clipboard == null) throw Error('clipboard unavailable');
+      await navigator.clipboard.writeText(selectionMenu.text);
+      setCopyState('copied');
+      window.setTimeout(()=>setCopyState('idle'),1400);
+    } catch {
+      setCopyState('failed');
+      window.setTimeout(()=>setCopyState('idle'),1800);
+    }
+    setSelectionMenu(null);
   };
   const primaryContent = (
     <>
@@ -225,9 +249,17 @@ export function MessageView({
   );
   return (
     <div
+      ref={rootRef}
       className={`msg${roleClass}${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}${isRepairedSource ? ' msg-repaired-source' : ''}${isRepairReplacement ? ' msg-repair-replacement' : ''}`}
       id={domId??`msg-${message.id}`}
       data-zs-repair-lineage={repairRole}
+      data-zs-message-selection-surface="1"
+      onContextMenu={(event) => {
+        const text = messageSelectionText(rootRef.current, window.getSelection());
+        if (text.length === 0) return;
+        event.preventDefault();
+        setSelectionMenu({ x: event.clientX, y: event.clientY, text });
+      }}
     >
       <div className="msg-avatar">
         {isSystem ? (
@@ -271,6 +303,27 @@ export function MessageView({
           {message.reactions?.length?<span className="row tight faint" aria-label="历史表情">{message.reactions.map(r=><span key={r.emoji}>{r.emoji} {r.by.length}</span>)}</span>:null}
         </div>:null}
       </div>
+      {selectionMenu ? (
+        <Menu anchor={selectionMenu} onClose={() => setSelectionMenu(null)}>
+          <div className="menu-label">已选 {selectionMenu.text.length} 字</div>
+          <MenuItem icon="copy" title="只复制所选文字，包含换行" onClick={() => void copySelected()}>
+            复制所选文字
+          </MenuItem>
+          {onQuote ? (
+            <MenuItem
+              icon="quote"
+              title="随消息发送"
+              onClick={() => {
+                onQuote(message, selectionMenu.text);
+                window.getSelection()?.removeAllRanges();
+                setSelectionMenu(null);
+              }}
+            >
+              引用到当前任务
+            </MenuItem>
+          ) : null}
+        </Menu>
+      ) : null}
     </div>
   );
 }

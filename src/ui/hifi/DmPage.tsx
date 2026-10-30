@@ -22,7 +22,11 @@ import { Icon } from './components/Icon';
 import { Avatar, Menu, MenuItem, Modal, Tag, memberColor } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
 import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, type ReviewSnapshot } from './loader';
-import { openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './data/store';
+import {
+  openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown,
+  addConversationQuoteToDraft,
+} from './data/store';
+import type { ConversationQuote } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
 import { useElementWidth } from './lib/useElementWidth';
@@ -104,9 +108,10 @@ export function DmPage() {
   const [reviewBox, setReviewBox] = useState<{ conversationId: string; mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
   /** 消息引用插入（r61：与线程同判——只写草稿，不派发；id 驱动 Composer 去重应用）。 */
   const [insertText, setInsertText] = useState<{ id: number; text: string } | null>(null);
+  const [insertQuote, setInsertQuote] = useState<{ id: number; quote: ConversationQuote } | null>(null);
   const savedRefs = useStore((s) => s.savedMessageRefs);
   // 切换会话：编辑框一律作废关闭（零提交、零串扰）——A 打开的框不会作用于 B。
-  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); setInsertText(null); setOpsAt(null);setRecordsFor(null); }, [activeId]);
+  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); setInsertText(null); setInsertQuote(null); setOpsAt(null);setRecordsFor(null); }, [activeId]);
   useEffect(() => {
     if (active?.id != null) void readFailedTasks(active.id, active.projectId);
     return () => { failedReadGen.current += 1; };
@@ -629,10 +634,21 @@ export function DmPage() {
                           toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}（状态未变）`, 'error');
                         })}
                         onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); }}
-                        onQuote={() => {
-                          const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
-                          setInsertText({ id: Date.now(), text: `> 引用${m.authorType==='human'?'你':'回复'}：${excerpt}` });
-                          toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
+                        onQuote={(_message, selectedText) => {
+                          const quoted = addConversationQuoteToDraft(`dm:${active.id}`, {
+                            messageId: m.id,
+                            authorLabel: m.authorType === 'human'
+                              ? '你'
+                              : membersAll.find((member) => member.id === m.authorId)?.displayName ?? '助手消息',
+                            threadMessageSeq: m.threadMessageSeq,
+                            text: selectedText ?? m.body,
+                          });
+                          if (!quoted.ok) {
+                            toast(quoted.error, 'error');
+                            return;
+                          }
+                          setInsertQuote({ id: Date.now(), quote: quoted.quote });
+                          toast('已添加对话引用', 'success');
                         }}
                       />
                     </div>
@@ -656,6 +672,7 @@ export function DmPage() {
                     showMentions={false}
                     formalLimits={FORMAL_LIMITS}
                     insertText={insertText ?? undefined}
+                    insertQuote={insertQuote ?? undefined}
                     attachmentUpload={{ conversationId: active.id }}
                     onRetrySend={(env) => retryUnknownSend(env).then((r) => {
                       if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('重发成功（上次发送记录）', 'success'); }
@@ -670,6 +687,7 @@ export function DmPage() {
                       if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
                       const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
                       env.revAtSend = p.draftRev;
+                      env.quoteIds = p.quoteIds;
                       const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）
                       if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
                       const r = await sendEnvelope(env);

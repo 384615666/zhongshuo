@@ -256,6 +256,69 @@ export function queueDraftInsert(draftKey: string, text: string): { ok: boolean;
   return { ok: true, queued: true };
 }
 
+/** 加入一条对话引用；同一消息、同一正文重复点击只展开原卡片，不重复入草稿。 */
+export function addConversationQuoteToDraft(
+  draftKey: string,
+  input: Omit<ConversationQuote, 'id' | 'createdAt'>,
+): { ok: true; quote: ConversationQuote; existed: boolean } | { ok: false; error: string } {
+  if (draftKey.length === 0) return { ok: false, error: '目标草稿未知' };
+  const text = input.text;
+  if (text.trim().length === 0) return { ok: false, error: '没有可引用的文字' };
+  const d = getDraftFull(draftKey);
+  const existing = d.conversationQuotes?.find((quote) => quote.messageId === input.messageId && quote.text === text);
+  if (existing != null) return { ok: true, quote: existing, existed: true };
+  const quote: ConversationQuote = {
+    ...input,
+    text,
+    id: `quoteref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: Date.now(),
+  };
+  setDraftFull(draftKey, {
+    ...d,
+    conversationQuotes: [...(d.conversationQuotes ?? []), quote],
+  });
+  return { ok: true, quote, existed: false };
+}
+
+/** 移除单条对话引用；编辑区正文与附件不受影响。 */
+export function removeConversationQuoteFromDraft(draftKey: string, quoteId: string): HifiDraft {
+  const d = getDraftFull(draftKey);
+  const next = (d.conversationQuotes ?? []).filter((quote) => quote.id !== quoteId);
+  if (next.length === (d.conversationQuotes ?? []).length) return d;
+  const settled: HifiDraft = { ...d, conversationQuotes: next };
+  setDraftFull(draftKey, settled);
+  return settled;
+}
+
+/** 清空当前草稿的对话引用。 */
+export function clearConversationQuotesFromDraft(draftKey: string): HifiDraft {
+  const d = getDraftFull(draftKey);
+  if ((d.conversationQuotes ?? []).length === 0) return d;
+  const settled: HifiDraft = { ...d, conversationQuotes: [] };
+  setDraftFull(draftKey, settled);
+  return settled;
+}
+
+/**
+ * 引用卡片 → 模型正文。引用正文逐字保留；展示层只折叠视觉，不做截断。
+ * Markdown 引用块使用可读来源，卡片删除后才停止出现在后续请求。
+ */
+export function conversationQuotesForModel(quotes: ConversationQuote[]): string {
+  return quotes.map((quote) => {
+    const source = `${quote.authorLabel}${quote.threadMessageSeq != null ? ` · #${quote.threadMessageSeq}` : ''}`;
+    const quoted = quote.text.split(/\r?\n/).map((line) => `> ${line}`).join('\n');
+    return `> 引用${source}\n${quoted}`;
+  }).join('\n>\n');
+}
+
+/** 编辑器展示正文与引用正文的唯一组合点；服务端只收到组合后的 body。 */
+export function composeDraftOutboundBody(text: string, quotes: ConversationQuote[]): string {
+  const quoteBody = conversationQuotesForModel(quotes);
+  const userBody = text.trim();
+  if (quoteBody.length === 0) return userBody;
+  return userBody.length === 0 ? quoteBody : `${quoteBody}\n\n${userBody}`;
+}
+
 /** Composer 挂载/zs:focus-composer 时取走并清空该目标的待插入文本（一次性消费）。 */
 export function takeDraftInserts(draftKey: string): Array<{ id: number; text: string }> {
   const cur = getState().draftInserts[draftKey];
@@ -290,6 +353,23 @@ export interface HifiDraftAttachment {
   /** 表格注入范围（第五十二轮：从预览面板选定——缺省=服务端有界默认窗口）。 */
   range?: string;
 }
+/**
+ * 对话消息引用。
+ *
+ * `text` 是模型真正收到的被引用正文；编辑器只显示紧凑卡片和来源，
+ * 因而长历史不会铺进可编辑正文。卡片跟 HifiDraft 一起持久化，
+ * 但草稿 key 仍负责会话隔离。
+ */
+export interface ConversationQuote {
+  id: string;
+  messageId: string;
+  /** 可读来源，例如「助手消息」「你」或成员名。 */
+  authorLabel: string;
+  /** 串内顺序号（DM 没有该语义时可省略）。 */
+  threadMessageSeq?: number;
+  text: string;
+  createdAt: number;
+}
 export interface HifiDraft {
   collaboration?: 'deliberate';
   /** One-shot request scope. The Composer only offers this for room_root sends. */
@@ -297,6 +377,8 @@ export interface HifiDraft {
   body: string;
   mentions: string[];
   attachments: HifiDraftAttachment[];
+  /** 引用正文与可编辑正文分开保存；发送时才组合进正式 body。 */
+  conversationQuotes?: ConversationQuote[];
   access: string;
   /** 独立研讨本次预算（调用次数）。只随本目标草稿保存，发送时冻结进信封。 */
   budgetMaxTurns?: number;
@@ -759,6 +841,11 @@ export interface PendingSendEnvelope {
   queued?: PendingSendEnvelope[];
   /** r62 P1：重载收口标记——出站账本恢复为「结果未知」人工同号确认项。 */
   recovered?: boolean;
+  /**
+   * 本信封已发送的引用卡身份。只用于本地草稿清算，不进入 params，
+   * 也不改变服务端协议；UNKNOWN 重试仍可据此恰当地移除已成功引用的卡片。
+   */
+  quoteIds?: string[];
 }
 
 export interface LastSendReference extends PendingSendEnvelope { outcome:'sending'|'unknown'|'accepted'|'rejected';settled?:boolean;location?:RecoveredSendLocation;error?:string }
@@ -781,6 +868,47 @@ export function setThreadReadGate(gate: ((threadId: string) => boolean) | null):
 export function canMarkThreadRead(threadId: string): boolean {
   const gate = getState().threadReadGate;
   try { return gate != null && gate(threadId); } catch { return false; }
+}
+
+/**
+ * 线程已读水位只有一个推进方向。卡片/侧栏消费 `readStates`，加载与命令门
+ * 消费 `threadReadSeq`；两处必须原子更新，不能在后端回执后只改其中一份。
+ */
+export function advanceThreadReadWatermark(threadId: string, throughMessageSeq: number): void {
+  if (threadId.length === 0 || !Number.isFinite(throughMessageSeq) || throughMessageSeq < 0) return;
+  setState((s) => {
+    const current = Math.max(s.readStates[threadId] ?? 0, s.threadReadSeq[threadId] ?? 0);
+    const next = Math.max(current, Math.floor(throughMessageSeq));
+    if (next === (s.readStates[threadId] ?? 0) && next === (s.threadReadSeq[threadId] ?? 0)) return s;
+    return {
+      ...s,
+      readStates: { ...s.readStates, [threadId]: next },
+      threadReadSeq: { ...s.threadReadSeq, [threadId]: next },
+    };
+  });
+}
+
+/**
+ * 仅撤销仍停留在本次乐观值上的开读水位。若期间已有更晚的本地标读，
+ * 迟到的失败不得把更新的水位一起回退。
+ */
+export function rollbackThreadReadWatermark(
+  threadId: string,
+  optimisticMessageSeq: number,
+  previousMessageSeq: number,
+): void {
+  if (threadId.length === 0 || !Number.isFinite(optimisticMessageSeq) || !Number.isFinite(previousMessageSeq)) return;
+  const optimistic = Math.floor(optimisticMessageSeq);
+  const previous = Math.max(0, Math.floor(previousMessageSeq));
+  setState((s) => {
+    const current = Math.max(s.readStates[threadId] ?? 0, s.threadReadSeq[threadId] ?? 0);
+    if (current !== optimistic || current <= previous) return s;
+    return {
+      ...s,
+      readStates: { ...s.readStates, [threadId]: previous },
+      threadReadSeq: { ...s.threadReadSeq, [threadId]: previous },
+    };
+  });
 }
 
 export function parkUnknownEnvelope(draftKey: string, env: PendingSendEnvelope): void {
@@ -855,6 +983,13 @@ function validateDraft(d: unknown): d is HifiDraft {
   if (d.analysisOnly !== undefined && typeof d.analysisOnly !== 'boolean') return false;
   if (d.budgetMaxTurns != null && (typeof d.budgetMaxTurns !== 'number' || !Number.isInteger(d.budgetMaxTurns) || d.budgetMaxTurns < 1)) return false;
   if (d.deliberateMemberIds != null && (!Array.isArray(d.deliberateMemberIds) || d.deliberateMemberIds.some((id) => typeof id !== 'string'))) return false;
+  if (d.conversationQuotes != null && (!Array.isArray(d.conversationQuotes) || d.conversationQuotes.some((quote) => !isPlainObject(quote)
+    || typeof quote.id !== 'string'
+    || typeof quote.messageId !== 'string'
+    || typeof quote.authorLabel !== 'string'
+    || typeof quote.text !== 'string'
+    || typeof quote.createdAt !== 'number'
+    || (quote.threadMessageSeq != null && typeof quote.threadMessageSeq !== 'number')))) return false;
   if (d.rev != null && typeof d.rev !== 'number') return false;
   if (d.updatedAt != null && typeof d.updatedAt !== 'number') return false;
   return true;
@@ -871,6 +1006,7 @@ function validateEnvelope(e: unknown): e is PendingSendEnvelope {
   if (p.analysisOnly !== undefined && typeof p.analysisOnly !== 'boolean') return false;
   if (p.deliberationBudget != null && (!isPlainObject(p.deliberationBudget) || !Number.isInteger(p.deliberationBudget.maxTurns) || (p.deliberationBudget.maxTurns as number) < 1)) return false;
   if (e.at != null && typeof e.at !== 'number') return false;
+  if (e.quoteIds != null && (!Array.isArray(e.quoteIds) || e.quoteIds.some((id) => typeof id !== 'string'))) return false;
   if (e.queued != null && (!Array.isArray(e.queued) || e.queued.some((q) => !validateEnvelope(q)))) return false;
   return true;
 }
@@ -1259,11 +1395,14 @@ export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?
   const mentionsClear = unchanged && d.mentions.length === sentMentionKeys.length && d.mentions.every((m, i) => m === sentMentionKeys[i]);
   const sentIds = new Set(env.params.attachmentRefs ?? []);
   const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
+  const sentQuoteIds = new Set(env.quoteIds ?? []);
+  const keptQuotes = (d.conversationQuotes ?? []).filter((quote) => !sentQuoteIds.has(quote.id));
   const settled: HifiDraft = {
     ...d,
     body: nextBody,
     mentions: mentionsClear ? [] : d.mentions,
     attachments: keptAttachments,
+    conversationQuotes: keptQuotes,
     analysisOnly: unchanged ? false : d.analysisOnly,
     // 兼容旧调用方的明确记录串结算标记；R90 的普通聊天页面不再传这个选项。
     sendAs: opts?.recordThread === true ? 'record' : 'ai',

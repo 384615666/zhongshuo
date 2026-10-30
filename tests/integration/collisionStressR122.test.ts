@@ -81,13 +81,16 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     }finally{await f.close();}
   },30000);
 
-  it('24 writable requests targeting one file serialize read-modify-write without losing updates',async()=>{
+  it('24 restricted writable requests targeting one file serialize read-modify-write without losing updates',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('文件已更新',25)});
     const f=await collisionFixture('same-file-writes',{writable:true,adapter});
     const file=join(f.projects[0]!.path,'counter.txt');writeFileSync(file,'0');
     const writes:Array<Promise<void>>=[];
     adapter.onStart=async()=>{const value=Number(readFileSync(file,'utf8'));const op=pause(10).then(()=>writeFileSync(file,String(value+1)));writes.push(op);await op;};
     try{
+      const project=f.projects[0]!;
+      for(const memberId of project.members)await f.cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'acceptEdits'});
+      await f.cmd('project.writeAccess.set',{projectId:project.id,authorized:true,expectedRevision:0});
       const roots=await Promise.all(Array.from({length:24},(_,i)=>f.send(0,i%3,[i%3],`TOKEN_WRITE_${i} 修改同一文件`)));
       const started=Date.now();await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'),90000);await Promise.all(writes);
       expect(readFileSync(file,'utf8')).toBe('24');expect(adapter.peakWritableRoot).toBe(1);expect(adapter.turns).toHaveLength(24);
@@ -150,13 +153,14 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     }finally{await f.close();}
   },30000);
 
-  it('production session-scoped role slots still serialize same-project writes',async()=>{
+  it('production session-scoped role slots run full-access writes concurrently within the provider limit',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('已更新',50)});
     const f=await collisionFixture('session-write-production',{members:1,writable:true,adapter});
     try{
       const roots=await Promise.all(Array.from({length:8},(_,i)=>f.send(0,i%3,[0],`TOKEN_SERIAL_${i} 修改文件`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
-      expect(adapter.peakMember).toBe(1);expect(adapter.peakWritableRoot).toBe(1);
+      expect(adapter.peakMember).toBe(2);expect(adapter.peakWritableRoot).toBe(2);
+      expect(new Set(adapter.turns.map(t=>t.sessionId)).size).toBe(8);
       f.save({ok:true,productionAdmission:true,requests:8,peakSameRole:adapter.peakMember,peakWritableRoot:adapter.peakWritableRoot});
     }finally{await f.close();}
   },30000);

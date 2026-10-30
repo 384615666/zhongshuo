@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
+import { DispatchAdmission } from '../../src/daemon/admission.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 
@@ -63,6 +64,9 @@ describe('R99 formal mixed 2 DELIBERATE + 1 AUTO long execution', () => {
       const worker = new DispatchWorker({
         db, adapter: codex, adapterFor: (memberId) => adapterByMember.get(memberId) ?? adapters.auto,
         leaseOwner: 'r99-mixed', enableDeliberate: true, turnDeadlineMs: null,
+        // Preserve this long-queue oracle under R127's full-access sharing: the
+        // configured project capacity, rather than a global writer mutex, is 1.
+        admission: new DispatchAdmission({perProjectMaxInFlight:1}),
         appDataDir: dir, detachedTurnConsumption: true,
       });
 
@@ -110,7 +114,7 @@ describe('R99 formal mixed 2 DELIBERATE + 1 AUTO long execution', () => {
         WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1`).get(autoTask.taskId) as { turn_id: string; run_id: string };
       expect(db.prepare("SELECT count(*) c FROM workspace_leases WHERE owner_turn_id=? AND status='active'").get(autoTurn.turn_id)).toMatchObject({ c: 1 });
       const startsBeforeBlockedAttempt = codex.startTurnLog.length;
-      await worker.runOnce(); // pending IND must defer on the same-root write admission
+      await worker.runOnce(); // pending IND must defer on the configured project capacity
       expect(codex.startTurnLog.length).toBe(startsBeforeBlockedAttempt);
       expect(db.prepare("SELECT count(*) c FROM outbox WHERE status='pending' AND dispatch_key LIKE '%:IND:%'").get()).toMatchObject({ c: 4 });
       await vi.advanceTimersByTimeAsync(301_200);

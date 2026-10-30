@@ -484,6 +484,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                 attachmentRanges:attachmentRangesFromDraft(draftKey),
               });
               env.revAtSend = p.draftRev;
+              env.quoteIds = p.quoteIds;
               // r62 P1：完整信封在交给 bridge 之前耐久落账；ok/failed/unknown 三态收口
               //（unknown→pendingSends 横幅=人工同号确认；崩溃窗口见 store 出站账本注释）。
               const staged = stageOutbound(draftKey, env);

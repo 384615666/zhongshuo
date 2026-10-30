@@ -82,7 +82,14 @@ export function claudeLaunchIdentity(options: ClaudeCliAdapterOptions, cwd: stri
   const identityFor=(configurationKey:string)=>createHash('sha256').update(JSON.stringify({ executableHash: cached.hash,
     model: options.model ?? process.env.ZS_CLAUDE_MODEL, permissionMode: options.permissionMode ?? 'bypassPermissions', effort:options.effort??null,
     adapterVersion: CLAUDE_ADAPTER_VERSION, configurationKey })).digest('hex');
-  return { ...configuration, executableHash: cached.hash, identityKey:identityFor(configuration.configurationKey),legacyIdentityKey:configuration.legacyConfigurationKey?identityFor(configuration.legacyConfigurationKey):undefined };
+  const launchEvidence:Record<string,string>={...configuration.configurationEvidence,
+    '执行程序':cached.hash,
+    '模型与权限':createHash('sha256').update(JSON.stringify({model:options.model??process.env.ZS_CLAUDE_MODEL,
+      permissionMode:options.permissionMode??'bypassPermissions',effort:options.effort??null,adapterVersion:CLAUDE_ADAPTER_VERSION})).digest('hex'),
+  };
+  return { ...configuration, executableHash: cached.hash, identityKey:identityFor(configuration.configurationKey),
+    previousIdentityKey:identityFor(configuration.previousConfigurationKey),launchEvidence,
+    legacyIdentityKey:configuration.legacyConfigurationKey?identityFor(configuration.legacyConfigurationKey):undefined };
 }
 
 /** 渠道裸模型名（deepseek-flash / deepseek/deepseek-v4.1-flash / glm-5.3…）；拒绝 [1m] 类后缀语法。 */

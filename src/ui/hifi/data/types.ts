@@ -295,6 +295,8 @@ export interface ThreadCard {
   projectId: string;
   roomId: string;
   anchorMessageId: string;
+  /** room.pool 的真实最新串内序号；用于历史尚未返回时的水位判定。 */
+  lastMessageSeq?: number;
   /** 记录串为 null（E1——卡片不显示任务号/状态；历史 record 消息保持原语义） */
   taskId: string | null;
   taskStatus: string | null;

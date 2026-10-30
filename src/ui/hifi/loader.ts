@@ -16,7 +16,7 @@ import type {PreDispatchFailureProjection} from '../../contracts/taskDetails';
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import {stageOutbound,updateSendReference,settleOutbound, setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
+import {stageOutbound,updateSendReference,settleOutbound, setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, advanceThreadReadWatermark, rollbackThreadReadWatermark, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
@@ -25,7 +25,7 @@ import type {MessageFileChange} from '../../contracts/messageFileChanges.ts';
 import type { CollaborationStage, CurrentRunBudget, DeliveryFact, DocumentView, FormalAttachmentSummary, Message, Task, Thread, ThreadCard } from './data/types';
 import { deriveDeliberateMaxTurns } from '../../contracts/deliberation.ts';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
-import { currentNavSeq, navigate } from './lib/router';
+import { currentNavSeq, match, navigate, parseQuery, pathOf } from './lib/router';
 import {canonicalJson} from '../../contracts/common.ts';
 import { navIntentActive, cancelAllNavIntents, beginUserNavIntent, onNavIntentCancel, releaseNavIntent, type NavIntent } from './lib/navIntent';
 
@@ -35,7 +35,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?: {maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; lastMessageSeq?: number; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?:{maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 export interface HistoryMessage { repairLineage?:MessageRepairLineage|null; id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[]; progress?: ThreadVisibleProgress[] }
@@ -172,6 +172,39 @@ function formalAttachmentsOf(raw: readonly { artifactId: string; filename: strin
 function stillCurrent(gen: number, projectId: string): boolean {
   const s = getState();
   return s.loadGen === gen && s.activeProjectId === projectId;
+}
+
+/** Whether the visible hash currently names this exact thread, not merely the same project. */
+export function threadOpenReadRouteMatches(
+  threadId: string,
+  projectId: string,
+  roomId: string,
+  hash = window.location.hash.replace(/^#/, '') || '/welcome',
+): boolean {
+  const path = pathOf(hash);
+  const direct = match('/thread/:threadId', path);
+  if (direct?.threadId === threadId) return true;
+  const queryThreadId = parseQuery(hash).thread;
+  if (queryThreadId !== threadId) return false;
+  const projectRoom = match('/project/:projectId/room/:roomId', path);
+  if (projectRoom != null) return projectRoom.projectId === projectId && projectRoom.roomId === roomId;
+  const legacyRoom = match('/room/:roomId', path);
+  return legacyRoom?.roomId === roomId;
+}
+
+function threadOpenReadTargetIsCurrent(
+  threadId: string,
+  projectId: string,
+  roomId: string,
+  gen: number,
+  readOpenGuard?: () => boolean,
+): boolean {
+  return stillCurrent(gen, projectId)
+    && getState().ui.activeThreadId === threadId
+    && document.visibilityState === 'visible'
+    && !document.body.classList.contains('legacy-on')
+    && threadOpenReadRouteMatches(threadId, projectId, roomId)
+    && readOpenGuard?.() === true;
 }
 
 /* ---------- 首启（有界等待，不靠 reload——review-r46 §5） ---------- */
@@ -1091,6 +1124,120 @@ const poolTickets = new Map<string, number>();
 const threadTickets = new Map<string, number>();
 const progressTickets = new Map<string, number>();
 const taskProjectionTickets = new Map<string, number>();
+const threadOpenReadGeneration = new Map<string, number>();
+const pendingThreadOpenReads = new Map<string, {
+  generation: number;
+  projectId: string;
+  roomId: string;
+  loadGen: number;
+  readOpenGuard?: () => boolean;
+  /** Server-confirmed floor for this open sequence. */
+  confirmed: number;
+  /** Highest locally visible watermark requested by cache or thread.get. */
+  requested: number;
+  inFlight: boolean;
+}>();
+
+function drainThreadOpenRead(
+  threadId: string,
+  pending: NonNullable<ReturnType<typeof pendingThreadOpenReads.get>>,
+): void {
+  if (pendingThreadOpenReads.get(threadId) !== pending
+    || pending.inFlight
+    || pending.confirmed >= pending.requested) return;
+  pending.inFlight = true;
+  const throughMessageSeq = pending.requested;
+  void command('thread.markRead', { threadId, throughMessageSeq })
+    .then(() => {
+      if (pendingThreadOpenReads.get(threadId) !== pending) return;
+      pending.inFlight = false;
+      pending.confirmed = Math.max(pending.confirmed, throughMessageSeq);
+      if (pending.confirmed < pending.requested) {
+        drainThreadOpenRead(threadId, pending);
+        return;
+      }
+      pendingThreadOpenReads.delete(threadId);
+      // The watermark is already local. Only refresh the source card while
+      // this exact route is still current; a switched-to B must stay untouched.
+      if (pending.generation !== threadOpenReadGeneration.get(threadId)) return;
+      if (!threadOpenReadTargetIsCurrent(
+        threadId,
+        pending.projectId,
+        pending.roomId,
+        pending.loadGen,
+        pending.readOpenGuard,
+      )) return;
+      void loadRoomPool(pending.roomId).catch(() => { /* 主池未读汇总下次刷新再对 */ });
+    })
+    .catch(() => {
+      if (pendingThreadOpenReads.get(threadId) !== pending) return;
+      pending.inFlight = false;
+      // A newer cache/thread.get watermark arrived while this older command was
+      // pending. Keep its optimistic value and immediately mark through it.
+      if (throughMessageSeq < pending.requested) {
+        drainThreadOpenRead(threadId, pending);
+        return;
+      }
+      pendingThreadOpenReads.delete(threadId);
+      rollbackThreadReadWatermark(threadId, pending.requested, pending.confirmed);
+    });
+}
+
+/**
+ * Single coordinator for both cached-entity opening and thread.get receipts.
+ * The first sequence advances UI immediately; a later, higher sequence is
+ * coalesced into the next command after the current ACK settles.
+ */
+function queueThreadOpenRead(
+  threadId: string,
+  throughMessageSeq: number,
+  context: {
+    projectId: string;
+    roomId: string;
+    loadGen: number;
+    readOpenGuard?: () => boolean;
+  },
+): void {
+  if (!Number.isFinite(throughMessageSeq) || throughMessageSeq <= 0) return;
+  const requested = Math.floor(throughMessageSeq);
+  let pending = pendingThreadOpenReads.get(threadId);
+  if (pending == null) {
+    const current = Math.max(
+      getState().readStates[threadId] ?? 0,
+      getState().threadReadSeq[threadId] ?? 0,
+    );
+    if (requested <= current) return;
+    const generation = (threadOpenReadGeneration.get(threadId) ?? 0) + 1;
+    threadOpenReadGeneration.set(threadId, generation);
+    pending = {
+      generation,
+      ...context,
+      confirmed: current,
+      requested,
+      inFlight: false,
+    };
+    pendingThreadOpenReads.set(threadId, pending);
+  } else {
+    pending.generation = threadOpenReadGeneration.get(threadId) ?? pending.generation;
+    pending.projectId = context.projectId;
+    pending.roomId = context.roomId;
+    pending.loadGen = context.loadGen;
+    pending.readOpenGuard = context.readOpenGuard;
+    pending.requested = Math.max(pending.requested, requested);
+  }
+  advanceThreadReadWatermark(threadId, pending.requested);
+  drainThreadOpenRead(threadId, pending);
+}
+
+/**
+ * Invalidate delayed opens when leaving the reply view, switching threads, or
+ * going to the background. An optimistic watermark already advanced is kept:
+ * the user did open that thread, and a later command failure rolls it back.
+ */
+export function cancelThreadReadOnOpen(threadId: string): void {
+  const generation = (threadOpenReadGeneration.get(threadId) ?? 0) + 1;
+  threadOpenReadGeneration.set(threadId, generation);
+}
 
 export async function loadRoomPool(roomId: string): Promise<void> {
   const ticket = ++rootReadTicket;
@@ -1107,6 +1254,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
     const cards: ThreadCard[] = (data.items ?? []).map((it) => ({
       threadId: it.threadId, projectId, roomId,
       anchorMessageId: it.anchorMessageId ?? '',
+      lastMessageSeq: it.lastMessageSeq,
       taskId: it.taskId ?? null, taskStatus: it.taskStatus ?? null, taskResponseKind:it.taskResponseKind, roomTaskNumber: it.roomTaskNumber ?? null,
       taskTitle: it.taskTitle ?? null,
       taskObjective: it.taskObjective, taskReviewPolicy: it.taskReviewPolicy, taskRevision: it.taskRevision,
@@ -1160,11 +1308,19 @@ export async function loadRoomPool(roomId: string): Promise<void> {
 function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string, cards: ThreadCard[], ticket: number): void {
   const room = prev.rooms.find((r) => r.id === roomId);
   const convId = room?.conversationId ?? '';
-  const threads = cards.map((c) => ({
-    id: c.threadId, projectId, roomId, conversationId: convId,
-    anchorMessageId: c.anchorMessageId, rootTaskId: c.taskId ?? undefined,
-    status: 'open' as const, lastMessageSeq: 0, revision: 0,
-  }));
+  const threads = cards.map((c) => {
+    const pooledSeq = c.lastMessageSeq ?? 0;
+    const knownSeq = Math.max(
+      pooledSeq,
+      prev.threadEntities[c.threadId]?.lastMessageSeq ?? 0,
+      prev.threads.find((thread) => thread.id === c.threadId)?.lastMessageSeq ?? 0,
+    );
+    return {
+      id: c.threadId, projectId, roomId, conversationId: convId,
+      anchorMessageId: c.anchorMessageId, rootTaskId: c.taskId ?? undefined,
+      status: 'open' as const, lastMessageSeq: knownSeq, revision: 0,
+    };
+  });
   const roots = cards.filter((c) => c.body.length > 0 || c.createdAt > 0).map((c) => ({
     id: c.anchorMessageId || `anchor:${c.threadId}`, projectId, roomId, threadId: undefined,
     authorType: c.authorType ?? 'human', authorId: c.authorId ?? 'you', kind: 'text' as const,
@@ -1193,14 +1349,29 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
   }));
   const subscriptions: Record<string, { followed: boolean; muted: boolean }> = {};
   for (const c of cards) subscriptions[c.threadId] = { followed: c.followed, muted: c.muted };
-  setState((s) => ({
-    ...s,
-    threads: [...s.threads.filter((t) => t.roomId !== roomId), ...threads],
-    messages: [...s.messages.filter((m) => m.roomId !== roomId || m.threadId != null), ...stableRoots],
-    tasks: [...s.tasks.filter((t) => t.roomId !== roomId), ...tasks],
-    subscriptions: { ...s.subscriptions, ...subscriptions },
-    threadAnchors: anchors,
-  }));
+  setState((s) => {
+    const threadViewById = new Map(threads.map((thread) => [thread.id, thread]));
+    const threadEntities = { ...s.threadEntities };
+    for (const card of cards) {
+      const pooledView = threadViewById.get(card.threadId);
+      if (pooledView == null) continue;
+      const current = threadEntities[card.threadId];
+      // Pool metadata supplies the cold-open sequence through `threads`.
+      // Keep thread.get-owned status/revision/entities absent until fetched.
+      if (current != null && pooledView.lastMessageSeq > current.lastMessageSeq) {
+        threadEntities[card.threadId] = { ...current, lastMessageSeq: pooledView.lastMessageSeq };
+      }
+    }
+    return {
+      ...s,
+      threads: [...s.threads.filter((t) => t.roomId !== roomId), ...threads],
+      messages: [...s.messages.filter((m) => m.roomId !== roomId || m.threadId != null), ...stableRoots],
+      tasks: [...s.tasks.filter((t) => t.roomId !== roomId), ...tasks],
+      subscriptions: { ...s.subscriptions, ...subscriptions },
+      threadAnchors: anchors,
+      threadEntities,
+    };
+  });
 }
 
 /**
@@ -1314,11 +1485,45 @@ export const msgOfReply = (projectId: string, roomId: string, threadId: string, 
  * task.get（有根任务才查）。readGate 独立水位：thread.markRead 只在**发起此刻**门通过才发
  * （当前线程+前台/贴底/接管——ThreadPage 注册；与 DM conversationSeq 门分开，review-r50 §4）。
  */
-export async function loadThread(threadId: string, opts: { markRead?: boolean } = {}): Promise<void> {
+export async function loadThread(
+  threadId: string,
+  opts: {
+    markRead?: boolean;
+    markReadOnOpen?: boolean;
+    /** 当前路由、前台、回复标签与 activeThreadId 的实时门。 */
+    readOpenGuard?: () => boolean;
+  } = {},
+): Promise<void> {
   const ticket = ++rootReadTicket;
   threadTickets.set(threadId, ticket);
   const initialProjectId = getState().activeProjectId;
   const gen = getState().loadGen;
+  const currentState = getState();
+  const cachedEntity = currentState.threadEntities[threadId];
+  const cachedView = currentState.threads.find((thread) => thread.id === threadId);
+  const cachedProjectId = cachedEntity?.projectId ?? cachedView?.projectId ?? '';
+  const cachedRoomId = cachedEntity?.roomId ?? cachedView?.roomId ?? '';
+  const cachedLastMessageSeq = Math.max(
+    cachedEntity?.lastMessageSeq ?? 0,
+    cachedView?.lastMessageSeq ?? 0,
+  );
+  if (opts.markReadOnOpen === true
+    && cachedProjectId === initialProjectId
+    && cachedRoomId.length > 0
+    && threadOpenReadTargetIsCurrent(
+      threadId,
+      cachedProjectId,
+      cachedRoomId,
+      gen,
+      opts.readOpenGuard,
+    )) {
+    queueThreadOpenRead(threadId, cachedLastMessageSeq, {
+      projectId: cachedProjectId,
+      roomId: cachedRoomId,
+      loadGen: gen,
+      readOpenGuard: opts.readOpenGuard,
+    });
+  }
   try {
     const got = await command<ThreadGetData>('thread.get', { threadId });
     const projectId = got.thread.projectId;
@@ -1339,17 +1544,30 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
       const errors = { ...prev.readErrors }; delete errors[`thread:${threadId}`];
       const updateProgress = got.progress != null && (progressTickets.get(threadId) ?? 0) <= ticket;
       if (updateProgress) progressTickets.set(threadId, ticket);
+      const knownRead = Math.max(prev.threadReadSeq[threadId] ?? 0, got.lastReadSeq);
       return {
         ...prev,
         threadEntities: { ...prev.threadEntities, [threadId]: thread },
         threadAnchors: { ...prev.threadAnchors, [threadId]: anchor != null && (rootTickets.get(anchor.id) ?? 0) > ticket
           ? prev.messages.find((m) => m.id === anchor.id) ?? prev.threadAnchors[threadId] ?? anchor : anchor },
-        threadReadSeq: { ...prev.threadReadSeq, [threadId]: got.lastReadSeq },
+        threadReadSeq: { ...prev.threadReadSeq, [threadId]: knownRead },
+        readStates: { ...prev.readStates, [threadId]: Math.max(prev.readStates[threadId] ?? 0, knownRead) },
         ...(got.members?{threadMemberships:{...prev.threadMemberships,[threadId]:got.members},followers:{...prev.followers,[threadId]:got.members.memberIds}}:{}),
         ...(updateProgress ? {threadProgress:{...prev.threadProgress,[threadId]:{items:got.progress!,readAt:Date.now()}}} : {}),
         readErrors: errors,
       };
     });
+    /** thread.get may be newer than the cached entity; coalesce the higher mark. */
+    if (opts.markReadOnOpen === true && threadOpenReadTargetIsCurrent(
+      threadId, projectId, thread.roomId, gen, opts.readOpenGuard,
+    )) {
+      queueThreadOpenRead(threadId, got.thread.lastMessageSeq, {
+        projectId,
+        roomId: thread.roomId,
+        loadGen: gen,
+        readOpenGuard: opts.readOpenGuard,
+      });
+    }
     hydrateThreadFromSnapshots(threadId, ticket);
     const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
     if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
@@ -1396,11 +1614,11 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
     hydrateThreadFromSnapshots(threadId, ticket);
     // 阅读水位（独立门）：最新回复 seq ≤ thread.lastMessageSeq（未来序号服务端拒绝）。
     const lastSeq = replies.length > 0 ? (replies[replies.length - 1]?.threadMessageSeq ?? 0) : 0;
-    if (opts.markRead === true && lastSeq > got.lastReadSeq && canMarkThreadRead(threadId)) {
+    if (opts.markRead === true && opts.markReadOnOpen !== true && lastSeq > got.lastReadSeq && canMarkThreadRead(threadId)) {
       void command('thread.markRead', { threadId, throughMessageSeq: lastSeq })
         .then(() => {
           if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
-          setState((prev) => ({ ...prev, threadReadSeq: { ...prev.threadReadSeq, [threadId]: lastSeq } }));
+          advanceThreadReadWatermark(threadId, lastSeq);
           void loadRoomPool(thread.roomId).catch(() => { /* 主池未读汇总下次刷新再对 */ });
         })
         .catch(() => { /* 下次进入再推进 */ });
@@ -1500,7 +1718,7 @@ export async function markThreadReadIfAllowed(threadId: string): Promise<void> {
   if (lastSeq > known && canMarkThreadRead(threadId)) {
     try {
       await command('thread.markRead', { threadId, throughMessageSeq: lastSeq });
-      setState((prev) => ({ ...prev, threadReadSeq: { ...prev.threadReadSeq, [threadId]: lastSeq } }));
+      advanceThreadReadWatermark(threadId, lastSeq);
     } catch { /* 未来序号/门关——下次再推进 */ }
   }
 }

@@ -280,6 +280,10 @@ describe('R124 command order and scheduler chaos; isolated Fake only',()=>{
       await f.cmd('member.setRuntime',{memberId:f.projects[0]!.members[1],kind:'fake',permissionMode:'plan'});
       gate.release();await expect(opening).rejects.toThrow('配置已变化');
       expect(adapter.starts.some(t=>t.taskId===a.taskId)).toBe(false);expect(f.admission.has(oldTurn)).toBe(false);
+      // This oracle deliberately exercises the restricted single-writer queue;
+      // R127 full-access independent threads now share the physical directory.
+      for(const memberId of [f.projects[0]!.members[0]!,f.projects[0]!.members[2]!])await f.cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'acceptEdits'});
+      await f.cmd('project.writeAccess.set',{projectId:f.projects[0]!.id,authorized:true,expectedRevision:0});
       const b=await f.send(0,1,[2],'A07_NEXT_WRITER');await f.worker.runOnce();
       const nextTurn=adapter.starts.find(t=>t.taskId===b.taskId)!.turnId;
       const stale=await f.raw('task.stop',{taskId:a.taskId,targetRunId:oldRun,expectedStopGeneration:0});expect(stale.ok).toBe(true);

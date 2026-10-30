@@ -239,6 +239,12 @@ const P: Record<string, JSX.Element> = {
   'message-square': (
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
   ),
+  quote: (
+    <>
+      <path d="M9 11H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v7c0 4-2 6-5 7" />
+      <path d="M20 11h-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v7c0 4-2 6-5 7" />
+    </>
+  ),
   bell: (
     <>
       <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />

@@ -7,9 +7,8 @@
  * - project：项目级在途上限（一项目占满不饿死其他项目——拒绝方进入 skip 重试，其他项目照常领取）；
  * - provider：runtime kind/installation 级上限（渠道/CLI 并发保护）；
  * - member：同成员同 executionScopeKey 会话串行；任一方无 key 时保守按成员串行；
- * - writeRoot：需要写入时的物理目录单写者（同 canonical_path 组串行）。当前全只读档
- *   （plan/analyze）不占写槽；写档接入点就绪（B6 扩展时把 tier=写 的任务带 writeRootKey 准入），
- *   本轮不恢复延期的并行写入增强（默认单写者语义不变）。
+ * - writeRoot：物理目录写者；完整权限跨串可按 session_scope 共存，其余单写。
+ *   同串、父子目录、旧身份和恢复保护不共享；最终持久租约再次核实保护状态。
  *
  * 占位语义：准入在 openSession/startTurn **启动窗口之前**（dispatchClaimed 解析出成员/项目/
  * provider 即判定并占位）；完成/失败/取消/启动失败由消费器/派发异常路径释放；结果不确定
@@ -18,6 +17,8 @@
  * 阶段泵只入队 outbox；一切启动必经 worker claim→dispatchClaimed→本准入（泵不能绕过准入
  * 直接启动下一阶段——结构保证）。
  */
+import {lockDomainsOverlap} from './directoryIdentity.ts';
+
 export interface AdmissionDimensions {
   memberId: string;
   /** 调用方提供的执行会话标识；缺省兼容旧调用/旧恢复记录的成员互斥。 */
@@ -26,6 +27,9 @@ export interface AdmissionDimensions {
   providerKey: string;
   /** 写类任务的物理目录（canonical_path）；只读为 null（不占写槽）。 */
   writeRootKey: string | null;
+  /** Only independently bound full-access threads opt into shared writers. */
+  writePolicy?: 'single_writer' | 'session_scope';
+  writeSessionScopeKey?: string;
 }
 
 export interface AdmissionLimits {
@@ -57,7 +61,12 @@ export class DispatchAdmission {
     if (this.held.has(turnId) || this.count((d) => d.memberId === dims.memberId && (
       d.executionScopeKey == null || dims.executionScopeKey == null || d.executionScopeKey === dims.executionScopeKey
     )) >= 1) return { granted: false, reason: 'member' };
-    if (dims.writeRootKey != null && this.count((d) => d.writeRootKey === dims.writeRootKey) >= 1) {
+    if (dims.writeRootKey != null && this.count((d) => d.writeRootKey != null && lockDomainsOverlap(d.writeRootKey,dims.writeRootKey!) && !(
+      d.writePolicy==='session_scope' && dims.writePolicy==='session_scope'
+      && d.projectId===dims.projectId && d.writeRootKey===dims.writeRootKey
+      && d.writeSessionScopeKey!=null && dims.writeSessionScopeKey!=null
+      && d.writeSessionScopeKey!==dims.writeSessionScopeKey
+    )) >= 1) {
       return { granted: false, reason: 'write-root' };
     }
     if (this.count((d) => d.projectId === dims.projectId) >= this.limits.perProjectMaxInFlight) {

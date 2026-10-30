@@ -133,6 +133,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
           if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
           const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
           env.revAtSend = p.draftRev;
+          env.quoteIds = p.quoteIds;
           const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）
           if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
           const r = await sendEnvelope(env);

@@ -41,6 +41,24 @@ async function fixture(deliberate=true){
 }
 
 describe('R104 semantic completion through formal worker dispatch',()=>{
+  it('R127 labels concurrent file versions as shared observations instead of claiming this run authored them',async()=>{
+    const f=await fixture();try{
+      writeFileSync(join(f.project,'共享.md'),'原始版本');
+      const root=await f.send('分别核对文件');await f.worker.runOnce();
+      await f.run(draft('continue','文件已更新',['需要复核']),[{kind:'writeFile',path:'共享.md',content:'更新版本'}]);
+      await f.run(draft('continue','读取当前版本',['需要复核']));
+      f.db.prepare("UPDATE change_sets SET manifest_json=json_set(manifest_json,'$.concurrentWriteObservation',json('true')) WHERE task_id=?").run(root.taskId);
+      const key=(f.db.prepare("SELECT dispatch_key FROM outbox WHERE status='pending' ORDER BY id LIMIT 1").get() as {dispatch_key:string}).dispatch_key;
+      const step=parseDelibStep(key)!;
+      const assembled=assembleStepInput(f.db,{taskId:root.taskId,runId:step.runId,step,appDataDir:f.dir});
+      expect(assembled.ok).toBe(true);if(!assembled.ok)return;
+      expect(assembled.value.text).toContain('文件版本观察：修改前/后快照');
+      expect(assembled.value.text).toContain('shared-directory-observation');
+      expect(assembled.value.text).toContain('不证明本运行或某位成员实际修改');
+      expect(assembled.value.text).not.toContain('本运行真实文件修改');
+      expect(assembled.value.text).toContain('原始版本');expect(assembled.value.text).toContain('更新版本');
+    }finally{await f.cleanup();}
+  });
   it.each([false,true])('supplies verified original and revised evidence without mixing later disk state (corrupt=%s)',async(corrupt)=>{
     const f=await fixture();try{
       writeFileSync(join(f.project,'预算.md'),'原稿1140/60/2');const root=await f.send('核对并修订预算');await f.worker.runOnce();

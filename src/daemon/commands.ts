@@ -5119,6 +5119,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const followed = (deps.db.prepare('SELECT followed FROM thread_subscriptions WHERE thread_id = ? AND viewer_id = ?').get(t.id, deps.localUserId) as { followed: number } | undefined)?.followed === 1;
           items.push({
             threadId: t.id, unread, muted, followed,
+            lastMessageSeq: t.last_message_seq,
             anchorMessageId: t.anchor_message_id,
             body: JSON.parse(t.body_json) as { text: string },
             createdAt: t.created_at,

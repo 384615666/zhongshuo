@@ -15,17 +15,22 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
  *  - 布局：工具条与状态行都是单行不折行；窄窗靠收窄间距与截断，而不是换行堆叠
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
 import {
   useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload,
   settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview,
   takeDraftInserts, settleOutbound, addFileRefToDraft, inlineAttachmentToken, parseInlineBody,
-  stripInlineAttachmentTokens, staleAttachmentUploadIds,
+  stripInlineAttachmentTokens, staleAttachmentUploadIds, composeDraftOutboundBody,
+  removeConversationQuoteFromDraft, clearConversationQuotesFromDraft,
 } from '../data/store';
-import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem, InlineAttachmentToken, InlineBodySegment } from '../data/store';
+import type {
+  PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem, InlineAttachmentToken,
+  InlineBodySegment, ConversationQuote,
+} from '../data/store';
 import {SendRecoveryAction} from './SendRecoveryAction';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
@@ -697,12 +702,294 @@ export interface FormalLimits {
   access?: string;
 }
 
+export function conversationQuoteSourceLabel(quote: Pick<ConversationQuote, 'authorLabel' | 'threadMessageSeq'>): string {
+  return `${quote.authorLabel}${quote.threadMessageSeq != null ? ` · #${quote.threadMessageSeq}` : ''}`;
+}
+
+function ConversationQuoteDock({
+  quotes,
+  onRemove,
+  onClear,
+}: {
+  quotes: ConversationQuote[];
+  onRemove: (quoteId: string) => void;
+  onClear: () => void;
+}) {
+  const popoverId = useId();
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    maxHeight: number;
+    placement: 'top' | 'bottom';
+  } | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
+  const suppressFocusOpenRef = useRef(false);
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    const popover = popoverRef.current;
+    if (trigger == null || popover == null) return;
+    const rect = trigger.getBoundingClientRect();
+    const margin = 8;
+    const gap = 6;
+    const viewportWidth = Math.max(0, window.innerWidth);
+    const viewportHeight = Math.max(0, window.innerHeight);
+    const width = Math.max(0, Math.min(340, viewportWidth - margin * 2));
+    const preferredHeight = Math.min(340, popover.scrollHeight);
+    const spaceAbove = Math.max(0, rect.top - gap - margin);
+    const spaceBelow = Math.max(0, viewportHeight - rect.bottom - gap - margin);
+    const placement = spaceAbove >= Math.min(preferredHeight, 160) || spaceAbove >= spaceBelow
+      ? 'top'
+      : 'bottom';
+    const maxHeight = Math.max(72, Math.min(preferredHeight, placement === 'top' ? spaceAbove : spaceBelow));
+    const visibleHeight = Math.min(preferredHeight, maxHeight);
+    const left = Math.min(Math.max(margin, rect.left), Math.max(margin, viewportWidth - width - margin));
+    const top = placement === 'top'
+      ? Math.max(margin, rect.top - gap - visibleHeight)
+      : Math.min(viewportHeight - margin - visibleHeight, rect.bottom + gap);
+    setPosition({ left, top: Math.max(margin, top), width, maxHeight, placement });
+  }, []);
+
+  const showPopover = useCallback((focusFirst = false) => {
+    clearCloseTimer();
+    setOpen(true);
+    if (focusFirst) {
+      window.requestAnimationFrame(() => {
+        const first = popoverRef.current?.querySelector<HTMLElement>('button');
+        first?.focus();
+      });
+    }
+  }, [clearCloseTimer]);
+
+  const scheduleClose = useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      const active = document.activeElement;
+      if (triggerRef.current?.contains(active) || popoverRef.current?.contains(active)) return;
+      setOpen(false);
+    }, 120);
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (quotes.length !== 0) return;
+    setOpen(false);
+    setCopiedId(null);
+    setPosition(null);
+  }, [quotes.length]);
+
+  const closeAndRestoreTriggerFocus = useCallback(() => {
+    setOpen(false);
+    suppressFocusOpenRef.current = true;
+    triggerRef.current?.focus();
+    window.setTimeout(() => {
+      suppressFocusOpenRef.current = false;
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+    const frame = window.requestAnimationFrame(updatePosition);
+    const onViewportChange = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect == null || rect.bottom <= 0 || rect.top >= window.innerHeight) {
+        setOpen(false);
+        return;
+      }
+      updatePosition();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target == null || triggerRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target as Node | null;
+      if (target == null || triggerRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onViewportChange, true);
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('scroll', onViewportChange, true);
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('focusin', onFocusIn);
+    };
+  }, [open, quotes.length, updatePosition]);
+
+  useEffect(() => () => {
+    clearCloseTimer();
+    if (copiedTimerRef.current != null) window.clearTimeout(copiedTimerRef.current);
+  }, [clearCloseTimer]);
+
+  if (quotes.length === 0) return null;
+
+  const copyQuote = async (quote: ConversationQuote): Promise<void> => {
+    try {
+      if (navigator.clipboard == null) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(quote.text);
+      setCopiedId(quote.id);
+      if (copiedTimerRef.current != null) window.clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = window.setTimeout(() => setCopiedId(null), 1400);
+    } catch {
+      setCopiedId(null);
+    }
+  };
+
+  const popover = open ? createPortal(
+    <div
+      ref={popoverRef}
+      id={popoverId}
+      className="composer-quote-popover"
+      role="dialog"
+      aria-label={`${quotes.length} 条对话引用`}
+      data-zs-conversation-quote-popover
+      data-zs-placement={position?.placement ?? 'top'}
+      style={position == null ? { left: 8, top: 8, width: 340, maxHeight: 280, visibility: 'hidden' } : {
+        left: position.left,
+        top: position.top,
+        width: position.width,
+        maxHeight: position.maxHeight,
+      }}
+      onMouseEnter={clearCloseTimer}
+      onMouseLeave={scheduleClose}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closeAndRestoreTriggerFocus();
+      }}
+      onBlur={(event) => {
+        const next = event.relatedTarget as Node | null;
+        if (next == null || (!triggerRef.current?.contains(next) && !popoverRef.current?.contains(next))) {
+          setOpen(false);
+        }
+      }}
+    >
+      <div className="composer-quote-popover-head">
+        <span>{quotes.length} 条对话引用</span>
+        <span className="faint">随消息发送</span>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="composer-quote-clear-all"
+          title="移除全部对话引用；输入正文与附件保留"
+          onClick={() => {
+            setOpen(false);
+            onClear();
+          }}
+        >
+          全部移除
+        </button>
+      </div>
+      <div className={`composer-quote-list${quotes.length === 1 ? ' is-single' : ''}`}>
+        {quotes.map((quote, index) => (
+          <article className="composer-quote-card" key={quote.id} data-zs-conversation-quote={quote.id}>
+            <div className="composer-quote-card-head">
+              <span className="composer-quote-index">{index + 1}.</span>
+              <span className="composer-quote-source">{conversationQuoteSourceLabel(quote)}</span>
+              <span className="spacer" />
+              <span className="composer-quote-actions">
+                <button
+                  type="button"
+                  className="composer-quote-action"
+                  aria-label={copiedId === quote.id ? `已复制引用 ${index + 1}` : `复制引用 ${index + 1}`}
+                  title={copiedId === quote.id ? '已复制' : '复制这条引用正文'}
+                  onClick={() => void copyQuote(quote)}
+                >
+                  <Icon name={copiedId === quote.id ? 'check' : 'copy'} size={11} />
+                </button>
+                <button
+                  type="button"
+                  className="composer-quote-action danger"
+                  aria-label={`移除引用 ${index + 1}`}
+                  title="移除这条引用；不会删除原消息"
+                  onClick={() => {
+                    if (quotes.length === 1) setOpen(false);
+                    onRemove(quote.id);
+                  }}
+                >
+                  <Icon name="x" size={11} />
+                </button>
+              </span>
+            </div>
+            <div className="composer-quote-text" title={quote.text}>{quote.text}</div>
+          </article>
+        ))}
+      </div>
+      <span className="visually-hidden" aria-live="polite">
+        {copiedId == null ? '' : '引用正文已复制'}
+      </span>
+    </div>,
+    document.body,
+  ) : null;
+
+  return (
+    <div className="composer-quote-dock" data-zs-conversation-quote-count={quotes.length}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="composer-quote-summary"
+        aria-expanded={open}
+        aria-controls={popoverId}
+        aria-haspopup="dialog"
+        aria-label={`${quotes.length} 条对话引用；查看或移除`}
+        title="引用将随消息发送"
+        onMouseEnter={() => showPopover()}
+        onMouseLeave={scheduleClose}
+        onFocus={() => {
+          if (!suppressFocusOpenRef.current) showPopover();
+        }}
+        onBlur={(event) => {
+          const next = event.relatedTarget as Node | null;
+          if (next == null || (!triggerRef.current?.contains(next) && !popoverRef.current?.contains(next))) {
+            scheduleClose();
+          }
+        }}
+        onClick={() => showPopover()}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            showPopover(true);
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            setOpen(false);
+          }
+        }}
+      >
+        <Icon name="quote" size={14} />
+        <span>{quotes.length} 条对话引用</span>
+      </button>
+      {popover}
+    </div>
+  );
+}
+
 export function Composer({
   target,
   draftKey,
   onSend,
   onClearSubtask,
   insertText,
+  insertQuote,
   sendDisabledReason,
   sendDisabledLabel,
   inputDisabledReason,
@@ -725,6 +1012,8 @@ export function Composer({
     method: { planFirst: boolean; skipFirstDraft: boolean; splitWork: boolean };
     access: AccessMode;
     attachments: HifiDraftAttachment[];
+    /** 本次随 body 一起发给模型的对话引用卡身份（仅本地草稿清算用）。 */
+    quoteIds: string[];
     /** 图片能力门显式选择（一次性）：'omit-images'=仅发送文字（图片不送模型并如实注明）。 */
     imageAck?: 'omit-images';
     collaboration?:'deliberate';
@@ -740,6 +1029,8 @@ export function Composer({
   onClearSubtask?: () => void;
   /** 从消息菜单插入引用或更正提示；只改变草稿，不直接派发任务。 */
   insertText?: { id: number; text: string };
+  /** 消息菜单新增的结构化引用；正文只进入引用卡，不进入可编辑区。 */
+  insertQuote?: { id: number; quote: ConversationQuote };
   /** 允许保留草稿但暂时不能发送，例如房间还没有成员。 */
   sendDisabledReason?: string;
   /**
@@ -872,6 +1163,9 @@ export function Composer({
   const bodyRef = useRef('');
   const [body, setBody] = useState('');
   bodyRef.current = body;
+  const [conversationQuotes, setConversationQuotes] = useState<ConversationQuote[]>(
+    getDraftFull(draftKey).conversationQuotes ?? [],
+  );
   /**
    * 普通聊天只有一种发送语义：交给 AI。历史 record 消息仍按原数据展示/留账；
    * 在历史记录串里继续聊天也会自然发起新的 AI 请求，不再静默 record_only。
@@ -1218,6 +1512,7 @@ export function Composer({
   /** IME 组合期间收到的回执同步：组合结束（compositionend）后一次性收敛（R91）。 */
   const pendingCompositionSyncRef = useRef<string | null>(null);
   const appliedInsertRef = useRef<number | null>(null);
+  const appliedQuoteRef = useRef<number | null>(null);
   /** 刚载入过草稿的 key：让紧接着的一次保存 effect 跳过，避免把草稿清空 */
   const skipSaveRef = useRef<string | null>(null);
 
@@ -1270,6 +1565,7 @@ export function Composer({
       restoredBody = `${prefix} ${restoredBody}`.trimStart();
     }
     setBody(restoredBody);
+    setConversationQuotes(saved.conversationQuotes ?? []);
     const editor = editorRef.current;
     const editorWasFocused = editor != null && document.activeElement === editor;
     if (editor != null) {
@@ -1375,6 +1671,13 @@ export function Composer({
     }
   }, [insertText]);
 
+  useEffect(() => {
+    if (!insertQuote || appliedQuoteRef.current === insertQuote.id) return;
+    appliedQuoteRef.current = insertQuote.id;
+    setConversationQuotes(getDraftFull(draftKey).conversationQuotes ?? []);
+    editorRef.current?.focus();
+  }, [draftKey, insertQuote]);
+
   /** 正文插入应用（r61 G7：摘录等文本块——一次一条，正文保持用户文字，新插入追加不覆盖）。 */
   const applyDraftInserts = (items: Array<{ id: number; text: string }>): void => {
     if (items.length === 0) return;
@@ -1465,11 +1768,23 @@ export function Composer({
     return `cmd_${Math.random().toString(36).slice(2, 10)}`;
   }
 
+  function removeDraftQuote(quoteId: string): void {
+    const next = removeConversationQuoteFromDraft(draftKey, quoteId);
+    setConversationQuotes(next.conversationQuotes ?? []);
+  }
+
+  function clearDraftQuotes(): void {
+    const next = clearConversationQuotesFromDraft(draftKey);
+    setConversationQuotes(next.conversationQuotes ?? []);
+  }
+
   async function submit(imageAck?: 'omit-images') {
     const text = stripInlineAttachmentTokens(body).trim();
-    // 普通聊天固定交给 AI；没有正文但有 ready 附件仍可发送。
+    const sentQuotes = getDraftFull(draftKey).conversationQuotes ?? [];
+    const outboundText = composeDraftOutboundBody(text, sentQuotes);
+    // 普通聊天固定交给 AI；没有可编辑正文但有引用或 ready 附件仍可发送。
     const refsAtGuard = getDraftFull(draftKey).attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
-    if (text.length === 0 && refsAtGuard.length === 0) return;
+    if (outboundText.length === 0 && refsAtGuard.length === 0) return;
     const busyAttachments = (getState().uploadItems[draftKey] ?? []).filter((item) => item.removed !== true && (item.status === 'preparing' || item.status === 'uploading'));
     if (busyAttachments.length > 0) {
       setSendErrorFor(draftKey, `仍有 ${busyAttachments.length} 个文件正在准备或上传；完成或移除后再发送，避免文件落到下一条草稿`);
@@ -1490,7 +1805,7 @@ export function Composer({
     // 意图身份**（正文+意图+@提及+附件引用集合）。同一身份=换新号必重复，只允许同号重发或
     // 显式放弃；等待期改了正文/附件/提及=不同身份，允许新号发送（未知信封仍保留）。
     if (pendingEnv != null && pendingIdentityMatches(
-      pendingEnv, text, effectiveMentionIds, sendAs, refsAtGuard.map((a) => a.attachmentId!),
+      pendingEnv, outboundText, effectiveMentionIds, sendAs, refsAtGuard.map((a) => a.attachmentId!),
       collaboration,
       callBudgetEnabled === true ? budgetMaxTurns ?? undefined : undefined,
       callBudgetEnabled === true && collaboration ? budgetPreview?.calls ?? undefined : undefined,
@@ -1526,7 +1841,7 @@ export function Composer({
       } finally { imageCheckingKeys.delete(draftKey); }
 
     }
-    if (imageAck === 'omit-images' && text.length === 0 && draftRefs.every((a) => a.kind === 'image_file')) {
+    if (imageAck === 'omit-images' && outboundText.length === 0 && draftRefs.every((a) => a.kind === 'image_file')) {
       setSendErrorFor(draftKey, '已选「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）——请先添加文字或换非图片附件');
       return;
     }
@@ -1540,12 +1855,13 @@ export function Composer({
     /** 本次实际发送的附件引用（refs 身份——不再按文件名/大小识别，review-r51 §2）。 */
     const sentAttachmentIds = draftRefs.map((a) => a.attachmentId);
     const sentAttachments = draftRefs;
+    const sentQuoteIds = sentQuotes.map((quote) => quote.id);
     const sentBudget = callBudgetEnabled === true && collaboration
       ? (budgetMaxTurns ?? budgetPreview?.calls)
       : undefined;
 
     const outcome = onSend({
-      body: text,
+      body: outboundText,
       sendAs,
       mentionIds: effectiveMentionIds,
       ...(collaboration?{collaboration}:{}),
@@ -1553,6 +1869,7 @@ export function Composer({
       method: { planFirst: access === 'plan', skipFirstDraft, splitWork },
       access,
       attachments: sentAttachments,
+      quoteIds: sentQuoteIds,
       commandId: commandIdAtSend,
       target,
       draftRev: getDraftFull(draftKey).rev,
@@ -1573,11 +1890,14 @@ export function Composer({
       const mentionsClear = unchanged && d.mentions.length === sentMentions.length && d.mentions.every((m, i) => m === sentMentions[i]);
       const sentIds = new Set(sentAttachmentIds);
       const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
+      const sentIdsForQuotes = new Set(sentQuoteIds);
+      const keptQuotes = (d.conversationQuotes ?? []).filter((quote) => !sentIdsForQuotes.has(quote.id));
       const settled: HifiDraft = {
         ...d,
         body: nextBody,
         mentions: mentionsClear ? [] : d.mentions,
         attachments: keptAttachments,
+        conversationQuotes: keptQuotes,
         sendAs: 'ai',
       };
       setDraftFull(key, settled);
@@ -1588,6 +1908,7 @@ export function Composer({
       if (draftKeyRef.current !== key) return; // 已切目标：不动当前输入（B 的草稿不受 A 回执影响）
       setBody(settled.body);
       setMentions(settled.mentions); // r63：已发 @ 的清理结果随统一清结算同步（此前不同步=芯片残留）
+      setConversationQuotes(settled.conversationQuotes ?? []);
       // 附件芯片由 store 驱动（clearSettledUploads 已按 refs 清）——不同步本地状态。
       if (editorRef.current != null) {
         renderEditorBody(editorRef.current, settled.body, getState().uploadItems[key] ?? []);
@@ -1659,6 +1980,7 @@ export function Composer({
         if (draftKeyRef.current === keyAtSend) {
           setBody(settled.body);
           setMentions(settled.mentions);
+          setConversationQuotes(settled.conversationQuotes ?? []);
           if (editorRef.current != null) {
             renderEditorBody(editorRef.current, settled.body, getState().uploadItems[keyAtSend] ?? []);
             setEditorCaret(editorRef.current);
@@ -1889,7 +2211,7 @@ export function Composer({
     : null;
   const modeInvalid = deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all');
   const canUseDeliberate = target.kind === 'room_root' || target.kind === 'thread';
-  const hasSendableBody = stripInlineAttachmentTokens(body).trim().length > 0;
+  const hasSendableBody = stripInlineAttachmentTokens(body).trim().length > 0 || conversationQuotes.length > 0;
 
   function enableDeliberate(): void {
     const explicitlyNamed = mentions.filter((id) => availableDeliberateIds.includes(id));
@@ -2084,7 +2406,7 @@ export function Composer({
       ) : null}
 
       {/* 空文件门：不造空派发，也不提供“仅记录”逃生口。 */}
-      {stripInlineAttachmentTokens(body).trim().length === 0 && readyAttachmentCount > 0
+      {stripInlineAttachmentTokens(body).trim().length === 0 && conversationQuotes.length === 0 && readyAttachmentCount > 0
         && attachments.filter((x) => x.status === 'ready').every((x) => x.size === 0 && (x.kind === 'text_file' || x.kind === 'code_file')) ? (
         <div className="composer-mentions" data-zs-empty-text-gate="1">
           <span className="chip composer-info-chip" title="这些附件都是 0 字节空文本——发给 AI 不会带上任何可用内容">
@@ -2106,7 +2428,7 @@ export function Composer({
           <span className="chip composer-info-chip" title="当前目标未能确认图片输入能力；图片默认不会作为模型输入">
             <Icon name="image" size={11} />
             {userFacingSystemText(imageGate.reason ?? '当前目标图片输入尚未认证')}：{imageGate.names.join('、')}
-            <button disabled={stripInlineAttachmentTokens(body).trim().length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片保留在聊天中，本次只把文字发送给 AI" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
+            <button disabled={stripInlineAttachmentTokens(body).trim().length === 0 && conversationQuotes.length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片保留在聊天中，本次只把文字发送给 AI" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
             <button title="移除本草稿图片引用；已保存原件保留，其余内容可继续发送" onClick={() => { for (const a of attachments) if (a.kind === 'image_file') removeAttachment(a.uploadId); setImageGate(null); }}>移除图片继续</button>
             {showMentions ? <button title="重新选择已认证图片输入的成员后发送" onClick={() => { setImageGate(null); setMentionTrigger(null); setMentionOpen(true); }}>换可用成员</button> : <button onClick={navigateToMembers}>成员配置</button>}
             <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
@@ -2120,6 +2442,7 @@ export function Composer({
         if(draftKeyRef.current!==recovered.draftKey)return;
         setSendErrorState(previous=>previous?.key===recovered.draftKey&&previous.commandId===recovered.commandId?null:previous);
         setBody(settled.body);setMentions(settled.mentions);
+        setConversationQuotes(settled.conversationQuotes??[]);
         if(editorRef.current){renderEditorBody(editorRef.current,settled.body,getState().uploadItems[draftKey]??[]);setEditorCaret(editorRef.current);}
       }}/>
       {pendingEnv != null ? (
@@ -2134,6 +2457,12 @@ export function Composer({
       ) : null}
 
       <div className="composer-box">
+        <ConversationQuoteDock
+          key={draftKey}
+          quotes={conversationQuotes}
+          onRemove={removeDraftQuote}
+          onClear={clearDraftQuotes}
+        />
         <div
           ref={editorRef}
           className="composer-input composer-editor"

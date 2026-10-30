@@ -151,12 +151,25 @@ export function replyPreview(s: AppState, threadId: string, limit = 3): Message[
 export function unreadCount(s: AppState, threadId: string): number {
   const thread = threadOf(s, threadId);
   if (!thread) return 0;
-  const loaded = s.messages.filter((m) => m.threadId === threadId);
-  if (loaded.length === 0) return poolCardOf(s, threadId)?.unread ?? 0; // R64：未装载线程按卡片未读
   const watermark = s.readStates[threadId] ?? 0;
-  return loaded.filter(
+  const card = poolCardOf(s, threadId);
+  const loaded = s.messages.filter((m) => m.threadId === threadId);
+  if (loaded.length === 0) {
+    // 历史尚未返回时也以真实最新序号做水位门；否则已打开/已读线程会被
+    // 迟到的 pool 快照重新点亮。更高 seq 的更新仍保留其未读投影。
+    if (card == null) return 0;
+    if (card.lastMessageSeq != null && watermark >= card.lastMessageSeq) return 0;
+    return card.unread;
+  }
+  const loadedUnread = loaded.filter(
     (m) => (m.threadMessageSeq ?? 0) > watermark && m.authorType !== 'system',
   ).length;
+  // A bounded/stale history may not yet contain the latest pool messages.
+  // Their server aggregate must survive until the next history snapshot.
+  if (card?.lastMessageSeq != null && card.lastMessageSeq > watermark) {
+    return Math.max(loadedUnread, card.unread);
+  }
+  return loadedUnread;
 }
 
 export function hasUnread(s: AppState, threadId: string): boolean {

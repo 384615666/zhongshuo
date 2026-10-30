@@ -2,7 +2,7 @@ import {afterEach,describe,expect,it,vi} from 'vitest';
 import * as configuration from '../../src/adapter/claude/configuration.ts';
 import {claudeModelCatalog} from '../../src/daemon/runtimeCatalog.ts';
 function configured(reason:string|null=null){
-  vi.spyOn(configuration,'resolveClaudeConfiguration').mockReturnValue({env:{},restrictedEnv:{ANTHROPIC_BASE_URL:'https://fixture.invalid/v1',ANTHROPIC_AUTH_TOKEN:'fixture-secret-never-return',ANTHROPIC_MODEL:'configured-model'},configuredModel:'settings-model',configDir:'isolated',cwd:'isolated',endpointHash:'isolated',channel:'https://fixture.invalid/v1',endpointSource:'isolated',sources:[],reason,configurationKey:'isolated'});
+  vi.spyOn(configuration,'resolveClaudeConfiguration').mockReturnValue({env:{},restrictedEnv:{ANTHROPIC_BASE_URL:'https://fixture.invalid/v1',ANTHROPIC_AUTH_TOKEN:'fixture-secret-never-return',ANTHROPIC_MODEL:'configured-model'},configuredModel:'settings-model',configDir:'isolated',cwd:'isolated',endpointHash:'isolated',channel:'https://fixture.invalid/v1',endpointSource:'isolated',sources:[],reason,configurationKey:'isolated',previousConfigurationKey:'isolated-v2',configurationEvidenceVersion:'claude-configuration-v3',configurationEvidence:{}});
 }
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();});
 describe('R87 actual channel model metadata, zero inference',()=>{

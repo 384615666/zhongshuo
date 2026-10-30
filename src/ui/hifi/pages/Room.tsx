@@ -29,9 +29,12 @@ import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThrea
 import {
   buildRoomRootEnvelope, buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview,
   executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed,
-  toggleSavedMessage, type ReviewSnapshot,
+  cancelThreadReadOnOpen, toggleSavedMessage, type ReviewSnapshot,
 } from '../loader';
-import { stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown, queueDraftInsert } from '../data/store';
+import {
+  stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown, queueDraftInsert,
+  addConversationQuoteToDraft, stripInlineAttachmentTokens,
+} from '../data/store';
 import { command, openExportDir } from '../bridge';
 import {
   anchorOf, byId, childTasksOf, coordinatorOfRoom,
@@ -53,6 +56,7 @@ import {
   detailsSectionOfTab, tabFor, viewOfTab,
 } from '../lib/threadNav';
 import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary,ProjectMember } from '../data/types';
+import type { ConversationQuote } from '../data/store';
 /* ---------- UX-PREVIEW-01：共享预览（§17.9） ---------- */
 import { audienceAllows, resourceOf } from '../lib/resource';
 import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
@@ -863,6 +867,7 @@ function RoomPool({
               attachmentRanges: attachmentRangesFromDraft(draftKey),
             });
             env.revAtSend = p.draftRev;
+            env.quoteIds = p.quoteIds;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
             if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
             const r = await sendEnvelope(env);
@@ -937,7 +942,7 @@ function RootCardActions({ message, saved }: { message: Message; saved: boolean 
   );
 }
 
-function RootCard({
+export function RootCard({
   message, selected, onOpenResource,
 }: {
   message: Message;
@@ -1345,6 +1350,7 @@ function ThreadPanel({
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
   const [pendingNew, setPendingNew] = useState(0);
   const [composerInsert, setComposerInsert] = useState<{ id: number; text: string }>();
+  const [composerQuote, setComposerQuote] = useState<{ id: number; quote: ConversationQuote }>();
   /** 线程「⋯」菜单锚点（由触发元素的矩形算出，键盘打开也落在同一处） */
   const [threadMenuAnchor, setThreadMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const lastCountRef = useRef(0);
@@ -1354,12 +1360,58 @@ function ThreadPanel({
    * 其它端的新回复可见（隐藏/接管暂停——关闭面板不停止执行，只停轮询）。 */
   const repliesBoxRef = useRef<HTMLDivElement | null>(null);
   /** 当前 tab 的可变镜像（标读门闭包读取——replies 视图才允许推进水位）。 */
-  const activeTabRef = useRef<{ v: ThreadTabLocal }>({ v: initialTab ?? 'replies' });
-  activeTabRef.current.v = tab;
-  useEffect(() => { void loadThread(threadId, { markRead: true }); }, [threadId]);
+  const activeTabRef = useRef<{ threadId: string; v: ThreadTabLocal }>({
+    threadId,
+    v: initialTab ?? 'replies',
+  });
+  if (activeTabRef.current.threadId !== threadId) {
+    activeTabRef.current = { threadId, v: initialTab ?? 'replies' };
+  } else {
+    activeTabRef.current.v = tab;
+  }
+  const openReadGuard = (): boolean =>
+    activeTabRef.current.threadId === threadId
+    && activeTabRef.current.v === 'replies'
+    && document.visibilityState === 'visible'
+    && !document.body.classList.contains('legacy-on')
+    && getState().ui.activeThreadId === threadId;
+  useEffect(() => {
+    setState((current) => ({ ...current, ui: { ...current.ui, activeThreadId: threadId } }));
+    void loadThread(threadId, { markRead: true, markReadOnOpen: true, readOpenGuard: openReadGuard });
+    return () => {
+      cancelThreadReadOnOpen(threadId);
+      setState((current) => current.ui.activeThreadId === threadId
+        ? { ...current, ui: { ...current.ui, activeThreadId: undefined } }
+        : current);
+    };
+  }, [threadId]);
+  useEffect(() => {
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== 'visible' || activeTabRef.current.v !== 'replies') {
+        cancelThreadReadOnOpen(threadId);
+        return;
+      }
+      void loadThread(threadId, { markRead: true, markReadOnOpen: true, readOpenGuard: openReadGuard });
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [threadId]);
+  const previousTabRef = useRef(tab);
+  useEffect(() => {
+    const previous = previousTabRef.current;
+    previousTabRef.current = tab;
+    if (tab !== 'replies') {
+      cancelThreadReadOnOpen(threadId);
+      return;
+    }
+    if (previous !== 'replies' && document.visibilityState === 'visible') {
+      void loadThread(threadId, { markRead: true, markReadOnOpen: true, readOpenGuard: openReadGuard });
+    }
+  }, [tab, threadId]);
   useEffect(() => {
     setThreadReadGate((tid: string) =>
       tid === threadId
+      && activeTabRef.current.threadId === threadId
       && activeTabRef.current.v === 'replies'
       && document.visibilityState === 'visible'
       && !document.body.classList.contains('legacy-on')
@@ -1376,7 +1428,11 @@ function ThreadPanel({
   }, [threadId]);
   useEffect(() => {
     const t = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) void loadThread(threadId);
+      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) {
+        void loadThread(threadId, activeTabRef.current.v === 'replies'
+          ? { markRead: true, markReadOnOpen: true, readOpenGuard: openReadGuard }
+          : undefined);
+      }
     }, 5000);
     return () => { window.clearInterval(t); };
   }, [threadId]);
@@ -1497,6 +1553,7 @@ function ThreadPanel({
     urlTabRef.current = initialTab ?? 'replies';
     setOpenArtifactId(initialArtifactId);
     setComposerInsert(undefined);
+    setComposerQuote(undefined);
     setPendingNew(0);
     requestAnimationFrame(() => {
       const el = listRef.current;
@@ -1604,15 +1661,30 @@ function ThreadPanel({
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
-  const insertMessageAction = (message: Message, kind: 'quote' | 'correction') => {
-    const visible=chatAnswer(message.body,message.authorType).replace(/\s+/g,' ').trim().slice(0,400);
-    const prefix = kind === 'quote' ? `> ${visible}` : '更正（针对上一条消息）：';
-    setComposerInsert({ id: Date.now(), text: prefix });
+  const insertMessageAction = (message: Message, kind: 'quote' | 'correction', selectedText?: string) => {
+    if (kind === 'quote') {
+      const text = selectedText ?? chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType);
+      const quoted = addConversationQuoteToDraft(`thread:${thread.id}`, {
+        messageId: message.id,
+        authorLabel: message.authorType === 'human'
+          ? '你'
+          : byId(s.members, message.authorId)?.displayName ?? '助手消息',
+        threadMessageSeq: message.threadMessageSeq,
+        text,
+      });
+      if (!quoted.ok) {
+        toast(quoted.error, 'error');
+        return;
+      }
+      setComposerQuote({ id: Date.now(), quote: quoted.quote });
+    } else {
+      setComposerInsert({ id: Date.now(), text: '更正（针对上一条消息）：' });
+    }
     recordLocalOnly(
       `message.${kind}`,
-      `message=${message.id} → 已插入当前串输入框；发送前仍可编辑，已发消息与执行依据不被覆盖`,
+      `message=${message.id} → ${kind === 'quote' ? '已加入结构化引用卡（全文保留给模型，编辑区不铺正文）' : '已插入更正草稿'}；发送前仍可编辑，已发消息与执行依据不被覆盖`,
     );
-    toast(kind === 'quote' ? '已引用到当前串输入框，可继续编辑后发送' : '已加入更正草稿，可补充内容后发送', 'info');
+    toast(kind === 'quote' ? '已添加对话引用' : '已加入更正草稿，可补充内容后发送', 'info');
   };
 
   return (
@@ -1894,7 +1966,7 @@ function ThreadPanel({
                           else if (r.busy !== true) toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}`, 'error');
                         });
                       }}
-                      onQuote={(message) => insertMessageAction(message, 'quote')}
+                      onQuote={(message, selectedText) => insertMessageAction(message, 'quote', selectedText)}
                       onCorrection={(message) => insertMessageAction(message, 'correction')}
                     />
                   </div>
@@ -1976,6 +2048,7 @@ function ThreadPanel({
           target={{ kind: 'thread', roomId: thread.roomId, threadId: thread.id, subtask: subtaskTarget }}
           draftKey={`thread:${thread.id}`}
           insertText={composerInsert}
+          insertQuote={composerQuote}
           formalLimits={FORMAL_LIMITS}
           attachmentUpload={entityConversationId !== '' ? { conversationId: entityConversationId } : undefined}
           /* 归档房间是只读的：主池早已这样处理，线程输入条此前漏了同一判定 */
@@ -2014,6 +2087,7 @@ function ThreadPanel({
             if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
             const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
+            env.quoteIds = p.quoteIds;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
             if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '未能保存发送记录，请重试' };
             const r = await sendEnvelope(env);

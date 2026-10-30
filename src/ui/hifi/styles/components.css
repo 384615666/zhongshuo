@@ -342,6 +342,210 @@ button.composer-target-summary:hover {
   color: var(--text-3);
 }
 
+.composer-quote-dock {
+  position: relative;
+  align-self: flex-start;
+  min-width: 0;
+  max-width: calc(100% - 20px);
+  margin: 9px 10px 0;
+}
+
+.composer-quote-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer-quote-summary:hover,
+.composer-quote-summary[aria-expanded="true"] {
+  background: var(--bg-surface-3);
+  color: var(--text);
+}
+
+.composer-quote-summary:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.composer-quote-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-quote-popover {
+  position: fixed;
+  z-index: 2147480150;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg, 0 14px 38px rgba(15, 23, 42, 0.18));
+  color: var(--text);
+  animation: composer-quote-popover-in 0.1s ease-out;
+  -webkit-app-region: no-drag;
+}
+
+@keyframes composer-quote-popover-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.composer-quote-popover[data-zs-placement="bottom"] {
+  animation-name: composer-quote-popover-in-bottom;
+}
+
+@keyframes composer-quote-popover-in-bottom {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.composer-quote-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 4px 5px 3px;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+
+.composer-quote-popover-head > span:first-child {
+  flex: none;
+  font-weight: 600;
+}
+
+.composer-quote-clear-all {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+
+.composer-quote-clear-all:hover,
+.composer-quote-clear-all:focus-visible {
+  background: var(--bg-surface-3);
+  color: var(--text);
+}
+
+.composer-quote-list {
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  max-height: min(220px, 32vh);
+  overflow: auto;
+}
+
+.composer-quote-list.is-single {
+  overflow: hidden;
+}
+
+.composer-quote-card {
+  min-width: 0;
+  padding: 7px 8px 8px;
+  border: 0;
+  border-radius: var(--r-lg);
+  background: transparent;
+}
+
+.composer-quote-card:hover,
+.composer-quote-card:focus-within {
+  background: var(--bg-surface-2);
+}
+
+.composer-quote-card-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 22px;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+
+.composer-quote-index {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.composer-quote-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.composer-quote-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  opacity: 0.5;
+}
+
+.composer-quote-card:hover .composer-quote-actions,
+.composer-quote-card:focus-within .composer-quote-actions {
+  opacity: 1;
+}
+
+.composer-quote-action {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.composer-quote-action:hover,
+.composer-quote-action:focus-visible {
+  background: var(--bg-surface-3);
+  color: var(--text);
+}
+
+.composer-quote-action.danger:hover,
+.composer-quote-action.danger:focus-visible {
+  color: var(--danger);
+}
+
+.composer-quote-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--fs-12);
+  line-height: 1.55;
+}
+
 /**
  * 输入区容器（规范 §5.6）：--r-xl + --border + --shadow-sm ——
  * **全场唯一轻浮起的静态容器**。聚焦时描边 --accent + --ring。

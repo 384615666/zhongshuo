@@ -18,8 +18,9 @@ import { capturedFileChanges, recordMessageFileChanges } from './messageFileChan
 import { humanFacingFile } from '../contracts/messageFileChanges.ts';
 import {mergeRoleMemory,RoleMemoryError} from '../persistence/stores/roleMemory.ts';
 import {memoryUpdateSchema,roleMemorySnapshotSchema,mergeRoleMemoryInputSchema,type MergeRoleMemoryInput} from '../contracts/roleMemory.ts';
-import { acquireLease } from './workspaceLocks.ts';
+import { acquireLease, protectSharedWriteSnapshot, writeSessionScope } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
+
 /**
  * outbox 派发 worker（§11.2/§11.3）：CAS 领取 → 建 run/turn/session → 经适配器执行 →
  * 规范化事件落库（消息入正确线程）→ 预算结算 → completeOutbox。
@@ -274,6 +275,8 @@ export class DispatchWorker {
           projectId: row.projectId,
           providerKey: this.providerKeyOf(row.memberId),
           writeRootKey: row.writeRootKey,
+          ...(row.frozenScope!=null&&row.writeRootKey!=null&&writeSessionScope(this.db,row.turnId)!=null&&writeSessionScope(this.db,row.turnId)===this.kvGet(`write-session-scope:${row.turnId}`)
+            ?{writePolicy:'session_scope' as const,writeSessionScopeKey:writeSessionScope(this.db,row.turnId)!}:{}),
         });
       }
     } catch (err) {
@@ -371,6 +374,9 @@ export class DispatchWorker {
   /** 排空当前可领取的 outbox（门禁 held 时为 0）。 */
   async drain(): Promise<number> {
     this.busyDeferrals.clear(); // 新一轮 drain 重试上轮忙碌项（前一轮 run 可能已终态）
+    // Physical leases can be released by recovery or another consumer. Retry once
+    // per drain; retain skips within this drain to avoid a busy synchronous loop.
+    for(const [id,reason] of this.blockedOutbox)if(reason==='write-root'||reason==='admission:write-root')this.blockedOutbox.delete(id);
     let processed = 0;
     while (await this.runOnce()) processed += 1;
     this.busyDeferrals.clear();
@@ -737,7 +743,11 @@ export class DispatchWorker {
     const repairSourceChangeSetId = isRepairDispatch && repairItem != null
       ? this.changeSetForTurn(repairItem.source_turn_id)
       : null;
-    const repairSourceFiles = repairSourceChangeSetId == null ? [] : capturedFileChanges(this.db, repairSourceChangeSetId).map((file) => ({
+    const repairSourceShared=this.sharedChangeSet(repairSourceChangeSetId);
+    const repairSourceKeys=repairSourceShared&&repairItem!=null
+      ?this.fileCandidateKeys(project.canonical_path,this.sourceFileCandidates(repairItem.source_turn_id,repairItem.source_output_text)):null;
+    const repairSourceFiles = repairSourceChangeSetId == null ? [] : capturedFileChanges(this.db, repairSourceChangeSetId)
+      .filter(file=>repairSourceKeys==null||repairSourceKeys.has(comparisonKey(resolve(project.canonical_path,file.path)))).map((file) => ({
       path: file.path,
       state: file.state,
       beforeHash: file.before?.sha256 ?? null,
@@ -777,6 +787,7 @@ export class DispatchWorker {
       projectId: task.project_id,
       providerKey: this.providerKeyOf(member.id),
       writeRootKey: writeAccess.modificationAuthorized ? comparisonKey(writeAccess.root) : null,
+      ...(writeAccess.fullAccess&&task.kind!=='dm_turn'&&!isRepairDispatch?{writePolicy:'session_scope' as const,writeSessionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id])}:{}),
     });
     if (!admission.granted) {
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -823,9 +834,10 @@ export class DispatchWorker {
         if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'running',undefined,runId,turnId);
         if (isRepairDispatch && repairSourceChangeSetId != null) {
           this.kvSet(`repair-source-changeset:${turnId}`, repairSourceChangeSetId);
+          if(repairSourceShared)this.kvSet(`write-overlap:${turnId}`,'true');
         }
         if(writeAccess.modificationAuthorized) {
-          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:'single_writer',now:Date.now()});
+          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:writeAccess.fullAccess&&task.kind!=='dm_turn'&&!isRepairDispatch?'session_scope':'single_writer',now:Date.now()});
           if(!lease.ok) throw Object.assign(new Error('写入目录已有持有者'),{name:'WriteLeaseHeld'});
           this.kvSet(`write-lease:${turnId}`,comparisonKey(writeAccess.root));
         }
@@ -880,6 +892,7 @@ export class DispatchWorker {
         }
         baselineChangeSetId = baseline.value.changeSetId;
         this.kvSet(`write-changeset:${turnId}`, baselineChangeSetId);
+        protectSharedWriteSnapshot(this.db,baselineChangeSetId);
         if (baseline.value.truncated) {
           const message = `写入基线不完整：${baseline.value.scanProblems.slice(0,3).join('；')}，未启动模型`;
           if (conversationRequest) setConversationReplyState(this.db, conversationRequest.messageId, 'blocked', message);
@@ -1686,6 +1699,7 @@ export class DispatchWorker {
       projectId: task.project_id,
       providerKey: this.providerKeyOf(step.memberId),
       writeRootKey: writeAccess.modificationAuthorized ? comparisonKey(writeAccess.root) : null,
+      ...(writeAccess.fullAccess&&!isRepair?{writePolicy:'session_scope' as const,writeSessionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id])}:{}),
     });
     if (!admission.granted) {
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -1717,7 +1731,7 @@ export class DispatchWorker {
         // 全文入 bundle（PP-04：真实输入可核对——审计用 sha256(text) 复核）。
         ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, text: assembly.value.text,executionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id,step.memberId]),...(roleMemory?{roleMemory}:{}) }), textHash);
         if(writeAccess.modificationAuthorized){
-          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:'single_writer',now:Date.now()});
+          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:writeAccess.fullAccess&&!isRepair?'session_scope':'single_writer',now:Date.now()});
           if(!lease.ok)throw Object.assign(new Error('研讨写入目录已有持有者'),{name:'WriteLeaseHeld'});
           this.kvSet(`write-lease:${turnId}`,comparisonKey(writeAccess.root));
         }
@@ -1743,6 +1757,7 @@ export class DispatchWorker {
         const baselineChangeSetId=baseline.value.changeSetId;
         const baselineContentUnavailable=baseline.value.contentUnavailable;
         this.kvSet(`write-changeset:${turnId}`,baselineChangeSetId);
+        protectSharedWriteSnapshot(this.db,baselineChangeSetId);
         if(baselineContentUnavailable.length>0)this.audit(task,run.id,turnId,'run.baselineContentUnavailable',{paths:baselineContentUnavailable,changeSetId:baselineChangeSetId,note:'这些文件没有内容级前像；不降低已授权执行权限，变更按实际差异留证'});
       }
       const standing = renderStandingPrompt({
@@ -2496,10 +2511,22 @@ export class DispatchWorker {
             // A concrete successor handoff depends on this turn's actual
             // delivery; completed writes must not forbid distinct next work.
             if(result.replyDisposition==='none'||result.coordinationPlan){
-              const changeSets=[this.kvGet(`write-changeset:${turnId}`),this.kvGet(`repair-source-changeset:${turnId}`)].filter((id):id is string=>id!=null);
+              const sourceChangeSet=this.kvGet(`repair-source-changeset:${turnId}`);
+              const source=sourceChangeSet?this.db.prepare('SELECT source_turn_id,source_output_text FROM format_repair_workitems WHERE consumed_turn_id=?').get(turnId) as {source_turn_id:string;source_output_text:string}|undefined:undefined;
+              const changeSets=[this.kvGet(`write-changeset:${turnId}`),sourceChangeSet].filter((id):id is string=>id!=null);
               for(const changesetId of new Set(changeSets)){
                 const changes=finalizeChangeset(this.db,{changeSetId:changesetId,appDataDir:this.appDataDir});
-                if((changes.ok&&Object.values(changes.value.diff).some((files)=>files.length>0))||capturedFileChanges(this.db,changesetId).length>0)
+                const shared=this.sharedChangeSet(changesetId);
+                let captured=capturedFileChanges(this.db,changesetId);
+                if(shared){
+                  const root=(this.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(task.project_id) as {canonical_path:string}).canonical_path;
+                  const candidates=changesetId===sourceChangeSet&&source
+                    ?this.sourceFileCandidates(source.source_turn_id,source.source_output_text)
+                    :[...result.files,...(this.observedFileEvidenceForTurn(turnId)?.paths??[])];
+                  const ownKeys=this.fileCandidateKeys(root,candidates);
+                  captured=captured.filter(file=>ownKeys.has(comparisonKey(resolve(root,file.path))));
+                }
+                if((!shared&&changes.ok&&Object.values(changes.value.diff).some((files)=>files.length>0))||captured.length>0)
                   contract={ok:false,issues:['本轮已有实际文件变化：交付已完成的修改，不静默结束或重复派发同一工作；格式修复不重复业务写入']};
               }
             }
@@ -2521,7 +2548,7 @@ export class DispatchWorker {
               AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
             const changesetId=this.kvGet(`write-changeset:${turnId}`);
             const changes=changesetId?finalizeChangeset(this.db,{changeSetId:changesetId,appDataDir:this.appDataDir}):null;
-            const changedFiles=changes?.ok?changes.value.diff.added.length+changes.value.diff.removed.length+changes.value.diff.modified.length:0;
+            const changedFiles=changes?.ok&&!this.sharedWriteObservation(turnId)?changes.value.diff.added.length+changes.value.diff.removed.length+changes.value.diff.modified.length:0;
             if(successfulWriteActions===0&&changedFiles===0){
               const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
               this.casTurn(turnId,'SUCCEEDED');
@@ -2618,7 +2645,7 @@ export class DispatchWorker {
           // model-declared work retains its formal work/verification contract.
           const changesetId=this.kvGet(`write-changeset:${turnId}`);
           const changes=changesetId?finalizeChangeset(this.db,{changeSetId:changesetId,appDataDir:this.appDataDir}):null;
-          const changedFiles=changes?.ok?changes.value.diff.added.length+changes.value.diff.removed.length+changes.value.diff.modified.length:0;
+          const changedFiles=changes?.ok&&!this.sharedWriteObservation(turnId)?changes.value.diff.added.length+changes.value.diff.removed.length+changes.value.diff.modified.length:0;
           const successfulWriteActions=(this.db.prepare(`SELECT count(*) n FROM domain_events started JOIN domain_events completed
             ON completed.turn_id=started.turn_id AND completed.kind='tool.completed'
             AND json_extract(completed.payload_json,'$.toolCallId')=json_extract(started.payload_json,'$.toolCallId')
@@ -2627,7 +2654,7 @@ export class DispatchWorker {
             AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
           // 成功合同已确认、任务身份在本 turn 内：记录候选（正式结果 .files + 本 turn 已验证差异）。
-          snapshotRef.current = { files: [...result.files], diff: changes?.ok ? { added: [...changes.value.diff.added], modified: [...changes.value.diff.modified] } : null };
+          snapshotRef.current = { files: [...result.files], diff: changes?.ok&&!this.sharedWriteObservation(turnId) ? { added: [...changes.value.diff.added], modified: [...changes.value.diff.modified] } : null };
           const deliveryChangeSets = [...new Set([
             ...pendingClarificationChangeSets(this.db,task.id,task.stop_generation,turnId),
             this.kvGet(`repair-source-changeset:${turnId}`),
@@ -3439,6 +3466,43 @@ export class DispatchWorker {
   }
 
   /** 本轮成功合同路径写入的生成文件候选（.files + 已验证差异）；非成功路径不写键。 */
+  private sharedWriteObservation(turnId:string):boolean {
+    if(this.kvGet(`write-overlap:${turnId}`)==='true')return true;
+    const id=this.kvGet(`write-changeset:${turnId}`)??this.changeSetForTurn(turnId);
+    return this.sharedChangeSet(id)||this.sharedChangeSet(this.kvGet(`repair-source-changeset:${turnId}`));
+  }
+
+  private sharedChangeSet(id:string|null):boolean {
+    return id!=null&&this.db.prepare("SELECT 1 FROM change_sets WHERE id=? AND json_extract(manifest_json,'$.concurrentWriteObservation')=1").get(id)!=null;
+  }
+
+  private fileCandidateKeys(root:string,paths:readonly string[]):Set<string> {
+    return new Set(paths.map(path=>comparisonKey(resolve(root,path))));
+  }
+
+  /** An invalid source contract can still explicitly name its own files. Never
+   * infer those names from a shared directory diff or from the repair's claims. */
+  private sourceFileCandidates(turnId:string,text:string):string[] {
+    let declared:string[]=[];
+    // A later system observation can be the repair work item's latest text.
+    // Prefer the exact source turn's stored agent terminal message, never that
+    // system observation or another turn's last message.
+    const message=this.db.prepare("SELECT body_json FROM messages WHERE id=? AND author_type='agent'").get(`msg_${turnId}_final_result`) as {body_json:string}|undefined;
+    let terminal:string|undefined;
+    try{const body=message?JSON.parse(message.body_json) as {text?:unknown}:null;if(typeof body?.text==='string')terminal=body.text;}catch{/* Malformed historical body cannot establish ownership. */}
+    for(const candidate of [terminal,text]){
+      if(candidate==null)continue;
+      try {
+        const value=JSON.parse(this.taskCompleteControlForTurn(turnId,candidate).finalText) as {files?:unknown};
+        if(Array.isArray(value.files)){
+          declared=value.files.filter((path):path is string=>typeof path==='string'&&path.trim().length>0);
+          break;
+        }
+      }catch{/* Unparseable source text establishes no declared file ownership. */}
+    }
+    return [...new Set([...declared,...(this.observedFileEvidenceForTurn(turnId)?.paths??[])])];
+  }
+
   private turnFileSnapshotContext(turnId: string): { files: string[]; diff: { added: string[]; modified: string[] } | null } | null {
     const raw = this.kvGet(`final-files:${turnId}`);
     if (raw == null) return null;
@@ -3676,11 +3740,19 @@ export class DispatchWorker {
       if (changesetId != null) finalizeChangeset(this.db, { changeSetId: changesetId, appDataDir: this.appDataDir });
       let captured = changesetId != null ? capturedFileChanges(this.db, changesetId) : [];
       const repairSourceChangeSetId = this.kvGet(`repair-source-changeset:${turnId}`);
+      const sourceShared=this.sharedChangeSet(repairSourceChangeSetId);
+      const source=sourceShared?this.db.prepare('SELECT source_turn_id,source_output_text FROM format_repair_workitems WHERE consumed_turn_id=?').get(turnId) as {source_turn_id:string;source_output_text:string}|undefined:undefined;
+      const sourceCandidates=source?this.sourceFileCandidates(source.source_turn_id,source.source_output_text):[];
+      const sourceKeys=sourceShared?this.fileCandidateKeys(project?.canonical_path??'',sourceCandidates):null;
       if (repairSourceChangeSetId != null && captured.length === 0) {
         changesetId = repairSourceChangeSetId;
         captured = capturedFileChanges(this.db, repairSourceChangeSetId);
       }
       let contextForFiles = context;
+      if(sourceKeys!=null){
+        captured=captured.filter(file=>sourceKeys.has(comparisonKey(resolve(project?.canonical_path??'',file.path))));
+        if(contextForFiles!=null)contextForFiles={files:contextForFiles.files.filter(path=>sourceKeys.has(comparisonKey(resolve(project?.canonical_path??'',path)))),diff:null};
+      }
       if (repairSourceChangeSetId != null && captured.length > 0) {
         const sourceDiff = {
           added: captured.filter(file => file.state === 'added').map(file => file.path),
@@ -3706,6 +3778,16 @@ export class DispatchWorker {
           modified: captured.filter(file => file.state === 'modified').map(file => file.path),
         } };
       }
+      const sharedObservation=this.sharedWriteObservation(turnId);
+      if(sharedObservation){
+        // The directory diff can contain a peer's files. Keep immutable snapshots,
+        // but register attachments only from this result or this turn's tools.
+        const ownCandidates=[...new Set([...contextForFiles.files,...sourceCandidates,...(!sourceShared?this.observedFileEvidenceForTurn(turnId)?.paths??[]:[])])];
+        contextForFiles={files:ownCandidates,diff:null};
+        const ownKeys=new Set(ownCandidates.map(p=>comparisonKey(resolve(project?.canonical_path??'',p))));
+        captured=captured.filter(file=>ownKeys.has(comparisonKey(resolve(project?.canonical_path??'',file.path))));
+        this.audit(task,runId,turnId,'turn.sharedWorkspaceSnapshot',{changeSetId:changesetId,note:'跨串并行期间的目录观察；前后版本保留但不证明独占归属，不自动撤销；附件仅来自本轮声明或工具路径'});
+      }
       // 绑定消息必须属于本轮（DIRECT 最终回复或 DELIB 可见阶段消息），否则不挂附件。
       const rawMessageId = this.kvGet(`final-message:${turnId}`);
       const messageId = rawMessageId != null && (rawMessageId.startsWith(`msg_${turnId}_`) || rawMessageId.startsWith('msg_delib_')) ? rawMessageId : null;
@@ -3728,7 +3810,7 @@ export class DispatchWorker {
       });
       recordMessageFileChanges({db: this.db, appDataDir: this.appDataDir, projectRoot: project?.canonical_path ?? '',
         projectId: task.project_id, conversationId: task.conversation_id, taskId: task.id, runId, turnId,
-        memberId: turn.member_id, messageId, changeSetId: changesetId,
+        memberId: turn.member_id, messageId, changeSetId: sharedObservation?null:changesetId,
         declaredFiles: contextForFiles?.files ?? [], registered: outcome.registered});
       if (outcome.failures.length > 0 || outcome.status === 'blocked') {
         this.insertFileSnapshotNotice(task, turnId, messageId, outcome);

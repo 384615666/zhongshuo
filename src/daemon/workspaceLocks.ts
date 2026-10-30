@@ -2,7 +2,7 @@
  * 写入租约（§10.3/§12.2 workspace_leases/RT-07/RT-08/RT-09）。
  * - 锁域=identityKey；重叠判定（父子/junction）在 acquire 时逐租约检查。
  * - single_writer：同一锁域同时最多 1 个活跃租约，其他任务排队并可见持有者。
- * - parallel_writers：允许共存（上限由上层按项目设置执行，ADR-I14）。
+ * - session_scope：同项目同根目录、不同串的已登记完整权限执行可共存。
  * - RT-07：租约过期不给新写者放行，直到旧持有者被确认终止。
  */
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -21,7 +21,7 @@ export interface LeaseRow {
 export interface AcquireLeaseInput {
   lockDomain: string;
   ownerTurnId: string;
-  policy: 'single_writer' | 'parallel_writers';
+  policy: 'single_writer' | 'parallel_writers' | 'session_scope';
   now: number;
 }
 
@@ -42,13 +42,17 @@ export interface AcquireLeaseOk {
  * - 冲突时返回 WORKSPACE_BUSY 并列出全部重叠持有者（排队可见）。
  * - RT-07：`active` 与 `expired`（心跳超时但持有者未确认终止）都阻塞新写者；
  *   只有 `released`（正常释放或确认终止）才放行。
- * - parallel_writers 已按 §14.7 延期（ADR-I19）：入口一律拒绝，调用方无法绕过开启。
+ * - 旧 parallel_writers 仍拒绝；session_scope 逐持有者核对身份与保护状态。
  */
 export function acquireLease(
   db: ZhongshuoDatabase,
   input: AcquireLeaseInput,
 ): DomainResult<AcquireLeaseOk> {
-  if (input.policy !== 'single_writer') {
+  return db.transaction(()=>acquireLeaseInTransaction(db,input))();
+}
+
+function acquireLeaseInTransaction(db:ZhongshuoDatabase,input:AcquireLeaseInput):DomainResult<AcquireLeaseOk> {
+  if (input.policy !== 'single_writer' && input.policy !== 'session_scope') {
     return domainErr(
       'CAPABILITY_UNSUPPORTED',
       '当前按项目依次修改文件，不支持同时写入同一项目',
@@ -59,7 +63,15 @@ export function acquireLease(
     .prepare("SELECT * FROM workspace_leases WHERE status != 'released'")
     .all() as LeaseRow[];
   const overlapping = rows.filter((row) => lockDomainsOverlap(row.lock_domain, input.lockDomain));
-  if (overlapping.length > 0) {
+  const scope=writeSessionScope(db,input.ownerTurnId);
+  // Protected executions block new writers even if a legacy record lacks a lease.
+  const protectedRoots=db.prepare(`SELECT p.canonical_path FROM agent_turns t
+    JOIN workflow_runs r ON r.id=t.run_id JOIN tasks tk ON tk.id=r.task_id
+    JOIN projects p ON p.id=tk.project_id
+    WHERE (t.status='UNKNOWN' AND t.protection_state IS NOT 'released') OR t.protection_state='retained'`).all() as Array<{canonical_path:string}>;
+  if(protectedRoots.some(p=>lockDomainsOverlap(p.canonical_path,input.lockDomain)))return domainErr('WORKSPACE_BUSY','此目录有未确认结束的执行，解除保护前不启动新的写入');
+  if(input.policy==='session_scope' && !scope)return domainErr('WORKSPACE_BUSY','共享写入会话身份无法核实');
+  if (overlapping.some(row=>input.policy!=='session_scope'||row.status!=='active'||row.lock_domain!==input.lockDomain||!canShareWriteLease(db,row.owner_turn_id,scope!))) {
     return busy(overlapping);
   }
 
@@ -73,7 +85,44 @@ export function acquireLease(
      ON CONFLICT (lock_domain, owner_turn_id) DO UPDATE SET
        epoch = excluded.epoch, heartbeat_at = excluded.heartbeat_at, status = 'active'`,
   ).run(input.lockDomain, input.ownerTurnId, epoch, input.now);
+  if(input.policy==='session_scope'){
+    db.prepare('INSERT OR REPLACE INTO daemon_state(key,value,updated_at) VALUES(?,?,?)').run(`write-session-scope:${input.ownerTurnId}`,scope,input.now);
+    // Keep durable evidence on both sides. A directory snapshot spanning another
+    // writer cannot establish exclusive authorship, even when the bytes match.
+    for(const row of overlapping){
+      for(const id of [row.owner_turn_id,input.ownerTurnId]){
+        db.prepare('INSERT OR REPLACE INTO daemon_state(key,value,updated_at) VALUES(?,?,?)').run(`write-overlap:${id}`,'true',input.now);
+        const snapshot=db.prepare('SELECT value FROM daemon_state WHERE key=?').get(`write-changeset:${id}`) as {value:string}|undefined;
+        if(snapshot)protectSharedWriteSnapshot(db,snapshot.value);
+      }
+    }
+  }
   return domainOk({ granted: true, epoch });
+}
+
+/** Thread identity deliberately excludes member: two members in one thread
+ * still serialize writes, while the member admission remains separately scoped. */
+export function writeSessionScope(db:ZhongshuoDatabase,turnId:string):string|null {
+  const row=db.prepare(`SELECT tk.project_id,t.conversation_id,t.thread_id,t.status,t.protection_state
+    FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id JOIN tasks tk ON tk.id=r.task_id WHERE t.id=?`).get(turnId) as {project_id:string;conversation_id:string;thread_id:string|null;status:string;protection_state:string|null}|undefined;
+  if(!row||!row.thread_id||!['RUNNING','DISPATCHING','WAITING_APPROVAL','WAITING_INPUT'].includes(row.status)||row.protection_state==='retained')return null;
+  return JSON.stringify([row.project_id,row.conversation_id,row.thread_id]);
+}
+
+function canShareWriteLease(db:ZhongshuoDatabase,turnId:string,incoming:string):boolean {
+  const actual=writeSessionScope(db,turnId);
+  const saved=db.prepare('SELECT value FROM daemon_state WHERE key=?').get(`write-session-scope:${turnId}`) as {value:string}|undefined;
+  return actual!=null&&saved?.value===actual&&actual!==incoming&&JSON.parse(actual)[0]===JSON.parse(incoming)[0];
+}
+
+/** Preserve the original bytes/hash, but prohibit automatic rollback of a
+ * directory difference whose author cannot be proven during overlapping turns. */
+export function protectSharedWriteSnapshot(db:ZhongshuoDatabase,changeSetId:string):void {
+  const shared=db.prepare(`SELECT 1 FROM daemon_state c JOIN daemon_state o
+    ON o.key='write-overlap:'||substr(c.key,length('write-changeset:')+1)
+    WHERE c.key LIKE 'write-changeset:%' AND c.value=? LIMIT 1`).get(changeSetId);
+  if(!shared)return;
+  db.prepare(`UPDATE change_sets SET manifest_json=json_set(manifest_json,'$.concurrentWriteObservation',json('true')) WHERE id=?`).run(changeSetId);
 }
 
 function busy(holders: LeaseRow[]): DomainResult<never> {

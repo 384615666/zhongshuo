@@ -1055,6 +1055,9 @@ function runHasToolActivity(db: ZhongshuoDatabase, runId: string): boolean {
   if(db.prepare("SELECT 1 FROM domain_events WHERE run_id=? AND kind='tool.started' AND COALESCE(json_extract(payload_json,'$.toolName'),'')!='StructuredOutput' LIMIT 1").get(runId))return true;
   const baselines=db.prepare("SELECT json_extract(payload_json,'$.changeSetId') id FROM domain_events WHERE run_id=? AND kind='changeset.baselineCaptured'").all(runId) as Array<{id:string}>;
   return baselines.some(({id})=>{
+    // A concurrent directory observation can contain a different thread's
+    // edits. Only this run's tool activity proves work in that shared interval.
+    if(db.prepare("SELECT 1 FROM change_sets WHERE id=? AND json_extract(manifest_json,'$.concurrentWriteObservation')=1").get(id))return false;
     const event=db.prepare("SELECT payload_json FROM domain_events WHERE kind='changeset.finalized' AND json_extract(payload_json,'$.changeSetId')=? ORDER BY seq DESC LIMIT 1").get(id) as {payload_json:string}|undefined;
     if(event==null)return true;
     const diff=JSON.parse(event.payload_json) as Record<string,unknown[]>;
@@ -1153,6 +1156,38 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
     }
   }
   const drafts = frozenDrafts(db, run.id);
+
+  // A failed launch is not a discussion contribution. Finish the other queued
+  // seats in this stage, then expose the gap instead of repeatedly scheduling
+  // the same unavailable member and turning a peer discussion into a monologue.
+  if (stage === 'CROSS_REVIEW' || stage === 'ISSUE_DISCUSSION') {
+    const failedLaunches = roster.members.filter(m => m.expected && statusOf(participants, m.memberId) === 'failed'
+      && db.prepare(`SELECT 1 FROM domain_events WHERE run_id=? AND task_id=? AND kind='run.stepFailed'
+        AND turn_id IS NULL AND json_extract(payload_json,'$.memberId')=?
+        AND json_extract(payload_json,'$.failurePhase')='before-model'
+        AND json_extract(payload_json,'$.stage') IN (?,?) LIMIT 1`)
+        .get(run.id, taskId, m.memberId, stage === 'CROSS_REVIEW' ? 'CR' : 'ISS', stage === 'CROSS_REVIEW' ? 'CR' : 'CHK') != null);
+    if (failedLaunches.length > 0) {
+      const pending = db.prepare(`SELECT 1 FROM outbox o LEFT JOIN agent_turns a ON a.id=o.turn_id
+        WHERE o.dispatch_key LIKE ? AND o.status IN ('pending','leased')
+        AND (o.turn_id IS NULL OR a.status NOT IN ('SUCCEEDED','FAILED','CANCELLED')) LIMIT 1`)
+        .get(`task:${taskId}:delib:${run.id}:%`);
+      if (pending != null) return { advanced: false };
+      const names = failedLaunches.map(m => db.prepare('SELECT display_name FROM project_members WHERE id=?').get(m.memberId) as {display_name:string} | undefined)
+        .map(m => m?.display_name ?? '指定成员').join('、');
+      const reason = `${names}未能开始${stage === 'CROSS_REVIEW' ? '互评' : '分歧讨论'}；已保留其他成员的回复和文件，请查看具体原因后在原串继续。`;
+      db.transaction(() => {
+        restoreDeferredDraftMessages(db, taskId, run.id, now);
+        db.prepare("UPDATE workflow_runs SET status='PARTIAL' WHERE id=?").run(run.id);
+        db.prepare("UPDATE tasks SET status='BLOCKED',revision=revision+1 WHERE id=? AND status NOT IN ('CANCELLED','DONE')").run(taskId);
+        settleThreadReplyForRun(db, run.id, 'failed', reason);
+        appendDomainEvent(db, {schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:projectIdOf(db,taskId),conversationId:task.conversation_id,
+          threadId,taskId,runId:run.id,kind:'run.discussionIncomplete',createdAt:now,
+          payload:{reason,stage,roundNo:run.round_no,failedBeforeDispatchMemberIds:failedLaunches.map(m=>m.memberId),createdDelivery:false}});
+      })();
+      return { advanced: true, blocked: reason };
+    }
+  }
 
   // A pre-dispatch failure is not E4 absence. With only one independent draft,
   // asking its author to synthesize and ratify would create no peer judgment.
@@ -1865,15 +1900,17 @@ export interface StepAssembly {
   outputContract: string;
 }
 
-/** Verified preimages disambiguate an original draft from a teammate's later fix.
- * Only this run's project changes are included; independent drafts stay isolated. */
+/** Verified preimages disambiguate earlier/later file versions. Shared directory
+ * observations remain explicit and never establish authorship; IND stays isolated. */
 function fileVersionEvidence(db:ZhongshuoDatabase,runId:string,appDataDir:string):string{
-  const sets=db.prepare(`SELECT e.seq,e.created_at,cs.id,cs.project_id FROM domain_events e
+  const sets=db.prepare(`SELECT e.seq,e.created_at,cs.id,cs.project_id,
+    json_extract(cs.manifest_json,'$.concurrentWriteObservation') shared FROM domain_events e
     JOIN change_sets cs ON cs.id=json_extract(e.payload_json,'$.changeSetId')
     JOIN workflow_runs r ON r.id=e.run_id JOIN tasks t ON t.id=r.task_id
     WHERE e.run_id=? AND e.kind='changeset.baselineCaptured' AND cs.task_id=t.id AND cs.project_id=t.project_id
-    ORDER BY e.seq`).all(runId) as Array<{seq:number;created_at:number;id:string;project_id:string}>;
+    ORDER BY e.seq`).all(runId) as Array<{seq:number;created_at:number;id:string;project_id:string;shared:number|null}>;
   const evidence:unknown[]=[];
+  let sharedObservation=false;
   let remaining=64*1024;
   for(const set of sets){
     const changes=capturedFileChanges(db,set.id).slice(0,12);
@@ -1891,10 +1928,11 @@ function fileVersionEvidence(db:ZhongshuoDatabase,runId:string,appDataDir:string
       const snippet=truncated?new TextDecoder('utf-8',{fatal:true}).decode(stored.content.subarray(0,limit),{stream:true}):text;
       return{...meta,verified:true,text:snippet,truncated};
     };
-    evidence.push({changeSetId:set.id,recordedAt:set.created_at,changes:changes.map(change=>({path:change.path,state:change.state,before:version(change.before),after:version(change.after)}))});
+    sharedObservation ||= set.shared===1;
+    evidence.push({changeSetId:set.id,recordedAt:set.created_at,...(set.shared===1?{attribution:'shared-directory-observation',note:'跨串并行期间的版本观察，可能包含其他对话串的修改，不证明本运行或某位成员实际修改'}:{}),changes:changes.map(change=>({path:change.path,state:change.state,before:version(change.before),after:version(change.after)}))});
     if(remaining<=0)break;
   }
-  return evidence.length?`\n\n【本运行真实文件修改：修改前/后快照】\n以下是程序记录并核对哈希的版本证据，按发生顺序排列。当前文件正确不代表最初原稿正确；区分最初值、已发生的修订和当前值，不把前序修订后的文件当作原稿。未提供或未验证的正文不作事实依据。\n${JSON.stringify(evidence)}`:'';
+  return evidence.length?`\n\n【${sharedObservation?'文件版本观察':'本运行真实文件修改'}：修改前/后快照】\n以下是程序记录并核对哈希的版本证据，按发生顺序排列。当前文件正确不代表最初原稿正确；区分最初值、已发生的修订和当前值，不把前序修订后的文件当作原稿。并行观察不证明修改归属，不能代替本轮实际工具执行证据。未提供或未验证的正文不作事实依据。\n${JSON.stringify(evidence)}`:'';
 }
 
 /**
