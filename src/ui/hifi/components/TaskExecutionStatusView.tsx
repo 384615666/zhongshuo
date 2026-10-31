@@ -8,7 +8,7 @@ import {requestRecoveryOpen} from '../lib/recovery';
 import {navigate} from '../lib/router';
 
 /** Bind the shared factual view to existing local actions; rendering never dispatches. */
-export function TaskExecutionStatusView({status,density='compact',hideThreadNavigation=false}:{status:TaskExecutionStatus|null|undefined;density?:'compact'|'detail';hideThreadNavigation?:boolean}){
+export function TaskExecutionStatusView({status,density='compact',hideThreadNavigation=false,surface='default',onOpenDetails}:{status:TaskExecutionStatus|null|undefined;density?:'compact'|'detail';hideThreadNavigation?:boolean;surface?:'default'|'thread';onOpenDetails?:()=>void}){
   const [error,setError]=useState<string|null>(null);
   const pending=useRef<{key:string;commandId:string}|null>(null);
   const busy=useRef(false);
@@ -51,7 +51,7 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
     finally{busy.current=false;}
   };
   return <div>
-    <ExecutionStatus status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} onAction={action=>void handle(action)}/>
+    <ExecutionStatus status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} surface={surface} onOpenDetails={onOpenDetails} onAction={action=>void handle(action)}/>
     {error?<div className="small warning" role="alert">{userFacingSystemText(error ?? '')}</div>:null}
   </div>;
 }

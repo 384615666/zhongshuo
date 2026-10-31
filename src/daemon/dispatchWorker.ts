@@ -637,6 +637,9 @@ export class DispatchWorker {
         await this.transitionTask(task.id, 'BLOCKED');
         this.audit(task, null, null, 'task.deliberationPrepareFailed', { message: prepared.error.message });
       } else {
+        // A successful explicit continuation establishes a new execution. Leaving
+        // its parent BLOCKED makes the post-open launch guard cancel every member.
+        this.transitionTask(task.id,'ACTIVE');
         if(generalRequest)bindThreadReplyRun(this.db,generalRequest.messageId,prepared.value.runId);
         this.audit(task, prepared.value.runId, null, 'run.prepared', {
           mode: 'DELIBERATE',

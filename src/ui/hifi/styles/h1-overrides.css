@@ -3,6 +3,39 @@
    R88 起消息列不再强制通栏：人类消息右对齐，AI 消息左侧阅读，宽度由 components.css
    的消息列规则统一约束。 */
 
+/* R135: reserve the project action column even while its icons are hidden.
+   The name clips before the buttons; hover/focus never changes its width.
+   Room rows retain their separate fixed status/unread slots from base.css. */
+.sidebar .side-project > .side-row > .side-row-actions {
+  position: static;
+  flex: none;
+  transform: none;
+  margin-right: 2px;
+}
+
+.sidebar .side-project > .side-row > .side-item-label-btn > svg {
+  flex: none;
+}
+
+.sidebar .side-project > .side-row .side-row-act {
+  flex: none;
+  pointer-events: none;
+}
+
+.sidebar .side-project > .side-row:hover .side-row-act,
+.sidebar .side-project > .side-row:focus-within .side-row-act,
+.sidebar .side-project > .side-row:has(.side-row-act.on) .side-row-act {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .sidebar .side-project > .side-row .side-row-act {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 /* ---------- R115 高分屏与 3440 宽屏布局 ----------
    数据页随可用宽度增加信息密度；文档正文仍保持可读行长。
    这些规则放在最后加载的覆盖层，避免再次引入与面板实测宽度无关的窄窗改动。 */

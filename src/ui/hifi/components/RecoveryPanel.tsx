@@ -40,6 +40,7 @@ const checkPreviousReply = createPreviousReplyCheck(command);
 export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin?: 'startup' | 'runtime' | null }) {
   const [data, setData] = useState<RecoveryStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [locateError, setLocateError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   /** 对账表单（按 turn 展开：verdict/note/manualRiskAck）。 */
   const [recon, setRecon] = useState<{ turnId: string; verdict: 'notStarted' | 'executed' | 'keepUnknown'; note: string; manualRiskAck: boolean } | null>(null);
@@ -133,7 +134,14 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
     } catch (e) { toast(`解除保护被拒：${userFacingSystemText((e as Error).message ?? '')}（仍需确认执行已结束，文件保护已保留）`, 'error'); }
     finally { setBusy(null); }
   };
-  const locate = (link: string) => { void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); };
+  const locate = (link: string) => {
+    setLocateError(null);
+    void openExternalDeepLink(link).then(onClose).catch((error: unknown) => {
+      const message = `定位失败：${userFacingSystemText(error instanceof Error ? error.message : String(error)) || '暂时无法打开原任务，请重试'}`;
+      setLocateError(message);
+      toast(message, 'error');
+    });
+  };
 
   const realAttention = data != null && (data.gateHeld || data.unknownTurns.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 || data.interruptedRuns.length > 0);
   /** 仅普通排队（无任何恢复类事项）——不是故障（R66 P5 三态分类之一）。 */
@@ -156,6 +164,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           <button className="btn ghost sm" onClick={onClose}>关闭</button>
         </div>
         <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
+          {locateError != null ? <div className="panel warning" role="alert">{locateError}</div> : null}
           {err != null ? <div className="panel warning">恢复状态读取失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
           {data == null && err == null ? <div className="panel info">正在检查上次回复状态…</div> : null}
           {data != null && !attention ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}

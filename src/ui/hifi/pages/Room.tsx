@@ -2013,7 +2013,8 @@ function ThreadPanel({
        * 「回复」「成果」保持原样。URL 仍写既有 tab 键，旧深链不动。
        */}
 
-      <TaskExecutionStatusView status={executionStatus} hideThreadNavigation={view==='replies'}/>
+      <TaskExecutionStatusView status={executionStatus} hideThreadNavigation={view==='replies'} surface="thread"
+        onOpenDetails={view==='replies'?()=>goView('details',executionStatus?.phase==='FAILED'||executionStatus?.phase==='NOT_STARTED_FAILED'||executionStatus?.phase==='UNKNOWN'?'run':'overview'):undefined}/>
       <div className="list-wrap">
         {view === 'replies' ? (
           <>
@@ -2023,12 +2024,12 @@ function ThreadPanel({
              * 它只在这些状态真实存在时出现，不是常驻工具条。
              * 授权请求、需用户决定的分歧本身就以消息卡形式留在对话里，不在这里重复。
              */}
-            <ThreadPendingStrip
+            {!executionStatus?<ThreadPendingStrip
               s={s}
               task={task}
               run={run}
               onOpenSection={(sec) => goView('details', sec)}
-            />
+            />:null}
             <div
               className="msg-list is-replies"
               style={{ overflowAnchor: 'none' }}
@@ -2522,7 +2523,7 @@ function ThreadPendingStrip({
         </div>
       ) : null}
 
-      {blocked ? (
+      {blocked && !deliveryPending ? (
         <div className="card tight">
           <div className="row tight wrap">
             <Icon name="octagon" size={13} />
@@ -2536,7 +2537,7 @@ function ThreadPendingStrip({
         </div>
       ) : null}
 
-      {runTrouble && run ? (
+      {runTrouble && run && !blocked && !deliveryPending ? (
         <div className="card tight">
           <div className="row tight wrap">
             <Icon name="alert-triangle" size={13} />
@@ -2791,7 +2792,7 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
       </div>
       <details className="small faint"><summary>操作版本信息</summary>任务 revision {detail?.revision ?? task.revision} · 停止请求版本 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
     </div>
-    {formal ? <><TaskExecutionStatusView status={formal.executionStatus} density="detail"/><TaskExtraFacts detail={formal}/><AnalysisContinueAction failure={formal.preDispatchFailure} roomId={task.roomId}/></> : null}
+    {formal ? <TaskExtraFacts detail={formal}/> : null}
     </>
   );
 }

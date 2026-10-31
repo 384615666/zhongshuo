@@ -144,8 +144,10 @@ const FAILURE_EVENT_KINDS = [
   'run.failed',
   'run.stepFailed',
   'turn.startupFailed',
+  'turn.startupCancelled',
   'turn.failed',
   'turn.outputInvalid',
+  'turn.statusChanged',
 ] as const;
 
 function placeholders(count: number): string {
@@ -231,6 +233,7 @@ function failureReasonFromEvent(event: EventRow | undefined): string | null {
   if (event == null) return null;
   const payload = parseObject(event.payload_json);
   if (event.kind === 'task.statusChanged' && payload.status !== 'BLOCKED') return null;
+  if (event.kind === 'turn.statusChanged' && payload.status !== 'FAILED') return null;
   return readPayloadMessage(payload);
 }
 
@@ -893,7 +896,17 @@ export function readTaskExecutionStatus(
        AND e.kind IN (${FAILURE_EVENT_KINDS.map(() => '?').join(',')})
      ORDER BY e.seq DESC LIMIT 40`,
   ).all(...scopeIds, ...FAILURE_EVENT_KINDS) as EventRow[];
-  const durableFailure = failureEvent.find(event => failureReasonFromEvent(event) != null);
+  const latestFailures=selectedLatestRun==null?[]:failureEvent.filter(event=>event.run_id===selectedLatestRun.id);
+  const latestFailure=latestFailures.find(event=>failureReasonFromEvent(event)!=null);
+  const genericNoAnalysis=latestFailure?.kind==='run.deliberationBlocked'
+    && /未收到有效分析|全员无有效输入/.test(failureReasonFromEvent(latestFailure)??'');
+  const durableFailure=(genericNoAnalysis?latestFailures.find(event=>['turn.startupFailed','turn.startupCancelled','run.stepFailed','turn.statusChanged'].includes(event.kind)&&failureReasonFromEvent(event)!=null):undefined)
+    ??latestFailure??failureEvent.find(event=>failureReasonFromEvent(event)!=null);
+  const notStarted=selectedLatestRun==null?undefined:db.prepare(`SELECT count(*) total,
+    sum(CASE WHEN a.status='CANCELLED' AND a.exec_started_at IS NULL AND EXISTS(SELECT 1 FROM domain_events e
+      WHERE e.turn_id=a.id AND e.run_id=a.run_id AND e.kind='turn.startupCancelled'
+        AND json_extract(e.payload_json,'$.classification')='confirmed-not-started') THEN 1 ELSE 0 END) confirmed
+    FROM agent_turns a WHERE a.run_id=?`).get(selectedLatestRun.id) as {total:number;confirmed:number|null};
 
   const recovery = assessTaskRedispatchReadiness(db, task.id);
   const runCount = (db.prepare(
@@ -1089,7 +1102,8 @@ export function readTaskExecutionStatus(
         : latestStatus === 'INTERRUPTED'
           ? '运行被中断，结果尚不能视为完成。'
           : '最近执行未成功完成。');
-    phase = latestStatus === 'RUNNING' || latestStatus === 'INTERRUPTED' ? 'UNKNOWN' : 'FAILED';
+    phase = latestStatus === 'RUNNING' || latestStatus === 'INTERRUPTED' ? 'UNKNOWN'
+      :notStarted&&notStarted.total>0&&notStarted.total===notStarted.confirmed?'NOT_STARTED_FAILED':'FAILED';
     projectionReason = reason(
       latestStatus === 'RUNNING' || latestStatus === 'INTERRUPTED' ? 'NO_EXECUTION_EVIDENCE' : 'RUN_FAILED',
       durableMessage,

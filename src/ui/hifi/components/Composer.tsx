@@ -2763,7 +2763,7 @@ export function Composer({
                 className={`composer-mode-chip${modeMenuAnchor != null ? ' open' : ''}`}
                 onClick={(event) => setModeMenuAnchor(anchorFromElement(event.currentTarget))}
                 aria-haspopup="dialog"
-                title="独立研讨：先独立分析，再互评汇总；点击调整成员或回到自然协作"
+                title="独立研讨：先独立分析，再互评汇总；点击调整成员"
               >
                 <Icon name="users" size={11} />
                 独立研讨 · {effectiveMentionIds.includes('all') ? '全体' : `${effectiveMentionIds.filter((id) => id !== 'all').length}人`}
@@ -3022,6 +3022,10 @@ export function Composer({
             }
             setRunSettingsAnchor(null);
           }} hint={deliberate?'已开启':undefined}>{deliberate?'调整独立研讨成员':'独立研讨'}</MenuItem>:null}
+          {canUseDeliberate && deliberate && !inputDisabledReason ? <MenuItem icon="users" onClick={() => {
+            setDeliberate(false);
+            setRunSettingsAnchor(null);
+          }}>回到自然协作</MenuItem> : null}
         </Menu>
       ) : null}
 
@@ -3051,7 +3055,6 @@ export function Composer({
           </div>
           {availableDeliberateIds.length < 2 ? <div className="composer-mode-warning" role="alert">请添加至少2位AI</div> : null}
           <div className="menu-sep" />
-          <MenuItem icon="users" onClick={() => { setDeliberate(false); setModeMenuAnchor(null); }}>回到自然协作</MenuItem>
           <MenuItem icon="check" onClick={() => setModeMenuAnchor(null)}>完成</MenuItem>
         </Menu>
       ) : null}

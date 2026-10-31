@@ -92,7 +92,12 @@ function friendlyDetail(status: TaskExecutionStatus): string | null {
     if (status.reason.code === 'NO_EXECUTION_EVIDENCE') return '没有取得可确认的执行进展，正在安全等待刷新。';
     return '上一次执行的结果还没确认；需要先核对，暂时不能继续。';
   }
-  if (status.phase === 'NOT_STARTED_FAILED' || status.phase === 'FAILED') return executionReasonText(status);
+  if (status.phase === 'NOT_STARTED_FAILED' || status.phase === 'FAILED') {
+    const text=executionReasonText(status);
+    if(/研讨已中断或同轮结果未知；未请求startTurn/.test(text))return '本次启动已取消，AI 尚未开始新的分析。已有回复和文件保留。';
+    if(/(?:有效执行配置|实际配置).*变化/.test(text))return '执行配置与保存的记录不一致，本次未启动。请检查成员配置后继续。';
+    return text;
+  }
   if (status.phase === 'STOPPING') return '停止请求已送出，正在等执行端确认。';
   if (status.phase === 'WAITING_FOR_USER') return status.waitingForUser?.message ?? status.reason.message;
   if (status.phase === 'WAITING_FOR_PEER') {
@@ -184,6 +189,8 @@ export interface ExecutionStatusProps {
   /** Compact is the pool/thread default. Detail exposes IDs and raw evidence only on demand. */
   density?: 'compact' | 'detail';
   className?: string;
+  surface?: 'default'|'thread';
+  onOpenDetails?: () => void;
 }
 
 /**
@@ -195,6 +202,8 @@ export function ExecutionStatus({
   onAction,
   density = 'compact',
   className,
+  surface='default',
+  onOpenDetails,
 }: ExecutionStatusProps) {
   const presentation = taskExecutionNeedsReview(status)?{label:'待你验收',tone:'warning' as const,icon:'eye' as const}:PHASE[status.phase];
   const summary = taskExecutionStatusSummary(status);
@@ -202,6 +211,12 @@ export function ExecutionStatus({
     action.kind === 'recover' || action.kind === 'review' || action.kind === 'retry' || action.kind==='close')
     ?? status.actions[0];
   const remainingActions = status.actions.filter(action => action !== firstAction);
+  const threadNotice=surface==='thread';
+  const noticeDetail=threadNotice&&status.phase==='WAITING_FOR_USER'&&(summary.detail?.length??0)>180
+    ?'请答复下方 AI 提出的问题，再继续处理；完整问题保留在最新回复中。':summary.detail;
+  const nextStep=status.phase==='FAILED'||status.phase==='NOT_STARTED_FAILED'
+    ?status.actions.some(action=>action.kind==='retry')?'可继续任务；不再处理时可结束任务。':status.actions.some(action=>action.kind==='recover')?'请先核对上次执行结果。':status.actions.some(action=>action.kind==='close')?'可查看原因，或结束这项任务。':'请查看原因后决定下一步。'
+    :null;
 
   return (
     <section
@@ -221,7 +236,7 @@ export function ExecutionStatus({
         {summary.main!==summary.label?<span className="small strong truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-summary>
           {summary.main}
         </span>:null}
-        {summary.detail != null ? (
+        {summary.detail != null && !threadNotice ? (
           <span className="small faint truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-detail>
             {summary.detail}
           </span>
@@ -245,7 +260,11 @@ export function ExecutionStatus({
           disabled={onAction==null} onClick={onAction==null?undefined:()=>onAction(action)}>
           <Icon name="x" size={12}/>{action.label}
         </button>):null}
+        {density==='compact'&&onOpenDetails?<button type="button" className="btn sm ghost" data-zs-execution-details onClick={onOpenDetails}>{['FAILED','NOT_STARTED_FAILED','UNKNOWN'].includes(status.phase)?'查看原因':'查看详情'}</button>:null}
       </div>
+      {threadNotice&&(noticeDetail||nextStep)?<div className="small" data-zs-thread-notice-body style={{marginTop:5,lineHeight:1.65,whiteSpace:'normal',overflowWrap:'anywhere'}}>
+        {noticeDetail}{nextStep?<div>{nextStep}</div>:null}
+      </div>:null}
 
       {density === 'detail' ? (
         <>

@@ -473,6 +473,7 @@ export default function App() {
                             className={`side-row-act${projectMenuFor === p.id ? ' on' : ''}`}
                             title={`「${p.displayName}」的更多操作`}
                             aria-haspopup="menu"
+                            aria-expanded={projectMenuFor === p.id}
                             onClick={(e) => {
                               e.stopPropagation();
                               const r = (e.currentTarget as HTMLElement).getBoundingClientRect();

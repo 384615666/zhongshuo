@@ -32,6 +32,7 @@
     {name:'17-project-files',run:async()=>{await go(`/project/${m.projectId}/files`);await wait(600);return {targets:[text('活动安排.md')||q('[title="活动安排.md"]')],rect:{x:260,y:190,width:1070,height:470}};}},
     {name:'18-call-budget',run:async()=>{await go('/settings?section=runtime');await until(()=>q('[data-zs-call-budget-setting] [role="switch"]')?.disabled===false);return {targets:[text('AI 设置'),q('[data-zs-call-budget-setting] [role="switch"]')],rect:{x:250,y:45,width:1100,height:260}};}},
     {name:'19-user-confirmation',run:async()=>{await go(room()+`?thread=${m.question.threadId}`);await until(()=>document.body.innerText.includes('是否准备茶点')&&q('[aria-label="回复串视图"]'));const edit=Array.from(document.querySelectorAll('.composer-editor')).at(-1);editor(edit,'只提供饮用水，请继续完成安排。');return {targets:[q('[aria-label="回复串视图"] button'),edit],rect:{x:914,y:38,width:446,height:882}};}},
+    {name:'20-collaboration-settings',run:async()=>{await go(room());await until(()=>q('[aria-label="本次运行设置"]'));q('[aria-label="本次运行设置"]').click();await until(()=>text('独立研讨')||text('调整独立研讨成员'));if(text('独立研讨')){text('独立研讨').click();await wait(120);document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));q('[aria-label="本次运行设置"]').click();}await until(()=>text('回到自然协作'));await wait(180);const menu=text('回到自然协作').closest('.menu');return{targets:[Array.from(menu.querySelectorAll('button')).find(el=>el.textContent.includes('调整独立研讨成员')),text('回到自然协作')],rect:{x:1000,y:600,width:360,height:320}};}},
   ];
   window.guideScenes=scenes;
   let ready=false;
