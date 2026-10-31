@@ -2,11 +2,13 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 2026-10-31：R136 DeepSeek Harness → Pi 适配完成，交付验证中
+## 2026-10-31：R136 DeepSeek Harness → Pi 适配完成，V73交付
 
 按用户顺序完成官方 DSH 0.2.1-rc.5 众说专用 profile/JSONL 插件及 Pi 1.4.0 原生 RPC。统一渠道目录，成员/模板/模型/思考等级/工厂/受管执行/配置指纹/调用台账/恢复和停止接通；旧 Claude/Codex 兼容及默认成员不改。首版原生完整权限，只读/受限编辑/图片/格式修复执行前拒绝，不以提示词代替权限。真实 session 冷续接及目录核对、冲突 ID 全记录，无终态退出由 worker UNKNOWN 保留保护而不重跑。Pi Windows 工具后立即 EOF 原生断言经对照确认，host 延迟 300ms 关闭 stdin，真实退出确认不放宽。见 [R136](../reviews/r136-dsh-pi-20261031.md)。
 
-默认全量311文件2722通过/8跳过/0失败（含既有保留反例，7项官方Pi需显式打开、1Windows symlink权限）。双types通过，新增代码lint通过、后台对照10项既有无新增。Harness13协议+官方19检查、Pi官方9项、相关后台/适配器53项、UI两渠道各34检查通过，手册03正文及04图更新目视。官方程序使用独立profile/本地固定响应，0真实供应商模型请求。原R130/R131及站点未提交工作保留。独立worktree实施，正在构建并核对V73包与安装入口；完成后补交付记录，暂未推送。
+默认全量311文件2722通过/8跳过/0失败（含既有保留反例，7项官方Pi需显式打开、1Windows symlink权限）。双types通过，新增代码lint通过、后台对照10项既有无新增。Harness13协议+官方19检查、Pi官方9项、相关后台/适配器53项、UI两渠道各34检查通过，手册03正文及04图更新目视。官方程序使用独立profile/本地固定响应，0真实供应商模型请求。原R130/R131及站点未提交工作保留。独立worktree实施，仅本轮文件本地提交，未推送。
+
+V73：desktop-daily-win-v73-r136-dsh-pi-20261031，clean源码1a35115b7f660cd612722459c3162d072ae19103、BUILD bld_ea86a2e337eab758。621程序hash一致/ZIP652文件CRC通过/220435025字节，SHA256 5e672f982965f4611d3aa5d0bb3a02f75b6775dc8659bc4910f8e60c9070985e。包内实际Electron/Node/daemon，非主屏独立数据根10项新入口检查及正式停机exit0通过；Harness组件归档/校验与手册通过。沿用数据bat/vbs与V72字节一致，正常退出旧版后start-existing-data.vbs。包验证脚本中间失败（封装exe忽略wrapper、裸管道名、Browser.close绕收口）保留，修正验证方法后完整通过。证据dist/r136-package，官方程序与测试dist/r136-tools、dist/r136-pi-tools，报告R136。
 
 ## 2026-10-31：R135 五项状态/交互反馈修复，V72交付
 

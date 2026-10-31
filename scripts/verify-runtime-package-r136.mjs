@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import WebSocket from 'ws';
 
 const repo=resolve(import.meta.dirname,'..');
 const daily=resolve(process.argv[2]??'');
@@ -19,23 +21,6 @@ const help=readFileSync(join(daily,'众说操作手册.html'),'utf8');
 if(!help.includes('DeepSeek Harness')||!help.includes('Pi'))throw Error('Packaged manual missing channels');
 const data=join(run,'data'),project=join(run,'project'),config=join(run,'config');
 for(const dir of [data,project,config])mkdirSync(dir);
-const wrapper=String.raw`
-const {app}=require('electron');const fs=require('node:fs');const path=require('node:path');
-app.disableHardwareAcceleration();app.commandLine.appendSwitch('force-device-scale-factor','1');
-const output=__OUTPUT__;let completed=false;
-const save=result=>fs.writeFileSync(output,JSON.stringify(result,null,2));
-app.on('browser-window-created',(_event,win)=>{
- win.show=()=>{};
- win.webContents.once('did-finish-load',async()=>{
-  try{
-   const result=await win.webContents.executeJavaScript(__SCENARIO__);
-   save({ok:true,...result});completed=true;win.close();
-  }catch(error){save({ok:false,error:String(error)});completed=true;win.close();}
- });
-});
-setTimeout(()=>{if(!completed)save({ok:false,error:'Packaged UI deadline'});app.exit(2);},60000).unref();
-require(__MAIN__);
-`;
 const scenario=String.raw`(async()=>{
  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));const checks=[];
  const check=(name,ok)=>{checks.push({name,ok});if(!ok)throw Error(name);};
@@ -57,17 +42,63 @@ const scenario=String.raw`(async()=>{
  return {checks,channels:labels,realModelCalls:0};
 })()`;
 const code=scenario.replace('__PROJECT__',JSON.stringify(project)).replace('__MISSING__',JSON.stringify(join(run,'missing-runtime.cjs')));
-const main=wrapper.replace('__OUTPUT__',JSON.stringify(join(run,'ui-result.json'))).replace('__SCENARIO__',JSON.stringify(code))
-  .replace('__MAIN__',JSON.stringify(join(app,'resources','app','dist','ui','main.cjs')));
-writeFileSync(join(run,'main.cjs'),main);
 const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('ZS_'))delete env[key];delete env.ELECTRON_RUN_AS_NODE;
 Object.assign(env,{ZS_APP_DATA:data,ZS_RUNTIME:'fake',ZS_ALLOW_FAKE:'1',ZS_REAL_DISPATCH_GUARD:'1',ZS_PACKAGED_UI:'1',
-  ZS_PIPE_NAME:'zs-r136-package-'+randomUUID(),ZS_DAEMON_ENTRY:join(app,'resources','app','daemon','daemon.cjs'),
+  ZS_PIPE_NAME:String.fromCharCode(92,92,46,92)+'pipe'+String.fromCharCode(92)+'zs-r136-package-'+randomUUID(),ZS_DAEMON_ENTRY:join(app,'resources','app','daemon','daemon.cjs'),
   ZS_NODE_BIN:join(app,'resources','app','daemon','node','node.exe'),CLAUDE_CONFIG_DIR:config,CODEX_HOME:config,DSH_HOME:join(config,'dsh'),PI_CODING_AGENT_DIR:join(config,'pi')});
-const processResult=spawnSync(join(app,'electron.exe'),[join(run,'main.cjs')],{cwd:dirname(daily),env,encoding:'utf8',windowsHide:true,timeout:75000});
-writeFileSync(join(run,'process.log'),`${processResult.stdout??''}\n${processResult.stderr??''}`);
-const result=existsSync(join(run,'ui-result.json'))?JSON.parse(readFileSync(join(run,'ui-result.json'),'utf8')):{ok:false,error:'No packaged UI result'};
-const report={...result,run,exitCode:processResult.status,hashes:manifest.files.length,build:JSON.parse(readFileSync(join(app,'BUILD.json'),'utf8')),
+// Packaged Electron loads its bundled application, not a positional main script.
+// Drive that actual application through its debugging port on a non-primary display.
+const screenQuery=join(run,'screens.cjs');
+writeFileSync(screenQuery,"const {app,screen}=require('electron');app.whenReady().then(()=>{console.log('R136_SCREENS '+JSON.stringify({primary:screen.getPrimaryDisplay().id,displays:screen.getAllDisplays().map(d=>({id:d.id,label:d.label}))}));app.quit();});");
+const screenResult=spawnSync(join(repo,'node_modules','electron','dist','electron.exe'),[screenQuery],{env,encoding:'utf8',windowsHide:true,timeout:15000});
+const screenLine=screenResult.stdout?.split(/\r?\n/).find(line=>line.startsWith('R136_SCREENS '));
+if(!screenLine)throw Error('Cannot inspect isolated test display');
+const screens=JSON.parse(screenLine.slice('R136_SCREENS '.length));
+const display=screens.displays.find(item=>item.id!==screens.primary);if(!display)throw Error('Packaged visual verification needs a non-primary display');
+env.ZS_TEST_DISPLAY=String(display.id);
+const port=await new Promise(resolvePort=>{const server=createServer();server.listen(0,'127.0.0.1',()=>{const value=server.address().port;server.close(()=>resolvePort(value));});});
+const child=spawn(join(app,'electron.exe'),[`--remote-debugging-port=${port}`],{cwd:dirname(daily),env,windowsHide:true,stdio:['ignore','pipe','pipe']});
+let log='',exitCode=null;child.stdout.on('data',chunk=>{log+=chunk;});child.stderr.on('data',chunk=>{log+=chunk;});
+const closed=new Promise(resolveClose=>child.on('close',code=>{exitCode=code;resolveClose();}));
+const wait=ms=>new Promise(resolveWait=>setTimeout(resolveWait,ms));
+let socket,result,requestId=0;
+const pending=new Map();
+const send=(method,params={})=>new Promise((resolveResponse,reject)=>{
+  const id=++requestId;const timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP deadline: '+method));},25000);
+  pending.set(id,{resolve:resolveResponse,reject,timer});socket.send(JSON.stringify({id,method,params}));
+});
+try{
+  let target;
+  for(let attempt=0;attempt<150;attempt++){
+    try{const targets=await(await globalThis.fetch(`http://127.0.0.1:${port}/json/list`)).json();target=targets.find(item=>item.type==='page'&&item.webSocketDebuggerUrl);if(target)break;}catch{/* startup */}
+    await wait(100);
+  }
+  if(!target)throw Error('Packaged page did not start');
+  socket=new WebSocket(target.webSocketDebuggerUrl);await new Promise((ready,reject)=>{socket.once('open',ready);socket.once('error',reject);});
+  socket.on('message',bytes=>{const frame=JSON.parse(bytes.toString());const waiter=pending.get(frame.id);if(waiter){pending.delete(frame.id);clearTimeout(waiter.timer);if(frame.error)waiter.reject(Error(JSON.stringify(frame.error)));else waiter.resolve(frame.result);}});
+  for(let attempt=0;attempt<100;attempt++){
+    const state=await send('Runtime.evaluate',{expression:"typeof window.zs?.command==='function'&&document.body.classList.contains('hifi-on')",returnByValue:true});
+    if(state.result?.value===true)break;await wait(100);
+  }
+  const response=await send('Runtime.evaluate',{expression:code,awaitPromise:true,returnByValue:true});
+  if(response.exceptionDetails)throw Error(response.exceptionDetails.exception?.description??response.exceptionDetails.text);
+  result={ok:true,...response.result.value};
+}catch(error){result={ok:false,error:String(error)};}
+finally{
+  if(socket?.readyState===WebSocket.OPEN){
+    try{
+      const stopped=await send('Runtime.evaluate',{expression:"window.zs.command({protocolVersion:1,commandId:crypto.randomUUID(),method:'daemon.shutdown',params:{}})",awaitPromise:true,returnByValue:true});
+      result.shutdownReceipt=stopped.result?.value?.ok===true;
+    }catch(error){result.shutdownError=String(error);}
+    try{await send('Page.close');}catch{/* target closes with application */}
+  }
+  await Promise.race([closed,wait(15000)]);
+  if(exitCode===null){child.kill();await Promise.race([closed,wait(2000)]);}
+  socket?.close();for(const waiter of pending.values()){clearTimeout(waiter.timer);waiter.reject(Error('CDP closed'));}pending.clear();
+}
+writeFileSync(join(run,'process.log'),log);writeFileSync(join(run,'ui-result.json'),JSON.stringify(result,null,2));
+for(let attempt=0;attempt<30&&existsSync(join(data,'daemon.pid'));attempt++)await wait(100);
+const report={...result,run,exitCode,display,hashes:manifest.files.length,build:JSON.parse(readFileSync(join(app,'BUILD.json'),'utf8')),
   connector:{profile:connector.profile,dshVersion:connector.dshVersion,sha256:connector.sha256},daemonStopped:!existsSync(join(data,'daemon.pid'))};
 writeFileSync(join(run,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 if(!report.ok||report.exitCode!==0||!report.daemonStopped)process.exitCode=1;
