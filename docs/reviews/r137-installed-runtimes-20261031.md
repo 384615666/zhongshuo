@@ -29,4 +29,13 @@
 
 默认完整回归 312 文件、2726 通过、9 跳过、0 失败；跳过为 8 项显式开启的官方 Pi 测试及 1 项 Windows 文件 symlink 权限。运行命令 `node node_modules/vitest/vitest.mjs run --maxWorkers=4 --reporter=json --outputFile=dist/r137-full.json`。本轮本机真实 CLI 测试另行显式执行，未在默认回归中消耗额度。
 
-V74 包的源码身份、文件校验与包内验证在交付时补记。只读/受限编辑/图片/格式修复的首版边界延续 R136，本轮不扩大权限宣称。
+只读/受限编辑/图片/格式修复的首版边界延续 R136，本轮不扩大权限宣称。
+
+## V74 交付
+
+- 目录 `dist/desktop/desktop-daily-win-v74-r137-installed-runtimes-20261031`，ZIP 位于同级；程序 clean 源码 `b4929e27a2a6679e346585e04d9db836281dcebd`，BUILD `bld_144d09aee397afc4`。
+- 622 个程序文件 hash 一致；ZIP 653 文件 CRC 全过、220454087 字节，SHA256 `4004faaad56591720c2fccafa13b18fffb879dbeb3eab0ce0c24e9fd7b774be4`。
+- 实际包内 Electron/Node/daemon 在非主屏、独立应用数据根完成 14 项检查，包含从包内后台发现用户安装的两个 CLI 并读取模型目录（Harness 19、Pi 2），四渠道表单及正式停机正常、退出码 0。该阶段仅元数据，未追加推理调用。证据 `dist/r136-package/1936abb8-e646-4797-bf27-b9d511851ef1/report.json`。
+- 从正式交付目录再执行连接组件安装，握手 0.1.1 成功，使用户专用 profile 的依赖指向稳定的 V74 交付目录；没有把临时验证配置或凭据打入包。
+- 沿用原数据的 bat/vbs 入口与 V73 完全一致；先正常退出旧版，再使用 `start-existing-data.vbs`。用户原聊天/任务/文件未搬迁。
+- 独立 worktree 实施后合入本机公开源码 main，仅提交本轮文件，原 82 项未跟踪工作及 R130/R131 续工改动保留；未推送远端。

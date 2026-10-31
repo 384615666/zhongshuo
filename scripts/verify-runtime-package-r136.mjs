@@ -7,6 +7,7 @@ import WebSocket from 'ws';
 
 const repo=resolve(import.meta.dirname,'..');
 const daily=resolve(process.argv[2]??'');
+const installed=process.argv.includes('--installed');
 if(!process.argv[2]||!existsSync(join(daily,'ZhongshuoDual','BUILD.json')))throw Error('Pass a built daily package directory');
 const app=join(daily,'ZhongshuoDual');
 const run=join(repo,'dist','r136-package',randomUUID());mkdirSync(run,{recursive:true});
@@ -33,19 +34,29 @@ const scenario=String.raw`(async()=>{
   const result=await command('member.runtimeCatalog',{projectId,kind,executable:__MISSING__});
   check(kind+' schema accepted in packaged daemon',result.kind===kind&&result.program.status==='missing'&&result.models.length===0);
  }
+ const installedCatalogs=[];
+ if(__INSTALLED__)for(const [kind,executable] of [['deepseek-harness','dsh'],['pi','pi']]){
+  const catalog=await command('member.runtimeCatalog',{projectId,kind,executable});
+  check(kind+' installed CLI found by packaged daemon',catalog.program.status==='found');
+  check(kind+' installed model catalog readable',catalog.models.length>0);
+  installedCatalogs.push({kind,models:catalog.models.map(model=>model.id)});
+ }
  location.hash='/project/'+projectId+'/members';
  let add;for(let i=0;i<120;i++){add=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='添加 AI');if(add)break;await wait(50);}
  check('packaged member page renders',Boolean(add));add.click();await wait(150);
  const select=document.querySelector('[role="dialog"] [role="combobox"][aria-label="运行渠道"]');check('channel picker renders',Boolean(select));select.click();await wait(100);
  const labels=Array.from(document.querySelectorAll('[role="option"]')).map(el=>el.textContent.trim());
  for(const label of ['Claude CLI','Codex CLI','DeepSeek Harness','Pi'])check('picker contains '+label,labels.includes(label));
- return {checks,channels:labels,realModelCalls:0};
+ return {checks,channels:labels,installedCatalogs,realModelCalls:0};
 })()`;
-const code=scenario.replace('__PROJECT__',JSON.stringify(project)).replace('__MISSING__',JSON.stringify(join(run,'missing-runtime.cjs')));
+const code=scenario.replace('__PROJECT__',JSON.stringify(project)).replace('__MISSING__',JSON.stringify(join(run,'missing-runtime.cjs'))).replace('__INSTALLED__',JSON.stringify(installed));
 const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('ZS_'))delete env[key];delete env.ELECTRON_RUN_AS_NODE;
 Object.assign(env,{ZS_APP_DATA:data,ZS_RUNTIME:'fake',ZS_ALLOW_FAKE:'1',ZS_REAL_DISPATCH_GUARD:'1',ZS_PACKAGED_UI:'1',
   ZS_PIPE_NAME:String.fromCharCode(92,92,46,92)+'pipe'+String.fromCharCode(92)+'zs-r136-package-'+randomUUID(),ZS_DAEMON_ENTRY:join(app,'resources','app','daemon','daemon.cjs'),
   ZS_NODE_BIN:join(app,'resources','app','daemon','node','node.exe'),CLAUDE_CONFIG_DIR:config,CODEX_HOME:config,DSH_HOME:join(config,'dsh'),PI_CODING_AGENT_DIR:join(config,'pi')});
+if(installed)for(const key of ['DSH_HOME','DSH_AGENTS_HOME','PI_CODING_AGENT_DIR']){
+  if(process.env[key]!=null)env[key]=process.env[key];else delete env[key];
+}
 // Packaged Electron loads its bundled application, not a positional main script.
 // Drive that actual application through its debugging port on a non-primary display.
 const screenQuery=join(run,'screens.cjs');

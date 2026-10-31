@@ -2,11 +2,13 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 2026-10-31：R137 本机安装版真实验证，V74打包中
+## 2026-10-31：R137 本机安装版真实验证，V74交付
 
 用户已安装Harness桌面版和全局Pi并要求实试。实机版本DSH0.2.1-rc.5/Pi1.4.0，发现并修复桌面Electron Node/ASAR入口、%~dp0缺分隔符、Windows选Unix shim优先级；适配器和setup共用解析器并传受管env，ASAR/Pi版本文件计入配置指纹。Harness provider名称含斜杠按最长已配置前缀解析，off↔none，组件0.1.1。已在用户DSH自有zhongshuo profile安装组件，不改默认或其他profile、不改凭据/模型设置。见 [R137](../reviews/r137-installed-runtimes-20261031.md)。
 
-实际Harness magpie/newapi/deepseek-flash共3turn（读取、冷续接、显式模型low）及Pi magpie/newapi/glm-5.3-flash共2turn（读取、冷续接）全过/退出0；Pi job子进程及句柄归零，额外空闲取消0推理；只传临时marker无用户私有资料。元数据Harness19模型/Pi默认及等级读取通过。默认全量312文件2726通过/9跳过/0失败；相关50项、插件14项、双types/lint通过。原R130/R131及站点未提交工作保留；独立worktree实施，V74交付核对中，不再追加真实调用。
+实际Harness magpie/newapi/deepseek-flash共3turn（读取、冷续接、显式模型low）及Pi magpie/newapi/glm-5.3-flash共2turn（读取、冷续接）全过/退出0；Pi job子进程及句柄归零，额外空闲取消0推理；只传临时marker无用户私有资料。元数据Harness19模型/Pi默认及等级读取通过。默认全量312文件2726通过/9跳过/0失败；相关50项、插件14项、双types/lint通过。原R130/R131及站点未提交工作保留；独立worktree实施，仅本地提交未推送，不再追加真实调用。
+
+V74：desktop-daily-win-v74-r137-installed-runtimes-20261031，clean源码b4929e27a2a6679e346585e04d9db836281dcebd、BUILD bld_144d09aee397afc4。622程序hash一致/ZIP653文件CRC通过/220454087字节，SHA256 4004faaad56591720c2fccafa13b18fffb879dbeb3eab0ce0c24e9fd7b774be4。包内实际Electron/Node/daemon非主屏独立数据14项入口/本机CLI模型目录/正常停机exit0通过；无新增推理。组件从稳定V74目录重装握手0.1.1通过；沿用数据入口与V73一致。证据dist/r137-real、dist/r136-package/1936abb8-e646-4797-bf27-b9d511851ef1。
 
 ## 2026-10-31：R136 DeepSeek Harness → Pi 适配完成，V73交付
 
