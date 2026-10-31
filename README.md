@@ -18,6 +18,8 @@ AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 
 
 DeepSeek Harness 首版适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。在 `dsh web` 配置模型后，回众说添加该渠道。Pi 直接连接已安装的官方 CLI，沿用其模型配置。两种新渠道首版使用原生完整权限，暂不提供只读、项目受限编辑、图片或格式修复模式。
 
+Windows 官方 Harness 桌面安装版也可直接使用：默认 `dsh` 会解析桌面安装器入口，也可选择 `DeepSeek Harness.exe`。Pi 同时兼容官方安装器和 npm 全局安装；无需替换本机安装方式。
+
 ## 从源码构建
 
 准备 Windows、Node.js 24 或更高版本、pnpm 和 Git：

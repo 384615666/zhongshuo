@@ -85,7 +85,7 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
   private async query(flag: '--zs-probe' | '--zs-models'): Promise<Record<string, unknown>> {
     const entry = resolveAgentExecutable('deepseek-harness', this.options.executable);
     const output = await new Promise<string>((resolve, reject) => execFile(entry.command, [...entry.prefixArgs, ...PROFILE_ARGS, flag],
-      { cwd: this.options.cwd, windowsHide: true, timeout: this.options.requestTimeoutMs ?? 10000, maxBuffer: 1024 * 1024 },
+      { cwd: this.options.cwd, env: entry.env ? { ...process.env, ...entry.env } : undefined, windowsHide: true, timeout: this.options.requestTimeoutMs ?? 10000, maxBuffer: 1024 * 1024 },
       (error, stdout) => error ? reject(new AdapterCallError('CAPABILITY_UNSUPPORTED', '无法读取 Harness 连接组件，请先安装官方 dsh 并运行众说连接组件安装入口', true)) : resolve(stdout)));
     let result: unknown;
     try { result = JSON.parse(output.trim()); } catch { throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Harness 连接组件返回了无效信息，请重新安装连接组件', true); }
@@ -104,7 +104,7 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
     return result.models.slice(0, 500).flatMap((model: unknown) => {
       if (!isRecord(model) || typeof model.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,199}$/.test(model.id) || model.id.startsWith('sk-')) return [];
       return [{ id: model.id, label: typeof model.label === 'string' && !/[\r\n\0]/.test(model.label) ? model.label.slice(0, 120) : model.id,
-        ...(Array.isArray(model.efforts) ? { efforts: model.efforts.filter((effort): effort is string => typeof effort === 'string' && /^[a-z]{1,16}$/.test(effort)) } : {}) }];
+        ...(Array.isArray(model.efforts) ? { efforts: model.efforts.filter((effort): effort is string => typeof effort === 'string' && /^[a-z]{1,16}$/.test(effort)).map(effort=>effort==='off'?'none':effort) } : {}) }];
     });
   }
 }

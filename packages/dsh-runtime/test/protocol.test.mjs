@@ -3,7 +3,14 @@ import { Buffer } from 'node:buffer';
 import { setImmediate, setTimeout } from 'node:timers';
 import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
-import { RuntimeProtocol, RuntimeError, createWriter, bindInput } from '../protocol.mjs';
+import { RuntimeProtocol, RuntimeError, createWriter, bindInput, splitModelSelection } from '../protocol.mjs';
+
+test('model selection retains nested provider and model ids',()=>{
+  const providers=[{id:'gateway'},{id:'gateway/team'},{id:'other'}];
+  assert.deepEqual(splitModelSelection('gateway/team/model/v1',providers),{provider:'gateway/team',model:'model/v1'});
+  assert.throws(()=>splitModelSelection('unknown/model',providers),{code:'INVALID_MODEL'});
+  assert.throws(()=>splitModelSelection('gateway/team/',providers),{code:'INVALID_MODEL'});
+});
 
 const command = (overrides = {}) => ({ v: 1, type: 'execute', requestId: 'one', cwd: '/fixture', prompt: 'hello', mode: 'full', ...overrides });
 function fixture(overrides = {}) {

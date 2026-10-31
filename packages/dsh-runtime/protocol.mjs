@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 const { AbortController } = globalThis;
-export const PLUGIN_VERSION = '0.1.0';
+export const PLUGIN_VERSION = '0.1.1';
 export const DSH_VERSION = '0.2.1-rc.5';
 export const RUNTIME = 'zhongshuo-dsh';
 export const capabilities = Object.freeze({ sessionResume: true, sessionCancel: true, structuredEvents: true, readOnly: false });
@@ -11,6 +11,13 @@ export class RuntimeError extends Error {
 }
 
 const fail = (code, message) => { throw new RuntimeError(code, message); };
+/** Provider ids may themselves contain slashes (for example imported gateways). */
+export function splitModelSelection(value, providers) {
+  const provider = providers.map(item => item.id).filter(id => typeof id === 'string' && value.startsWith(id + '/'))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!provider || value.length === provider.length + 1) fail('INVALID_MODEL', 'model must name a configured provider/model.');
+  return { provider, model: value.slice(provider.length + 1) };
+}
 function validate(command) {
   if (command.mode === 'readonly') fail('READ_ONLY_UNSUPPORTED', 'This runtime cannot enforce read-only execution.');
   if (command.mode !== 'full') fail('INVALID_REQUEST', 'mode must be full or readonly.');

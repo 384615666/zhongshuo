@@ -20,7 +20,8 @@ function fileDigest(path: string): string {
 export function externalRuntimeLaunchIdentity(kind: ExternalRuntimeKind, options: ExternalRuntimeOptions, cwd: string) {
   const entry = resolveAgentExecutable(kind, options.executable);
   const launchEvidence: Record<string, string> = {
-    '执行程序': digest(JSON.stringify([entry.command, fileDigest(entry.command), entry.prefixArgs.map(path => [path, fileDigest(path)])])),
+    '执行程序': digest(JSON.stringify([entry.command, fileDigest(entry.command), entry.prefixArgs,
+      (entry.integrityFiles ?? entry.prefixArgs).map(path => [path, fileDigest(path)]),entry.env??null])),
     '模型与权限': digest(JSON.stringify({ kind, model: options.model ?? null, effort: options.effort ?? null, permissionMode: options.permissionMode ?? 'bypassPermissions', protocol: 1 })),
   };
   const home = homedir();
@@ -37,7 +38,9 @@ export function externalRuntimeLaunchIdentity(kind: ExternalRuntimeKind, options
       ...['package.json', 'cordis.yml', 'cordis.patch.yml', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'].map(name => join(profile, name)),
       ...['package.json', 'index.mjs', 'backend.mjs', 'protocol.mjs', 'cordis.patch.yml'].map(name => join(bundle, name))]
     : [join(piHome, 'settings.json'), join(piHome, 'models.json'), join(piHome, 'auth.json'), join(cwd, '.pi', 'settings.json')];
-  if (entry.prefixArgs[0]) paths.push(join(dirname(entry.prefixArgs[0]), 'package.json'), join(dirname(dirname(entry.prefixArgs[0])), 'package.json'));
+  const script=entry.prefixArgs.find(arg=>/\.(?:mjs|cjs|js)$/i.test(arg));
+  if(script&&!entry.integrityFiles)paths.push(join(dirname(script), 'package.json'), join(dirname(dirname(script)), 'package.json'));
+  if(kind==='pi'&&script&&/[\\/]pi-launcher\.js$/i.test(script))paths.push(join(dirname(dirname(script)),'install','current-version'));
   launchEvidence['渠道配置'] = digest(JSON.stringify(paths.map(path => [path, fileDigest(path)])));
   const names = kind === 'deepseek-harness'
     ? ['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DSH_HOME', 'DSH_AGENTS_HOME', 'NODE_OPTIONS', 'NODE_PATH']

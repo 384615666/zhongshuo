@@ -1,5 +1,7 @@
 # 众说正式工程 · 施工总账
 
+R137使用用户本机Harness桌面版与Pi安装器实测：真实Harness3turn、Pi2turn均成功/退出0、未传用户私有资料。补修Desktop Electron Node/ASAR入口、%~dp0/Windows shim优先级、受管env与配置指纹、Harness嵌套provider解析和off等级，组件0.1.1已装自有zhongshuo profile。默认312文件2726通过/9跳过/0失败，相关50项/插件14/双types/lint通过。V74打包核对中，详见 [R137](../reviews/r137-installed-runtimes-20261031.md)。
+
 R136按顺序接入 DeepSeek Harness 0.2.1-rc.5 和 Pi 1.4.0，原生完整权限、统一成员渠道目录及模型/思考等级、后台工厂/受管执行/台账/配置身份与恢复均接通。Harness 使用原创自有 profile 连接插件，Pi 使用 RPC 精确 session；无终态退出收口 UNKNOWN，冲突身份全记录，Pi Windows 工具退出竞态由 300ms EOF 延迟兼容并真实核对退出。首版只读/受限编辑/图片/格式修复暂不支持，明确拒绝。默认311文件2722通过/8跳过/0失败、双types及lint无新增；Harness13协议/官方19检查、Pi官方9、UI两渠道各34检查通过。手册03/04更新；零真实供应商模型调用。V73 clean源码1a35115、BUILD bld_ea86a2e337eab758，621程序hash/ZIP652文件CRC及包内实际Electron/daemon10项入口/正常停机exit0通过，沿用数据入口与V72一致，仅本地提交未推送。见 [R136](../reviews/r136-dsh-pi-20261031.md)。
 
 R135处理五项追加反馈：恢复定位成功自动关弹窗、回自然协作移至运行设置一级、独立研讨继续后父状态转ACTIVE、一条可读任务横幅、侧栏长名与动作分列。原库只读确认最新继续未转ACTIVE导致两成员confirmed-not-started取消；旧记录不改不自动重跑。最终304文件2646通过/1权限跳过/0失败；双types、16代码文件lint无新增；正式继续4项、状态桌面26项、Recovery/Composer78项、侧栏四组布局交互、长问句25项、宽屏66项通过。V72 clean源码acb6014、BUILD bld_91abf3df19cf70f4，616hash/ZIP650文件CRC通过；实际包内14章20图/原界面/正常退出及包内状态26项通过。沿用数据入口与V71一致，两提交发布main。完整交付记录见 [R135](../reviews/r135-status-feedback-20261031.md)。

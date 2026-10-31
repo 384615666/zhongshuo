@@ -65,7 +65,7 @@ export function memberExecutableStatus(kind: string | null, executable: string |
     try{
       const entry=kind==='claude'?resolveClaudeExecutable(executable):kind==='codex'?resolveCodexInvocation(executable):isExternalRuntimeKind(kind)?resolveAgentExecutable(kind,executable):{command:executable,args:[]};
       const args='prefixArgs' in entry?entry.prefixArgs:entry.args;
-      const present=locate(entry.command);const scripts=args.filter(a=>/\.(js|cjs|mjs)$/i.test(a));
+      const present=locate(entry.command);const scripts:string[]='integrityFiles' in entry&&Array.isArray(entry.integrityFiles)?entry.integrityFiles:args.filter(a=>/\.(js|cjs|mjs)$/i.test(a));
       const found=present!==false&&scripts.every(p=>locate(p)!==false);
       if(!found)return{status:'missing' as const,reason:'当前正式 adapter 的程序或脚本引用不存在或不可读取，请配置后再派工'};
       if(present==null||scripts.some(p=>locate(p)==null))return{status:'unknown' as const,reason:'相对程序路径依赖执行上下文；请保存明确的程序引用'};

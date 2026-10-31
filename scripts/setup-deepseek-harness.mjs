@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readFile, access } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { dirname, join, resolve, delimiter, extname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveCliExecutable } from '../src/adapter/cli/executable.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const supportedVersion = '0.2.1-rc.5';
@@ -28,7 +29,7 @@ export async function setupDeepseekHarness(args) {
   const tarball = join(artifacts, manifest.tarball);
   const hash = createHash('sha256').update(await readFile(tarball)).digest('hex');
   if (hash !== manifest.sha256) throw new Error('Runtime archive checksum mismatch.');
-  const launch = script ? { command: process.execPath, prefix: [script] } : await resolveDsh(executable);
+  const launch = script ? { command: process.execPath, prefixArgs: [script] } : resolveCliExecutable('deepseek-harness', executable);
   const version = await run(launch, ['--version'], true);
   if (version.trim() !== supportedVersion) throw new Error(`This plugin supports DSH ${supportedVersion}; install that official version separately before setup.`);
   // No default/open-design profile flag is accepted from the caller. The official
@@ -40,26 +41,10 @@ export async function setupDeepseekHarness(args) {
   return { profile: 'zhongshuo', dshVersion: supportedVersion, pluginVersion: manifest.pluginVersion, probe: frame };
 }
 
-async function resolveDsh(explicit) {
-  const candidates = explicit ? [explicit] : (process.env.PATH ?? '').split(delimiter).flatMap((dir) => process.platform === 'win32' ? [join(dir, 'dsh.exe'), join(dir, 'dsh.cmd')] : [join(dir, 'dsh')]);
-  for (const candidate of candidates) {
-    if (!await exists(candidate)) continue;
-    if (/\.(cmd|bat)$/i.test(candidate)) {
-      // Resolve known npm shims to Node directly; never invoke cmd.exe with
-      // caller-controlled paths or build a shell command string.
-      const base = dirname(resolve(candidate));
-      for (const path of [join(base, 'node_modules/@deepseek-ai/dsh/lib/bin.js'), join(base, '../@deepseek-ai/dsh/lib/bin.js')]) {
-        if (await exists(path)) return { command: process.execPath, prefix: [path] };
-      }
-      throw new Error('Cannot resolve this Windows shim safely. Supply --dsh-js with the official dsh/lib/bin.js path.');
-    }
-    return extname(candidate) === '.js' ? { command: process.execPath, prefix: [resolve(candidate)] } : { command: candidate, prefix: [] };
-  }
-  throw new Error('Official DSH is not installed. Install @deepseek-ai/dsh@0.2.1-rc.5 separately, then rerun this manual setup.');
-}
 async function run(launch, args, capture = false) {
   return new Promise((resolveRun, reject) => {
-    const child = spawn(launch.command, [...launch.prefix, ...args], { stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'], windowsHide: true, shell: false });
+    const child = spawn(launch.command, [...launch.prefixArgs, ...args], { env: launch.env ? { ...process.env, ...launch.env } : undefined,
+      stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'], windowsHide: true, shell: false });
     let text = '';
     child.stdout?.on('data', (chunk) => { text += chunk.toString('utf8'); if (text.length > 1024 * 1024) child.kill(); });
     child.once('error', reject);

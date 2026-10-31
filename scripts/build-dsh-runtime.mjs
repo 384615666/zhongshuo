@@ -32,7 +32,9 @@ export async function buildDshRuntime(output = join(sourceRoot, 'dist/dsh-runtim
   await mkdir(output, { recursive: true });
   await writeFile(join(output, tarball), archive);
   await writeFile(join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-  await writeFile(join(output, 'setup-deepseek-harness.mjs'), await readFile(join(sourceRoot, 'scripts/setup-deepseek-harness.mjs')));
+  const setupSource=await readFile(join(sourceRoot, 'scripts/setup-deepseek-harness.mjs'),'utf8');
+  await writeFile(join(output, 'setup-deepseek-harness.mjs'),setupSource.replace("'../src/adapter/cli/executable.mjs'","'./executable.mjs'"));
+  await writeFile(join(output, 'executable.mjs'),await readFile(join(sourceRoot,'src/adapter/cli/executable.mjs')));
   return { output, ...manifest };
 }
 

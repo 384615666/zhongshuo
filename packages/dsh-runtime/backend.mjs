@@ -5,7 +5,7 @@ import { isAbsolute, normalize } from 'node:path';
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
 import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { admitEncodedImages } from '@deepseek-ai/dsh-attachment';
-import { RuntimeError } from './protocol.mjs';
+import { RuntimeError, splitModelSelection } from './protocol.mjs';
 
 const samePath = (a, b) => process.platform === 'win32' ? normalize(a).toLowerCase() === normalize(b).toLowerCase() : normalize(a) === normalize(b);
 const checkAbort = (signal) => { signal.throwIfAborted(); };
@@ -35,12 +35,10 @@ export function createBackend(ctx) {
       required(ctx, 'sessionPersistence');
       const selection = { ...required(ctx, 'agentDefaultModel').currentSelection() };
       if (command.model !== undefined) {
-        const split = command.model.indexOf('/');
-        if (split < 1 || split === command.model.length - 1) throw new RuntimeError('INVALID_MODEL', 'model must be provider/model.');
-        selection.provider = command.model.slice(0, split); selection.model = command.model.slice(split + 1);
+        Object.assign(selection,splitModelSelection(command.model,required(ctx,'llm').listProviders()));
         delete selection.reasoningEffort;
       }
-      if (command.effort !== undefined) selection.reasoningEffort = ReasoningEffortId(command.effort);
+      if (command.effort !== undefined) selection.reasoningEffort = ReasoningEffortId(command.effort==='none'?'off':command.effort);
       await required(ctx, 'llm').resolveCallConfig(selection, signal);
       checkAbort(signal);
       const sessionId = command.sessionId ?? `session-${randomUUID()}`;

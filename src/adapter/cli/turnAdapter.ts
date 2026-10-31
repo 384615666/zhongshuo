@@ -5,7 +5,7 @@ import type { AdapterProcessIdentity, NormalizedRuntimeEvent, OpenSessionInput, 
 import { runtimeToolResultSummary, runtimeToolSummary, safeRuntimeToolText } from '../../contracts/runtimeProgress.ts';
 import { resolveAgentExecutable, type ExternalRuntimeKind } from './executable.ts';
 
-export type CliSpawn = (command: string, args: string[], cwd?: string) => ChildProcessWithoutNullStreams;
+export type CliSpawn = (command: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv) => ChildProcessWithoutNullStreams;
 export interface CliAdapterOptions {
   executable?: string; model?: string; effort?: string; permissionMode?: string;
   installationId?: string; cwd?: string; spawnFn?: CliSpawn; requestTimeoutMs?: number;
@@ -61,9 +61,10 @@ export abstract class CliTurnAdapter implements RuntimeAdapter {
     this.validate(session, input);
     const entry = resolveAgentExecutable(this.kind, this.options.executable);
     const args = [...entry.prefixArgs, ...this.arguments(session, input)];
+    const env = entry.env ? { ...process.env, ...entry.env } : undefined;
     const child = this.options.spawnFn
-      ? this.options.spawnFn(entry.command, args, ref.cwd)
-      : spawn(entry.command, args, { cwd: ref.cwd, shell: false, windowsHide: true, stdio: 'pipe' });
+      ? this.options.spawnFn(entry.command, args, ref.cwd, env)
+      : spawn(entry.command, args, { cwd: ref.cwd, env, shell: false, windowsHide: true, stdio: 'pipe' });
     const turn: CliTurn = { input, child, requestId: randomUUID(), buffer: '', stderr: '', text: '', seq: 0, started: false,
       terminal: false, stopRequested: false, exitConfirmed: false, exitCode: null, ready: false,
       timers: new Set(), exitWaiters: new Set(), tools: new Map(), values: new Map() };

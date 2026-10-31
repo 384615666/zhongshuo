@@ -15,8 +15,13 @@ the main application can decline images until separately certified.
 
 Build: `node scripts/build-dsh-runtime.mjs` produces `dist/dsh-runtime/` containing
 the npm-compatible tgz, SHA256 manifest, and standalone manual setup script.
-Portable packaging should include those three files. No root dependency changes
+Portable packaging should include those files and the launcher resolver below. No root dependency changes
 or package-manager commands are needed to build. Nothing auto-installs on launch.
+
+The setup directory also includes the shared `executable.mjs` launcher resolver.
+It supports both npm DSH and the official Windows desktop installer (Electron
+Node mode with its packaged ASAR entry); Pi's managed installer shim and npm
+shim are resolved without a shell. Keep this file beside the setup script.
 
 After the user separately installs official DSH **0.2.1-rc.5** and its profile
 package manager, run the bundled `node setup-deepseek-harness.mjs --install`.

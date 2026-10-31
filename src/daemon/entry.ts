@@ -235,7 +235,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const managedCodexSpawn = (() => {
       if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
       const { spawnManagedBridge } = managedBridgeMod;
-      return (cmd: string, args: string[],cwd?:string) => spawnManagedBridge(cmd, args, {cwd}) as never; // env 缺省=继承父环境
+      return (cmd: string, args: string[],cwd?:string,env?:NodeJS.ProcessEnv) => spawnManagedBridge(cmd, args, {cwd,...(env?{env}:{})}) as never;
     })();
     if (options.testAdapter == null && options.runtime === 'codex' && managedCodexSpawn != null) {
       adapter = new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn });
