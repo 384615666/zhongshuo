@@ -2167,7 +2167,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const { isDispatchGateHeld } = await import('../persistence/daemonState.ts');
         const held = isDispatchGateHeld(deps.db);
         const pending = deps.db.prepare(`SELECT dispatch_key FROM outbox WHERE status = 'pending'`).all() as Array<{ dispatch_key: string }>;
-        const interrupted = deps.db.prepare(`SELECT id, task_id, status FROM workflow_runs WHERE status IN ('INTERRUPTED')`).all() as Array<{ id: string; task_id: string; status: string }>;
+        // Historical interruptions remain in the run history. Only the latest
+        // run of an unfinished task can require an interruption reminder now.
+        // UNKNOWN turns, retained protection and unfinished undos are queried
+        // independently below, including when their task has since completed.
+        const interrupted = deps.db.prepare(`SELECT r.id, r.task_id, r.status
+          FROM workflow_runs r JOIN tasks t ON t.id=r.task_id
+          WHERE r.status='INTERRUPTED' AND t.status NOT IN ('DONE','CANCELLED')
+            AND NOT EXISTS(SELECT 1 FROM workflow_runs newer WHERE newer.task_id=r.task_id AND newer.rowid>r.rowid)
+          ORDER BY r.rowid`).all() as Array<{ id: string; task_id: string; status: string }>;
         const unknownTurns = deps.db.prepare(
           `SELECT t.id, t.run_id AS runId, t.stage_key AS stageKey, r.task_id AS taskId, t.status,
              (t.protection_state='released' AND NOT EXISTS(SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id=t.id AND l.status!='released')

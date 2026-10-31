@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R140 恢复检查过滤已解决的历史中断
+
+用户反馈“查看中断任务”仍定位到已修复完成的旧任务。原库只读确认唯一INTERRUPTED属于DONE任务，后续最新SUCCEEDED；旧recovery.status无条件列全部历史中断。现仅每任务最新run仍INTERRUPTED且task非DONE/CANCELLED才提醒，历史保留；UNKNOWN/保留保护/撤销/门禁独立查询不隐藏。新正式方法在原库readonly+query_only读取interruptedRuns[]，其余空/门禁false，无写入。见[R140](../reviews/r140-recovery-current-20261101.md)。
+
+新增16项正式恢复回归、既有7文件124项通过；双types/UI手册构建通过，commands lint与HEAD均10既有/无新增。MCP/Skill测试用户明确后排，本轮0真实模型调用。原R130/R131及82未跟踪工作保留，独立worktree实施，仅本地提交不推送。
+
 ## 2026-11-01：R139 Pi 正式结果与格式补交修复
 
 截图原库只读确认Pi同类链路：自然正文→TaskComplete非JSON→旧repairOnly拒绝，R138只修Harness留下Pi缺口。Pi适配器2逐轮传完整schema系统指令；官方1.4.0补交新会话，禁全部工具/扩展/MCP/上下文/模板并关闭重试压缩，握手历史为空；预检停止不启动。DM补交与后续会话隔离，普通只读/受限/图片不扩权。见[R139](../reviews/r139-pi-output-20261101.md)。
