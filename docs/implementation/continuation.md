@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R139 Pi 正式结果与格式补交修复
+
+截图原库只读确认Pi同类链路：自然正文→TaskComplete非JSON→旧repairOnly拒绝，R138只修Harness留下Pi缺口。Pi适配器2逐轮传完整schema系统指令；官方1.4.0补交新会话，禁全部工具/扩展/MCP/上下文/模板并关闭重试压缩，握手历史为空；预检停止不启动。DM补交与后续会话隔离，普通只读/受限/图片不扩权。见[R139](../reviews/r139-pi-output-20261101.md)。
+
+实际Pi问候/强制正文后的真实补交/旧失败后的明确继续共3真实turn+3fixture reservation，全部DONE/SUCCEEDED/resultKey正确/受管退出确认/job及poller0，同号重放无新增。官方本地固定响应4/4通过，9种强制工具全部原生not found，零副作用/真实供应商请求0；相关55/会话25/新DM3通过。默认全量314文件2742通过13跳过0失败（新DM收集后加入另验，不冒称含在全量），双types/lint/UI构建通过。证据dist/r139-formal/r139-1793469174679-2b31ccc2、dist/r139-pi-official/vitest-official.json、dist/r139-full.json。原数据只读不重放，无需安装Pi插件，仅本地提交不推送；原R130/R131及82未跟踪文件保留。
+
 ## 2026-11-01：R138 Harness 正式结果与补交修复
 
 用户截图只读诊断确认：DSH自然正文→TaskComplete非JSON→自动补交被repairOnly拒绝；R137底层测试漏正式worker验收。组件0.1.2补完整schema系统指令和强制零工具的新会话format-repair；旧组件握手升级拦截，正常只读/受限/图片边界不扩。DM补交与后续对话分会话，修复DM null线程恢复被转空串的既存拒续接。见[R138](../reviews/r138-harness-output-20261101.md)。

@@ -424,7 +424,7 @@ body.embedded .footer{display:none}
 <p>从源码运行时，先执行 <code>node scripts/build-dsh-runtime.mjs</code>，再执行 <code>node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime</code>。找不到程序时可在高级设置填写实际 CLI 路径。</p>
 <p><strong>Pi：</strong> 安装官方 Pi CLI，在 Pi 内完成供应商和模型配置，再回众说选择 <strong>Pi</strong>。Pi 无需安装众说连接插件。众说为不同任务建立独立会话，续接时核对原会话编号与目录；原会话缺失会明确失败，不会自动创建替代会话。</p>
 <p>Windows 上，Harness 官方桌面版安装后提供的 <code>dsh</code> 入口可直接使用，也可以在高级设置选择 <code>DeepSeek Harness.exe</code>。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 <code>pi</code>。已安装好时无需重复安装 CLI，只需为 Harness 运行一次众说连接组件安装入口。</p>
-<p>密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 起支持结果格式补交，补交时禁用所有工具，仅整理已有输出，不重复执行原任务；Pi 暂不支持格式补交。若提示连接组件需要升级，运行新版便携包中的 <code>ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd</code> 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 <strong>继续任务</strong>。</p>
+<p>密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版便携包中的 <code>ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd</code> 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 <strong>继续任务</strong>。</p>
 <h3>修改已有AI</h3>
 <p>进入 <strong>成员管理</strong>，在对应成员卡片上点 <strong>AI设置…</strong>。修改渠道或模型后，点 <strong>保存 AI 设置</strong>。</p>
 <p>Claude、Codex 只需要阅读和解释资料时，可以展开 <strong>高级：执行程序与权限</strong>，选择只读模式；需要修改文件时，选择对应的编辑权限。Harness、Pi 当前选择原生完整权限，旧的受限配置保留原值，不能通过切换渠道自动升级授权。</p>

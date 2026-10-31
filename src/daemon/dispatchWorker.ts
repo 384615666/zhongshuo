@@ -1076,9 +1076,9 @@ export class DispatchWorker {
       const dmResolved = isDm ? resolveMemberRuntime(this.db, member.id, this.defaultKindOf()) : null;
       const resolvedKind = dmResolved?.kind ?? null;
       const resolvedModel = dmResolved?.model ?? null;
-      const harnessFormatRepair = isRepairDispatch && resolvedKind === 'deepseek-harness';
+      const freshFormatRepair = isRepairDispatch && (resolvedKind === 'deepseek-harness'||resolvedKind === 'pi');
       const dmBindingSnap = JSON.stringify({
-        ...(harnessFormatRepair ? { formatOnlyRepair: true } : {}),
+        ...(freshFormatRepair ? { formatOnlyRepair: true } : {}),
         runtimeKind: resolvedKind,
         model: resolvedModel,
         installationId: dmResolved?.installationId ?? null,
@@ -1090,7 +1090,7 @@ export class DispatchWorker {
         effort:dmResolved?.effort??null,
         cwd: project.canonical_path,
       });
-      const dmPrevSession = isDm && !harnessFormatRepair
+      const dmPrevSession = isDm && !freshFormatRepair
         ? this.db.prepare(
           "SELECT id, provider_session_id, session_generation, thread_id, member_id, cwd, capabilities_json FROM runtime_sessions WHERE conversation_id = ? AND member_id = ? AND scope_kind = 'dm' AND provider_session_id IS NOT NULL AND provider_session_id != '' ORDER BY rowid DESC LIMIT 1",
         ).get(task.conversation_id, member.id) as { id: string; provider_session_id: string; session_generation: number; thread_id: string | null; member_id: string; cwd: string; capabilities_json: string | null } | undefined

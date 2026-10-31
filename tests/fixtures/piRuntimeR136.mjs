@@ -8,7 +8,10 @@ const reader={close:()=>process.stdin.pause()};
 const receive=line=>{
   const command=JSON.parse(line);
   if(command.type==='get_state'){
-    output({id:command.id,type:'response',command:'get_state',success:true,data:{sessionId:scenario==='wrong-session'?'other-session':sessionId,sessionFile:file,isStreaming:false,pendingMessageCount:0}});return;
+    output({id:command.id,type:'response',command:'get_state',success:true,data:{sessionId:scenario==='wrong-session'?'other-session':sessionId,sessionFile:file,isStreaming:false,pendingMessageCount:0,messageCount:scenario==='dirty-repair'?1:0,isCompacting:false}});return;
+  }
+  if(command.type==='set_auto_retry'||command.type==='set_auto_compaction'){
+    output({id:command.id,type:'response',command:command.type,success:scenario!=='repair-setup-failed'&&command.enabled===false});return;
   }
   if(command.type==='abort'){
     output({id:command.id,type:'response',command:'abort',success:true});output({type:'agent_settled',aborted:true});return;
@@ -22,11 +25,17 @@ const receive=line=>{
   if(scenario==='malformed'){process.stdout.write('null\n');return;}
   if(scenario==='dialog'){output({type:'extension_ui_request',id:'permission',method:'confirm',title:'Allow?'});return;}
   const complete=()=>{
-    const developer=process.argv.includes('--append-system-prompt')?readFileSync(value('--append-system-prompt'),'utf8'):null;
-    const content=JSON.stringify({prompt:command.message,developer,sessionId});
+    const developer=process.argv.includes('--append-system-prompt')&&value('--append-system-prompt')?readFileSync(value('--append-system-prompt'),'utf8'):null;
+    const system=process.argv.includes('--system-prompt')?readFileSync(value('--system-prompt'),'utf8'):null;
+    const content=JSON.stringify({prompt:command.message,developer,system,sessionId});
     output({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'中文🙂\u2028\u2029literal'}});
-    output({type:'tool_execution_start',toolCallId:'tool',toolName:'read',args:{path:'input.txt'}});
-    output({type:'tool_execution_end',toolCallId:'tool',toolName:'read',isError:false,result:{text:'not copied'}});
+    if(!process.argv.includes('--no-tools')||scenario==='repair-tool'){
+      output({type:'tool_execution_start',toolCallId:'tool',toolName:'read',args:{path:'input.txt'}});
+      output({type:'tool_execution_end',toolCallId:'tool',toolName:'read',isError:false,result:{text:'not copied'}});
+    }
+    if(scenario==='repair-tool-call'){
+      output({type:'message_end',message:{role:'assistant',content:[{type:'toolCall',id:'denied',name:'write',arguments:{}}],stopReason:'toolUse'}});return;
+    }
     output({type:'message_end',message:{role:'assistant',content:[{type:'text',text:content}],stopReason:scenario==='error'?'error':scenario==='truncated'?'length':'stop',model:'fixture',usage:{input:10,output:5,cacheRead:3,cost:{total:0.01}}}});
     output({type:'agent_end',willRetry:false,messages:[]});
     if(scenario==='end-only'){reader.close();process.stdin.destroy();return;}
