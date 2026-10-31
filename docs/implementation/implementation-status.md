@@ -2,6 +2,8 @@
 
 R138修复Harness正式任务正文非JSON后又被格式补交拒绝：组件0.1.2传完整schema系统指令，独立format-repair新会话机械禁用全部工具，旧组件提示升级；普通只读/受限/图片认证不扩大。DM补交与后续会话隔离、null线程续接修复。6真实turn涵盖问候/Pi转交及汇总/补交/旧失败继续全部DONE，受管退出及job/poller0。全量313文件2733通过1既有UI超时9跳过，定向13及DM3通过；双types/lint/UI构建通过，协议17/官方SDK27通过。原数据只读不重放。见[R138](../reviews/r138-harness-output-20261101.md)。
 
+V75 clean源码509edb1/BUILD bld_1e8fbeb795460357，622程序hash/ZIP652 CRC及实际包内Electron/daemon14项/正常停机通过；组件从稳定交付目录安装0.1.2，沿用数据入口与V74一致。仅本地提交未推送。
+
 R137使用用户本机Harness桌面版与Pi安装器实测：真实Harness3turn、Pi2turn均成功/退出0、未传用户私有资料。补修Desktop Electron Node/ASAR入口、%~dp0/Windows shim优先级、受管env与配置指纹、Harness嵌套provider解析和off等级，组件0.1.1已装自有zhongshuo profile。默认312文件2726通过/9跳过/0失败，相关50项/插件14/双types/lint通过。V74 clean源码b4929e2/BUILD bld_144d09aee397afc4，622hash/ZIP653 CRC、包内实际Electron/daemon14项入口/本机模型目录/正常停机通过；沿用数据入口与V73一致，仅本地提交未推送。详见 [R137](../reviews/r137-installed-runtimes-20261031.md)。
 
 R136按顺序接入 DeepSeek Harness 0.2.1-rc.5 和 Pi 1.4.0，原生完整权限、统一成员渠道目录及模型/思考等级、后台工厂/受管执行/台账/配置身份与恢复均接通。Harness 使用原创自有 profile 连接插件，Pi 使用 RPC 精确 session；无终态退出收口 UNKNOWN，冲突身份全记录，Pi Windows 工具退出竞态由 300ms EOF 延迟兼容并真实核对退出。首版只读/受限编辑/图片/格式修复暂不支持，明确拒绝。默认311文件2722通过/8跳过/0失败、双types及lint无新增；Harness13协议/官方19检查、Pi官方9、UI两渠道各34检查通过。手册03/04更新；零真实供应商模型调用。V73 clean源码1a35115、BUILD bld_ea86a2e337eab758，621程序hash/ZIP652文件CRC及包内实际Electron/daemon10项入口/正常停机exit0通过，沿用数据入口与V72一致，仅本地提交未推送。见 [R136](../reviews/r136-dsh-pi-20261031.md)。

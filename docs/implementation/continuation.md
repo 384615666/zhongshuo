@@ -8,6 +8,8 @@
 
 实际Harness问候1、Pi→DSH→Pi3、强制正文失败后真实补交1、旧不支持补交后明确继续1，共6真实turn，全部DONE/SUCCEEDED/受管退出确认/job及poller0；注入fixture另外3reservation。转交脚本误计正式交接消息为重复回复，中止原件保留，离线按handoff身份复核；不再额外调用模型。旧数据只读，无现场重放。协议17/官方SDK27零供应商检查/适配器及worker55通过。全量313文件2733通过1旧UI5000ms超时9跳过，旧UI与新DM定向13通过，第四轮正常DM续接3通过；双types/lint/UI构建通过。原R130/R131及82未跟踪文件保留，独立worktree，仅本地提交不推送。
 
+V75：desktop-daily-win-v75-r138-harness-output-20261101，clean源码509edb17562ba02cf0cdeb63f977b0c7d2923f63、BUILD bld_1e8fbeb795460357。622hash/ZIP652 CRC通过/220450566字节，SHA256 5b3660071732bfa9c2f497b956aca73886b05153694f50e063a8aaf63b364476。包内实际Electron/daemon非主屏隔离14项/正常停机exit0通过，证据dist/r136-package/db4e533f-c269-4cfd-a8c2-19ddb22f2e4c。组件从稳定V75重装0.1.2握手通过；沿用数据启动器与V74字节一致，正常退出旧版后start-existing-data.vbs。未自动运行用户旧任务。
+
 ## 2026-10-31：R137 本机安装版真实验证，V74交付
 
 用户已安装Harness桌面版和全局Pi并要求实试。实机版本DSH0.2.1-rc.5/Pi1.4.0，发现并修复桌面Electron Node/ASAR入口、%~dp0缺分隔符、Windows选Unix shim优先级；适配器和setup共用解析器并传受管env，ASAR/Pi版本文件计入配置指纹。Harness provider名称含斜杠按最长已配置前缀解析，off↔none，组件0.1.1。已在用户DSH自有zhongshuo profile安装组件，不改默认或其他profile、不改凭据/模型设置。见 [R137](../reviews/r137-installed-runtimes-20261031.md)。
