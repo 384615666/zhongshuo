@@ -2,6 +2,10 @@
 
 R140修复恢复检查误报已解决历史中断：recovery.status只列未完成任务最新INTERRUPTED，DONE/CANCELLED及已有新运行的旧中断不再提醒，历史不改；UNKNOWN/保护/撤销/门禁独立保留。原库只读复核从1旧提醒归零，新16/既有124恢复回归通过、双types/UI构建通过、lint无新增。0真实模型调用，MCP/Skill测试延期。见[R140](../reviews/r140-recovery-current-20261101.md)。
 
+V77 clean源码248c23b/BUILD bld_4f7e269cfc383220，622程序hash/ZIP652 CRC、实际包内恢复UI两组14项与通用入口14项/正常退出通过；沿用数据入口与V76一致，仅本地提交不推送。
+
+冻结默认全量316文件2761通过13跳过0失败，恢复定向140通过；中间fixture失败原件保留。
+
 R139补齐Pi自然正文后结果非JSON→格式补交不支持的同类缺口。逐轮schema原生系统指令，官方1.4.0补交严格新会话+禁全部工具及扩展/MCP/上下文，关闭重试压缩并确认后发送；普通权限边界不扩大。真实问候/补交/旧失败继续3turn全部DONE，3fixture另账；官方本地4项、9种工具原生拒绝、会话25、新DM3通过。默认314文件2742通过13跳过0失败，双types/lint/UI构建通过。原库只读，无需Pi插件。见[R139](../reviews/r139-pi-output-20261101.md)。
 
 V76 clean源码c48727e/BUILD bld_759549b0ac2cdf49，622程序hash/ZIP652 CRC、实际包内Electron/daemon14项及正常停机通过；沿用数据入口与V75相同，仅本地提交不推送。

@@ -8,6 +8,12 @@
 
 新增16项正式恢复回归、既有7文件124项通过；双types/UI手册构建通过，commands lint与HEAD均10既有/无新增。MCP/Skill测试用户明确后排，本轮0真实模型调用。原R130/R131及82未跟踪工作保留，独立worktree实施，仅本地提交不推送。
 
+最终定向8文件140通过。V77包内真实Electron/daemon非主屏合成两组14项通过：已修复不自动提醒/手动无旧链接，未解决仍1链接且正确定位，任务历史/outbox/台账不变；退出0且无遗留daemon，截图已目视。证据dist/r140-ui/26def641-7688-466d-8479-addfccb7d365。启动早期body空/CDP不支持窗口命令/截图动画中间失败保留，修正验证器后通过。MCP/Skill仍未测。
+
+冻结默认全量316文件2761通过13跳过0失败，原件dist/r140-full-final.json；首次全量收集了定稿前fixture产生3唯一键冲突，原报告保留，最终定向与全量均过，不覆盖历史。
+
+V77：desktop-daily-win-v77-r140-recovery-current-20261101，clean源码248c23b8e48d55f03b6c2b5eb74ad988c0138ec5、BUILD bld_4f7e269cfc383220。622hash/ZIP652 CRC通过/220454955字节，SHA256 582726494c4b8bc8dad17df001da37ddab565b9b60490dc9a8b88bd187e2ec10。通用包内入口14项/正常退出0通过，证据dist/r136-package/f7bde406-5633-4d75-a7b3-fa3f944246d1。沿用数据启动器与V76字节相同，正常退出旧版后start-existing-data.vbs，不清旧记录不重跑。
+
 ## 2026-11-01：R139 Pi 正式结果与格式补交修复
 
 截图原库只读确认Pi同类链路：自然正文→TaskComplete非JSON→旧repairOnly拒绝，R138只修Harness留下Pi缺口。Pi适配器2逐轮传完整schema系统指令；官方1.4.0补交新会话，禁全部工具/扩展/MCP/上下文/模板并关闭重试压缩，握手历史为空；预检停止不启动。DM补交与后续会话隔离，普通只读/受限/图片不扩权。见[R139](../reviews/r139-pi-output-20261101.md)。
