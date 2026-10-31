@@ -319,7 +319,7 @@ body.embedded .footer{display:none}
 <a href="#optional"><span>12</span>备份与恢复</a>
 <a href="#send"><span>13</span>发送后看哪里</a>
 <a href="#help"><span>14</span>常见问题</a></aside><main><h1>众说操作手册</h1>
-<p><strong>Windows 桌面版 · 图文入门 · 更新于 2026-10-30</strong></p>
+<p><strong>Windows 桌面版 · 图文入门 · 更新于 2026-10-31</strong></p>
 <p>第一次用众说，可以跟着本手册做一次：打开项目 → 添加 AI → 发消息 → 看回复。本手册用“读书会筹备”举例，你可以换成自己的工作、资料或代码项目。</p>
 <p><strong>怎么看图：</strong> 截图中的蓝色 <strong>①②③</strong> 标出了点击位置，下面的步骤与编号对应。打开 <strong>设置 → 操作手册</strong>，随时可以回来查。</p>
 <p><a id="start"></a></p>
@@ -390,7 +390,7 @@ body.embedded .footer{display:none}
 <p><img src="images/04-add-ai.png" alt="添加AI窗口：①名称，②运行渠道，③模型，④添加成员"></p>
 <ol>
 <li><strong>① 成员名称</strong>：给助手起一个你认得的名字，例如“读书会助手”。</li>
-<li><strong>② 运行渠道</strong>：选这台电脑上已经安装并登录的 Claude 或 Codex。</li>
+<li><strong>② 运行渠道</strong>：选这台电脑上已经安装并配置的 Claude、Codex、DeepSeek Harness 或 Pi。</li>
 <li><strong>③ 模型</strong>：点下拉框，从列表里选一个模型。第一次使用时，其他项目可以保持默认。</li>
 <li>点 <strong>④ 添加成员</strong>，回到房间聊天。</li>
 </ol>
@@ -410,7 +410,7 @@ body.embedded .footer{display:none}
 </tr>
 <tr>
 <td>运行渠道</td>
-<td>众说连接AI所用的程序，例如 Claude 或 Codex。账号登录在对应程序中完成。</td>
+<td>众说连接AI所用的程序，例如 Claude、Codex、DeepSeek Harness 或 Pi。账号及模型配置在对应程序中完成。</td>
 </tr>
 <tr>
 <td>模型</td>
@@ -418,10 +418,15 @@ body.embedded .footer{display:none}
 </tr>
 </tbody>
 </table></div>
-<p><strong>模型列表为空时：</strong> 先在对应的 Claude 或 Codex 程序中完成安装和登录，再回到这里点 <strong>重新读取</strong>，选择模型。</p>
+<p><strong>模型列表为空时：</strong> 先在对应的渠道程序中完成安装和配置，再回到这里点 <strong>重新读取</strong>，选择模型。切换渠道时，旧模型和思考等级会清空；默认程序随渠道切换，Harness 为 <code>dsh</code>，Pi 为 <code>pi</code>。</p>
+<h3>使用 DeepSeek Harness 或 Pi</h3>
+<p><strong>DeepSeek Harness：</strong> 首版对应官方 <code>@deepseek-ai/dsh@0.2.1-rc.5</code>。先安装该版本及其要求的 Node.js、包管理工具，再打开便携包内的 <code>ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd</code>。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。在终端运行 <code>dsh web</code> 配置模型后，回众说选择 <strong>DeepSeek Harness</strong>，读取模型并添加成员。</p>
+<p>从源码运行时，先执行 <code>node scripts/build-dsh-runtime.mjs</code>，再执行 <code>node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime</code>。找不到程序时可在高级设置填写实际 CLI 路径。</p>
+<p><strong>Pi：</strong> 安装官方 Pi CLI，在 Pi 内完成供应商和模型配置，再回众说选择 <strong>Pi</strong>。Pi 无需安装众说连接插件。众说为不同任务建立独立会话，续接时核对原会话编号与目录；原会话缺失会明确失败，不会自动创建替代会话。</p>
+<p>密钥由各自 CLI 管理，无需填进众说。两种新渠道当前使用原生完整权限；只读、项目受限编辑、图片和自动格式修复暂未开放。模型能列出、配置能保存，与真实任务已经验证完成是不同状态。</p>
 <h3>修改已有AI</h3>
 <p>进入 <strong>成员管理</strong>，在对应成员卡片上点 <strong>AI设置…</strong>。修改渠道或模型后，点 <strong>保存 AI 设置</strong>。</p>
-<p>只需要阅读和解释资料时，可以展开 <strong>高级：执行程序与权限</strong>，选择只读模式；需要修改文件时，选择对应的编辑权限。</p>
+<p>Claude、Codex 只需要阅读和解释资料时，可以展开 <strong>高级：执行程序与权限</strong>，选择只读模式；需要修改文件时，选择对应的编辑权限。Harness、Pi 当前选择原生完整权限，旧的受限配置保留原值，不能通过切换渠道自动升级授权。</p>
 <p><a id="chat"></a></p>
 <h2>4. 发消息、看回复，再接着问</h2>
 <h3>发出第一条消息</h3>

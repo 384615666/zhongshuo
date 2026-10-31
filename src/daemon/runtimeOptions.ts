@@ -1,3 +1,4 @@
+import {isExternalRuntimeKind,externalRuntimeAdapter,externalRuntimeMetadata} from './externalRuntime.ts';
 import {execFile} from 'node:child_process';
 import {resolveClaudeExecutable} from '../adapter/claude/cliAdapter.ts';
 import {CodexAppServerAdapter} from '../adapter/codex/appServerAdapter.ts';
@@ -16,6 +17,11 @@ export async function runtimeOptions(kind:string,executable:string|undefined,mod
     const help=await new Promise<string>((resolve,reject)=>execFile(entry.command,[...entry.prefixArgs,'--help'],{cwd,windowsHide:true,timeout:10000,maxBuffer:256*1024},(error,out)=>error?reject(Error('无法读取 Claude CLI 选项，请检查程序引用')):resolve(out)));
     const efforts=claudeEffortsFromHelp(help);
     return {efforts,source:'本机 Claude CLI --help',reason:efforts.length?'参数会实际传给 CLI；第三方渠道是否采用以真实结果为准':'当前 CLI 没有声明可用思考等级',imageInput:'automatic'};
+  }
+  if(isExternalRuntimeKind(kind)){
+    const adapter=externalRuntimeAdapter(kind,{executable,cwd,model});
+    const models=await adapter.listModels();const selected=models.find(m=>m.id===model);
+    return{efforts:selected?.efforts??[],models:models.map(m=>({id:m.id,model:m.id,displayName:m.label})),source:`本机 ${externalRuntimeMetadata(kind).label} 模型清单（无推理调用）`,reason:selected?'按当前模型声明提供等级':'未在当前清单找到模型 ID；可保留手动配置',imageInput:'unsupported'};
   }
   if(kind==='codex') {
     const adapter=new CodexAppServerAdapter({executable,cwd,requestTimeoutMs:10000});

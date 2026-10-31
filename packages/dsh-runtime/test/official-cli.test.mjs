@@ -1,0 +1,91 @@
+import test from 'node:test';
+import process from 'node:process';
+import { setTimeout, clearTimeout } from 'node:timers';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, writeFile, cp } from 'node:fs/promises';
+import { join, dirname, resolve, delimiter } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
+import { buildDshRuntime } from '../../../scripts/build-dsh-runtime.mjs';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const cli = process.env.ZHONGSHUO_DSH_TEST_CLI;
+test('official DSH isolated installation, probe, catalog and persisted agent lifecycle (zero model calls)', { skip: !cli, timeout: 120000 }, async () => {
+  const tools = resolve(cli, '../../../..');
+  const area = await mkdtemp(join(root, 'dist/r136-tools/official-cli-test-'));
+  const work = join(area, 'workspace'); await mkdir(work);
+  const env = {};
+  for (const key of ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'LOCALAPPDATA', 'APPDATA']) if (process.env[key]) env[key] = process.env[key];
+  env.PATH = [join(tools, '.bin'), dirname(process.execPath), 'C:\\Windows\\System32', 'C:\\Program Files\\Git\\cmd'].join(delimiter);
+  env.DSH_HOME = join(area, 'home'); env.DSH_AGENTS_HOME = join(area, 'agents'); env.DSH_TELEMETRY_DISABLED = '1'; env.CI = 'true'; env.COREPACK_ENABLE_AUTO_PIN = '0';
+  const artifacts = join(area, 'artifacts'); await buildDshRuntime(artifacts);
+  async function run(args, timeout = 20000) {
+    const child = spawn(process.execPath, args, { cwd: work, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = ''; child.stdout.on('data', (data) => { stdout += data; }); child.stderr.on('data', (data) => { stderr += data; });
+    const timer = setTimeout(() => child.kill(), timeout);
+    const code = await new Promise((done, reject) => { child.once('error', reject); child.once('close', done); }); clearTimeout(timer);
+    return { code, stdout, stderr };
+  }
+  const install = await run([join(root, 'scripts/setup-deepseek-harness.mjs'), '--install', '--artifact-dir', artifacts, '--dsh-js', cli], 60000);
+  assert.equal(install.code, 0, install.stderr + install.stdout);
+  const profile = join(env.DSH_HOME, 'profiles/zhongshuo');
+  const manifest = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'));
+  assert.deepEqual(manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@zhongshuo/dsh-runtime']);
+  const probe = await run([cli, '--profile', 'zhongshuo', '--zs-probe']); assert.equal(probe.code, 0, probe.stderr);
+  assert.equal(JSON.parse(probe.stdout).type, 'probe');
+  const emptyModels = await run([cli, '--profile', 'zhongshuo', '--zs-models']); assert.equal(emptyModels.code, 0, emptyModels.stderr); assert.deepEqual(JSON.parse(emptyModels.stdout).models, []);
+  // Only fixture registration is added to the profile. The actual official
+  // base/agent/tool/persistence stack remains unchanged.
+  const fixture = join(profile, 'fixture-provider.mjs');
+  await cp(join(root, 'packages/dsh-runtime/test/fixture-provider.mjs'), fixture);
+  // The fixture's explicit peer manifest shares the official llm class identity.
+  const fixturePackage = join(profile, 'fixture-package'); await mkdir(fixturePackage);
+  await cp(fixture, join(fixturePackage, 'index.mjs'));
+  await writeFile(join(fixturePackage, 'package.json'), JSON.stringify({ name: 'zhongshuo-test-fixture', type: 'module', peerDependencies: { '@deepseek-ai/dsh-llm': '0.2.1-rc.5' } }));
+  const overlay = join(area, 'fixture.patch.yml');
+  await writeFile(overlay, `- insert:\n    - id: zhongshuo-test-fixture\n      name: ${JSON.stringify(join(fixturePackage, 'index.mjs').replaceAll('\\', '/'))}\n`);
+  const models = await run([cli, '--profile', 'zhongshuo', '--patch', overlay, '--zs-models']); assert.equal(models.code, 0, models.stderr);
+  assert.deepEqual(JSON.parse(models.stdout).models, [{ id: 'fixture/scripted', label: 'Scripted fixture', efforts: ['low', 'high'] }]);
+  async function execute(prompt, options = {}) {
+    const frames = []; let stderr = ''; let settled = false; let result;
+    const child = spawn(process.execPath, [cli, '--profile', 'zhongshuo', '--patch', overlay, '--zs-stdio'], { cwd: work, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stderr.on('data', (data) => { stderr += data; });
+    const timer = setTimeout(() => child.kill(), 15000);
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    const request = { v: 1, type: 'execute', requestId: 'request-1', cwd: work, prompt, mode: 'full', model: 'fixture/scripted', effort: 'high', developerInstructions: 'fixture-instruction={{literal}}', ...options };
+    const send = (value) => child.stdin.write(JSON.stringify(value) + '\n');
+    lines.on('line', (line) => {
+      const frame = JSON.parse(line); frames.push(frame);
+      if (frame.type === 'ready') {
+        if (options.cancelBeforeExecute) send({ v: 1, type: 'cancel', requestId: request.requestId });
+        else { send(request); if (options.cancelImmediately) send({ v: 1, type: 'cancel', requestId: request.requestId }); }
+      }
+      if (frame.type === 'session' && prompt === 'fixture:wait') setTimeout(() => send({ v: 1, type: 'cancel', requestId: request.requestId }), 100);
+      if (frame.type === 'result') { result = frame; settled = true; child.stdin.end(); }
+    });
+    const code = await new Promise((done, reject) => { child.once('error', reject); child.once('close', done); }); clearTimeout(timer);
+    assert.equal(settled, true, JSON.stringify({ code, stderr, frames })); assert.equal(code, 0, stderr);
+    return { frames, result, stderr };
+  }
+  const first = await execute('fixture:hello'); assert.equal(first.result.status, 'completed', JSON.stringify(first)); assert.match(first.result.text, /prompts=1 effort=high/);
+  const sessionId = first.frames.find((frame) => frame.type === 'session').sessionId;
+  assert.equal(first.result.sessionId, sessionId); assert.ok(first.frames.some((frame) => frame.event?.kind === 'thinking')); assert.ok(first.frames.some((frame) => frame.event?.kind === 'text'));
+  assert.deepEqual(first.frames.find((frame) => frame.event?.kind === 'usage').event, { kind: 'usage', inputTokens: 12, cachedTokens: 4, outputTokens: 6, model: 'fixture/scripted' });
+  const resumed = await execute('fixture:resume', { sessionId }); assert.equal(resumed.result.status, 'completed', JSON.stringify(resumed)); assert.match(resumed.result.text, /prompts=2/); assert.equal(resumed.frames.find((frame) => frame.type === 'session').resumed, true);
+  const fresh = await execute('fixture:fresh'); assert.equal(fresh.result.status, 'completed'); assert.match(fresh.result.text, /prompts=1/); assert.notEqual(fresh.result.sessionId, sessionId);
+  const missing = await execute('fixture:missing', { sessionId: 'session-does-not-exist' }); assert.equal(missing.result.status, 'failed'); assert.ok(!missing.frames.some((frame) => frame.type === 'session'));
+  const other = join(area, 'other-workspace'); await mkdir(other);
+  const wrongCwd = await execute('fixture:wrong-cwd', { sessionId, cwd: other }); assert.equal(wrongCwd.result.error.code, 'SESSION_CWD_MISMATCH');
+  const readonly = await execute('fixture:readonly', { mode: 'readonly' }); assert.equal(readonly.result.error.code, 'READ_ONLY_UNSUPPORTED'); assert.ok(!readonly.frames.some((frame) => frame.type === 'session'));
+  const max = await execute('fixture:max'); assert.equal(max.result.status, 'failed'); assert.equal(max.result.stopReason, 'max-tokens');
+  const failed = await execute('fixture:error'); assert.equal(failed.result.status, 'failed'); assert.ok(!JSON.stringify(failed.frames).includes('test-secret-must-not-leak'));
+  const cancelled = await execute('fixture:wait'); assert.equal(cancelled.result.status, 'cancelled');
+  const early = await execute('fixture:hello', { cancelImmediately: true }); assert.equal(early.result.status, 'cancelled');
+  const unopened = await execute('fixture:hello', { cancelBeforeExecute: true }); assert.equal(unopened.result.status, 'cancelled'); assert.equal(unopened.result.sessionId, ''); assert.ok(!unopened.frames.some((frame) => frame.type === 'session'));
+  const tool = await execute('fixture:tool'); assert.equal(tool.result.status, 'completed', JSON.stringify(tool));
+  const started = tool.frames.find((frame) => frame.event?.kind === 'tool-start').event;
+  const ended = tool.frames.find((frame) => frame.event?.kind === 'tool-end').event;
+  assert.equal(started.id, ended.id); assert.equal(started.name, 'fixture_echo'); assert.deepEqual(started.input, { value: 'hello' }); assert.equal(ended.isError, false);
+  await writeFile(join(area, 'report.json'), JSON.stringify({ version: '0.2.1-rc.5', realModelCalls: 0, checks: ['official-profile-install', 'probe', 'empty-models', 'fixture-models-and-efforts', 'official-agent-loop', 'text', 'thinking', 'usage', 'resume-after-process-restart', 'fresh-session-isolation', 'missing-session', 'cwd-mismatch', 'readonly-preexecute-rejection', 'max-tokens-failure', 'error-redaction', 'active-cancel', 'startup-cancel', 'cancel-before-execute', 'official-tool-events'], results: [first, resumed, fresh, missing, wrongCwd, readonly, max, failed, cancelled, early, unopened, tool] }, null, 2));
+});

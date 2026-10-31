@@ -119,6 +119,14 @@ Android、安装器、签名、自动更新与既有延期不包含在首版候�
 //    「已有新逻辑身份的数据整根移动（自动继承）」两条路径——R68 真实旧版继承收口）
 writeFileSync(join(out, 'README-DAILY.md'), `# 众说·日常桌面版 ${outArg ?? 'desktop-daily-win-v1'}
 
+## DeepSeek Harness 与 Pi（2026-10-31）
+
+成员管理 → 添加 AI，现在可选择 Claude、Codex、DeepSeek Harness 或 Pi。已有成员和原任务保持原配置；不会自动新增成员或重跑任务。
+
+Harness 首版对应官方 \`@deepseek-ai/dsh@0.2.1-rc.5\`。先安装该版本及其要求的工具链，再运行 \`ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd\` 安装众说专用 profile 连接组件。在 \`dsh web\` 完成模型配置后，回众说读取模型。该安装入口只安装连接组件，不替你安装 DSH，不把密钥写入众说。
+
+Pi 首版验证版本为官方 \`@earendil-works/pi-coding-agent@1.4.0\`，直接连接本机 Pi CLI；模型和凭据由 Pi 管理。两种新渠道首版使用原生完整权限，暂不提供只读、项目受限编辑、图片和格式修复模式。停止、续接、调用记录与普通任务沿用众说机制；真实模型表现仍以你当前渠道的实际运行结果为准。
+
 ## R81 成员管理与配置模板（2026-10-13）
 
 成员名称与说明使用正式 project/member/version 合同编辑；同名按稳定短 ID 区分，旧身份、任务、会话与正文不重建。

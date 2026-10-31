@@ -1,3 +1,4 @@
+import {isRuntimeKind,type RuntimeKind} from '../contracts/runtimeKinds.ts';
 import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 const ANALYSIS_ONLY_INSTRUCTIONS='本次请求仅分析：只读取当前项目和用户要求比较的公开资料，在对话中交付有依据的实质结论。不得修改源码、配置或业务文件，不执行命令、安装程序、脚本或外部项目，不转交实现工作；协作子步骤同样保持只读。可使用只读文件工具及 WebFetch/WebSearch 查阅公开资料；不要将本地代码、凭据或私有内容上传到网络或放入搜索查询。用户明确创建新的可写请求前，普通继续与同串跟进仍保持本次只读权限。';
 import {redispatchExecution} from './redispatchExecution.ts';
@@ -3105,9 +3106,9 @@ export class DispatchWorker {
   }
 
   /** 全局默认 runtime kind（未绑定成员回落；ZS_RUNTIME 归一——fake 限开发模式）。 */
-  private defaultKindOf(): 'fake' | 'codex' | 'claude' | null {
+  private defaultKindOf(): RuntimeKind | null {
     const raw = process.env.ZS_RUNTIME;
-    return raw === 'codex' || raw === 'claude' || raw === 'fake' ? raw : null;
+    return isRuntimeKind(raw) ? raw : null;
   }
 
   /** DM 会话终态结算（第二十轮二）：turnId → 会话身份待结算（终态时 provider 已实际上报）。 */

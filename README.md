@@ -14,7 +14,9 @@
 - **任务与成果**：查看执行进展、停止或继续工作，预览、保存文件并提出修改意见。
 - **本地资料**：聊天、附件、设置和任务记录保存在本机。
 
-AI 成员使用电脑上已安装、登录并配置的 Claude 或 Codex 渠道。第三方兼容模型由对应渠道配置。
+AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 或 Pi 渠道。第三方兼容模型由对应渠道配置。
+
+DeepSeek Harness 首版适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。在 `dsh web` 配置模型后，回众说添加该渠道。Pi 直接连接已安装的官方 CLI，沿用其模型配置。两种新渠道首版使用原生完整权限，暂不提供只读、项目受限编辑、图片或格式修复模式。
 
 ## 从源码构建
 
@@ -45,7 +47,8 @@ pnpm build:ui
 | `src/contracts` | 命令、事件与数据契约 |
 | `src/domain` | 路由与任务领域规则 |
 | `src/persistence` | SQLite、迁移与持久化 |
-| `src/adapter` | Claude、Codex 及模拟执行端 |
+| `src/adapter` | Claude、Codex、DeepSeek Harness、Pi 及模拟执行端 |
+| `packages/dsh-runtime` | 众说专用 Harness profile 连接组件 |
 | `src/daemon` | 调度、协作与执行服务 |
 | `src/ui` | Electron 桌面客户端与正式 React 界面 |
 | `docs/user-guide` | 面向用户的图文操作手册 |

@@ -2,10 +2,12 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Select, memberShortId } from './ui';
 import { command } from '../bridge';
+import { RUNTIME_CHANNELS, runtimeExecutable, type RuntimeKind } from '../../../contracts/runtimeKinds';
 import {runtimeChannelPatch} from '../../../contracts/runtimeSelection';
 import {RuntimeModel} from './RuntimeModel';
 import {RuntimeEffort} from './RuntimeEffort';
-import { runtimePermissionOptions } from '../lib/runtimePermissions';
+import { runtimePermissionHint, runtimePermissionOptions } from '../lib/runtimePermissions';
+import { RuntimeChannelHelp } from './RuntimeChannelHelp';
 import { refreshDms, refreshMembers,refreshRooms } from '../loader';
 import { getState, useStore } from '../shell';
 import { useFormGuard } from '../lib/useFormGuard';
@@ -19,7 +21,7 @@ export interface ConfigTemplate {
     enabled: boolean;
     revision: number;
     config: {
-        kind: 'claude' | 'codex' | 'fake';
+        kind: RuntimeKind;
         model: string | null;
         executable: string;
         permissionMode: string | null;
@@ -100,15 +102,16 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     const f = useWriteForm(`memberTemplate.update:${t.id}`);
     const fake = useStore(s => s.dispatchGuard?.fakeAllowed === true);
     const config = (patch: Partial<ConfigTemplate['config']>) => setForm(s => ({ ...s, config: { ...s.config, ...patch } }));
-    return <Modal title={`编辑模板 · ${t.name}`} size="md" onClose={onClose} subtitle="保存只影响后续创建，已有成员继续使用独立配置" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-edit-save disabled={f.busy || f.invalid || f.committed || !form.name.trim()} onClick={() => void f.save('memberTemplate.update', { templateId: t.id, expectedRevision: t.revision, name: form.name, description: form.description, enabled: form.enabled, config: form.config }, onSaved)}>保存模板</button></>}>
+    return <Modal title={`编辑模板 · ${t.name}`} size="md" onClose={onClose} subtitle="保存只影响后续创建，已有成员继续使用独立配置" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-edit-save disabled={f.busy || f.invalid || f.committed || !form.name.trim()} onClick={() => void f.save('memberTemplate.update', { templateId: t.id, expectedRevision: t.revision, name: form.name, description: form.description, enabled: form.enabled, config: {...form.config,executable:form.config.executable.trim()||runtimeExecutable(form.config.kind)} }, onSaved)}>保存模板</button></>}>
     <FormFeedback state={f}/>{f.invalid ? <div className="panel warning">页面已切换，表单作废。</div> : null}
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} maxLength={60} value={form.name} onChange={e => setForm(s => ({ ...s, name: e.target.value }))}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={form.description} onChange={e => setForm(s => ({ ...s, description: e.target.value }))}/></label>
     <label className="field"><span className="field-label">模板状态</span><Select disabled={f.busy||f.committed} value={form.enabled ? 'enabled' : 'disabled'} ariaLabel="模板状态" options={[{ value: 'enabled', label: '启用 · 可创建' }, { value: 'disabled', label: '停用 · 已有成员不变' }]} onChange={v => setForm(s => ({ ...s, enabled: v === 'enabled' }))}/></label>
-    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[{ value: 'claude', label: 'claude' }, { value: 'codex', label: 'codex' }, ...(fake ? [{ value: 'fake', label: '测试 AI' }] : [])]} onChange={v => config(runtimeChannelPatch(v as ConfigTemplate['config']['kind']))}/></label>
+    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[...RUNTIME_CHANNELS, ...(fake ? [{ value: 'fake', label: '测试 AI' }] : [])]} onChange={v => config(runtimeChannelPatch(v as RuntimeKind))}/></label>
+    <RuntimeChannelHelp kind={form.config.kind}/>
     {projectId&&form.config.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.config.kind} executable={form.config.executable} value={form.config.model??''} disabled={f.busy||f.committed} onChange={model=>config({model:model||null,effort:null})}/>:<label className="field"><span className="field-label">模型 ID</span><input className="input" disabled={f.busy||f.committed} value={form.config.model??''} onChange={e=>config({model:e.target.value||null})}/></label>}
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
     {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}；打开项目后可读取真实选项。</div>}
-    <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">新成员使用模板中的权限配置。选择项目内编辑时，还需授权目标项目。创建后可查看 AI 是否可用。</div>
+    <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">{runtimePermissionHint(form.config.kind)}</div>
   </Modal>;
 }
 export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {
@@ -124,6 +127,7 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
     {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">成员名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-member-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">成员说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
     <div className="panel">{t.config.kind} · {t.config.model ?? '模型由渠道默认'} · 保存权限档 {t.config.permissionMode ?? '未指定'}<br />程序：{t.config.executable}<br />{t.config.kind==='codex'?'Codex 使用保存的原生权限；真实渠道结果单独记录。':null}<br/>配置成功不等于可派工或识图认证。不自动派发、不成为协调者，不复用旧会话；加入未归档房间只影响之后派发。</div>
+    <RuntimeChannelHelp kind={t.config.kind}/>
   </Modal>;
 }
 export function TemplatePanel({ projectId, readOnly, onChanged }: {

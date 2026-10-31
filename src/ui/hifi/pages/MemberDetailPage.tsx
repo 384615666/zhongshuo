@@ -1,4 +1,5 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
+import { isRuntimeKind, runtimeExecutable, type RuntimeKind } from '../../../contracts/runtimeKinds';
 /** 成员详情：批准原型的单成员两列布局，字段来自明确项目的 member.list/member.runtime。 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
@@ -71,10 +72,10 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   };
 
   const currentKind = runtime?.installation?.kind;
-  const initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string; effort?:string } = {
-    kind: currentKind === 'codex' || currentKind === 'fake' ? currentKind : 'claude',
+  const initial: { kind: RuntimeKind; model: string; executable: string; permissionMode: string; effort?:string } = {
+    kind: isRuntimeKind(currentKind) ? currentKind : 'claude',
     model: runtime?.binding?.model ?? '',
-    executable: runtime?.installation?.executable ?? '',
+    executable: runtime?.installation?.executable || runtimeExecutable(isRuntimeKind(currentKind) ? currentKind : 'claude'),
     permissionMode: runtime?.binding?.permissionMode ?? '',effort:runtime?.binding?.effort??'',
   };
   const guard = runtime?.environment != null ? { fakeAllowed: runtime.environment.allowFake === true, realDispatchGuard: runtime.environment.realDispatchGuard === true } : null;

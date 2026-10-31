@@ -1,3 +1,6 @@
+import {runtimeKindSchema,isRealRuntimeKind} from '../contracts/runtimeKinds.ts';
+import {resolveAgentExecutable} from '../adapter/cli/executable.ts';
+import {isExternalRuntimeKind,externalRuntimeMetadata} from './externalRuntime.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { statSync } from 'node:fs';
@@ -10,7 +13,7 @@ const description = z.string().trim().max(200);
 const id = z.string().min(1);
 const revision = z.number().int().nonnegative();
 export const templateConfigSchema = z.strictObject({
-    kind: z.enum(['claude', 'codex', 'fake']),
+    kind: runtimeKindSchema,
     model: z.string().trim().min(1).max(200).nullable(),
     executable: z.string().trim().min(1).max(1024),
     permissionMode: z.enum(['plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']).nullable(),
@@ -60,7 +63,7 @@ export function memberExecutableStatus(kind: string | null, executable: string |
       return(process.env.PATH??'').split(delimiter).filter(Boolean).some(dir=>suffixes.some(ext=>file(join(dir,program+ext))));
     };
     try{
-      const entry=kind==='claude'?resolveClaudeExecutable(executable):kind==='codex'?resolveCodexInvocation(executable):{command:executable,args:[]};
+      const entry=kind==='claude'?resolveClaudeExecutable(executable):kind==='codex'?resolveCodexInvocation(executable):isExternalRuntimeKind(kind)?resolveAgentExecutable(kind,executable):{command:executable,args:[]};
       const args='prefixArgs' in entry?entry.prefixArgs:entry.args;
       const present=locate(entry.command);const scripts=args.filter(a=>/\.(js|cjs|mjs)$/i.test(a));
       const found=present!==false&&scripts.every(p=>locate(p)!==false);
@@ -100,19 +103,21 @@ export function configGuard(config: TemplateConfig, fail: Fail) {
         fail('CAPABILITY_UNSUPPORTED', 'fake 配置仅限独立工程环境');
     if (config.kind === 'claude' && config.model == null)
         fail('VALIDATION_INVALID', 'claude 配置必须指定模型 ID');
+    if (isExternalRuntimeKind(config.kind) && config.permissionMode != null && config.permissionMode !== 'bypassPermissions')
+        fail('CAPABILITY_UNSUPPORTED', `${externalRuntimeMetadata(config.kind).label} 目前仅支持 CLI 原生完整权限；只读及项目范围模式尚未认证`);
     if (config.model != null && (/^sk-/i.test(config.model) || /[\r\n\0]/.test(config.model)))
         fail('VALIDATION_INVALID', '模型 ID 不能携带密钥或多行内容');
     if (/[\r\n\0]/.test(config.executable))
         fail('VALIDATION_INVALID', '执行程序引用不能携带多行内容');
-    if (process.env.ZS_REAL_DISPATCH_GUARD === '1' && config.kind !== 'fake')
+    if (process.env.ZS_REAL_DISPATCH_GUARD === '1' && isRealRuntimeKind(config.kind))
         fail('CAPABILITY_UNSUPPORTED', '工程派发保护下拒绝创建真实渠道绑定；不会为模板绕过保护');
 }
 /** Same persistence path as member.setRuntime, always a private member profile. No process starts. */
 export function bindMemberRuntime(db: ZhongshuoDatabase, memberId: string, config: TemplateConfig) {
     const installationId = `ri_${config.kind}_${createHash('sha256').update(`${config.kind}|${config.executable}`).digest('hex').slice(0, 10)}`;
-    const capabilities = { toolCapabilities: config.kind === 'claude' ? claudeCapabilities() : { note: 'codex/fake 能力表随各自 adapter 认证轮登记' }, modelAvailability: config.model == null ? 'not-specified' : 'configured-unverified', permissionAuth: 'unverified' };
+    const capabilities = { toolCapabilities: config.kind === 'claude' ? claudeCapabilities() : isExternalRuntimeKind(config.kind) ? externalRuntimeMetadata(config.kind).capabilities() : { note: 'codex/fake 能力表随各自 adapter 认证轮登记' }, modelAvailability: config.model == null ? 'not-specified' : 'configured-unverified', permissionAuth: 'unverified' };
     db.prepare(`INSERT INTO runtime_installations (id,kind,executable,version,adapter_version,capabilities_json,detected_at) VALUES (?,?,?,?,?,?,?)
-    ON CONFLICT(id) DO NOTHING`).run(installationId, config.kind, config.executable, '', config.kind === 'claude' ? CLAUDE_ADAPTER_VERSION : config.kind === 'codex' ? 'codex-appserver-adapter' : 'fake-adapter', JSON.stringify(capabilities), Date.now());
+    ON CONFLICT(id) DO NOTHING`).run(installationId, config.kind, config.executable, '', config.kind === 'claude' ? CLAUDE_ADAPTER_VERSION : config.kind === 'codex' ? 'codex-appserver-adapter' : isExternalRuntimeKind(config.kind) ? externalRuntimeMetadata(config.kind).version : 'fake-adapter', JSON.stringify(capabilities), Date.now());
     const profileId = `ap_${memberId}`;
     db.prepare(`INSERT INTO agent_profiles (id,name,description,runtime_installation_id,settings_json) VALUES (?,?,NULL,?,?)
     ON CONFLICT(id) DO UPDATE SET runtime_installation_id=excluded.runtime_installation_id, settings_json=excluded.settings_json`).run(profileId, `成员 ${memberId} 的 runtime profile`, installationId, JSON.stringify({ model: config.model, permissionMode: config.permissionMode, effort:config.effort??null }));

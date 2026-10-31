@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { buildDshRuntime } from './build-dsh-runtime.mjs';
 
 const repo = resolve(import.meta.dirname, '..');
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
@@ -76,6 +77,33 @@ if (!existsSync(koffiPlatform)) {
 }
 mkdirSync(join(nm, '@koromix'), { recursive: true });
 cpSync(koffiPlatform, join(nm, '@koromix'), { recursive: true, dereference: true });
+
+// The connector is bundled as data, and installed only through the user's
+// explicit setup command. DSH itself and its credentials remain user-owned.
+const dshTools = join(staging, 'runtime-tools', 'deepseek-harness');
+await buildDshRuntime(dshTools);
+writeFileSync(join(dshTools, 'setup.cmd'), [
+  '@echo off',
+  '"%~dp0..\\..\\resources\\app\\daemon\\node\\node.exe" "%~dp0setup-deepseek-harness.mjs" --install',
+  'if errorlevel 1 (',
+  '  echo Harness connection setup failed. See the message above.',
+  '  pause',
+  '  exit /b 1',
+  ')',
+  'echo Harness connection setup complete. Return to Zhongshuo and reread models.',
+  'pause',
+  '',
+].join('\r\n'), 'utf8');
+writeFileSync(join(dshTools, 'README.txt'), [
+  'DeepSeek Harness connection for Zhongshuo',
+  '',
+  'Install official @deepseek-ai/dsh@0.2.1-rc.5 and its required toolchain first.',
+  'Run setup.cmd to install only the Zhongshuo profile connector.',
+  'Configure your provider in dsh web, then select DeepSeek Harness in Zhongshuo.',
+  'The connector does not install DSH or store API keys in Zhongshuo.',
+  'Pi uses its installed CLI directly and needs no connector.',
+  '',
+].join('\r\n'), 'utf8');
 
 for (const path of [
   join(appDir, 'dist', 'ui', 'main.cjs'),

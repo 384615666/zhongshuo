@@ -1,3 +1,6 @@
+import {isExternalRuntimeKind} from './externalRuntime.ts';
+import {isRealRuntimeKind} from '../contracts/runtimeKinds.ts';
+import {externalRuntimeLaunchIdentity} from '../adapter/cli/configuration.ts';
 /**
  * 成员级 runtime 绑定（DEV-10；2026-09-28 生产接线）。
  *
@@ -74,6 +77,8 @@ export type MemberAdapterFactory = (binding: MemberRuntimeBinding) => RuntimeAda
 export function defaultModelOf(kind: string | null): string | null {
   if (kind === 'codex') return process.env.ZS_E2E_MODEL ?? null;
   if (kind === 'claude') return process.env.ZS_CLAUDE_MODEL ?? null;
+  if (kind === 'deepseek-harness') return process.env.ZS_DSH_MODEL ?? null;
+  if (kind === 'pi') return process.env.ZS_PI_MODEL ?? null;
   return null;
 }
 
@@ -140,7 +145,7 @@ export class MemberRuntimeRegistry {
   adapterFor(memberId: string): RuntimeAdapter {
     const resolved = resolveMemberRuntime(this.db, memberId, this.options?.defaultKind ?? null);
     const unbound = !resolved.bound;
-    if (this.options?.realDispatchGuard === true && (resolved.kind === 'claude' || resolved.kind === 'codex')) {
+    if (this.options?.realDispatchGuard === true && isRealRuntimeKind(resolved.kind)) {
       throw new Error(`[验收防护] ZS_REAL_DISPATCH_GUARD=1：真实 runtime（${resolved.kind}）派发被拒绝（${unbound ? '全局默认' : `成员 ${memberId} 持久绑定`}）——模拟/验收环境不得发出真实模型请求；runtime 配置的保存与读取不受影响`);
     }
     if (unbound) {
@@ -150,8 +155,8 @@ export class MemberRuntimeRegistry {
     if (factory == null) {
       throw new Error(`成员 ${memberId} 绑定的 runtime kind=${resolved.kind} 在当前 daemon 不可用（未注册 adapter 工厂）`);
     }
-    const context=resolved.kind==='codex'?(this.db.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(memberId) as {canonical_path:string}|undefined)?.canonical_path:null;
-    const configurationKey=context?`${memberId}|${context}|${codexConfigurationIdentity(context)}`:'';
+    const context=(resolved.kind==='codex'||isExternalRuntimeKind(resolved.kind))?(this.db.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(memberId) as {canonical_path:string}|undefined)?.canonical_path:null;
+    const configurationKey=context?`${memberId}|${context}|${isExternalRuntimeKind(resolved.kind)?externalRuntimeLaunchIdentity(resolved.kind,{executable:resolved.executable??undefined,model:resolved.model??undefined,effort:resolved.effort??undefined,permissionMode:resolved.permissionMode??undefined},context).identityKey:codexConfigurationIdentity(context)}`:'';
     const key = `${resolved.installationId}|${resolved.model ?? ''}|${resolved.permissionMode ?? ''}|${resolved.executable ?? ''}|${resolved.effort??''}|${configurationKey}`;
     let adapter = this.cache.get(key);
     if (adapter == null) {

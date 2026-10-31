@@ -1,3 +1,6 @@
+import {isExternalRuntimeKind} from './externalRuntime.ts';
+import {isRealRuntimeKind} from '../contracts/runtimeKinds.ts';
+import {externalRuntimeLaunchIdentity} from '../adapter/cli/configuration.ts';
 import { realpathSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -44,7 +47,7 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
   const previousClaudeSnapshot=runtime.kind==='claude'&&snapshot.launchIdentity!=null&&snapshot.launchFingerprintVersion===2;
   const legacyCodexSnapshot=runtime.kind==='codex'&&snapshot.launchIdentity!=null&&(snapshot.launchFingerprintVersion==null||snapshot.launchFingerprintVersion===1);
   const previousCodexSnapshot=runtime.kind==='codex'&&snapshot.launchIdentity!=null&&snapshot.launchFingerprintVersion===2;
-  if(snapshot.launchFingerprintVersion!=null&&snapshot.launchFingerprintVersion!==2&&!(['claude','codex'].includes(runtime.kind??'')&&snapshot.launchFingerprintVersion===3)&&!(runtime.kind==='codex'&&snapshot.launchFingerprintVersion===1))throw Error('执行配置指纹版本不受支持；旧输入保留，请明确重新提交');
+  if(snapshot.launchFingerprintVersion!=null&&snapshot.launchFingerprintVersion!==2&&!(isRealRuntimeKind(runtime.kind)&&snapshot.launchFingerprintVersion===3)&&!(runtime.kind==='codex'&&snapshot.launchFingerprintVersion===1))throw Error('执行配置指纹版本不受支持；旧输入保留，请明确重新提交');
   const member=db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(memberId) as {project_id:string;settings_revision:number}|undefined;
   if(!member || member.project_id!==row.project_id) throw Error('执行成员不属于该项目');
   if('analysisOnly' in snapshot&&snapshot.analysisOnly===true){
@@ -68,10 +71,12 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
     if (JSON.stringify(snapshot.runtime) !== JSON.stringify(runtime) || ![null,'bypassPermissions'].includes(runtime.permissionMode)) throw Error('成员执行配置已变化；请明确重新提交');
     if (snapshot.root !== root || fullSnapshot.physicalIdentity !== physicalRootIdentity(root)) throw Error('项目物理身份已变化；请明确重新提交');
     const configuration = runtime.kind === 'claude' ? claudeLaunchIdentity({executable:runtime.executable??undefined,model:runtime.model??undefined,permissionMode:'bypassPermissions',effort:runtime.effort??undefined},root) : null;
-    const identityKey = createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:configuration?.identityKey ?? (runtime.kind==='codex'?codexConfigurationIdentity(root):null)})).digest('hex');
+    const externalConfiguration=isExternalRuntimeKind(runtime.kind)?externalRuntimeLaunchIdentity(runtime.kind,{executable:runtime.executable??undefined,model:runtime.model??undefined,effort:runtime.effort??undefined,permissionMode:runtime.permissionMode??undefined},root):null;
+    if(externalConfiguration?.reason)throw Error(`执行配置无法确定：${externalConfiguration.reason}`);
+    const identityKey = createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:configuration?.identityKey ?? externalConfiguration?.identityKey ?? (runtime.kind==='codex'?codexConfigurationIdentity(root):null)})).digest('hex');
     const comparisonIdentity=previousCodexSnapshot||previousClaudeSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:previousCodexSnapshot?codexConfigurationIdentityV2(root):configuration?.previousIdentityKey})).digest('hex'):legacyClaudeSnapshot||legacyCodexSnapshot?createHash('sha256').update(JSON.stringify({projectId:row.project_id,root,runtime,mode:'full',configuration:legacyCodexSnapshot?legacyCodexConfigurationIdentity(root):configuration?.legacyIdentityKey??null})).digest('hex'):identityKey;
-    if(snapshot.launchIdentity && snapshot.launchIdentity!==comparisonIdentity) throw Error(configurationChangeMessage('有效执行配置已变化；未沿用旧会话',snapshot.launchEvidence,configuration?.launchEvidence));
-    return {fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey,root,launchConfigurationKey:configuration?.identityKey,launchEvidence:configuration?.launchEvidence,tier:'auto_edit' as const,intent:'modify' as const,policyId:'policy-full-access'};
+    if(snapshot.launchIdentity && snapshot.launchIdentity!==comparisonIdentity) throw Error(configurationChangeMessage('有效执行配置已变化；未沿用旧会话',snapshot.launchEvidence,configuration?.launchEvidence??externalConfiguration?.launchEvidence));
+    return {fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey,root,launchConfigurationKey:configuration?.identityKey??externalConfiguration?.identityKey,launchEvidence:configuration?.launchEvidence??externalConfiguration?.launchEvidence,tier:'auto_edit' as const,intent:'modify' as const,policyId:'policy-full-access'};
   }
   const root = current.authorized ? realpathSync.native(row.canonical_path) : row.canonical_path;
   const requested = snapshot.authorized === true || (snapshot.authorized as unknown) === 1;
@@ -103,14 +108,14 @@ export function snapshotConversationWriteAccess(db:ZhongshuoDatabase,taskId:stri
   let snapshot:Record<string,unknown>;
   if(options?.analysisOnly===true||taskAnalysisOnly(db,taskId)){
     const root=realpathSync.native(p.canonical_path);snapshot={executionMode:'readonly',analysisOnly:true,authorized:false,root,physicalIdentity:physicalRootIdentity(root),runtime};
-  }else if(runtime.permissionMode==='bypassPermissions'||runtime.permissionMode==null&&['claude','codex'].includes(runtime.kind??'')){
+  }else if(runtime.permissionMode==='bypassPermissions'||runtime.permissionMode==null&&isRealRuntimeKind(runtime.kind)){
     const root=realpathSync.native(p.canonical_path);snapshot={executionMode:'full',root,physicalIdentity:physicalRootIdentity(root),runtime};
   }else{
     const member=db.prepare('SELECT settings_revision FROM project_members WHERE id=?').get(row.owner_member_id) as {settings_revision:number};
     snapshot={authorized:grant.authorized,root:grant.root,revision:grant.revision,memberRevision:member.settings_revision,memberPermission:runtime.permissionMode,runtime,...(!grant.authorized?{executionMode:'readonly'}:{})};
   }
   const effective=effectiveTaskWriteAccess(db,taskId,row.owner_member_id,defaultKind,JSON.stringify(snapshot));
-  return JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(effective.launchEvidence?{launchEvidence:effective.launchEvidence}:{}),...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:3}:{})});
+  return JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(effective.launchEvidence?{launchEvidence:effective.launchEvidence}:{}),...(isRealRuntimeKind(runtime.kind)?{launchFingerprintVersion:3}:{})});
 }
 /** Called inside the original formal send transaction, never after returning its receipt. */
 export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null,options?:{analysisOnly?:boolean}) {
@@ -123,19 +128,19 @@ export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null,
   }
   let snapshot=JSON.parse(task.write_scope_json) as Partial<WriteScope> & {executionMode?:string;runtime?:unknown};
   const runtime=resolveMemberRuntime(db,task.owner_member_id,process.env.ZS_RUNTIME??null);
-  if(runtime.permissionMode==='bypassPermissions' || runtime.permissionMode==null&&['claude','codex'].includes(runtime.kind??'')) {
+  if(runtime.permissionMode==='bypassPermissions' || runtime.permissionMode==null&&isRealRuntimeKind(runtime.kind)) {
     const p=db.prepare('SELECT p.canonical_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?').get(taskId) as {canonical_path:string};
     const root=realpathSync.native(p.canonical_path);
     snapshot={executionMode:'full',root,physicalIdentity:physicalRootIdentity(root),runtime};
     db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify(snapshot),taskId);
     const effective=effectiveTaskWriteAccess(db,taskId,task.owner_member_id,process.env.ZS_RUNTIME??null);
-    db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(effective.launchEvidence?{launchEvidence:effective.launchEvidence}:{}),...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:3}:{})}),taskId);
+    db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,launchIdentity:effective.identityKey,...(effective.launchEvidence?{launchEvidence:effective.launchEvidence}:{}),...(isRealRuntimeKind(runtime.kind)?{launchFingerprintVersion:3}:{})}),taskId);
     return;
   }
   if(!snapshot.authorized){
-    if(['claude','codex'].includes(runtime.kind??''))db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,executionMode:'readonly',runtime}),taskId);
+    if(isRealRuntimeKind(runtime.kind))db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,executionMode:'readonly',runtime}),taskId);
     return;
   }
   const effective=effectiveTaskWriteAccess(db,taskId,task.owner_member_id,process.env.ZS_RUNTIME??null);
-  db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,runtime:resolveMemberRuntime(db,task.owner_member_id,process.env.ZS_RUNTIME??null),launchIdentity:effective.identityKey,...(effective.launchEvidence?{launchEvidence:effective.launchEvidence}:{}),...(['claude','codex'].includes(runtime.kind??'')?{launchFingerprintVersion:3}:{})}),taskId);
+  db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(JSON.stringify({...snapshot,runtime:resolveMemberRuntime(db,task.owner_member_id,process.env.ZS_RUNTIME??null),launchIdentity:effective.identityKey,...(effective.launchEvidence?{launchEvidence:effective.launchEvidence}:{}),...(isRealRuntimeKind(runtime.kind)?{launchFingerprintVersion:3}:{})}),taskId);
 }

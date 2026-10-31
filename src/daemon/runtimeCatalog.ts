@@ -1,3 +1,6 @@
+import {runtimeExecutable,type RuntimeKind} from '../contracts/runtimeKinds.ts';
+import {isExternalRuntimeKind,externalRuntimeMetadata} from './externalRuntime.ts';
+import {defaultModelOf} from './memberRuntime.ts';
 import {resolveClaudeConfiguration} from '../adapter/claude/configuration.ts';
 import {resolveCodexDefaultMetadata} from '../adapter/codex/configuration.ts';
 import {runtimeOptions} from './runtimeOptions.ts';
@@ -40,9 +43,15 @@ export async function claudeModelCatalog(cwd:string):Promise<Omit<RuntimeCatalog
     return{models:[...unique.values()].slice(0,500),defaultModel:configured[0]??null,source:'当前渠道模型列表 + 本机配置',warning:null,truncated:Boolean(body.has_more||body.nextCursor||body.data.length>500||unique.size>500)};
   }catch{return fallback('渠道模型列表暂时不可读；保留本机配置，可重试读取或在高级设置指定模型。');}
 }
-export async function runtimeCatalog(kind:'claude'|'codex'|'fake',executable:string|undefined,cwd:string):Promise<RuntimeCatalog>{
-  const program=memberExecutableStatus(kind,executable??kind);
+export async function runtimeCatalog(kind:RuntimeKind,executable:string|undefined,cwd:string):Promise<RuntimeCatalog>{
+  const program=memberExecutableStatus(kind,executable??runtimeExecutable(kind));
   if(kind==='claude')return{kind,program,...await claudeModelCatalog(cwd)};
+  if(isExternalRuntimeKind(kind)){
+    if(program.status==='missing')return{kind,program,models:[],defaultModel:defaultModelOf(kind),source:`本机 ${externalRuntimeMetadata(kind).label}`,warning:program.reason,truncated:false};
+    const options=await runtimeOptions(kind,executable,undefined,cwd);
+    const models='models' in options?options.models??[]:[];
+    return{kind,program,models:models.filter(m=>validId(m.model??m.id)).map(m=>({id:m.model??m.id,label:m.displayName??m.id,source:'reported' as const})),defaultModel:defaultModelOf(kind),source:options.source,warning:models.length?null:options.reason,truncated:false};
+  }
   if(kind==='codex'){
     const options=await runtimeOptions(kind,executable,undefined,cwd);
     const models='models' in options?options.models??[]:[];

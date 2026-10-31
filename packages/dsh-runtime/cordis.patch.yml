@@ -1,0 +1,14 @@
+# Original Zhongshuo surface over the official base bundle. No OpenDesign code.
+- id: hmr
+  disabled: true
+- id: session-title-llm
+  disabled: true
+- id: sandbox-policy
+  config:
+    mode: danger-full-access
+- id: approval
+  config:
+    policy: never
+- insert:
+    - id: zhongshuo-stdio
+      name: '@zhongshuo/dsh-runtime'

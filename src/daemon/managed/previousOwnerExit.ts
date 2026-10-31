@@ -1,3 +1,4 @@
+import {isRealRuntimeKind} from '../../contracts/runtimeKinds.ts';
 /** Recovery of anonymous Windows jobs after the only handle owner has exited.
  * This is a KILL_ON_JOB_CLOSE proof, not a PID/tree-absence proof. The managed
  * registry is written only after the local bridge has verified job membership.
@@ -42,7 +43,7 @@ export function verifyPreviousManagedOwnerExit(
   if (process.platform !== 'win32') fail('当前平台没有 Windows job 关闭保证');
   const now = options.now ?? Date.now();
   if (reg.identity_source !== 'managed-job' || !['shared', 'per-turn'].includes(reg.process_model)
-    || !['codex', 'claude'].includes(reg.adapter_kind) || reg.pid == null || reg.started_at_ms == null
+    || !isRealRuntimeKind(reg.adapter_kind) || reg.pid == null || reg.started_at_ms == null
     || reg.managed_job_id == null || reg.note !== `job=${reg.managed_job_id}`) fail('缺少完整的本机受管登记');
   const job = /^job-([0-9a-z]+)-(\d+)$/.exec(reg.managed_job_id!);
   const jobCreatedAt = job == null ? NaN : parseInt(job[1]!, 36);

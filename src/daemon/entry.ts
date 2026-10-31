@@ -1,3 +1,5 @@
+import {isRuntimeKind,isRealRuntimeKind,type RuntimeKind,type RealRuntimeKind,REAL_RUNTIME_KINDS} from '../contracts/runtimeKinds.ts';
+import {isExternalRuntimeKind,externalRuntimeAdapter} from './externalRuntime.ts';
 /**
  * daemon 组装入口（DEV-07；修复轮 5：凭据握手 + 生命周期）。
  *
@@ -42,7 +44,7 @@ import type { LocalCredential } from '../contracts/daemonIpc.ts';
 export interface DaemonOptions {
   appDataDir: string;
   /** 全局默认 runtime（未绑定成员的回落值；fake 仅限显式开发/测试模式 ZS_ALLOW_FAKE=1）。 */
-  runtime: 'fake' | 'codex' | 'claude';
+  runtime: RuntimeKind;
   localUserId?: string;
   pipeName?: string;
   tickMs?: number;
@@ -125,6 +127,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ? options.testAdapter
       : options.runtime === 'codex'
         ? new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL })
+        : isExternalRuntimeKind(options.runtime)
+          ? externalRuntimeAdapter(options.runtime,{model:defaultModelOf(options.runtime)??undefined})
         : options.runtime === 'claude'
           ? new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL })
           : new FakeRuntimeAdapter(
@@ -233,11 +237,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       const { spawnManagedBridge } = managedBridgeMod;
       return (cmd: string, args: string[],cwd?:string) => spawnManagedBridge(cmd, args, {cwd}) as never; // env 缺省=继承父环境
     })();
-    if (options.runtime === 'codex' && managedCodexSpawn != null) {
-      adapter = wrapRealCallLedger(new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn }), 'codex', db, process.env.ZS_E2E_MODEL ?? null);
-    } else if (options.runtime === 'claude' && managedClaudeSpawn != null) {
-      adapter = wrapRealCallLedger(new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined)), 'claude', db, process.env.ZS_CLAUDE_MODEL ?? null);
+    if (options.testAdapter == null && options.runtime === 'codex' && managedCodexSpawn != null) {
+      adapter = new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn });
+    } else if (options.testAdapter == null && options.runtime === 'claude' && managedClaudeSpawn != null) {
+      adapter = new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined));
     }
+
+    if(options.testAdapter==null&&isExternalRuntimeKind(options.runtime)&&managedCodexSpawn!=null)adapter=externalRuntimeAdapter(options.runtime,{model:defaultModelOf(options.runtime)??undefined,spawnFn:managedCodexSpawn});
+    if(adapter==null)throw Error('运行时适配器未构建');
+    adapter=wrapRealCallLedger(adapter,options.runtime,db,defaultModelOf(options.runtime));
 
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
     // claude（模型/权限档来自 agent_profiles.settings_json）；fake 工厂仅显式开发模式注册。
@@ -247,8 +255,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 请求模型归属按 kind 区分（第十八轮三）：codex=ZS_E2E_MODEL、claude=ZS_CLAUDE_MODEL——
     // 成员级以 binding.model 优先；不把 ZS_CLAUDE_MODEL 记到 codex 台账上。
     // 渠道默认口径=memberRuntime.defaultModelOf（统一解析层——快照/台账/adapter 同源）。
-    const defaultModelFor = (kind: 'codex' | 'claude'): string | null => defaultModelOf(kind);
+    const defaultModelFor = (kind: RealRuntimeKind): string | null => defaultModelOf(kind);
     const productionFactories: Record<string, MemberAdapterFactory> = {
+      ...Object.fromEntries(REAL_RUNTIME_KINDS.filter(isExternalRuntimeKind).map(kind=>[kind,(binding:MemberRuntimeBinding)=>wrapRealCallLedger(externalRuntimeAdapter(kind,{
+        cwd:(dbForLedger.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(binding.memberId) as {canonical_path:string}).canonical_path,
+        executable:binding.executable??undefined,model:binding.model??defaultModelFor(kind)??undefined,
+        effort:binding.effort??undefined,permissionMode:binding.permissionMode??undefined,installationId:binding.installationId??undefined,
+        ...(managedCodexSpawn!=null?{spawnFn:managedCodexSpawn}:{}),
+      }),kind,dbForLedger,binding.model??defaultModelFor(kind))])),
       codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
         cwd:(dbForLedger.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(binding.memberId) as {canonical_path:string}).canonical_path,
         model: binding.model ?? process.env.ZS_E2E_MODEL,
@@ -272,7 +286,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // 注入工厂仍按 kind 包装护栏（真实 kind 台账/上限/生命周期透传与生产同链）。
       ? Object.fromEntries(Object.entries(options.testAdapterFactories).map(([kind, factory]) => [
         kind,
-        (binding: MemberRuntimeBinding) => wrapRealCallLedger(factory(binding), kind, dbForLedger, binding.model ?? (kind === 'codex' || kind === 'claude' ? defaultModelFor(kind) : null)),
+        (binding: MemberRuntimeBinding) => wrapRealCallLedger(factory(binding), kind, dbForLedger, binding.model ?? (isRealRuntimeKind(kind) ? defaultModelFor(kind) : null)),
       ]))
       : productionFactories;
     if (process.env.ZS_ALLOW_FAKE === '1') {
@@ -594,10 +608,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || process.env.ZS_PACKED_ENTRY === '1') {
   const appDataDir = process.env.ZS_APP_DATA ?? defaultAppDataDir();
   const rawRuntime = process.env.ZS_RUNTIME ?? 'fake';
-  const runtime = (rawRuntime === 'codex' || rawRuntime === 'claude' ? rawRuntime : 'fake') as 'fake' | 'codex' | 'claude';
+  const runtime:RuntimeKind = isRuntimeKind(rawRuntime) ? rawRuntime : 'fake';
   if (runtime === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
     // 正式用户启动路径不得静默使用 fake runtime（显式开发模式需 ZS_ALLOW_FAKE=1）。
-    process.stderr.write('[zhongshuo-daemon] fake runtime 仅限开发/测试（ZS_RUNTIME=fake 需同时设置 ZS_ALLOW_FAKE=1）；生产请用 ZS_RUNTIME=codex|claude\n');
+    process.stderr.write('[zhongshuo-daemon] fake runtime 仅限开发/测试（ZS_RUNTIME=fake 需同时设置 ZS_ALLOW_FAKE=1）；生产请配置已支持的真实 ZS_RUNTIME 渠道\n');
     process.exit(2);
   }
   if (runtime === 'claude' && process.env.ZS_CLAUDE_MODEL == null) {

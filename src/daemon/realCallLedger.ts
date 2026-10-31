@@ -1,3 +1,4 @@
+import {isRealRuntimeKind} from '../contracts/runtimeKinds.ts';
 /**
  * 真实调用护栏（第十七轮四建立；第十八轮二/三重写）。
  *
@@ -37,7 +38,7 @@ export interface RealCallRow {
   usage_json: string | null;
 }
 
-const REAL_KINDS = new Set(['claude', 'codex']);
+
 
 export interface RealCallQuotaError extends Error {
   code: 'REAL_BATCH_CAP';
@@ -59,7 +60,7 @@ function attributionFor(db: ZhongshuoDatabase, turnId: string): { memberId: stri
  *              ZS_CLAUDE_MODEL 记到 codex 上）。可空=构建时不可知。
  */
 export function wrapRealCallLedger(adapter: RuntimeAdapter, kind: string, db: ZhongshuoDatabase, model?: string | null): RuntimeAdapter {
-  if (!REAL_KINDS.has(kind)) return adapter; // fake 不计（本地/回放零真实调用——不产生噪音行）
+  if (!isRealRuntimeKind(kind)) return adapter; // fake 不计（本地/回放零真实调用——不产生噪音行）
   const batchId = process.env.ZS_REAL_BATCH_ID ?? 'ad-hoc';
   const started = new Map<string, number>(); // turnId → real_calls.id（请求前占位）
   const interceptStartTurn = async (session: SessionRef, input: TurnRequest): Promise<void> => {

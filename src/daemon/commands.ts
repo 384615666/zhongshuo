@@ -1,3 +1,5 @@
+import {runtimeKindSchema,isRuntimeKind,isRealRuntimeKind,runtimeExecutable} from '../contracts/runtimeKinds.ts';
+import {isExternalRuntimeKind,externalRuntimeMetadata} from './externalRuntime.ts';
 import {TaskNotificationError,pollTaskNotifications,claimTaskNotification,ackTaskNotification} from './taskNotifications.ts';
 /**
  * daemon 命令面（DEV-07；修复轮 5 扩充）。
@@ -182,7 +184,7 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const editable=scopeUsable && ['acceptEdits','dontAsk'].includes(effective.permissionMode??'') && ['claude','codex'].includes(effective.kind??'');
   const full=effective.permissionMode==null||effective.permissionMode==='bypassPermissions';
   const explicitReadonly=effective.permissionMode==='plan'||effective.permissionMode==='manual'||effective.permissionMode==='auto';
-  const permissionExecution=['codex','claude'].includes(effective.kind??'')?full?{effective:'CLI 完整权限',reason:'新任务使用原生完整权限，可读写电脑并执行命令；原有只读任务不自动升级。'}:{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':explicitReadonly?'成员保存的是只读档；项目范围授权不会改变该档，已有任务保留原权限快照。':!access.authorized?'项目范围编辑档尚未获得本项目授权；这不代表完整权限成员受限。':!scopeUsable?'授权目录身份已变化或不可用；未开放写入。':writeCapability.reason}:null;
+  const permissionExecution=isRealRuntimeKind(effective.kind)?full?{effective:'CLI 完整权限',reason:'新任务使用原生完整权限，可读写电脑并执行命令；原有只读任务不自动升级。'}:isExternalRuntimeKind(effective.kind)?{effective:'未支持',reason:'当前渠道仅支持 CLI 原生完整权限；只读及项目范围模式尚未认证，派发会明确拒绝。'}:{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':explicitReadonly?'成员保存的是只读档；项目范围授权不会改变该档，已有任务保留原权限快照。':!access.authorized?'项目范围编辑档尚未获得本项目授权；这不代表完整权限成员受限。':!scopeUsable?'授权目录身份已变化或不可用；未开放写入。':writeCapability.reason}:null;
   return { binding, installation, permissionExecution, writeCapability, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
@@ -448,8 +450,8 @@ function configuredCoordinator(db:ZhongshuoDatabase,memberIds:readonly string[])
     const member=db.prepare("SELECT enabled,principal_type FROM project_members WHERE id=?").get(id) as {enabled:number;principal_type:string}|undefined;
     if(!member?.enabled||member.principal_type!=='agent')return false;
     const runtime=resolveMemberRuntime(db,id,process.env.ZS_RUNTIME??null);
-    return ['claude','codex','fake'].includes(runtime.kind??'')&&(runtime.kind!=='claude'||Boolean(runtime.model))
-      &&(runtime.kind!=='fake'||process.env.ZS_ALLOW_FAKE==='1')&&memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='found';
+    return isRuntimeKind(runtime.kind)&&(runtime.kind!=='claude'||Boolean(runtime.model))
+      &&(runtime.kind!=='fake'||process.env.ZS_ALLOW_FAKE==='1')&&memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind??'')).status==='found';
   })??null;
 }
 
@@ -1476,7 +1478,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           memberId: z.string().min(1),
           projectId:z.string().min(1).optional(),expectedRevision:z.number().int().nonnegative().optional(),
-          kind: z.enum(['codex', 'claude', 'fake']),
+          kind: runtimeKindSchema,
           model: z.string().min(1).optional(),
           executable: z.string().min(1).optional(),
           permissionMode: z.enum(['plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']).optional(),
@@ -1493,9 +1495,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 派发侧硬防护保留（ZS_REAL_DISPATCH_GUARD 语义不变）；此处只是把「绑定后必死」提前为
         // 「绑定时明确拒绝」——恢复路径 kind=fake 不受影响（可解绑回模拟）。正式部署不设该变量
         // =真实绑定正常可用。
-        if (process.env.ZS_REAL_DISPATCH_GUARD === '1' && (params.kind === 'claude' || params.kind === 'codex')) {
+        if (process.env.ZS_REAL_DISPATCH_GUARD === '1' && isRealRuntimeKind(params.kind)) {
           throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `验收防护模式（ZS_REAL_DISPATCH_GUARD=1）下不可绑定真实 runtime（${params.kind}）：绑定后该成员的所有任务派发都会被防护拒绝（零真实调用护栏）。本包用于模拟/验收——请保持 fake（member.setRuntime kind=fake，需 ZS_ALLOW_FAKE=1），或在正式部署环境（不设该变量）绑定真实渠道`);
         }
+        configGuard({kind:params.kind,model:params.model??null,executable:params.executable??runtimeExecutable(params.kind),permissionMode:params.permissionMode??(params.kind==='fake'?'plan':'bypassPermissions'),effort:params.effort??null},(code,message)=>{throw new DaemonCommandError(code,message);});
         const scope = () => { const m=deps.db.prepare('SELECT project_id FROM project_members WHERE id=?').get(params.memberId) as {project_id:string}|undefined; if(m==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');assertMemberProject(deps.db,m.project_id,(c,m)=>{throw new DaemonCommandError(c,m);}); };
         scope();
         const checkTarget=()=>{const target=deps.db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(params.memberId) as {project_id:string;settings_revision:number}|undefined;if(target==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');if(params.projectId!=null&&target.project_id!==params.projectId)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不属于目标项目');if(params.expectedRevision!=null&&target.settings_revision!==params.expectedRevision)throw new DaemonCommandError('STALE_REVISION','成员版本已变化，请刷新后确认');};
@@ -1510,20 +1513,20 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           scope();
           const member = deps.db.prepare('SELECT id FROM project_members WHERE id = ?').get(params.memberId) as { id: string } | undefined;
           if (member == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
-          return bindMemberRuntime(deps.db,params.memberId,{kind:params.kind,executable:params.executable??params.kind,model:params.model??null,permissionMode:params.permissionMode??(params.kind==='fake'?'plan':'bypassPermissions'),effort:params.effort??null});
+          return bindMemberRuntime(deps.db,params.memberId,{kind:params.kind,executable:params.executable??runtimeExecutable(params.kind),model:params.model??null,permissionMode:params.permissionMode??(params.kind==='fake'?'plan':'bypassPermissions'),effort:params.effort??null});
         },()=>{scope();if(params.projectId!=null){const row=deps.db.prepare("SELECT project_id FROM project_members WHERE id=?").get(params.memberId) as {project_id:string};if(row.project_id!==params.projectId)throw new DaemonCommandError("RESOURCE_NOT_FOUND","成员不属于目标项目");}});
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'member.runtimeCatalog': {
         if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','模型清单读取仅限本机入口');
-        const params=z.strictObject({projectId:z.string().min(1),kind:z.enum(['claude','codex','fake']),executable:z.string().optional()}).parse(env.params);
+        const params=z.strictObject({projectId:z.string().min(1),kind:runtimeKindSchema,executable:z.string().optional()}).parse(env.params);
         const project=deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as {canonical_path:string}|undefined;
         if(!project)throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
         return withCommandId({ok:true,data:await runtimeCatalog(params.kind,params.executable,project.canonical_path)});
       }
       case 'member.runtimeOptions': {
         if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','CLI 选项读取仅限本机可信入口');
-        const params=z.strictObject({projectId:z.string().min(1),kind:z.enum(['claude','codex','fake']),model:z.string().optional(),executable:z.string().optional()}).parse(env.params);
+        const params=z.strictObject({projectId:z.string().min(1),kind:runtimeKindSchema,model:z.string().optional(),executable:z.string().optional()}).parse(env.params);
         const project=deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as {canonical_path:string}|undefined;
         if(!project)throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
         return withCommandId({ok:true,data:await runtimeOptions(params.kind,params.executable,params.model,project.canonical_path)});
@@ -1846,7 +1849,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const members=preparationMembers();
           const bindings=members.map(memberId=>({memberId,runtime:resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null)}));
           for(const {memberId,runtime} of bindings){
-            if(runtime.kind!=='codex'||memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='missing')continue;
+            if(runtime.kind!=='codex'||memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind??'')).status==='missing')continue;
             try{
               const receipt=await deps.prepareRuntimeConfiguration(memberId,params.target.projectId);
               if(!receipt||receipt.memberId!==memberId||receipt.projectId!==params.target.projectId)throw Error('配置准备未返回对应成员的核验依据');
@@ -5080,6 +5083,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             note: 'fakeAllowed=允许 fake adapter（演练/测试）；realDispatchGuard=真实派发防护开启（fake 环境下真实 startTurn 会被拒）',
           },
           capabilities: {
+            'deepseek-harness':{keyAbilities:externalRuntimeMetadata('deepseek-harness').capabilities(),adapterVersion:externalRuntimeMetadata('deepseek-harness').version},
+            pi:{keyAbilities:externalRuntimeMetadata('pi').capabilities(),adapterVersion:externalRuntimeMetadata('pi').version},
             claude: { keyAbilities: { structuredFinal: 'supported', restrictWrites: 'unverified', interactiveApprovals: 'unverified' }, adapterVersion: CLAUDE_ADAPTER_VERSION },
           },
           daemonRecovery: {
@@ -5301,7 +5306,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           for(const memberId of ids){
             const runtime=resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null);
-            if(runtime.kind!=='codex'||!deps.prepareRuntimeConfiguration||memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='missing')continue;
+            if(runtime.kind!=='codex'||!deps.prepareRuntimeConfiguration||memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind??'')).status==='missing')continue;
             try{
               const proof=await deps.prepareRuntimeConfiguration(memberId,original.project_id);
               if(!proof||proof.memberId!==memberId||proof.projectId!==original.project_id)throw Error('配置准备未返回对应成员的核验依据');

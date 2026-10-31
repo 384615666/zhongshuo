@@ -1,3 +1,4 @@
+import {isRuntimeKind,runtimeExecutable} from '../contracts/runtimeKinds.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { statSync, lstatSync,realpathSync,openSync,readSync,closeSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
@@ -48,8 +49,8 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
   const roster: ScopeMember[] = members.map(m => {
     try {
       const runtime=resolveMemberRuntime(db,m.id,process.env.ZS_RUNTIME??null);
-      if(!['claude','codex','fake'].includes(runtime.kind??''))throw Error('成员未配置可执行渠道');
-      const program=memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind);if(program.status==='missing')throw Error(program.reason);
+      if(!isRuntimeKind(runtime.kind))throw Error('成员未配置可执行渠道');
+      const program=memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind));if(program.status==='missing')throw Error(program.reason);
       return { memberId:m.id, displayName:m.display_name, description:m.description,
       writeScope:snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,m.id,{analysisOnly}) }; }
     catch (error) { return { memberId:m.id,displayName:m.display_name,description:m.description,writeScope:null,unavailableReason:String(error) }; }

@@ -1,4 +1,5 @@
 import { userFacingSystemText } from '../../contracts/userFacingText';
+import { RUNTIME_CHANNELS, isRuntimeKind, runtimeExecutable, type RuntimeKind, type RealRuntimeKind } from '../../contracts/runtimeKinds';
 /**
  * 成员管理（第五十四轮 H3 §4 → R66 P4 原型布局还原）：正式命令接线——`member.list`
  * （项目/房间两级：项目成员全量 vs 房间名单子集；协调者=房间 AUTO 路由依赖，不可停用）、
@@ -26,7 +27,8 @@ import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
 import { memberWrite } from './data/memberWrites';
 import { fullTime, runtimeModelDisplayName } from './lib/format';
-import { runtimePermissionOptions } from './lib/runtimePermissions';
+import { runtimePermissionHint, runtimePermissionOptions } from './lib/runtimePermissions';
+import { RuntimeChannelHelp } from './components/RuntimeChannelHelp';
 import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
 
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
@@ -151,14 +153,14 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    * R68 §5B：捕获**打开时**的 projectId（addFor）——弹窗存续期间全局项目切换（标题栏菜单/
    * 深链/受控事件）时旧表单作废，不再出现「旧 A 输入随全局 activeProjectId 写进 B」。 */
   const [addFor, setAddFor] = useState<string | null>(null);
-  const [bindForm, setBindForm] = useState<{ kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string; effort?:string }>({ kind: 'claude', model: '', executable: '', permissionMode: '' });
+  const [bindForm, setBindForm] = useState<{ kind: RuntimeKind; model: string; executable: string; permissionMode: string; effort?:string }>({ kind: 'claude', model: '', executable: runtimeExecutable('claude'), permissionMode: '' });
   const openBind = (m: MemberRow) => {
     const cur = runtimes[m.id];
     const curKind = cur?.installation?.kind;
     setBindForm({
-      kind: curKind === 'codex' || curKind === 'fake' ? curKind : 'claude',
+      kind: isRuntimeKind(curKind) ? curKind : 'claude',
       model: cur?.binding?.model ?? '',
-      executable: cur?.installation?.executable ?? '',
+      executable: cur?.installation?.executable || runtimeExecutable(isRuntimeKind(curKind) ? curKind : 'claude'),
       permissionMode: cur?.binding?.permissionMode ?? '',effort:cur?.binding?.effort??'',
     });
     setBindFor({projectId,member:m});
@@ -392,7 +394,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
 export function BindRuntimeModal({ member, projectId, initial, guard, onClose, onSaved }: {
   member: MemberRow;
   projectId:string;
-  initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string; effort?:string };
+  initial: { kind: RuntimeKind; model: string; executable: string; permissionMode: string; effort?:string };
   guard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
@@ -413,7 +415,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
       const outcome=await memberWrite(`member.setRuntime:${targetProject}:${member.id}`,'member.setRuntime', {projectId:targetProject,expectedRevision:member.revision,
         memberId: member.id, kind: form.kind,
         ...(form.model.trim().length > 0 ? { model: form.model.trim() } : {}),
-        ...(form.executable.trim().length > 0 ? { executable: form.executable.trim() } : {}),
+        executable: form.executable.trim() || runtimeExecutable(form.kind),
         ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
         ...(form.effort?{effort:form.effort}:{}),
       });
@@ -452,14 +454,15 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           <Select
             value={form.kind}
             ariaLabel="runtime 渠道"
-            onChange={(v) => setForm((f) => ({ ...f, kind: v as typeof f.kind,model:'',executable:'',effort:'' }))}
+            disabled={busy}
+            onChange={(v) => setForm((f) => ({ ...f, kind: v as typeof f.kind,model:'',executable:runtimeExecutable(v),effort:'' }))}
             options={[
-              { value: 'claude', label: 'claude（CLI）' },
-              { value: 'codex', label: 'codex' },
+              ...RUNTIME_CHANNELS,
               ...(guard?.fakeAllowed === true ? [{ value: 'fake', label: 'fake（仅演练环境）' }] : []),
             ]}
           />
         </label>
+        <RuntimeChannelHelp kind={form.kind}/>
         {form.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.kind} executable={form.executable} value={form.model} disabled={busy} onChange={model=>setForm(f=>({...f,model,effort:''}))}/>:null}
         <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
         <details><summary>高级：执行程序与权限</summary>
@@ -472,7 +475,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
             onChange={(v) => setForm((f) => ({ ...f, permissionMode: v }))}
             options={runtimePermissionOptions(form.permissionMode, form.kind)}
           />
-          <div className="field-hint">完整权限沿用 CLI 的原生机制，可读写电脑并执行命令。选择 plan 可保持只读；项目编辑模式保留明确授权边界。保存配置不等于渠道已实测。</div>
+          <div className="field-hint">{runtimePermissionHint(form.kind)}</div>
         </label>
         </details>
       </div>
@@ -488,7 +491,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   const inFlight=useRef(false);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
-  const [runtime,setRuntime]=useState({kind:'claude' as 'claude'|'codex',model:'',executable:'',permissionMode:'bypassPermissions',effort:''});
+  const [runtime,setRuntime]=useState({kind:'claude' as RealRuntimeKind,model:'',executable:runtimeExecutable('claude'),permissionMode:'bypassPermissions',effort:''});
   const [useAsDefault,setUseAsDefault]=useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -502,7 +505,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
     if (name.trim().length === 0) { setErr('请填写成员名称（不能为空白）'); return; }
     inFlight.current=true;setBusy(true); setErr(null);
     try {
-      const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}), runtime:{kind:runtime.kind,model:runtime.model.trim()||null,executable:runtime.executable.trim()||runtime.kind,permissionMode:runtime.permissionMode,effort:runtime.effort||null},useAsDefault });
+      const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}), runtime:{kind:runtime.kind,model:runtime.model.trim()||null,executable:runtime.executable.trim()||runtimeExecutable(runtime.kind),permissionMode:runtime.permissionMode,effort:runtime.effort||null},useAsDefault });
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       const r=outcome.data;
       if(!formGuard.valid())return;
@@ -541,14 +544,15 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
           <input className="input" value={desc} placeholder="例如 实现与重构，偏好直接给结论" onChange={(e) => setDesc(e.target.value)} />
           <div className="field-hint">出现在成员卡与 @ 选择里，帮模型判断该找谁。</div>
         </div>
-        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind=>setRuntime(f=>({...f,kind:kind as 'claude'|'codex',model:'',executable:'',effort:''}))} options={[{value:'claude',label:'Claude CLI'},{value:'codex',label:'Codex CLI'}]}/></label>
+        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind=>setRuntime(f=>({...f,kind:kind as RealRuntimeKind,model:'',executable:runtimeExecutable(kind),effort:''}))} options={[...RUNTIME_CHANNELS]}/></label>
+        <RuntimeChannelHelp kind={runtime.kind}/>
         <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model=>setRuntime(f=>({...f,model,effort:''}))}/>
         <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort=>setRuntime(f=>({...f,effort}))}/>
         <label className="row tight"><input type="checkbox" checked={useAsDefault} disabled={busy} onChange={e=>setUseAsDefault(e.target.checked)}/>在没有可用协调者的房间中，默认由它接收消息</label>
         <details><summary>高级：执行程序与权限</summary>
           <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" disabled={busy} value={runtime.executable} placeholder="留空使用本机 CLI" onChange={e=>setRuntime(f=>({...f,executable:e.target.value}))}/></label>
           <label className="field"><span className="field-label">执行权限</span><Select ariaLabel="新成员执行权限" value={runtime.permissionMode} disabled={busy} onChange={permissionMode=>setRuntime(f=>({...f,permissionMode}))} options={runtimePermissionOptions(runtime.permissionMode,runtime.kind)}/></label>
-          <div className="field-hint">默认沿用 CLI 完整权限，可修改文件与执行命令；可改为只读。保存本身不调用模型。</div>
+          <div className="field-hint">{runtimePermissionHint(runtime.kind)}</div>
         </details>
         {err != null ? <div className="panel warning">{userFacingSystemText(err ?? '')}</div> : null}
       </div>
