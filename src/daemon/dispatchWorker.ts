@@ -1076,7 +1076,9 @@ export class DispatchWorker {
       const dmResolved = isDm ? resolveMemberRuntime(this.db, member.id, this.defaultKindOf()) : null;
       const resolvedKind = dmResolved?.kind ?? null;
       const resolvedModel = dmResolved?.model ?? null;
+      const harnessFormatRepair = isRepairDispatch && resolvedKind === 'deepseek-harness';
       const dmBindingSnap = JSON.stringify({
+        ...(harnessFormatRepair ? { formatOnlyRepair: true } : {}),
         runtimeKind: resolvedKind,
         model: resolvedModel,
         installationId: dmResolved?.installationId ?? null,
@@ -1088,7 +1090,7 @@ export class DispatchWorker {
         effort:dmResolved?.effort??null,
         cwd: project.canonical_path,
       });
-      const dmPrevSession = isDm
+      const dmPrevSession = isDm && !harnessFormatRepair
         ? this.db.prepare(
           "SELECT id, provider_session_id, session_generation, thread_id, member_id, cwd, capabilities_json FROM runtime_sessions WHERE conversation_id = ? AND member_id = ? AND scope_kind = 'dm' AND provider_session_id IS NOT NULL AND provider_session_id != '' ORDER BY rowid DESC LIMIT 1",
         ).get(task.conversation_id, member.id) as { id: string; provider_session_id: string; session_generation: number; thread_id: string | null; member_id: string; cwd: string; capabilities_json: string | null } | undefined
@@ -1097,17 +1099,19 @@ export class DispatchWorker {
       if (dmPrevSession != null) {
         // 绑定兼容：候选快照必须与当前 runtime、权限、工作目录及常驻提示词版本/hash 全一致。
         // 旧快照缺失 prompt 绑定或任一变化 → 不 resume（新会话+获准历史重放，不重放旧工具调用）。
-        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null; promptVersion?: string; promptTemplateHash?: string; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string } | null = null;
+        type DmResumeSnapshot = { runtimeKind?: string | null; model?: string | null; installationId?: string | null; promptVersion?: string; promptTemplateHash?: string; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string; formatOnlyRepair?: boolean };
+        let prevSnap: DmResumeSnapshot | null = null;
         let snapDamaged = false;
         if (dmPrevSession.capabilities_json != null) {
           try {
-            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null; promptVersion?: string; promptTemplateHash?: string; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string };
+            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as DmResumeSnapshot;
             if (typeof prevSnap.runtimeKind !== 'string' && prevSnap.runtimeKind !== null) snapDamaged = true;
           } catch { snapDamaged = true; }
         }
         // 缺失/损坏快照不默认兼容：按不兼容处理——新会话+历史重放，不冒充续接。
         const compatible = !snapDamaged
           && prevSnap != null
+          && prevSnap.formatOnlyRepair !== true
           && (prevSnap.runtimeKind ?? null) === resolvedKind
           && (prevSnap.model ?? null) === resolvedModel
           && (prevSnap.installationId ?? null) === (dmResolved?.installationId ?? null)
@@ -1122,7 +1126,7 @@ export class DispatchWorker {
             providerSessionId: dmPrevSession.provider_session_id,
             runtimeInstallationId: dmResolved?.installationId ?? (resolvedKind != null ? `default:${resolvedKind}` : 'unbound'), // 实际解析身份（绑定或全局默认——不用伪造常量）
             adapterVersion: 'resume-of-record',
-            threadId: dmPrevSession.thread_id ?? '',
+            threadId: dmPrevSession.thread_id ?? task.conversation_thread_id,
             sessionGeneration: dmPrevSession.session_generation,
             cwd: dmPrevSession.cwd,
           };

@@ -71,7 +71,7 @@ reader.on('line',line=>{
   send({v:1,type:'result',requestId:request.requestId,sessionId:active.sessionId,status:'completed',stopReason:'completed',text:JSON.stringify(result)});
   reader.close();process.stdin.destroy();
 });
-send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true}});
+send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true}});
 `;
 
 const localPiProcess=String.raw`

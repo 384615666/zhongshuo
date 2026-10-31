@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer';
 const { AbortController } = globalThis;
-export const PLUGIN_VERSION = '0.1.1';
+export const PLUGIN_VERSION = '0.1.2';
 export const DSH_VERSION = '0.2.1-rc.5';
 export const RUNTIME = 'zhongshuo-dsh';
-export const capabilities = Object.freeze({ sessionResume: true, sessionCancel: true, structuredEvents: true, readOnly: false });
+export const capabilities = Object.freeze({ sessionResume: true, sessionCancel: true, structuredEvents: true, readOnly: false, outputSchema: true, formatRepair: true });
 export const identity = (type) => ({ v: 1, type, runtime: RUNTIME, protocol: 1, pluginVersion: PLUGIN_VERSION, capabilities });
 
 export class RuntimeError extends Error {
@@ -20,13 +20,19 @@ export function splitModelSelection(value, providers) {
 }
 function validate(command) {
   if (command.mode === 'readonly') fail('READ_ONLY_UNSUPPORTED', 'This runtime cannot enforce read-only execution.');
-  if (command.mode !== 'full') fail('INVALID_REQUEST', 'mode must be full or readonly.');
+  if (!['full', 'format-repair'].includes(command.mode)) fail('INVALID_REQUEST', 'mode must be full or format-repair.');
   if (typeof command.cwd !== 'string' || !command.cwd || typeof command.prompt !== 'string' || !command.prompt.trim()) fail('INVALID_REQUEST', 'cwd and a nonempty prompt are required.');
   for (const key of ['sessionId', 'model', 'effort']) {
     if (command[key] !== undefined && (typeof command[key] !== 'string' || !command[key].trim())) fail('INVALID_REQUEST', `${key} must be a nonempty string.`);
   }
   if (command.developerInstructions !== undefined && typeof command.developerInstructions !== 'string') fail('INVALID_REQUEST', 'developerInstructions must be a string.');
   if (command.images !== undefined && !Array.isArray(command.images)) fail('INVALID_REQUEST', 'images must be an array.');
+  if (command.outputSchema !== undefined && (!command.outputSchema || typeof command.outputSchema !== 'object' || Array.isArray(command.outputSchema))) fail('INVALID_REQUEST', 'outputSchema must be a JSON Schema object.');
+  if (command.mode === 'format-repair') {
+    if (command.outputSchema === undefined) fail('INVALID_REQUEST', 'format-repair requires outputSchema.');
+    if (command.sessionId !== undefined) fail('INVALID_REQUEST', 'format-repair requires a fresh session; sessionId is not allowed.');
+    if (command.images?.length) fail('INVALID_REQUEST', 'format-repair accepts text only.');
+  }
 }
 
 // One process owns one live request. Reserve synchronously, before any await, so

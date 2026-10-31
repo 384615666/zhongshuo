@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R138 Harness 正式结果与补交修复
+
+用户截图只读诊断确认：DSH自然正文→TaskComplete非JSON→自动补交被repairOnly拒绝；R137底层测试漏正式worker验收。组件0.1.2补完整schema系统指令和强制零工具的新会话format-repair；旧组件握手升级拦截，正常只读/受限/图片边界不扩。DM补交与后续对话分会话，修复DM null线程恢复被转空串的既存拒续接。见[R138](../reviews/r138-harness-output-20261101.md)。
+
+实际Harness问候1、Pi→DSH→Pi3、强制正文失败后真实补交1、旧不支持补交后明确继续1，共6真实turn，全部DONE/SUCCEEDED/受管退出确认/job及poller0；注入fixture另外3reservation。转交脚本误计正式交接消息为重复回复，中止原件保留，离线按handoff身份复核；不再额外调用模型。旧数据只读，无现场重放。协议17/官方SDK27零供应商检查/适配器及worker55通过。全量313文件2733通过1旧UI5000ms超时9跳过，旧UI与新DM定向13通过，第四轮正常DM续接3通过；双types/lint/UI构建通过。原R130/R131及82未跟踪文件保留，独立worktree，仅本地提交不推送。
+
 ## 2026-10-31：R137 本机安装版真实验证，V74交付
 
 用户已安装Harness桌面版和全局Pi并要求实试。实机版本DSH0.2.1-rc.5/Pi1.4.0，发现并修复桌面Electron Node/ASAR入口、%~dp0缺分隔符、Windows选Unix shim优先级；适配器和setup共用解析器并传受管env，ASAR/Pi版本文件计入配置指纹。Harness provider名称含斜杠按最长已配置前缀解析，off↔none，组件0.1.1。已在用户DSH自有zhongshuo profile安装组件，不改默认或其他profile、不改凭据/模型设置。见 [R137](../reviews/r137-installed-runtimes-20261031.md)。

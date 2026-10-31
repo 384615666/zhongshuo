@@ -73,11 +73,42 @@ describe('DeepSeek Harness structured profile and actual child lifecycle',()=>{
     const a=adapter('slow-ready');const s=await a.openSession(input());await a.startTurn(s,request());await a.interrupt(s,'turn');
     const events=await terminal(a,s);expect(events.some(e=>e.kind==='turn.started')).toBe(false);expect(events.at(-1)).toMatchObject({kind:'turn.failed',code:'INTERRUPTED'});
   });
-  it('rejects unsupported scopes, images and repair turns before starting any child',async()=>{
+  it('rejects unsupported scopes, images and malformed repair requests before starting any child',async()=>{
     let calls=0;const a=adapter('success',()=>{calls++;});const readOnly=await a.openSession({...input(),writeAccess:undefined});
     await expect(a.startTurn(readOnly,request())).rejects.toMatchObject({code:'CAPABILITY_UNSUPPORTED',notStarted:true});
     const full=await a.openSession(input());await expect(a.startTurn(full,{...request(),repairOnly:true})).rejects.toMatchObject({notStarted:true});
     await expect(a.startTurn(full,{...request(),images:[{artifactId:'a',hash:'h',mime:'image/png',dataBase64:'AA=='}]})).rejects.toMatchObject({notStarted:true});
+    expect(calls).toBe(0);
+  });
+  it('carries the result schema and confines repair to the separate tool-free mode',async()=>{
+    const a=adapter(),s=await a.openSession({...input(),writeAccess:undefined});
+    const outputSchema={type:'object',properties:{resultKey:{const:'result-original'}}};
+    await a.startTurn(s,{...request(),repairOnly:true,outputSchema});
+    const events=await terminal(a,s),done=events.find(e=>e.kind==='turn.completed');
+    expect(done?.kind).toBe('turn.completed');
+    if(done?.kind==='turn.completed')expect(JSON.parse(done.finalText!)).toMatchObject({mode:'format-repair',outputSchema});
+    expect(events.some(e=>e.kind==='tool.started'||e.kind==='tool.completed')).toBe(false);
+  });
+  it.each([false,true])('blocks outdated plugins before submitting a structured request (repair=%s)',async repairOnly=>{
+    const a=adapter('old-plugin'),s=await a.openSession(input());
+    await a.startTurn(s,{...request(),repairOnly,outputSchema:{type:'object'}});
+    const events=await terminal(a,s);
+    expect(events.at(-1)).toMatchObject({kind:'turn.failed',code:'CAPABILITY_UNSUPPORTED'});
+    expect(events.some(e=>e.kind==='turn.started'||e.kind==='session.ready')).toBe(false);
+    expect(await a.waitForTurnExit(s,'turn',3000)).toMatchObject({exitConfirmed:true});
+  });
+  it('rejects tool events during format repair without accepting completion',async()=>{
+    const a=adapter('repair-tool'),s=await a.openSession(input());
+    await a.startTurn(s,{...request(),repairOnly:true,outputSchema:{type:'object'}});
+    const events=await terminal(a,s);
+    expect(events.at(-1)).toMatchObject({kind:'turn.failed',code:'OUTPUT_INVALID'});
+    expect(events.some(e=>e.kind==='turn.completed'||e.kind==='tool.started')).toBe(false);
+  });
+  it('requires a fresh session for repair instead of replaying pending provider work',async()=>{
+    let calls=0;const a=adapter('success',()=>{calls++;});
+    const previous=await a.openSession(input());previous.providerSessionId='original-session';
+    const s=await a.openSession({...input(),resume:previous});
+    await expect(a.startTurn(s,{...request(),repairOnly:true,outputSchema:{type:'object'}})).rejects.toMatchObject({code:'VALIDATION_INVALID',notStarted:true});
     expect(calls).toBe(0);
   });
 });

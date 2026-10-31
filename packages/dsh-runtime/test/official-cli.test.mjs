@@ -5,15 +5,17 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile, cp } from 'node:fs/promises';
 import { join, dirname, resolve, delimiter } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { buildDshRuntime } from '../../../scripts/build-dsh-runtime.mjs';
+import { taskCompleteOutputSchema, taskCompleteSchema } from '../../../src/contracts/taskComplete.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const cli = process.env.ZHONGSHUO_DSH_TEST_CLI;
-test('official DSH isolated installation, probe, catalog and persisted agent lifecycle (zero model calls)', { skip: !cli, timeout: 120000 }, async () => {
+test('official DSH isolated profile, schema, tool-free repair and persisted agent lifecycle (zero provider calls, no package manager)', { skip: !cli, timeout: 120000 }, async () => {
   const tools = resolve(cli, '../../../..');
-  const area = await mkdtemp(join(root, 'dist/r136-tools/official-cli-test-'));
+  const area = await mkdtemp(join(tmpdir(), 'zhongshuo-dsh-sdk-test-'));
   const work = join(area, 'workspace'); await mkdir(work);
   const env = {};
   for (const key of ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'LOCALAPPDATA', 'APPDATA']) if (process.env[key]) env[key] = process.env[key];
@@ -27,13 +29,20 @@ test('official DSH isolated installation, probe, catalog and persisted agent lif
     const code = await new Promise((done, reject) => { child.once('error', reject); child.once('close', done); }); clearTimeout(timer);
     return { code, stdout, stderr };
   }
-  const install = await run([join(root, 'scripts/setup-deepseek-harness.mjs'), '--install', '--artifact-dir', artifacts, '--dsh-js', cli], 60000);
-  assert.equal(install.code, 0, install.stderr + install.stdout);
   const profile = join(env.DSH_HOME, 'profiles/zhongshuo');
+  // Stage our package only in the temporary profile. The official launcher
+  // resolves its own installed SDK; never run pnpm or mutate shared modules.
+  const plugin = join(profile, 'node_modules/@zhongshuo/dsh-runtime'); await mkdir(plugin, { recursive: true });
+  const pkg = JSON.parse(await readFile(join(root, 'packages/dsh-runtime/package.json'), 'utf8'));
+  for (const file of ['package.json', ...pkg.files]) await cp(join(root, 'packages/dsh-runtime', file), join(plugin, file));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-zhongshuo-test', private: true, dependencies: { [pkg.name]: pkg.version }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', pkg.name] } } }));
   const manifest = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'));
   assert.deepEqual(manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@zhongshuo/dsh-runtime']);
   const probe = await run([cli, '--profile', 'zhongshuo', '--zs-probe']); assert.equal(probe.code, 0, probe.stderr);
   assert.equal(JSON.parse(probe.stdout).type, 'probe');
+  assert.equal(JSON.parse(probe.stdout).pluginVersion, '0.1.2');
+  assert.equal(JSON.parse(probe.stdout).capabilities.outputSchema, true);
+  assert.equal(JSON.parse(probe.stdout).capabilities.formatRepair, true);
   const emptyModels = await run([cli, '--profile', 'zhongshuo', '--zs-models']); assert.equal(emptyModels.code, 0, emptyModels.stderr); assert.deepEqual(JSON.parse(emptyModels.stdout).models, []);
   // Only fixture registration is added to the profile. The actual official
   // base/agent/tool/persistence stack remains unchanged.
@@ -42,7 +51,7 @@ test('official DSH isolated installation, probe, catalog and persisted agent lif
   // The fixture's explicit peer manifest shares the official llm class identity.
   const fixturePackage = join(profile, 'fixture-package'); await mkdir(fixturePackage);
   await cp(fixture, join(fixturePackage, 'index.mjs'));
-  await writeFile(join(fixturePackage, 'package.json'), JSON.stringify({ name: 'zhongshuo-test-fixture', type: 'module', peerDependencies: { '@deepseek-ai/dsh-llm': '0.2.1-rc.5' } }));
+  await writeFile(join(fixturePackage, 'package.json'), JSON.stringify({ name: 'zhongshuo-test-fixture', type: 'module', peerDependencies: { '@deepseek-ai/dsh-llm': '0.2.1-rc.5', '@deepseek-ai/dsh-scope': '0.2.1-rc.5' } }));
   const overlay = join(area, 'fixture.patch.yml');
   await writeFile(overlay, `- insert:\n    - id: zhongshuo-test-fixture\n      name: ${JSON.stringify(join(fixturePackage, 'index.mjs').replaceAll('\\', '/'))}\n`);
   const models = await run([cli, '--profile', 'zhongshuo', '--patch', overlay, '--zs-models']); assert.equal(models.code, 0, models.stderr);
@@ -87,5 +96,29 @@ test('official DSH isolated installation, probe, catalog and persisted agent lif
   const started = tool.frames.find((frame) => frame.event?.kind === 'tool-start').event;
   const ended = tool.frames.find((frame) => frame.event?.kind === 'tool-end').event;
   assert.equal(started.id, ended.id); assert.equal(started.name, 'fixture_echo'); assert.deepEqual(started.input, { value: 'hello' }); assert.equal(ended.isError, false);
-  await writeFile(join(area, 'report.json'), JSON.stringify({ version: '0.2.1-rc.5', realModelCalls: 0, checks: ['official-profile-install', 'probe', 'empty-models', 'fixture-models-and-efforts', 'official-agent-loop', 'text', 'thinking', 'usage', 'resume-after-process-restart', 'fresh-session-isolation', 'missing-session', 'cwd-mismatch', 'readonly-preexecute-rejection', 'max-tokens-failure', 'error-redaction', 'active-cancel', 'startup-cancel', 'cancel-before-execute', 'official-tool-events'], results: [first, resumed, fresh, missing, wrongCwd, readonly, max, failed, cancelled, early, unopened, tool] }, null, 2));
+  const resultKey = 'r138-sdk-exact-result-key-{{literal}}';
+  const schema = taskCompleteOutputSchema(resultKey);
+  const value = { schemaVersion: 'task-complete-v1', resultKey, changeSummary: '收到', answer: '收到', document: null,
+    responseKind: 'conversation', replyDisposition: 'reply', userQuestion: null, files: [], executedVerifications: [],
+    unexecutedVerifications: [], remainingIssues: [], handoffs: [], memoryUpdates: [] };
+  const payload = JSON.stringify({ schema, value });
+  const structured = await execute(`fixture:schema\n${payload}`, { outputSchema: schema });
+  assert.equal(structured.result.status, 'completed', JSON.stringify(structured));
+  assert.deepEqual(taskCompleteSchema.parse(JSON.parse(structured.result.text)), value);
+  const repair = await execute(`fixture:repair\n${payload}`, { mode: 'format-repair', outputSchema: schema });
+  assert.equal(repair.result.status, 'completed', JSON.stringify(repair));
+  assert.deepEqual(taskCompleteSchema.parse(JSON.parse(repair.result.text)), value);
+  assert.equal(JSON.parse(repair.result.text).resultKey, resultKey);
+  assert.ok(!repair.frames.some((frame) => frame.event?.kind?.startsWith('tool-')));
+  assert.notEqual(repair.result.sessionId, structured.result.sessionId);
+  const unsolicited = [];
+  for (const name of ['fixture_echo', 'fixture_scoped', 'run_code']) {
+    const attempt = await execute(`fixture:repair-call:${name}\n${payload}`, { mode: 'format-repair', outputSchema: schema });
+    assert.equal(attempt.result.status, 'failed', JSON.stringify(attempt));
+    assert.equal(attempt.result.error.code, 'FORMAT_REPAIR_TOOL_DENIED', JSON.stringify(attempt));
+    assert.ok(!attempt.frames.some((frame) => frame.event?.kind?.startsWith('tool-')));
+    unsolicited.push(attempt);
+  }
+  await writeFile(join(area, 'report.json'), JSON.stringify({ version: '0.2.1-rc.5', realModelCalls: 0, checks: ['package-staged-without-install', 'probe-0.1.2-capabilities', 'empty-models', 'fixture-models-and-efforts', 'official-agent-loop', 'text', 'thinking', 'usage', 'resume-after-process-restart', 'fresh-session-isolation', 'missing-session', 'cwd-mismatch', 'readonly-preexecute-rejection', 'max-tokens-failure', 'error-redaction', 'active-cancel', 'startup-cancel', 'cancel-before-execute', 'official-tool-events', 'complete-task-schema-in-real-sdk-prompt', 'repair-exact-result-key', 'empty-repair-tool-schemas', 'global-scoped-late-stale-run_code-denial', 'extension-hooks-blocked', 'monotonic-guard-after-extension-allow', 'direct-dispatch-interceptor', 'unsolicited-model-tool-call-fails-before-dispatch'], results: [first, resumed, fresh, missing, wrongCwd, readonly, max, failed, cancelled, early, unopened, tool, structured, repair, ...unsolicited] }, null, 2));
+  process.stdout.write(`SDK evidence: ${join(area, 'report.json')}\n`);
 });

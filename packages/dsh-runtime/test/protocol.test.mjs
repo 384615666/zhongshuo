@@ -3,7 +3,17 @@ import { Buffer } from 'node:buffer';
 import { setImmediate, setTimeout } from 'node:timers';
 import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
-import { RuntimeProtocol, RuntimeError, createWriter, bindInput, splitModelSelection } from '../protocol.mjs';
+import { RuntimeProtocol, RuntimeError, createWriter, bindInput, splitModelSelection, identity } from '../protocol.mjs';
+
+test('0.1.2 probe and ready advertise schema instructions and enforced format repair without readonly expansion', () => {
+  for (const type of ['probe', 'ready']) {
+    const frame = identity(type);
+    assert.equal(frame.pluginVersion, '0.1.2');
+    assert.equal(frame.capabilities.outputSchema, true);
+    assert.equal(frame.capabilities.formatRepair, true);
+    assert.equal(frame.capabilities.readOnly, false);
+  }
+});
 
 test('model selection retains nested provider and model ids',()=>{
   const providers=[{id:'gateway'},{id:'gateway/team'},{id:'other'}];
@@ -27,6 +37,21 @@ test('completed follows the official flush and dispose barriers', async () => {
 });
 test('readonly and malformed mode are rejected before creating an agent', async () => {
   for (const mode of ['readonly', 'other']) { const f = fixture(); await f.protocol.receive(command({ mode })); assert.ok(!f.calls.includes('prepare')); assert.equal(f.records[0].status, 'failed'); }
+});
+test('format repair requires schema and a fresh text-only session before setup', async () => {
+  for (const overrides of [{}, { outputSchema: null }, { outputSchema: [] }, { outputSchema: 'schema' },
+    { outputSchema: {}, sessionId: 'existing' }, { outputSchema: {}, images: [{}] }]) {
+    const f = fixture();
+    await f.protocol.receive(command({ mode: 'format-repair', ...overrides }));
+    assert.ok(!f.calls.includes('prepare'));
+    assert.equal(f.records.at(-1).error.code, 'INVALID_REQUEST');
+  }
+  const f = fixture(); await f.protocol.receive(command({ mode: 'format-repair', outputSchema: { type: 'object' }, images: [] }));
+  assert.equal(f.records.at(-1).status, 'completed');
+});
+test('malformed output schema also fails normal work before setup', async () => {
+  const f = fixture(); await f.protocol.receive(command({ outputSchema: 'not a schema' }));
+  assert.ok(!f.calls.includes('prepare')); assert.equal(f.records.at(-1).error.code, 'INVALID_REQUEST');
 });
 test('max-tokens and missing terminals never complete', async () => {
   for (const reason of ['max-tokens', undefined, 'blocked', 'error']) { const f = fixture({ run: async () => ({ reason }) }); await f.protocol.receive(command()); assert.equal(f.records.at(-1).status, 'failed'); }

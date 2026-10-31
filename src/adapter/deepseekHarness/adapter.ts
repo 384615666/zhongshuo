@@ -5,7 +5,7 @@ import { externalRuntimeLaunchIdentity } from '../cli/configuration.ts';
 import { resolveAgentExecutable } from '../cli/executable.ts';
 import { CliTurnAdapter, isRecord, type CliAdapterOptions, type CliSession, type CliTurn } from '../cli/turnAdapter.ts';
 
-export const DSH_ADAPTER_VERSION = 'dsh-profile-adapter-1';
+export const DSH_ADAPTER_VERSION = 'dsh-profile-adapter-2';
 /** Protocol support and actual model/platform certification remain distinct. */
 export function deepseekHarnessCapabilities(): RuntimeCapabilities {
   return { structuredEvents: 'unverified', taskContextIsolation: 'unverified', resumeSession: 'unverified',
@@ -22,12 +22,16 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
   protected arguments(): string[] { return [...PROFILE_ARGS, '--zs-stdio']; }
   protected validate(session: CliSession, input: TurnRequest): void {
     if (input.images?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 图片输入尚未认证，请换用已支持图片的成员', true);
-    if (input.repairOnly || !session.input.writeAccess?.fullAccess || session.input.writeAccess.analysisOnly ||
-      ![undefined, 'bypassPermissions'].includes(this.options.permissionMode))
-      throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 当前支持原生完整权限；只读分析、项目受限编辑和格式修复尚未认证', true);
+    if (!input.repairOnly && (!session.input.writeAccess?.fullAccess || session.input.writeAccess.analysisOnly ||
+      ![undefined, 'bypassPermissions'].includes(this.options.permissionMode)))
+      throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 当前支持原生完整权限；只读分析和项目受限编辑尚未认证', true);
+    if (input.repairOnly && !isRecord(input.outputSchema))
+      throw new AdapterCallError('VALIDATION_INVALID', 'Harness 格式补交缺少结果结构，未启动执行', true);
+    if (input.repairOnly && session.requestedSessionId)
+      throw new AdapterCallError('VALIDATION_INVALID', 'Harness 格式补交需要独立的新会话，不能续接原执行', true);
     if (this.options.model && !/^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,199}$/.test(this.options.model))
       throw new AdapterCallError('VALIDATION_INVALID', 'DeepSeek Harness 模型编号无效', true);
-    const expected = session.input.writeAccess.launchConfigurationKey;
+    const expected = session.input.writeAccess?.launchConfigurationKey;
     if (expected && externalRuntimeLaunchIdentity('deepseek-harness', this.options, session.ref.cwd).identityKey !== expected)
       throw new AdapterCallError('STALE_EXECUTION', 'DeepSeek Harness 程序或配置已变化，请重新发送', true);
   }
@@ -43,8 +47,13 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
         throw Error('Harness 连接组件不兼容，请重新安装众说连接组件');
       turn.ready = true;
       if (turn.stopRequested) { this.cancel(session, turn); return; }
+      if ((turn.input.outputSchema && frame.capabilities.outputSchema !== true) ||
+        (turn.input.repairOnly && frame.capabilities.formatRepair !== true)) {
+        this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 连接组件需要升级；请运行新版便携包中的 DeepSeek Harness 连接组件安装入口后再继续任务', true);
+        return;
+      }
       this.send(turn, { v: 1, type: 'execute', requestId: turn.requestId, cwd: session.ref.cwd, prompt: turn.input.text,
-        mode: 'full', ...(session.requestedSessionId ? { sessionId: session.requestedSessionId } : {}),
+        mode: turn.input.repairOnly ? 'format-repair' : 'full', ...(session.requestedSessionId ? { sessionId: session.requestedSessionId } : {}),
         ...(this.options.model ? { model: this.options.model } : {}), ...(this.options.effort ? { effort: this.options.effort } : {}),
         ...(session.input.developerInstructions ? { developerInstructions: session.input.developerInstructions } : {}),
         ...(turn.input.outputSchema ? { outputSchema: turn.input.outputSchema } : {}) });
@@ -61,8 +70,12 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
       switch (event.kind) {
         case 'text': this.text(session, turn, event.text); break;
         case 'thinking': this.text(session, turn, event.text, true); break;
-        case 'tool-start': this.toolStart(session, turn, event.id, event.name, event.input); break;
-        case 'tool-end': this.toolEnd(session, turn, event.id, event.isError, event.output); break;
+        case 'tool-start':
+          if (turn.input.repairOnly) throw Error('Harness 格式补交不允许执行工具');
+          this.toolStart(session, turn, event.id, event.name, event.input); break;
+        case 'tool-end':
+          if (turn.input.repairOnly) throw Error('Harness 格式补交不允许执行工具');
+          this.toolEnd(session, turn, event.id, event.isError, event.output); break;
         case 'usage': this.usage(session, turn, event); break;
         default: throw Error('Harness 返回了未知事件类型');
       }

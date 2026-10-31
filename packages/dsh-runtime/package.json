@@ -1,6 +1,6 @@
 {
   "name": "@zhongshuo/dsh-runtime",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Zhongshuo JSONL v1 surface for the official DeepSeek Harness runtime",
   "type": "module",
   "license": "MIT",
