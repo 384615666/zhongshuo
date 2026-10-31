@@ -15,6 +15,7 @@ import type {PreDispatchFailureProjection} from '../../contracts/taskDetails';
  * 发送（review-r46 §4）：sendCommand 携带 Composer commandId，返回 ok/failed/unknown。
  */
 import { command, sendCommand, bridge } from './bridge';
+import { historyScope, historyWindow, readHistoryOnce, recordHistoryPage } from './lib/threadHistory';
 import type { BridgeOutcome } from './bridge';
 import {stageOutbound,updateSendReference,settleOutbound, setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, advanceThreadReadWatermark, rollbackThreadReadWatermark, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
@@ -1479,6 +1480,10 @@ interface ThreadGetData {  thread: { id: string; projectId: string; conversation
  */
 export interface ThreadHistoryItem { repairLineage?:MessageRepairLineage|null; id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown; detailMarkdown?: string; document?: unknown; delivery?: unknown; runtimeControlResult?: string } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>;replyExecution?:Message['formalReplyExecution'] }
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
+export function threadHistoryWindow(threadId: string) {
+  const s = getState();
+  return historyWindow(historyScope(s.loadGen, s.activeProjectId, threadId));
+}
 interface TaskGetData {
   task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
     objective?: string | null; review_policy?: Task['reviewPolicy']; mode?: Task['mode'] | null; owner_member_id?: string | null; parent_task_id?: string | null; current_delivery_id?: string | null;
@@ -1635,8 +1640,10 @@ export async function loadThread(
       hydrateThreadFromSnapshots(threadId,ticket);
     })();
     const historyRead=(async()=>{
-    const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
+    const scope = historyScope(gen, projectId, threadId);
+    const hist = await readHistoryOnce(scope, undefined, () => command<ThreadHistoryData>('thread.history', { threadId, limit: 100 }));
     if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
+    recordHistoryPage(scope, (hist.items ?? []).map(it => it.seq));
     const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
     // r56：**合并**而非整表替换——可见期轻量刷新（5s）会把补读出的更早历史整页冲掉
     //（长历史定位后元素消失）。按 id 去重合并、seq 升序，保留已补读窗口。
@@ -1773,19 +1780,23 @@ export async function markThreadReadIfAllowed(threadId: string): Promise<void> {
 /** 长历史定位补读（r56 H4 §5）：thread.history beforeSeq 游标向前补一页（100 条），追加到
  * 已装载回复**头部**（保持 seq 升序）。返回补入条数（0=已到头/迟到丢弃）——调用方按此决定
  * 继续补读还是如实「未定位」。补读是纯读：不改水位（标读仍只在前台+贴底时发生）。 */
-export async function loadThreadOlder(threadId: string, beforeSeq: number): Promise<number> {
+export async function loadThreadOlder(threadId: string, beforeSeq: number, isCurrent?: () => boolean): Promise<number> {
   const gen = getState().loadGen;
   const ent = getState().threadEntities[threadId];
-  if (ent == null) return 0;
-  const hist = await command<ThreadHistoryData>('thread.history', { threadId, beforeSeq, limit: 100 });
-  if (!stillCurrent(gen, ent.projectId)) return 0;
+  const activeThreadId = getState().ui.activeThreadId;
+  if (ent == null || !Number.isSafeInteger(beforeSeq) || beforeSeq < 1 || isCurrent?.() === false) return 0;
+  const scope = historyScope(gen, ent.projectId, threadId);
+  const hist = await readHistoryOnce(scope, beforeSeq, () => command<ThreadHistoryData>('thread.history', { threadId, beforeSeq, limit: 100 }));
+  if (!stillCurrent(gen, ent.projectId) || getState().ui.activeThreadId !== activeThreadId || isCurrent?.() === false) return 0;
+  recordHistoryPage(scope, (hist.items ?? []).map(it => it.seq), beforeSeq);
   const older = (hist.items ?? []).map((it) => msgOfReply(ent.projectId, ent.roomId, threadId, it));
-  if (older.length === 0) return 0;
   setState((prev) => {
     const cur = prev.threadMessages[threadId] ?? [];
-    const known = new Set(cur.map((m) => m.id));
-    const fresh = older.filter((m) => !known.has(m.id));
-    return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: [...fresh, ...cur] } };
+    const byId = new Map(older.map(m => [m.id, m]));
+    // A concurrent recent-page refresh owns the newer copy of overlapping rows.
+    for (const m of cur) byId.set(m.id, m);
+    const merged = [...byId.values()].sort((a, b) => (a.threadMessageSeq ?? 0) - (b.threadMessageSeq ?? 0));
+    return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: merged } };
   });
   hydrateThreadFromSnapshots(threadId);
   return older.length;

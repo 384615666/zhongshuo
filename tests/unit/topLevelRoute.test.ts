@@ -47,7 +47,7 @@ describe('§4.2 路由表逐行（SendIntent=default）', () => {
     }
   });
 
-  it('@全体 → AUTO，仅协调者先接收，冻结获准全体', () => {
+  it('@全体 → AUTO，分别派发给冻结的获准全体', () => {
     const r = route('default', [ALL]);
     expect(r).toMatchObject({
       ok: true,
@@ -55,7 +55,9 @@ describe('§4.2 路由表逐行（SendIntent=default）', () => {
         kind: 'dispatch',
         mode: 'AUTO',
         participantScope: 'selected',
+        dispatchStyle: 'broadcast',
         frozenMemberIds: ['m_coord', 'm_a', 'm_b', 'm_c'],
+        initialWakeMemberIds: ['m_coord', 'm_a', 'm_b', 'm_c'],
       },
     });
   });

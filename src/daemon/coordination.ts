@@ -83,29 +83,36 @@ export function seedExplicitRecipientCoordination(
   body:string,
   selectedMemberIds:readonly string[],
   requestBudget?:{maxTurns:number;callBudget:{enforcement:'enabled'|'disabled'}},
+  broadcast?:{dispatchKey:string;roster:ScopeMember[];reviewFeedback?:{deliveryId:string;deliveryRevision:number;note:string}},
 ){
   const parent=db.prepare(`SELECT id,project_id,conversation_id,room_id,conversation_thread_id,root_message_id,
     owner_member_id,title,stop_generation,source_connection_id,route_json,review_policy,deliberation_budget_json FROM tasks WHERE id=?`).get(taskId) as
     (Parent&{route_json:string|null;review_policy:'auto_deliver'|'user_review';deliberation_budget_json:string|null})|undefined;
   if(!parent)throw Error('明确收件人任务不存在');
   const recipients=[...new Set(selectedMemberIds)];
-  if(recipients.length<2)throw Error('明确多人发送至少需要两位成员');
+  if(recipients.length<(broadcast?1:2))throw Error('明确多人发送至少需要两位成员');
   const members=coordinationRoomMembers(db,parent.room_id,parent.project_id,recipients);
   if(members.length!==recipients.length)throw Error('明确收件人中有成员已停用或不属于本房间');
   const analysisOnly=(JSON.parse((db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId) as {write_scope_json:string}).write_scope_json) as {analysisOnly?:boolean}).analysisOnly===true;
-  const roster:ScopeMember[]=members.map(member=>{
+  const roster:ScopeMember[]=broadcast?recipients.map(id=>{
+    const member=broadcast.roster.find(item=>item.memberId===id);
+    if(!member?.writeScope)throw Error(`收件成员 ${id} 的执行配置不可用；未派发`);
+    return member;
+  }):members.map(member=>{
     let writeScope:string|null=null,unavailableReason:string|undefined;
     try{writeScope=snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,member.id,{analysisOnly});}
     catch(error){unavailableReason=String(error);}
     return{memberId:member.id,displayName:member.display_name,description:member.description,writeScope,unavailableReason};
   });
-  const runId=`run_${randomUUID()}`,now=Date.now(),objective=body.slice(0,8000);
+  const runId=`run_${randomUUID()}`,now=Date.now(),objective=body.slice(0,8000)+(broadcast?.reviewFeedback
+    ?`\n\n用户已明确要求执行返工。原交付 ${broadcast.reviewFeedback.deliveryId} · v${broadcast.reviewFeedback.deliveryRevision}。修改意见：\n${broadcast.reviewFeedback.note}`:'');
   const callBudget=requestBudget?.callBudget
     ??parsePersistedCallBudgetSnapshot(parent.deliberation_budget_json).callBudget;
   const maxTurns=requestBudget?.maxTurns
     ??(callBudget?.enforcement==='enabled'&&'limit' in callBudget?callBudget.limit:DEFAULT_CALL_BUDGET_LIMITS.AUTO);
   db.prepare(`INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,task_revision,status,stage,budget_json)
     VALUES(?,?,?,?,'AUTO',0,'WAITING','明确收件人执行',?)`).run(runId,taskId,parent.conversation_id,parent.conversation_thread_id,JSON.stringify({maxTurns,...(callBudget!=null?{callBudget}:{})}));
+  if(broadcast)db.prepare('UPDATE workflow_runs SET dispatch_identity=? WHERE id=?').run(broadcast.dispatchKey,runId);
   db.prepare(`INSERT INTO coordination_runs(run_id,task_id,stop_generation,state,created_at)
     VALUES(?,?,?,'running',?)`).run(runId,taskId,parent.stop_generation,now);
   db.prepare('INSERT INTO coordination_run_rosters(run_id,roster_json,created_at) VALUES(?,?,?)').run(runId,JSON.stringify(roster),now);
@@ -118,7 +125,7 @@ export function seedExplicitRecipientCoordination(
       owner_member_id,parent_task_id,title,objective,status,review_policy,route_json,write_scope_json)
       VALUES(?,?,?,'room_task',?,?,?,?,?,?,?,'OPEN',?,?,?)`).run(
         childId,parent.project_id,parent.conversation_id,parent.room_id,parent.conversation_thread_id,messageId,
-        memberId,taskId,`${member.displayName} 明确回复`,objective,parent.review_policy,JSON.stringify(childRoute),member.writeScope,
+        memberId,taskId,`${member.displayName} 明确回复`,objective,broadcast?'auto_deliver':parent.review_policy,JSON.stringify(childRoute),member.writeScope,
       );
     db.prepare('UPDATE tasks SET write_scope_json=?,source_connection_id=? WHERE id=?').run(member.writeScope,parent.source_connection_id,childId);
     db.prepare('INSERT INTO coordination_steps(run_id,step_key,child_task_id,role,handoff_json) VALUES(?,?,?,?,?)')
@@ -126,7 +133,7 @@ export function seedExplicitRecipientCoordination(
     enqueueOutbox(db,{dispatchKey:`task:${childId}:initial`,stopGenerationAtEnqueue:parent.stop_generation});
     return{key:stepKey,memberId,childId};
   });
-  const plan={summary:`按用户明确选择，由 ${recipients.length} 位 AI 分别回复`,steps:steps.map((step)=>({
+  const plan={...(broadcast?{broadcast:true}:{}),summary:`按用户明确选择，由 ${recipients.length} 位 AI 分别回复`,steps:steps.map((step)=>({
     key:step.key,memberId:step.memberId,title:`${roster.find(m=>m.memberId===step.memberId)!.displayName} 明确回复`,
     objective,role:'analysis' as const,dependsOn:[] as string[],
   }))};
@@ -135,6 +142,10 @@ export function seedExplicitRecipientCoordination(
   db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=?").run(taskId);
   event(db,parent,runId,'coordination.planAccepted',{summary:plan.summary,steps:steps.map(s=>({step_key:s.key,child_task_id:s.childId})),source:'explicit-recipients'});
   return{runId,steps};
+}
+
+export function isBroadcastRun(db:ZhongshuoDatabase,runId:string):boolean {
+  return db.prepare("SELECT 1 FROM coordination_runs WHERE run_id=? AND json_extract(plan_json,'$.broadcast')=1").get(runId)!=null;
 }
 
 export function childCoordination(db: ZhongshuoDatabase, taskId: string) {
@@ -210,6 +221,8 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const child = childCoordination(db,taskId);
   if (child) {
     if(child.handoff_json==null&&/^r\d+$/.test(child.step_key))child.handoff_json=freezeRecipientRequests(db,child.run_id,taskId);
+    if(isBroadcastRun(db,child.run_id))return{kind:'child' as const,run:child,request,
+      note:'本条由用户 @全体 分别发送给各位成员。独立回应本次用户要求，不替其他成员发言，不重复派发给已收件的成员；本轮不自动互评或汇总。需要执行工作时遵循用户要求及本轮实际权限；普通交流可用 responseKind=conversation，实际工作成果用 responseKind=work。'};
     const coordinator=db.prepare(`SELECT pm.display_name FROM tasks parent JOIN project_members pm ON pm.id=parent.owner_member_id
       WHERE parent.id=?`).get(child.task_id) as {display_name:string};
     if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request,
@@ -286,7 +299,7 @@ export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string
   verifyHandoffFiles({files:managedHandoffFiles(db,context.run.run_id,keys)},root);
   const ownReservation=reservedTurnId&&db.prepare('SELECT 1 FROM agent_turns WHERE id=?').get(reservedTurnId)?1:0;
   const used=coordinationCallsUsed(db,context.run.run_id)-ownReservation;
-  const reserve=context.kind==='integration'?0:2;
+  const reserve=context.kind==='integration'||isBroadcastRun(db,context.run.run_id)?0:2;
   if(coordinationCallEnforcement(db,context.run.run_id)!=='disabled'
     &&(!Number.isSafeInteger(used)||used<0||used>=coordinationCallLimit(db,context.run.run_id)-reserve))
     throw Error('本轮协作总调用预算已用尽；保留成果，未继续派发');
@@ -487,6 +500,67 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     for(const step of steps)if(step.status==='DONE'){
       const saved=JSON.parse(step.handoff_json??'{}') as {output?:unknown};
       if(!saved.output){step.handoff_json=JSON.stringify({...saved,output:finalHandoff(db,step.child_task_id)});db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(step.handoff_json,run.run_id,step.step_key);}
+    }
+    if(isBroadcastRun(db,run.run_id)){
+      // One failed recipient must not cancel the other already accepted recipients.
+      const unsuccessful=(id:string)=>db.prepare("SELECT 1 FROM workflow_runs WHERE id=(SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1) AND status IN ('FAILED','PARTIAL','INTERRUPTED','CANCELLED','UNKNOWN')").get(id)!=null;
+      const live=steps.some(step=>step.status==='OPEN'||step.status==='ACTIVE'&&!unsuccessful(step.child_task_id)||pendingAutomaticRecovery(db,step.child_task_id)||db.prepare(`SELECT 1 FROM workflow_runs r LEFT JOIN agent_turns a ON a.run_id=r.id
+        WHERE r.task_id=? AND (r.status IN ('QUEUED','RUNNING','WAITING','STOPPING') OR a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')) LIMIT 1`).get(step.child_task_id));
+      if(live)return;
+      if(steps.some(step=>step.status==='WAITING_USER')){
+        if(parent.status!=='WAITING_USER'){
+          db.prepare("UPDATE tasks SET status='WAITING_USER',revision=revision+1 WHERE id=?").run(parent.id);
+          db.prepare("UPDATE workflow_runs SET stage='等待用户补充' WHERE id=?").run(run.run_id);
+          event(db,parent,run.run_id,'coordination.waitingForUser',{childTaskIds:steps.filter(step=>step.status==='WAITING_USER').map(step=>step.child_task_id)});
+        }
+        return;
+      }
+      const failed=steps.find(step=>step.status!=='DONE'||unsuccessful(step.child_task_id)||assessTaskRedispatchReadiness(db,step.child_task_id,{queueOnly:true})!=null);
+      if(failed){
+        const reason=`成员步骤「${failed.step_key}」未完成；其他成员回复已保留`;
+        db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=?").run(reason,run.run_id);
+        db.prepare("UPDATE workflow_runs SET status='PARTIAL',stage='部分成员未完成' WHERE id=?").run(run.run_id);
+        db.prepare("UPDATE tasks SET status='BLOCKED',revision=revision+1 WHERE id=?").run(parent.id);
+        db.prepare("UPDATE thread_reply_requests SET status='blocked',error_message=?,updated_at=? WHERE run_id=? AND status IN ('queued','running')").run(reason,Date.now(),run.run_id);
+        event(db,parent,run.run_id,'coordination.blocked',{source:'broadcast',stepKey:failed.step_key});return;
+      }
+      const root=(db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(parent.project_id) as {canonical_path:string}).canonical_path;
+      verifyHandoffFiles({files:managedHandoffFiles(db,run.run_id)},root);
+      // Keep the existing single user acceptance point. This is a manifest of
+      // actual member deliveries, not a generated coordinator answer or synthesis.
+      const deliveries=db.prepare(`SELECT d.id,d.revision,d.manifest_hash,d.artifact_refs_json,d.change_set_refs_json,d.verification_refs_json
+        FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id JOIN task_deliveries d ON d.id=t.current_delivery_id
+        WHERE s.run_id=? ORDER BY s.rowid`).all(run.run_id) as Array<{id:string;revision:number;manifest_hash:string;artifact_refs_json:string;change_set_refs_json:string;verification_refs_json:string}>;
+      const previousDelivery=db.prepare('SELECT d.review_status FROM tasks t JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?').get(parent.id) as {review_status:string}|undefined;
+      let taskStatus=previousDelivery?.review_status==='pending'?'REVIEW':previousDelivery?.review_status==='changes_requested'?'ACTIVE':'DONE';
+      if(deliveries.length){
+        const policy=(db.prepare('SELECT review_policy FROM tasks WHERE id=?').get(parent.id) as {review_policy:string}).review_policy;
+        const id=`dlv_broadcast_${run.run_id}`,revision=(db.prepare('SELECT COALESCE(MAX(revision),0)+1 n FROM task_deliveries WHERE task_id=?').get(parent.id) as {n:number}).n;
+        const refs=(key:'artifact_refs_json'|'change_set_refs_json'|'verification_refs_json')=>JSON.stringify([...new Set(deliveries.flatMap(d=>JSON.parse(d[key]) as string[]))]);
+        const sections=deliveries.map(d=>{
+          const source=db.prepare(`SELECT pm.display_name FROM task_deliveries d JOIN tasks t ON t.id=d.task_id JOIN project_members pm ON pm.id=t.owner_member_id WHERE d.id=?`).get(d.id) as {display_name:string};
+          const reply=db.prepare(`SELECT m.body_json FROM task_deliveries d JOIN agent_turns a ON a.run_id=d.run_id
+            JOIN domain_events e ON e.turn_id=a.id AND e.kind='thread.replyAdded'
+            JOIN messages m ON m.id=json_extract(e.payload_json,'$.messageId') AND m.task_id=d.task_id AND m.author_type='agent' AND m.status='final'
+            WHERE d.id=? ORDER BY e.seq DESC LIMIT 1`).get(d.id) as {body_json:string}|undefined;
+          const text=reply?(JSON.parse(reply.body_json) as {text?:string}).text??'':'';
+          return `## ${source.display_name}\n\n${text}\n\n交付 ${d.id} · v${d.revision} · ${d.manifest_hash}`;
+        });
+        const manifestText=`# 各成员成果清单\n\n以下为各成员保存的原回复及对应交付版本。\n\n${sections.join('\n\n')}`;
+        const manifestHash=createHash('sha256').update(manifestText).digest('hex');
+        db.prepare("UPDATE task_deliveries SET review_status='superseded' WHERE task_id=? AND review_status='pending'").run(parent.id);
+        db.prepare(`INSERT INTO task_deliveries(id,task_id,run_id,revision,manifest_hash,artifact_refs_json,change_set_refs_json,verification_refs_json,review_status)
+          VALUES(?,?,?,?,?,?,?,?,?)`).run(id,parent.id,run.run_id,revision,manifestHash,refs('artifact_refs_json'),refs('change_set_refs_json'),refs('verification_refs_json'),policy==='user_review'?'pending':'not_required');
+        taskStatus=policy==='user_review'?'REVIEW':'DONE';
+        db.prepare("UPDATE tasks SET current_delivery_id=?,response_kind='work' WHERE id=?").run(id,parent.id);
+        event(db,parent,run.run_id,'coordination.broadcastDelivery',{deliveryId:id,deliveryRevision:revision,manifestHash,manifestText,members:deliveries.map(d=>({deliveryId:d.id,revision:d.revision,manifestHash:d.manifest_hash}))});
+      }
+      db.prepare("UPDATE coordination_runs SET state='completed',error_message=NULL WHERE run_id=?").run(run.run_id);
+      db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='全体成员执行结束' WHERE id=?").run(run.run_id);
+      db.prepare('UPDATE tasks SET status=?,revision=revision+1 WHERE id=?').run(taskStatus,parent.id);
+      db.prepare("UPDATE thread_reply_requests SET status='succeeded',error_message=NULL,updated_at=? WHERE run_id=? AND status IN ('queued','running')").run(Date.now(),run.run_id);
+      event(db,parent,run.run_id,'coordination.completed',{source:'broadcast',memberIds:coordinationRoster(db,parent.id,run.run_id).map(member=>member.memberId)});
+      return;
     }
     const blocked=steps.find(s=>assessTaskRedispatchReadiness(db,s.child_task_id,{queueOnly:true})!=null
       ||!pendingAutomaticRecovery(db,s.child_task_id)&&!db.prepare(`SELECT 1 FROM outbox o JOIN domain_events e ON e.kind='task.redispatchEnqueued' AND json_extract(e.payload_json,'$.dispatchKey')=o.dispatch_key

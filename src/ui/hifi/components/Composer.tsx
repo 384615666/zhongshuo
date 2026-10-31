@@ -34,7 +34,7 @@ import type {
 import {SendRecoveryAction} from './SendRecoveryAction';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
-import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
+import { bindMemberMention, buildMemberMentionIndex, detectMentionRange, emptyMemberMentionBindings, resolveMemberMentions } from '../lib/mentionText';
 import { command } from '../bridge';
 import { watchComposerWriteCapability } from '../lib/composerWriteCapability';
 import type { ComposerWriteCapability } from '../lib/composerWriteCapability';
@@ -1180,25 +1180,16 @@ export function Composer({
     };
   }, [runtimes, profiles,memberRuntimes]);
 
-  const mentionTokenById = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const member of members) counts.set(member.displayName, (counts.get(member.displayName) ?? 0) + 1);
-    return new Map(members.map((member) => {
-      const duplicate = (counts.get(member.displayName) ?? 0) > 1;
-      const qualifier = runtimeLabelOf(member).replace(/\s+/g, '');
-      const token = member.displayName + (duplicate ? `（${qualifier}）` : '');
-      return [member.id, token] as const;
-    }));
-  }, [members, runtimeLabelOf]);
-
-  const mentionIdByToken = useMemo(
-    () => new Map([...mentionTokenById].map(([id, token]) => [token, id] as const)),
-    [mentionTokenById],
-  );
-
+  const mentionIndex = useMemo(() => buildMemberMentionIndex(members, runtimeLabelOf), [members, runtimeLabelOf]);
+  const mentionTokenById = mentionIndex.tokenById;
+  const mentionBindingsRef = useRef(getDraftFull(draftKey).mentionBindings ?? emptyMemberMentionBindings());
+  const [mentionBindings, setMentionBindings] = useState(mentionBindingsRef.current);
   const resolveMentionsFromBody = useCallback((text: string): string[] => {
-    return resolveMentionIds(text, mentionIdByToken);
-  }, [mentionIdByToken]);
+    const analysis = resolveMemberMentions(text, mentionIndex, mentionBindingsRef.current);
+    mentionBindingsRef.current = analysis.bindings;
+    setMentionBindings(analysis.bindings);
+    return analysis.ids;
+  }, [mentionIndex]);
 
   const bodyRef = useRef('');
   const [body, setBody] = useState('');
@@ -1240,16 +1231,17 @@ export function Composer({
   }, []);
   const collaboration=target.kind!=='dm'&&deliberate?'deliberate' as const:undefined;
   const [mentions, setMentions] = useState<string[]>([]);
+  const bodyMentionAnalysis = useMemo(() => resolveMemberMentions(body, mentionIndex, mentionBindings), [body, mentionIndex, mentionBindings]);
   const availableDeliberateIds = useMemo(
     () => members.filter((member) => member.enabled && member.principalType === 'agent').map((member) => member.id),
     [members],
   );
   const effectiveMentionIds = useMemo(() => {
-    if (!deliberate) return mentions;
+    if (!deliberate) return bodyMentionAnalysis.ids;
     const selected = deliberateMemberIds.filter((id) => availableDeliberateIds.includes(id));
-    const bodyMentions = mentions.filter((id) => id === 'all' || availableDeliberateIds.includes(id));
+    const bodyMentions = bodyMentionAnalysis.ids.filter((id) => id === 'all' || availableDeliberateIds.includes(id));
     return [...new Set([...selected, ...bodyMentions])];
-  }, [deliberate, mentions, deliberateMemberIds, availableDeliberateIds]);
+  }, [deliberate, bodyMentionAnalysis, deliberateMemberIds, availableDeliberateIds]);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionActive, setMentionActive] = useState(0);
   const [mentionDocs, setMentionDocs] = useState<MentionDocument[]>([]);
@@ -1594,8 +1586,6 @@ export function Composer({
   attachmentUploadRef.current = attachmentUpload;
   const mentionTokenByIdRef = useRef(mentionTokenById);
   mentionTokenByIdRef.current = mentionTokenById;
-  const allMembersRef = useRef(allMembers);
-  allMembersRef.current = allMembers;
   const resolveMentionsFromBodyRef = useRef(resolveMentionsFromBody);
   resolveMentionsFromBodyRef.current = resolveMentionsFromBody;
   const availableDeliberateIdsRef = useRef(availableDeliberateIds);
@@ -1603,19 +1593,22 @@ export function Composer({
 
   useEffect(() => {
     const saved = getDraftFull(draftKey);
+    mentionBindingsRef.current = saved.mentionBindings ?? emptyMemberMentionBindings();
+    setMentionBindings(mentionBindingsRef.current);
     const uploadChannel = attachmentUploadRef.current;
     if (uploadChannel != null) hydrateUploadRefs(draftKey, uploadChannel.conversationId, saved.attachments);
     const resolveMentions = resolveMentionsFromBodyRef.current;
     const tokenById = mentionTokenByIdRef.current;
-    const membersAll = allMembersRef.current;
     const availableIds = availableDeliberateIdsRef.current;
     // 旧草稿只有 attachment refs、没有行内 token：hydrate 会补齐 token，这里以补齐后的正文为准。
     let restoredBody = getDraftFull(draftKey).body;
     const existingTokens = resolveMentions(restoredBody);
-    const missingTokens = saved.mentions.filter((id) => id !== 'all' && !existingTokens.includes(id));
-    if (saved.mentions.includes('all') && !existingTokens.includes('all') && !restoredBody.includes('@全体')) missingTokens.unshift('all');
+    // Only migrate old metadata-only drafts. An existing @ body is authoritative:
+    // old ambiguous text may already have the wrong saved ID (R133), so never prepend it.
+    const missingTokens = restoredBody.includes('@') ? [] : saved.mentions.filter((id) => id !== 'all' && tokenById.has(id) && !existingTokens.includes(id));
+    if (!restoredBody.includes('@') && saved.mentions.includes('all') && !existingTokens.includes('all')) missingTokens.unshift('all');
     if (missingTokens.length > 0) {
-      const prefix = missingTokens.map((id) => id === 'all' ? '@全体' : `@${tokenById.get(id) ?? memberLabel(membersAll.find((m) => m.id === id))}`).join(' ');
+      const prefix = missingTokens.map((id) => id === 'all' ? '@全体' : `@${tokenById.get(id)!}`).join(' ');
       restoredBody = `${prefix} ${restoredBody}`.trimStart();
     }
     setBody(restoredBody);
@@ -1672,6 +1665,7 @@ export function Composer({
   }, [draftKey, attachmentUpload?.conversationId]);
 
   useEffect(() => {
+    if (skipSaveRef.current === draftKey) return; // restore already resolved the new draft; do not parse the previous render's body
     const derived = resolveMentionsFromBody(body);
     setMentions((current) => current.length === derived.length && current.every((id, index) => id === derived[index]) ? current : derived);
   }, [body, resolveMentionsFromBody]);
@@ -1696,6 +1690,7 @@ export function Composer({
     const same = cur.body === body
       && cur.mentions.length === mentions.length
       && cur.mentions.every((m, i) => m === mentions[i])
+      && JSON.stringify(cur.mentionBindings?.tokens ?? {}) === JSON.stringify(mentionBindings.tokens)
       && cur.access === access
       && cur.sendAs === sendAs
       && cur.collaboration === collaboration
@@ -1704,11 +1699,11 @@ export function Composer({
       && (cur.deliberateMemberIds ?? []).every((id, index) => id === deliberateMemberIds[index]);
     if (same) return;
     setDraftFull(draftKey, {
-      ...cur, body, mentions, access, sendAs, collaboration,
+      ...cur, body, mentions, mentionBindings, access, sendAs, collaboration,
       ...(budgetMaxTurns != null ? { budgetMaxTurns } : { budgetMaxTurns: undefined }),
       deliberateMemberIds,
     });
-  }, [draftKey, body, mentions, access, sendAs, collaboration, budgetMaxTurns, deliberateMemberIds]);
+  }, [draftKey, body, mentions, mentionBindings, access, sendAs, collaboration, budgetMaxTurns, deliberateMemberIds]);
 
   useEffect(() => {
     if (!insertText || appliedInsertRef.current === insertText.id) return;
@@ -1845,6 +1840,10 @@ export function Composer({
       return;
     }
     if (sendDisabledReason) return;
+    if (bodyMentionAnalysis.unresolved.length > 0) {
+      setSendErrorFor(draftKey, '正文中的 @ 无法唯一确定成员，请从候选中重新选择；原文和草稿已保留。');
+      return;
+    }
     if (deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all')) {
       setSendErrorFor(draftKey, '请添加至少2位AI');
       return;
@@ -2074,8 +2073,11 @@ export function Composer({
   }
 
   function insertMention(id: string) {
-    const token = id === 'all' ? '全体' : mentionTokenById.get(id) ?? memberLabel(allMembers.find((member) => member.id === id));
-    replaceMentionTriggerWithToken(token);
+    if (id === 'all') { replaceMentionTriggerWithToken('全体'); return; }
+    const bound = bindMemberMention(mentionIndex, id, mentionBindingsRef.current);
+    mentionBindingsRef.current = bound.bindings;
+    setMentionBindings(bound.bindings);
+    replaceMentionTriggerWithToken(bound.token);
   }
 
   function openMentionPickerFromToolbar() {

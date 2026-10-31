@@ -11,7 +11,7 @@ import {taskExecutionNeedsReview,taskExecutionStatusSummary} from '../components
  *  - 关闭右侧面板不停止任务
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Composer } from '../components/Composer';
 import type { FormalSendOutcome } from '../components/Composer';
 import { Icon } from '../components/Icon';
@@ -30,6 +30,7 @@ import {
   buildRoomRootEnvelope, buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview,
   executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed,
   cancelThreadReadOnOpen, toggleSavedMessage, type ReviewSnapshot,
+  loadThreadOlder, threadHistoryWindow,
 } from '../loader';
 import {
   stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown, queueDraftInsert,
@@ -1354,6 +1355,69 @@ function ThreadPanel({
   /** 线程「⋯」菜单锚点（由触发元素的矩形算出，键盘打开也落在同一处） */
   const [threadMenuAnchor, setThreadMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const lastCountRef = useRef(0);
+  const historyContext = `${s.loadGen}:${s.activeProjectId}:${threadId}`;
+  const historyContextRef = useRef({ key: historyContext, active: true });
+  if (historyContextRef.current.key !== historyContext) historyContextRef.current = { key: historyContext, active: true };
+  const historyToken = historyContextRef.current;
+  const highlightRef = useRef(highlightMessageId);
+  highlightRef.current = highlightMessageId;
+  const historyBusy = useRef(false);
+  const historyOperation = useRef(0);
+  const readingHistory = useRef(Boolean(highlightMessageId));
+  const [historyFeedback, setHistoryFeedback] = useState<{ busy?: boolean; error?: string; missing?: boolean }>({});
+  const [locateAttempt, setLocateAttempt] = useState(0);
+  const history = threadHistoryWindow(threadId);
+  const prependAnchor = useRef<{ id?: string; offset: number; top: number; height: number; oldestSeq?: number }>();
+  const captureHistoryAnchor = () => {
+    const box = listRef.current;
+    if (!box) return;
+    const top = box.getBoundingClientRect().top;
+    const item = Array.from(box.querySelectorAll<HTMLElement>('[data-history-message]'))
+      .find(el => el.getBoundingClientRect().bottom > top);
+    prependAnchor.current = { id: item?.dataset.historyMessage, offset: item ? item.getBoundingClientRect().top - top : 0, top: box.scrollTop, height: box.scrollHeight, oldestSeq: threadHistoryWindow(threadId).oldestSeq };
+  };
+  useLayoutEffect(() => {
+    const saved = prependAnchor.current;
+    const box = listRef.current;
+    if (!saved || !box) return;
+    // A recent-page refresh can settle while the older page is still in flight.
+    // Keep the captured anchor until a prepend actually changes the boundary.
+    if (saved.oldestSeq != null && !(s.threadMessages[threadId] ?? []).some(m => (m.threadMessageSeq ?? Infinity) < saved.oldestSeq!)) return;
+    const item = Array.from(box.querySelectorAll<HTMLElement>('[data-history-message]')).find(el => el.dataset.historyMessage === saved.id);
+    box.scrollTop = saved.top;
+    box.scrollTop += item ? item.getBoundingClientRect().top - box.getBoundingClientRect().top - saved.offset : box.scrollHeight - saved.height;
+    prependAnchor.current = undefined;
+  }, [s.threadMessages[threadId]]);
+  const readEarlierPage = async (current: () => boolean): Promise<boolean> => {
+    const window = threadHistoryWindow(threadId);
+    if (window.exhausted || !current()) return false;
+    if (!window.initialized || window.oldestSeq == null) throw new Error('历史尚未加载完成，请重试');
+    readingHistory.current = true;
+    cancelThreadReadOnOpen(threadId);
+    setPinnedToBottom(false);
+    captureHistoryAnchor();
+    await loadThreadOlder(threadId, window.oldestSeq, current);
+    // Give React its layout pass before another page captures the viewport.
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (current()) prependAnchor.current = undefined;
+    return current();
+  };
+  const loadEarlier = async () => {
+    if (historyBusy.current) return;
+    const operation = ++historyOperation.current;
+    const current = () => historyOperation.current === operation && historyContextRef.current === historyToken && historyToken.active && getState().ui.activeThreadId === threadId;
+    historyBusy.current = true;
+    setHistoryFeedback({ busy: true });
+    try {
+      if (!threadHistoryWindow(threadId).initialized) await loadThread(threadId);
+      if (current()) await readEarlierPage(current);
+      if (current()) setHistoryFeedback({});
+    } catch (error) {
+      if (current()) { prependAnchor.current = undefined; setHistoryFeedback({ error: (error as Error).message }); }
+    } finally {
+      if (current()) historyBusy.current = false;
+    }
+  };
 
   /* ---------- 正式装载链（R64）：thread.get/history/task.get + 独立标读门 + 轻量刷新 ----------
    * 打开即按门推进水位（前台+当前回复视图+贴底；门在发起此刻重查）；5s 刷新让 worker/
@@ -1374,6 +1438,7 @@ function ThreadPanel({
     && activeTabRef.current.v === 'replies'
     && document.visibilityState === 'visible'
     && !document.body.classList.contains('legacy-on')
+    && !readingHistory.current && !historyBusy.current && !highlightRef.current
     && getState().ui.activeThreadId === threadId;
   useEffect(() => {
     setState((current) => ({ ...current, ui: { ...current.ui, activeThreadId: threadId } }));
@@ -1415,9 +1480,10 @@ function ThreadPanel({
       && activeTabRef.current.v === 'replies'
       && document.visibilityState === 'visible'
       && !document.body.classList.contains('legacy-on')
+      && !readingHistory.current && !historyBusy.current && !highlightRef.current
       && (() => { const box = repliesBoxRef.current; return box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : false; })());
     return () => { setThreadReadGate(null); };
-  }, [threadId]);
+  }, [threadId, highlightMessageId]);
   useEffect(() => {
     const onFocus = (e: Event): void => {
       if ((e as CustomEvent<string>).detail === `thread:${threadId}`) changeTab('replies');
@@ -1441,7 +1507,8 @@ function ThreadPanel({
   const onRepliesScroll = () => {
     const box = repliesBoxRef.current;
     if (box == null) return;
-    if (box.scrollHeight - box.scrollTop - box.clientHeight > 80) return;
+    if (box.scrollHeight - box.scrollTop - box.clientHeight > 80 || historyBusy.current || highlightMessageId) return;
+    readingHistory.current = false;
     const now = Date.now();
     if (now - lastMarkRef.current < 1500) return;
     lastMarkRef.current = now;
@@ -1545,7 +1612,7 @@ function ThreadPanel({
     const el = listRef.current;
     const grew = list.length > lastCountRef.current;
     lastCountRef.current = list.length;
-    if (!el || !grew) return;
+    if (!el || !grew || historyBusy.current || readingHistory.current) return;
     if (pinnedToBottom) el.scrollTop = el.scrollHeight;
     else setPendingNew((n) => n + 1);
   }, [list.length, pinnedToBottom]);
@@ -1625,27 +1692,67 @@ function ThreadPanel({
    */
   const backToPool = onBackToPool ?? (() => navigate(`/project/${s.activeProjectId}/room/${thread?.roomId ?? ''}`));
 
-  // 直达链接：滚到目标消息并高亮（§15.5 只定位已有记录，不执行任何命令）。
-  // R72：消息由 loadThread 异步装载——冷启动深链时 +350ms 元素常不存在（单次定时器
-  // 静默漏定位）。有界重试（~18s）等元素真正挂载；到期仍无=如实不高亮（不伪造）。
+  // Follow the server cursor to a real boundary, including targets beyond 500
+  // replies. No timer or arbitrary page count is evidence that a target is absent.
   useEffect(() => {
-    if (!highlightMessageId) return;
+    historyToken.active = true;
+    historyOperation.current++;
+    historyBusy.current = false;
+    prependAnchor.current = undefined;
+    readingHistory.current = Boolean(highlightMessageId);
+    setHistoryFeedback({});
+    return () => { historyToken.active = false; };
+  }, [historyContext]);
+  useEffect(() => {
+    if (!highlightMessageId) { setHistoryFeedback({}); return; }
+    if (!history.initialized) return;
     setTab('replies');
-    let tries = 0;
-    let timer = 0;
-    const tryHighlight = () => {
-      const el = document.getElementById(`thread-msg-${highlightMessageId}`);
-      if (el == null) {
-        if (tries < 60) { tries += 1; timer = window.setTimeout(tryHighlight, 300); }
-        return;
+    let cancelled = false;
+    const operation = ++historyOperation.current;
+    const current = () => !cancelled && historyOperation.current === operation && historyContextRef.current === historyToken && historyToken.active && getState().ui.activeThreadId === threadId;
+    historyBusy.current = true;
+    readingHistory.current = true;
+    cancelThreadReadOnOpen(threadId);
+    setPinnedToBottom(false);
+    setHistoryFeedback({ busy: true });
+    let highlighted: HTMLElement | null = null;
+    let clearHighlight = 0;
+    void (async () => {
+      try {
+        while (current()) {
+          const state = getState();
+          const found = state.threadAnchors[threadId]?.id === highlightMessageId
+            || state.threadMessages[threadId]?.some(m => m.id === highlightMessageId);
+          if (found) {
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+            if (!current()) return;
+            highlighted = document.getElementById(`thread-msg-${highlightMessageId}`);
+            if (!highlighted) throw new Error('目标消息暂未显示，请重试定位');
+            highlighted.scrollIntoView({ block: 'center' });
+            highlighted.classList.add('msg-highlight');
+            clearHighlight = window.setTimeout(() => highlighted?.classList.remove('msg-highlight'), 2600);
+            setHistoryFeedback({});
+            return;
+          }
+          if (!await readEarlierPage(current)) {
+            if (current()) setHistoryFeedback({ missing: true });
+            return;
+          }
+        }
+      } catch (error) {
+        if (current()) { prependAnchor.current = undefined; setHistoryFeedback({ error: (error as Error).message }); }
+      } finally {
+        if (current()) historyBusy.current = false;
       }
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      el.classList.add('msg-highlight');
-      window.setTimeout(() => el.classList.remove('msg-highlight'), 2600);
+    })();
+    return () => {
+      cancelled = true;
+      if (historyOperation.current === operation) { historyBusy.current = false; prependAnchor.current = undefined; }
+      window.clearTimeout(clearHighlight);
+      highlighted?.classList.remove('msg-highlight');
     };
-    timer = window.setTimeout(tryHighlight, 350);
-    return () => window.clearTimeout(timer);
-  }, [highlightMessageId, threadId]);
+    // Page merges update history without restarting or duplicating the traversal.
+  }, [highlightMessageId, historyContext, history.initialized, locateAttempt]);
 
   if (!thread || !anchor) {
     return (
@@ -1924,21 +2031,37 @@ function ThreadPanel({
             />
             <div
               className="msg-list is-replies"
+              style={{ overflowAnchor: 'none' }}
               ref={(el) => { (listRef as { current: HTMLDivElement | null }).current = el; repliesBoxRef.current = el; }}
               onScroll={(e) => {
                 const el = e.currentTarget;
                 const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+                if (!atBottom) readingHistory.current = true;
+                if (historyBusy.current && prependAnchor.current) captureHistoryAnchor();
                 setPinnedToBottom(atBottom);
                 if (atBottom) setPendingNew(0);
                 if (atBottom) onRepliesScroll();
               }}
             >
+              <div className="row" data-zs-thread-history role="status" aria-live="polite" style={{ justifyContent: 'center', padding: '8px', flexWrap: 'wrap' }}>
+                {!history.initialized && s.readErrors[`thread:${threadId}`] ? <>
+                  <span className="small">加载历史失败：{userFacingSystemText(s.readErrors[`thread:${threadId}`]!)}</span>
+                  <button className="btn sm" onClick={() => void loadEarlier()}>重试</button>
+                </> : historyFeedback.busy || !history.initialized ? <span className="small faint">{highlightMessageId ? '正在查找消息，补读更早历史…' : '正在加载更早消息…'}</span>
+                  : historyFeedback.error ? <>
+                    <span className="small">加载历史失败：{userFacingSystemText(historyFeedback.error)}</span>
+                    <button className="btn sm" onClick={() => highlightMessageId ? setLocateAttempt(n => n + 1) : void loadEarlier()}>重试{highlightMessageId ? '定位' : ''}</button>
+                  </>
+                  : historyFeedback.missing ? <span className="small faint">已到历史起点，未找到目标消息（可能已删除或不可访问）</span>
+                  : history.exhausted ? <span className="small faint">已到历史起点</span>
+                  : <button className="btn sm" onClick={() => void loadEarlier()}>加载更早消息</button>}
+              </div>
               {list.map((m) => {
                 const seq = m.threadMessageSeq;
                 const watermark = s.readStates[thread.id] ?? 0;
                 const isFirstUnread = seq !== undefined && seq > watermark && !list.some((x) => (x.threadMessageSeq ?? 0) > watermark && (x.threadMessageSeq ?? 0) < seq);
                 return (
-                  <div key={m.id} className="msg-item" id={seq !== undefined ? `msg-seq-${thread.id}-${seq}` : undefined}>
+                  <div key={m.id} className="msg-item" data-history-message={m.id} id={seq !== undefined ? `msg-seq-${thread.id}-${seq}` : undefined}>
                     {isFirstUnread ? (
                       <div className="row tight" style={{ marginBottom: 8 }}>
                         <div className="divider" style={{ flex: 1, margin: 0 }} />

@@ -117,7 +117,7 @@ export function selectThreadRecipients(
   const explicitScope=all||explicit.length>1;
   const route:TopLevelRouteOutcome=recipientIds.length===1&&(resumeChild!=null||explicit.length===1||candidateIds.length===1)
     ?{kind:'dispatch',mode:'DIRECT',targetMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]}
-    :{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,...(explicitScope?{participantScope:'selected' as const}:{}),frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]};
+    :{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,...(explicitScope?{participantScope:'selected' as const}:{}),...(all?{dispatchStyle:'broadcast' as const}:{}),frozenMemberIds:recipientIds,initialWakeMemberIds:all?recipientIds:[memberId]};
   return{memberId,recipientIds,candidateIds:resumeChild?recipientIds:candidateIds,inviteIds,route,membershipVersion:snapshot.version,...(resumeChild?{resumeTaskId:resumeChild.id,questionSource:{taskId:resumeChild.id,memberId:resumeChild.owner_member_id,eventId:resumeChild.event_id,turnId:resumeChild.turn_id,messageId:resumeChild.message_id}}:{})};
 }
 

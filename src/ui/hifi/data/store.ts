@@ -18,6 +18,7 @@ import type {ThreadMembersSnapshot} from '../../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../../contracts/runtimeProgress';
 import { openTab } from '../lib/resource';
 import { configureReadingPositions, readingPosition, saveReadingPosition } from './readingPositions';
+import type { MemberMentionBindings } from '../lib/mentionText';
 
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
  * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
@@ -378,6 +379,8 @@ export interface HifiDraft {
   analysisOnly?: boolean;
   body: string;
   mentions: string[];
+  /** v1 readable mention tokens bind to member IDs across roster/name/runtime changes. */
+  mentionBindings?: MemberMentionBindings;
   attachments: HifiDraftAttachment[];
   /** 引用正文与可编辑正文分开保存；发送时才组合进正式 body。 */
   conversationQuotes?: ConversationQuote[];
@@ -979,6 +982,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function validateDraft(d: unknown): d is HifiDraft {
   if (!isPlainObject(d)) return false;
   if (typeof d.body !== 'string' || !Array.isArray(d.mentions) || d.mentions.some((m) => typeof m !== 'string')) return false;
+  if (d.mentionBindings != null && (!isPlainObject(d.mentionBindings) || d.mentionBindings.version !== 1
+    || !isPlainObject(d.mentionBindings.tokens) || Object.values(d.mentionBindings.tokens).some(id => typeof id !== 'string' || id.length === 0))) return false;
   if (!Array.isArray(d.attachments) || d.attachments.some((a) => !isPlainObject(a) || typeof a.attachmentId !== 'string' || typeof a.name !== 'string')) return false;
   if (typeof d.access !== 'string' || (d.sendAs !== 'ai' && d.sendAs !== 'record')) return false;
   if (d.collaboration != null && d.collaboration !== 'deliberate') return false;
@@ -1403,6 +1408,7 @@ export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?
     ...d,
     body: nextBody,
     mentions: mentionsClear ? [] : d.mentions,
+    mentionBindings: nextBody.length === 0 ? undefined : d.mentionBindings,
     attachments: keptAttachments,
     conversationQuotes: keptQuotes,
     analysisOnly: unchanged ? false : d.analysisOnly,

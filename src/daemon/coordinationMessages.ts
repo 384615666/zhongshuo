@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import type {TurnBundleEnvelope} from '../contracts/prompts.ts';
 import {validateCoordinationPlan,type CoordinationPlan,type MemberHandoff} from '../contracts/coordination.ts';
-import {acceptCoordinationPlan,childCoordination,coordinationRoster,coordinationCallLimit,coordinationCallsUsed,coordinationCallEnforcement} from './coordination.ts';
+import {acceptCoordinationPlan,childCoordination,coordinationRoster,coordinationCallLimit,coordinationCallsUsed,coordinationCallEnforcement,isBroadcastRun} from './coordination.ts';
 import {effectiveTaskWriteAccess} from './projectWriteAccess.ts';
 import {appendDomainEvent} from '../persistence/events.ts';
 
@@ -32,6 +32,7 @@ function targetAvailable(db:ZhongshuoDatabase,parent:Parent,memberId:string){
 export function communicationForTurn(db:ZhongshuoDatabase,taskId:string,memberId:string,phase?:Phase,rootRunId?:string,dispatchKey?:string):TurnBundleEnvelope['communicationContract'] {
   if(!phase||phase==='integration')return{mentionEnabled:false,disabledReason:phase==='integration'?'本轮汇总已收到的结果，不再追加交接':'本条只请求你回应；没有开放额外成员交接'};
   const child=phase==='child'?childCoordination(db,taskId):undefined;
+  if(child&&isBroadcastRun(db,child.run_id))return{mentionEnabled:false,disabledReason:'本条已分别发送给全体成员，各自回应，不追加互评或汇总'};
   const parentId=child?.task_id??taskId;
   const parent=db.prepare('SELECT * FROM tasks WHERE id=?').get(parentId) as Parent;
   const request=dispatchKey?db.prepare('SELECT member_id,roster_json FROM thread_reply_requests WHERE dispatch_key=?').get(dispatchKey) as {member_id:string;roster_json:string}|undefined:undefined;
@@ -60,6 +61,7 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   if(!messages.length)return null;
   if(hasPlan)throw Error('同一结果不能同时提出分工计划和消息交接');
   const context=sourceContext(db,taskId,runId);
+  if(context&&isBroadcastRun(db,context.rootRunId))throw Error('本条全体收件人已分别接单，不追加成员交接');
   if(!context||context.phase==='integration')throw Error('本轮没有开放追加成员消息');
   const source=db.prepare(`SELECT a.member_id,a.status,a.stop_generation_snapshot,t.stop_generation
     FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id

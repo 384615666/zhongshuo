@@ -3589,6 +3589,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           | undefined;
         if (d == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `交付不存在：${params.deliveryId}`);
         assertConversationAudience(deps.db, deps.localUserId, d.conversation_id);
+        const broadcastDocument=deps.db.prepare(`SELECT e.payload_json FROM domain_events e JOIN task_deliveries delivery ON delivery.task_id=e.task_id AND delivery.run_id=e.run_id
+          WHERE delivery.id=? AND e.kind='coordination.broadcastDelivery' AND json_extract(e.payload_json,'$.deliveryId')=delivery.id
+          AND json_extract(e.payload_json,'$.manifestHash')=delivery.manifest_hash ORDER BY e.seq DESC LIMIT 1`).get(d.id) as {payload_json:string}|undefined;
+        if(broadcastDocument){
+          const payload=JSON.parse(broadcastDocument.payload_json) as {manifestText?:unknown};
+          const text=typeof payload.manifestText==='string'?payload.manifestText:null;
+          const hashMatch=text!=null&&createHash('sha256').update(text).digest('hex')===d.manifest_hash;
+          return withCommandId({ok:true,data:{deliveryId:d.id,revision:d.revision,manifestHash:d.manifest_hash,taskIdTitle:d.title,
+            conversationId:d.conversation_id,threadId:d.conversation_thread_id,audience:d.conv_kind==='dm'?'dm':'room',
+            text:hashMatch?text:null,hashMatch,bytes:hashMatch?Buffer.byteLength(text!,'utf8'):0,
+            ...(!hashMatch?{note:'成员成果清单与交付记录不匹配，请查看原成员回复'}:{})}});
+        }
         let turnRef: string | null = null;
         try {
           const refs = JSON.parse(d.artifact_refs_json) as unknown;

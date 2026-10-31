@@ -47,6 +47,8 @@ interface KoffiLib {
   terminateProcess(hProcess: unknown, exitCode: number): boolean;
   queryActiveProcesses(job: unknown): number | null; // null=查询失败
   closeHandle(handle: unknown): boolean;
+  /** 只探测可读字节数，不消费；0=暂时无数据，null=管道关闭/错误。 */
+  peekPipeBytes(pipe: unknown): number | null;
   /** 非阻塞读原始字节（无=空 Buffer；管道关闭/错误=null）。 */
   peekAndReadBytes(pipe: unknown, maxBytes: number): Buffer | null;
   /** 同步写字节（返回写入数；失败=null）。仅小块；大输入走 writePipeBytesAsync。 */
@@ -251,10 +253,14 @@ function loadLib(): KoffiLib | { unavailable: string } {
       closeHandle(handle) {
         return CloseHandle(handle) !== 0;
       },
-      peekAndReadBytes(pipe, maxBytes) {
+      peekPipeBytes(pipe) {
         const availPtr = koffi.alloc('uint32_t', 1);
         if (PeekNamedPipe(pipe, null, 0, null, availPtr, null) === 0) return null; // avail=第 5 参 lpTotalBytesAvail
-        const avail = koffi.decode(availPtr, 'uint32_t') as number;
+        return koffi.decode(availPtr, 'uint32_t') as number;
+      },
+      peekAndReadBytes(pipe, maxBytes) {
+        const avail = this.peekPipeBytes(pipe);
+        if (avail == null) return null;
         if (avail === 0) return Buffer.alloc(0);
         const n = Math.min(avail, maxBytes);
         const buf = koffi.alloc('uint8_t', n);
@@ -356,7 +362,7 @@ export interface ManagedProcess {
   /** 便捷文本读（增量拼接由调用方保证——本方法不做跨 chunk 解码承诺）。 */
   pollStdout(maxBytes?: number): string | null;
   pollStderr(maxBytes?: number): string | null;
-  /** 输出管道是否已无数据且子端关闭（读完排空判定）。 */
+  /** 非消费探测：true=管道关闭，false=仍有数据，null=暂时无数据但写端未关闭。 */
   stdoutDrained(): boolean | null;
   stderrDrained(): boolean | null;
   waitRootExit(timeoutMs: number): { code: number | null; timedOut: boolean };
@@ -504,21 +510,21 @@ export function spawnManagedProcess(options: ManagedSpawnOptions): ManagedProces
     },
     stdoutDrained(): boolean | null {
       if (stdoutPipeClosed) return true;
-      const r = lib.peekAndReadBytes(stdoutParentRead, 1);
-      if (r == null) {
+      const available = lib.peekPipeBytes(stdoutParentRead);
+      if (available == null) {
         stdoutPipeClosed = true;
         return true;
       }
-      return r.length === 0 ? null : false; // null=尚无数据（不能断定排空）
+      return available === 0 ? null : false; // 无数据但写端未关≠EOF；背压时不得消费字节
     },
     stderrDrained(): boolean | null {
       if (stderrPipeClosed) return true;
-      const r = lib.peekAndReadBytes(stderrParentRead, 1);
-      if (r == null) {
+      const available = lib.peekPipeBytes(stderrParentRead);
+      if (available == null) {
         stderrPipeClosed = true;
         return true;
       }
-      return r.length === 0 ? null : false;
+      return available === 0 ? null : false;
     },
     waitRootExit(timeoutMs: number): { code: number | null; timedOut: boolean } {
       const r = lib.waitFor(hProcess, timeoutMs);

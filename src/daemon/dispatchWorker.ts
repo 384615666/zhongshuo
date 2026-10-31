@@ -2,7 +2,7 @@ import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 const ANALYSIS_ONLY_INSTRUCTIONS='本次请求仅分析：只读取当前项目和用户要求比较的公开资料，在对话中交付有依据的实质结论。不得修改源码、配置或业务文件，不执行命令、安装程序、脚本或外部项目，不转交实现工作；协作子步骤同样保持只读。可使用只读文件工具及 WebFetch/WebSearch 查阅公开资料；不要将本地代码、凭据或私有内容上传到网络或放入搜索查询。用户明确创建新的可写请求前，普通继续与同串跟进仍保持本次只读权限。';
 import {redispatchExecution} from './redispatchExecution.ts';
 import {automaticRecoveryForDispatch,continuedRecoveryExecution,hasBusinessToolEvidence,markAutomaticRecovery,pumpAutomaticRecoveries,rebindAutomaticRecovery,requestAutomaticRecovery,saveRecoveryExecution,settleRejectedRecoveryDispatch} from './automaticRecovery.ts';
-import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations, settleIntegrationLaunchFailure } from './coordination.ts';
+import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations, settleIntegrationLaunchFailure,seedExplicitRecipientCoordination } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { verifyHandoffFiles } from './coordination.ts';
 import { pendingClarificationChangeSets,changeSetFilesForDelivery } from './clarificationWork.ts';
@@ -557,6 +557,43 @@ export class DispatchWorker {
     }
 
     const route = task.route_json != null ? (JSON.parse(task.route_json) as TopLevelRouteOutcome) : null;
+    if(!automatic&&!continuedExecution&&route?.kind==='dispatch'&&route.mode==='AUTO'&&route.dispatchStyle==='broadcast'){
+      try{
+        this.db.transaction(()=>{
+          const existing=this.db.prepare('SELECT id FROM workflow_runs WHERE task_id=? AND dispatch_identity=?').get(task.id,executionDispatchKey) as {id:string}|undefined;
+          if(existing){if(generalRequest)bindThreadReplyRun(this.db,generalRequest.messageId,existing.id);completeOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
+          const roster=generalRequest?JSON.parse(generalRequest.rosterJson) as ReturnType<typeof coordinationRoster>:coordinationRoster(this.db,task.id);
+          for(const id of route.frozenMemberIds){
+            const scope=roster.find(member=>member.memberId===id)?.writeScope;
+            if(!scope)throw Error(`成员 ${id} 的配置不可用；未派发`);
+            effectiveTaskWriteAccess(this.db,task.id,id,this.defaultKindOf(),scope);
+          }
+          const limit=dispatchCallBudgetPolicy?.enforcement==='enabled'
+            ?this.coordinationMaxCallsOverride?Math.min(dispatchCallBudgetPolicy.limit,this.coordinationMaxCalls):dispatchCallBudgetPolicy.limit
+            :dispatchCallBudgetPolicy?.enforcement==='disabled'?DEFAULT_CALL_BUDGET_LIMITS.AUTO:this.coordinationMaxCalls;
+          if(dispatchCallBudgetPolicy?.enforcement!=='disabled'&&limit<route.frozenMemberIds.length)throw Error('本次调用预算不足以分别发送给全体成员；未启动模型');
+          const messageId=generalRequest?.messageId??task.root_message_id;
+          if(!messageId)throw Error('全体请求缺少原始消息');
+          const source=this.db.prepare('SELECT body_json FROM messages WHERE id=?').get(messageId) as {body_json:string};
+          const rework=generalRequest?undefined:this.db.prepare(`SELECT d.id deliveryId,d.revision deliveryRevision,d.review_note note
+            FROM domain_events e JOIN task_deliveries d ON d.id=json_extract(e.payload_json,'$.deliveryId') AND d.task_id=e.task_id
+            JOIN tasks t ON t.id=e.task_id AND t.current_delivery_id=d.id
+            WHERE e.task_id=? AND e.kind='task.reworkEnqueued' AND json_extract(e.payload_json,'$.dispatchKey')=?
+              AND d.review_status='changes_requested' ORDER BY e.seq DESC LIMIT 1`).get(task.id,executionDispatchKey) as {deliveryId:string;deliveryRevision:number;note:string}|undefined;
+          const seeded=seedExplicitRecipientCoordination(this.db,task.id,messageId,(JSON.parse(source.body_json) as {text:string}).text,route.frozenMemberIds,
+            dispatchCallBudgetPolicy?{maxTurns:limit,callBudget:dispatchCallBudgetPolicy}:undefined,{dispatchKey:executionDispatchKey,roster,reviewFeedback:rework});
+          if(generalRequest)bindThreadReplyRun(this.db,generalRequest.messageId,seeded.runId);
+          completeOutbox(this.db,claimed.id,claimed.attempt_epoch);
+        })();
+      }catch(error){
+        const reason=error instanceof Error?error.message:String(error);
+        if(generalRequest)setThreadReplyState(this.db,generalRequest.messageId,'blocked',reason);
+        this.transitionTask(task.id,'BLOCKED');
+        this.audit(task,null,null,'coordination.dispatchBlocked',{source:'broadcast',message:reason});
+        failOutbox(this.db,claimed.id,claimed.attempt_epoch);
+      }
+      return;
+    }
     // DELIBERATE：编排开关开启时走 PREPARE（程序完成）；关闭时维持模式门禁 BLOCKED。
     if (route != null && route.kind === 'dispatch' && route.mode === 'DELIBERATE' && this.enableDeliberate) {
       if(generalRequest&&task.status==='DONE'){

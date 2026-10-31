@@ -1,0 +1,15 @@
+import { build } from 'esbuild';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+const dir = resolve('dist/r134-history');
+const screenshotOnly = process.argv.includes('--screenshot-only');
+mkdirSync(dir, { recursive: true });
+await build({ entryPoints: [resolve('scripts/r134-history-ui.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', outfile: join(dir, 'ui.js'), define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+writeFileSync(join(dir, 'app.css'), ['tokens.css', 'base.css', 'components.css', 'preview.css', 'titlebar.css', 'h1-overrides.css'].map(f => readFileSync(resolve('src/ui/hifi/styles', f), 'utf8')).join('\n'));
+writeFileSync(join(dir, 'index.html'), '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><style>html,body,#root{height:100%;width:100%;margin:0}#root{display:flex}.app-body{height:100vh;width:100vw;display:flex}</style><div class="app-body"><div id="root"></div></div><script src="ui.js"></script>');
+writeFileSync(join(dir, 'main.cjs'), `const {app,BrowserWindow}=require('electron');const path=require('node:path');const fs=require('node:fs');app.disableHardwareAcceleration();app.setPath('userData',path.join(__dirname,'isolated-profile'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1600,height:1000,webPreferences:{backgroundThrottling:false,contextIsolation:true,nodeIntegration:false,sandbox:false}});try{await win.loadFile(path.join(__dirname,'index.html'));if(!${screenshotOnly}){const result=await win.webContents.executeJavaScript('window.run()');fs.writeFileSync(path.join(__dirname,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));}const screenshot=await win.webContents.executeJavaScript('window.historyScreenshot()');fs.writeFileSync(path.join(__dirname,'screenshot.json'),JSON.stringify(screenshot,null,2));fs.writeFileSync(path.join(__dirname,'history-load-older.png'),(await win.webContents.capturePage()).toPNG());console.log(JSON.stringify(screenshot));app.exit(0);}catch(error){fs.writeFileSync(path.join(__dirname,'failure.png'),(await win.webContents.capturePage()).toPNG());console.error(String(error));app.exit(2);}});setTimeout(()=>app.exit(3),100000);`);
+const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+const result = spawnSync(resolve('node_modules/electron/dist/electron.exe'), [join(dir, 'main.cjs')], { cwd: resolve('.'), env, windowsHide: true, encoding: 'utf8', timeout: 105000 });
+writeFileSync(join(dir, screenshotOnly ? 'screenshot-process.json' : 'process.json'), JSON.stringify({ status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }, null, 2));
+console.log(result.stdout); console.error(result.stderr); process.exitCode = result.status ?? 4;

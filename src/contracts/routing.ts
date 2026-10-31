@@ -48,6 +48,8 @@ export type TopLevelRouteOutcome =
       coordinatorMemberId: MemberId;
       /** R87 explicit recipients constrain the whole natural collaboration. */
       participantScope?: 'selected';
+      /** Ordinary @all: independent delivery, without model-led planning. */
+      dispatchStyle?: 'broadcast';
       frozenMemberIds: readonly MemberId[];
       initialWakeMemberIds: readonly MemberId[];
     }

@@ -343,7 +343,7 @@ export function deriveRoute(
   const hasAll = mentionIds.includes('all');
   const named = mentionIds.filter((id) => id !== 'all' && roomMemberIds.includes(id));
   if (hasAll) {
-    return { mode: collaboration==='deliberate'?'DELIBERATE':'AUTO', resolvedMemberIds: roomMemberIds, note: collaboration==='deliberate'?'独立研讨：先独立分析再互评汇总':'全体参与本条协作，由协调成员接收并按需交接' };
+    return { mode: collaboration==='deliberate'?'DELIBERATE':'AUTO', resolvedMemberIds: roomMemberIds, note: collaboration==='deliberate'?'独立研讨：先独立分析再互评汇总':'分别发送给全体成员，各自回复' };
   }
   if (named.length === 0) {
     return { mode: 'AUTO', resolvedMemberIds: [], note: '无 @：默认协调者接单，可自行决定是否分工' };
