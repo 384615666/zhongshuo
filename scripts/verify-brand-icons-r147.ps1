@@ -13,6 +13,17 @@ public static class BrandIconProbe {
     [DllImport("shell32.dll",CharSet=CharSet.Unicode)] public static extern void SHChangeNotify(uint events,uint flags,string path,IntPtr reserved);
     [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr icon);
     [DllImport("user32.dll",SetLastError=true)] public static extern IntPtr SendMessageTimeoutW(IntPtr window,uint message,IntPtr wparam,IntPtr lparam,uint flags,uint timeout,out IntPtr result);
+    [StructLayout(LayoutKind.Sequential)] struct Key {public Guid Format;public uint Id;}
+    [StructLayout(LayoutKind.Explicit)] struct Value {[FieldOffset(0)]public ushort Type;[FieldOffset(8)]public IntPtr Data;}
+    [ComImport,Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface Store {
+        [PreserveSig]int GetCount(out uint count);[PreserveSig]int GetAt(uint index,out Key key);[PreserveSig]int GetValue(ref Key key,out Value value);[PreserveSig]int SetValue(ref Key key,ref Value value);[PreserveSig]int Commit();
+    }
+    [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr window,ref Guid iid,out Store store);
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref Value value);
+    public static string WindowProperty(IntPtr window,uint id) {
+        Guid iid=typeof(Store).GUID;Store store;Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(window,ref iid,out store));
+        try {var key=new Key {Format=new Guid("9f4c2855-9f79-4b39-a8d0-e1d42de1d5f3"),Id=id};Value value;Marshal.ThrowExceptionForHR(store.GetValue(ref key,out value));try {return value.Type==31?Marshal.PtrToStringUni(value.Data):null;}finally{PropVariantClear(ref value);}}finally{Marshal.ReleaseComObject(store);}
+    }
 }
 '@
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
@@ -53,6 +64,8 @@ try {
     if($WindowProcessId -gt 0){
         $window=(Get-Process -Id $WindowProcessId).MainWindowHandle
         Check 'native window is present' ($window -ne [IntPtr]::Zero)
+        Check 'taskbar relaunch icon points to the hashed logo resource' ([BrandIconProbe]::WindowProperty($window,3) -eq ($Icon+',0'))
+        Check 'taskbar has the application identity' (-not [String]::IsNullOrWhiteSpace([BrandIconProbe]::WindowProperty($window,5)))
         $native=[IntPtr]::Zero
         [BrandIconProbe]::SendMessageTimeoutW($window,0x7f,[IntPtr]1,[IntPtr]::Zero,2,2000,[ref]$native) | Out-Null
         Check 'native window has its own icon' ($native -ne [IntPtr]::Zero)
