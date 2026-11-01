@@ -2,6 +2,8 @@
 
 R147修图标：beta.2已安装却旧图，实证EXE内嵌仍Electron、外置ICO正确，快捷方式固定路径缓存。补发行副本原生资源与全组回读、哈希图标路径、窗口PNG/任务栏AppDetails及既有快捷方式定向刷新，beta.3准备交付；用户进程/数据保持。详见[R147](../reviews/r147-native-icons-beta3-20261101.md)。
 
+beta.3最终包clean源码08c5cb0/BUILD bld_de7686891fe36cd1/660hash，158187993字节SHA155dc14a3b8804f63bd6ca4867efeb8d16d683c2925ddd0e2bf2770afa9238e8；17入口回归、双types/lint、Inno编译、7项真实原生图标/任务栏属性及停机通过。程序和快捷方式图标PNG均目视确认新猫咪，0模型、未覆盖运行中的beta.2、不推送；dist/installers可安装新EXE。
+
 R146补测无CLI/后装/卸载/重装：修复空房NOT NULL、运行中PATH更新、原空房补名单与建房刷新成员、卸载后新请求误受理/文件错误。记录与配置保留、程序可用性独立显示、缺程序事务拒绝、重装同身份。320文件2798通过14跳过0失败，双types通过、0模型调用；独立源码准备beta.2安装包，最终身份见[R146](../reviews/r146-cli-lifecycle-beta2-20261101.md)。
 
 beta.2安装包已完成，clean程序89d6135/BUILD bld_30574674228982a6/659hash，158132428字节SHA 7c38dce097298c37550ed6d56c3e1fd01997525d1719b0f31d95e8e58fc27433。包内生命周期34项、实际原生UI10项及正常停机通过；dist/installers附独立数据测试入口，当前用户安装未动、不推送。详情及证据见R146。

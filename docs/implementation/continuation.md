@@ -6,6 +6,8 @@
 
 用户截图反馈旧图。核实确已安装beta.2，新ICO正确但EXE原生资源仍Electron，旧快捷方式复用固定图标路径导致缓存。现发行副本嵌入并回读所有图标组/语言/尺寸，哈希ICO文件名贯穿安装器/快捷方式/卸载，窗口PNG+setAppDetails；既有桌面入口即使未勾新建仍刷新，定向通知Shell，不删全局缓存/不重启Explorer。beta.3准备中，同AppId/数据根，用户运行中beta.2未关闭。见[R147](../reviews/r147-native-icons-beta3-20261101.md)。
 
+beta.3已出包：clean源码08c5cb0，BUILD bld_de7686891fe36cd1/660hash；158187993字节，SHA155dc14a3b8804f63bd6ca4867efeb8d16d683c2925ddd0e2bf2770afa9238e8。完整/界面types、代码lint、17入口回归过，模板及安装器编译过；实际EXE/Shell快捷方式/窗口HICON/任务栏属性7项及退出0通过，三PNG目视核对，dist/r147-ui/e19696f6。0模型、用户beta.2未关闭未覆盖，正常退出后安装新包即可；冻结分支codex/r147-native-icons-beta3，主目录同步R147源码而保留原未提交工作。
+
 ## 2026-11-01：R146 CLI 生命周期补测与 beta.2 打包
 
 用户要求打包并关注无CLI/后装/卸载。已修复零CLI建房NOT NULL、后装新PATH旧进程扫不到、先新房发现再扫描原空房间漏入房、建房界面未刷新成员，以及卸载Codex仍受理新任务。扫描只刷新daemon搜索PATH，不改注册表；卸载保留身份/配置/记录，实时程序可用性独立于启停，缺失的新请求入队前拒绝，重装同身份恢复、旧回执仍可重放。320跟踪文件2798通过14跳过0失败，后台/界面types过；无真实模型。独立worktree codex/r146-cli-lifecycle-beta2准备正式beta.2（同AppId/数据根、新logo），主目录其他AI首页/README及旧审计保留。见[R146](../reviews/r146-cli-lifecycle-beta2-20261101.md)，最终包身份待交付追加。
