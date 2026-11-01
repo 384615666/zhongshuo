@@ -2,6 +2,16 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R146 CLI 生命周期补测与 beta.2 打包
+
+用户要求打包并关注无CLI/后装/卸载。已修复零CLI建房NOT NULL、后装新PATH旧进程扫不到、先新房发现再扫描原空房间漏入房、建房界面未刷新成员，以及卸载Codex仍受理新任务。扫描只刷新daemon搜索PATH，不改注册表；卸载保留身份/配置/记录，实时程序可用性独立于启停，缺失的新请求入队前拒绝，重装同身份恢复、旧回执仍可重放。320跟踪文件2798通过14跳过0失败，后台/界面types过；无真实模型。独立worktree codex/r146-cli-lifecycle-beta2准备正式beta.2（同AppId/数据根、新logo），主目录其他AI首页/README及旧审计保留。见[R146](../reviews/r146-cli-lifecycle-beta2-20261101.md)，最终包身份待交付追加。
+
+## 2026-11-01：R145 正式 logo 与四渠道自动发现
+
+用户指定根目录 logo.png，AGENTS.md/branding.md 已记录，便携/安装构建共享七尺寸 ICO 转换，安装器/快捷方式/卸载/桌面窗口用新图；主页及 README 留给其他 AI。默认发现扩到 Claude/Codex/Harness/Pi，新建房间补扫仅填新房间，显式名单、旧房间与既有成员配置保留；成员页新增「扫描本机 AI」及原因说明。零 CLI 不创建启用绑定，Harness 缺连接组件/Claude或Codex缺可识别模型不猜测，Pi/Harness可沿CLI默认；Codex支持PATH原生入口。远程不自动扫描，无模型请求或用户配置写入。
+
+最终相关123项去重通过（含两组真实Electron各35界面断言），后台跟踪源码+新测试及hifi types通过，lint无新增；全工作区13项原有未跟踪R130测试类型错误保留。UI/daemon构建、新logo ICO目视、Inno模板编译通过。未重包交付/安装/发布，当前已安装beta.1不变；模板beta.2仅验证夹具，不可交付。详见 [R145](../reviews/r145-logo-cli-discovery-20261101.md)，证据dist/r145。原未提交审计、站点与续工内容保留。
+
 ## 2026-11-01：R144 Windows 安装 EXE 与安装测试
 
 用户反馈V78仍打不开并要求安装版。最新日志实为已有daemon重复启动锁冲突；安装版原生EXE/稳定根先单实例锁/重复唤起、隔离安装目录与数据、固定LOCALAPPDATA/Zhongshuo/data、清父环境覆盖、按根管道/失败日志及对话框。失败收口核本次daemon归属，无效参数不读旧根，数据后台兼容重命名EXE+明确同根重开。Inno当前用户中文安装/开始菜单/可选桌面/卸载登记，运行中更新卸载先拒绝，不强杀；卸载保留数据和未登记文件。便携原数据/进程不自动处理。见[R144](../reviews/r144-windows-installer-20261101.md)。

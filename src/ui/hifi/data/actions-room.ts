@@ -5,8 +5,9 @@
  * 调用方按「真实能力限制」呈现，不在这里伪造成功。
  */
 import { command } from '../bridge';
-import { getState, setState, toast, recordWrite } from './store';
-import { markThreadReadIfAllowed, stopThreadTask, loadThread, refreshRooms } from '../loader';
+import { setState, toast, recordWrite } from './store';
+import type { getState } from './store';
+import { markThreadReadIfAllowed, stopThreadTask, loadThread, refreshRooms, refreshMembers } from '../loader';
 import type { Task } from './types';
 
 /** 关注/静音切换（thread.subscribe——真实回执更新投影；订阅事实同时写入卡片/ subscriptions）。 */
@@ -62,7 +63,7 @@ export async function createRoomReal(projectId: string, name: string): Promise<s
   try {
     const r = await command<{ room: { id: string; name: string; conversationId: string }; roomIndex: number }>('room.create', { projectId, name });
     recordWrite('room.create', `新建房间「${name}」`);
-    await refreshRooms().catch(() => { /* 名单下次刷新 */ });
+    await Promise.all([refreshRooms(projectId), refreshMembers(projectId)]).catch(() => { /* 名单下次刷新 */ });
     toast(`已创建房间「${name}」`, 'success');
     return r.room.id;
   } catch (e) {

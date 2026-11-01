@@ -768,7 +768,7 @@ function RoomPool({
   const roomReadOnlyReason = room?.archivedAt ? '已归档 · 只读' : projectReadOnlyReason;
   const enabledRoomAgentIds = room?.memberIds.filter((memberId) => {
     const member = s.members.find((candidate) => candidate.id === memberId);
-    return member?.principalType === 'agent' && member.enabled;
+    return member?.principalType === 'agent' && member.enabled && member.runtimeAvailable !== false;
   }) ?? [];
   const lease = project ? lockOfProject(s, project.id) : null;
   const parallel = project?.writeConcurrencyPolicy === 'parallel_writers';
@@ -812,7 +812,7 @@ function RoomPool({
         {room && enabledRoomAgentIds.length === 0 ? (
           <div className="panel warning" style={{ marginBottom: 10 }}>
             <div className="panel-title"><Icon name="users" size={13} /> 这个房间还没有可用 AI</div>
-            添加 AI 后即可发送；输入与草稿会保留。
+            未发现已配置的可用 AI。请先安装并配置支持的 CLI，再到成员页「扫描本机 AI」或手动添加；输入与草稿会保留。
             <div className="panel-actions">
               <button className="btn sm primary" onClick={onOpenSettings}>
                 <Icon name="user-plus" size={12} /> 添加 AI

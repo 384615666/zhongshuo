@@ -141,7 +141,11 @@ export function resolveCodexInvocation(executable?:string,codexCmdPath?:string):
   const script=(p:string):CodexInvocation=>({command:process.execPath,args:[p],identityPath:p});
   if(explicit!=null&&!/\.(cmd|bat)$/i.test(explicit))return /\.(js|cjs|mjs)$/i.test(explicit)?script(explicit):{command:explicit,args:[],identityPath:explicit};
   const cmdPath=explicit??codexCmdPath??(process.env.PATH??'').split(delimiter).filter(Boolean).map(dir=>join(dir.trim(),'codex.cmd')).find(p=>existsSync(p));
-  if(cmdPath==null)throw new AdapterCallError('RUNTIME_NOT_FOUND','未找到 codex 可执行入口（PATH 无 codex.cmd）');
+  if(cmdPath==null){
+    const native=(process.env.PATH??'').split(delimiter).filter(Boolean).map(dir=>join(dir.trim(),process.platform==='win32'?'codex.exe':'codex')).find(p=>{try{return statSync(p).isFile();}catch{return false;}});
+    if(native)return{command:native,args:[],identityPath:native};
+  }
+  if(cmdPath==null)throw new AdapterCallError('RUNTIME_NOT_FOUND','未找到 codex 可执行入口（PATH 无 codex.cmd 或原生程序）');
   try{if(!statSync(cmdPath).isFile())throw Error('not a file');}catch{throw new AdapterCallError('RUNTIME_NOT_FOUND','保存的 Codex 程序引用不存在；不回落其他程序');}
   const candidate=join(cmdPath,'..','node_modules','@openai','codex','bin','codex.js');
   if(existsSync(candidate))return script(candidate);

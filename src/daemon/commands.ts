@@ -1086,7 +1086,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             };
           }
           const project = ensured.value.project;
-          const discoverDefaults = process.env.ZS_DEFAULT_MEMBER_DISCOVERY !== '0' && process.env.VITEST == null;
+          const discoverDefaults = !deps.remoteAudit && process.env.ZS_DEFAULT_MEMBER_DISCOVERY !== '0' && (process.env.VITEST == null || process.env.ZS_DEFAULT_MEMBER_DISCOVERY === '1');
           const defaultCandidates = discoverDefaults
             ? discoverLocalMemberDefaults(project.canonicalPath ?? project.rootPath ?? defaultRoot).candidates
             : [];
@@ -1315,7 +1315,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const opened = openProject(deps.db, { rootPath: params.path, displayName: params.displayName, now: Date.now() });
           if (!opened.ok) throw new DaemonCommandError(opened.error.code, opened.error.message);
           const names = params.agentNames ?? (process.env.ZS_BOOTSTRAP_AGENTS?.split(',').filter((n) => n.trim().length > 0));
-          const discoverDefaults = names == null && process.env.ZS_DEFAULT_MEMBER_DISCOVERY !== '0' && process.env.VITEST == null;
+          const discoverDefaults = !deps.remoteAudit && names == null && process.env.ZS_DEFAULT_MEMBER_DISCOVERY !== '0' && (process.env.VITEST == null || process.env.ZS_DEFAULT_MEMBER_DISCOVERY === '1');
           const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(opened.value.project.id) as { canonical_path: string };
           const defaultCandidates = discoverDefaults ? discoverLocalMemberDefaults(project.canonical_path).candidates : undefined;
           bootstrapProject(deps.db, opened.value.project.id, names, defaultCandidates);
@@ -1340,10 +1340,25 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         assertRoomCreationScope();
         const result = run(() => {
           assertRoomCreationScope();
+          let discovery: { notes: string[]; created: DefaultMemberCandidate['kind'][] } | undefined;
+          if (params.memberIds == null && !deps.remoteAudit && process.env.ZS_DEFAULT_MEMBER_DISCOVERY !== '0'
+            && (process.env.VITEST == null || process.env.ZS_DEFAULT_MEMBER_DISCOVERY === '1')) {
+            const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as { canonical_path: string };
+            const found = discoverLocalMemberDefaults(project.canonical_path);
+            const added = ensureDefaultMembers(deps.db, params.projectId, found.candidates, false, false);
+            discovery = { notes: [...found.notes, ...added.skipped.map(item => item.reason)], created: added.created.map(item => item.kind) };
+          }
           const roomCount = (deps.db.prepare('SELECT count(*) c FROM rooms WHERE project_id = ?').get(params.projectId) as { c: number }).c;
           const roomId = `room_${randomUUID()}`;
           const candidates=params.memberIds??(deps.db.prepare("SELECT id FROM project_members WHERE project_id=? AND principal_type='agent' AND enabled=1 ORDER BY id").all(params.projectId) as {id:string}[]).map(m=>m.id);
-          const defaultMember=configuredCoordinator(deps.db,candidates)??candidates.find(id=>(deps.db.prepare("SELECT 1 FROM project_members WHERE id=? AND principal_type='agent' AND enabled=1").get(id)))??null;
+          // The schema requires a coordinator identity even for an empty room.
+          // A disabled placeholder satisfies that FK without enabling a runtime.
+          let defaultMember=configuredCoordinator(deps.db,candidates)??candidates[0]
+            ??(deps.db.prepare("SELECT id FROM project_members WHERE project_id=? AND principal_type='agent' ORDER BY id LIMIT 1").get(params.projectId) as {id:string}|undefined)?.id;
+          if(!defaultMember){
+            defaultMember=`m_default_${params.projectId}_0`;
+            deps.db.prepare("INSERT INTO project_members (id,project_id,display_name,principal_type,enabled) VALUES (?,?,'待添加 AI','agent',0)").run(defaultMember,params.projectId);
+          }
           deps.db.prepare('INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES (?, ?, ?, ?)').run(roomId, params.projectId, params.name, defaultMember ?? null);
           const convId = `conv_${randomUUID()}`;
           deps.db.prepare("INSERT INTO conversations (id, project_id, kind, room_id) VALUES (?, ?, 'room', ?)").run(convId, params.projectId, roomId);
@@ -1351,7 +1366,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           for (const memberId of members) {
             deps.db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) VALUES (?, ?)').run(roomId, memberId);
           }
-          return { room: { id: roomId, name: params.name, conversationId: convId }, roomIndex: roomCount + 1 };
+          return { room: { id: roomId, name: params.name, conversationId: convId }, roomIndex: roomCount + 1, ...(discovery ? { discovery } : {}) };
         }, assertRoomCreationScope);
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
@@ -1392,7 +1407,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const rows = params.roomId != null
           ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled, pm.description, pm.settings_revision FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? AND pm.project_id = ? ORDER BY pm.id`).all(params.roomId, params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null; settings_revision:number }>)
           : (deps.db.prepare('SELECT id, display_name, principal_type, enabled, description, settings_revision FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null; settings_revision:number }>);
-        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1, description: r.description ?? undefined, revision:r.settings_revision })) } });
+        return withCommandId({ ok: true, data: { items: rows.map((r) => {
+          const runtime=resolveMemberRuntime(deps.db,r.id,process.env.ZS_RUNTIME??null);
+          const availability=isRealRuntimeKind(runtime.kind)?{runtimeAvailable:memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind)).status!=='missing'}:{};
+          return { id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1, description: r.description ?? undefined, revision:r.settings_revision,...availability };
+        }) } });
       }
       case 'member.create': {
         // R67 P4（review-r66 §4：已批准原型有成员添加/实例配置入口——无用户延期依据，补正式合同）：

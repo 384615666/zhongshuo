@@ -555,7 +555,8 @@ let dataOperationStarting = false;
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    ...(installedDesktop ? { icon: join(appRoot, 'Zhongshuo.ico') } : {}),
+    ...(existsSync(join(appRoot, 'Zhongshuo.ico')) ? { icon: join(appRoot, 'Zhongshuo.ico') }
+      : existsSync(join(appRoot, 'logo.png')) ? { icon: join(appRoot, 'logo.png') } : {}),
     show: false,
     // 无边框窗口（第五十四轮 H3 §3）：默认自绘标题栏接管外壳；--no-hifi（legacy 专项对照，
     // 无自绘栏）保留系统原生框——窗口控制不因换装失败/对照模式失去可达性。

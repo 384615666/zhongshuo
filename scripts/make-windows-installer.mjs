@@ -7,6 +7,7 @@ import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openS
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { packageUserGuideAssets, renderUserGuide } from './package-user-guide.mjs';
+import { brandIco } from './lib/brand-icon.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const configDir = join(repo, 'packaging/windows');
@@ -56,35 +57,7 @@ export function disableRunAsNode(executable) {
   return {schemaVersion: 1, runAsNode: false, otherFusesUnchanged: true};
 }
 
-export function brandIco() {
-  // Native ICO/DIB raster of the project's simple conversation mark. No image
-  // dependencies, external assets, network, installed fonts or AI generation.
-  const rounded = (x,y,l,t,w,h,r) => {const dx=Math.max(l+r-x,0,x-(l+w-r)),dy=Math.max(t+r-y,0,y-(t+h-r));return dx*dx+dy*dy<=r*r&&x>=l&&x<=l+w&&y>=t&&y<=t+h;};
-  const polygon = (x,y,points) => {let inside=false;for(let i=0,j=points.length-1;i<points.length;j=i++) {const a=points[i],b=points[j];if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])inside=!inside;}return inside;};
-  const pixel = (x,y) => {
-    if (!rounded(x,y,2,2,60,60,14)) return [0,0,0,0];
-    let color = [43,103,223,255];
-    if(rounded(x,y,25,25,29,23,5)||polygon(x,y,[[40,46],[49,46],[49,54]]))color=[201,220,255,255];
-    if(rounded(x,y,10,16,33,24,5)||polygon(x,y,[[16,36],[25,39],[16,47]]))color=[255,255,255,255];
-    for(const center of [19,27,35])if((x-center)**2+(y-28)**2<=2.5**2)color=[43,103,223,255];
-    return color;
-  };
-  const sizes = [16,24,32,48,64,128,256], entries=[], header=Buffer.alloc(6+16*sizes.length);
-  header.writeUInt16LE(1,2); header.writeUInt16LE(sizes.length,4); let offset=header.length;
-  sizes.forEach((size,index)=>{
-    const maskStride=Math.ceil(size/32)*4, bitmap=Buffer.alloc(40+size*size*4+maskStride*size);
-    bitmap.writeUInt32LE(40,0);bitmap.writeInt32LE(size,4);bitmap.writeInt32LE(size*2,8);bitmap.writeUInt16LE(1,12);bitmap.writeUInt16LE(32,14);bitmap.writeUInt32LE(size*size*4,20);
-    for(let y=0;y<size;y++)for(let x=0;x<size;x++){
-      const color=[0,0,0,0];
-      for(let sy=0;sy<4;sy++)for(let sx=0;sx<4;sx++){const sample=pixel((x+(sx+.5)/4)*64/size,(y+(sy+.5)/4)*64/size);for(let c=0;c<4;c++)color[c]+=sample[c]/16;}
-      const position=40+((size-1-y)*size+x)*4;
-      bitmap[position]=Math.round(color[2]);bitmap[position+1]=Math.round(color[1]);bitmap[position+2]=Math.round(color[0]);bitmap[position+3]=Math.round(color[3]);
-      if(color[3]===0)bitmap[40+size*size*4+(size-1-y)*maskStride+(x>>3)]|=1<<(7-(x%8));
-    }
-    const p=6+index*16;header[p]=size===256?0:size;header[p+1]=header[p];header.writeUInt16LE(1,p+4);header.writeUInt16LE(32,p+6);header.writeUInt32LE(bitmap.length,p+8);header.writeUInt32LE(offset,p+12);offset+=bitmap.length;entries.push(bitmap);
-  });
-  return Buffer.concat([header,...entries]);
-}
+export { brandIco } from './lib/brand-icon.mjs';
 
 function verifyManifest(root) {
   const build=JSON.parse(readFileSync(join(root,'BUILD.json'),'utf8'));
@@ -173,7 +146,7 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     json(join(appDir,'installed-desktop.json'),metadata);
     const pkg=JSON.parse(readFileSync(join(appDir,'package.json'),'utf8'));
     json(join(appDir,'package.json'),{...pkg,version:version.version,productName:release.productName,description:'众说——本地多 Agent 协同工作台'});
-    cpSync(icon,join(appDir,'Zhongshuo.ico'));cpSync(join(configDir,'zhongshuo.svg'),join(appDir,'Zhongshuo.svg'));
+    cpSync(icon,join(appDir,'Zhongshuo.ico'));cpSync(join(repo,'logo.png'),join(appDir,'logo.png'));
     if(existsSync(join(image,'LICENSE')))renameSync(join(image,'LICENSE'),join(image,'LICENSE-electron.txt'));
     cpSync(join(repo,'LICENSE'),join(image,'LICENSE'));
     const nativeLicense=join(dirname(process.execPath),'LICENSE');
@@ -183,7 +156,7 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     const licenses=join(image,'licenses');mkdirSync(licenses,{recursive:true});
     for(const name of ['pptx-renderer','react-xlsx']){const target=join(licenses,name);mkdirSync(target,{recursive:true});for(const file of ['LICENSE','PROVENANCE.json'])cpSync(join(repo,'src/ui/vendor',name,file),join(target,file));}
     const notices=readFileSync(join(repo,'THIRD_PARTY_NOTICES.md'),'utf8').replaceAll('src/ui/vendor/','licenses/');
-    writeFileSync(join(image,'THIRD_PARTY_NOTICES.md'),notices+'\n\n安装器使用 Inno Setup：https://jrsoftware.org/ 。程序图标为本项目原创对话图形。\n','utf8');
+    writeFileSync(join(image,'THIRD_PARTY_NOTICES.md'),notices+'\n\n安装器使用 Inno Setup：https://jrsoftware.org/ 。程序图标由项目根目录 logo.png 转换。\n','utf8');
     const guide=join(image,'操作手册');mkdirSync(guide,{recursive:true});
     cpSync(join(repo,'docs/user-guide/README.md'),join(guide,'README.md'));if(existsSync(join(repo,'docs/user-guide/images')))cpSync(join(repo,'docs/user-guide/images'),join(guide,'images'),{recursive:true});
     writeFileSync(join(image,'众说操作手册.html'),renderUserGuide({assetPrefix:'操作手册/',markdownPath:'操作手册/README.md'}),'utf8');

@@ -1,19 +1,24 @@
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { resolveClaudeConfiguration } from '../adapter/claude/configuration.ts';
 import { resolveCodexDefaultMetadata } from '../adapter/codex/configuration.ts';
+import { RUNTIME_CHANNELS, type RealRuntimeKind } from '../contracts/runtimeKinds.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { bindMemberRuntime, memberExecutableStatus, type TemplateConfig } from './memberManagement.ts';
+import { refreshCliSearchPath } from './cliEnvironment.ts';
 
 export type DefaultMemberCandidate = {
-  kind: 'claude' | 'codex';
+  kind: RealRuntimeKind;
   displayName: string;
   config: TemplateConfig;
   reason: string | null;
 };
 
 export type DefaultMemberResult = {
-  created: Array<{ memberId: string; kind: 'claude' | 'codex'; displayName: string }>;
-  existing: Array<{ memberId: string; kind: 'claude' | 'codex'; displayName: string }>;
-  skipped: Array<{ kind: 'claude' | 'codex'; reason: string }>;
+  created: Array<{ memberId: string; kind: RealRuntimeKind; displayName: string }>;
+  existing: Array<{ memberId: string; kind: RealRuntimeKind; displayName: string }>;
+  skipped: Array<{ kind: RealRuntimeKind; reason: string }>;
   removedLegacyPlaceholder: boolean;
 };
 
@@ -27,6 +32,8 @@ const modelId = (value: unknown): string | null => {
 export function discoverLocalMemberDefaults(cwd: string): { candidates: DefaultMemberCandidate[]; notes: string[] } {
   const candidates: DefaultMemberCandidate[] = [];
   const notes: string[] = [];
+  const pathWarning = refreshCliSearchPath();
+  if (pathWarning) notes.push(pathWarning);
 
   const claude = resolveClaudeConfiguration(cwd);
   const claudeModel = [
@@ -38,8 +45,8 @@ export function discoverLocalMemberDefaults(cwd: string): { candidates: DefaultM
     claude.restrictedEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL,
   ].map(modelId).find((value): value is string => value != null) ?? null;
   const claudeProgram = memberExecutableStatus('claude', 'claude');
-  if (claudeModel == null) notes.push('Claude 本机配置未声明可识别的默认模型');
-  else if (claudeProgram.status === 'missing') notes.push('Claude 本机配置存在，但没有找到可执行程序');
+  if (claudeProgram.status !== 'found') notes.push('没有找到可用的 Claude CLI 程序入口');
+  else if (claudeModel == null) notes.push('已找到 Claude CLI，但未能确定默认模型；请在「添加 AI」中选择模型');
   else candidates.push({
     kind: 'claude',
     displayName: 'Claude',
@@ -49,8 +56,8 @@ export function discoverLocalMemberDefaults(cwd: string): { candidates: DefaultM
 
   const codex = resolveCodexDefaultMetadata(cwd);
   const codexProgram = memberExecutableStatus('codex', 'codex');
-  if (codex.model == null) notes.push(codex.reason ?? 'Codex 本机配置未声明可识别的默认模型');
-  else if (codexProgram.status === 'missing') notes.push('Codex 本机配置存在，但没有找到可执行程序');
+  if (codexProgram.status !== 'found') notes.push('没有找到可用的 Codex CLI 程序入口');
+  else if (codex.model == null) notes.push(codex.reason ?? 'Codex 本机配置未声明可识别的默认模型');
   else candidates.push({
     kind: 'codex',
     displayName: 'Codex',
@@ -58,10 +65,35 @@ export function discoverLocalMemberDefaults(cwd: string): { candidates: DefaultM
     reason: codex.reason,
   });
 
+  for (const channel of RUNTIME_CHANNELS) {
+    if (channel.value !== 'deepseek-harness' && channel.value !== 'pi') continue;
+    if (memberExecutableStatus(channel.value, channel.executable).status !== 'found') {
+      notes.push(`没有找到可用的 ${channel.label} 程序入口`);
+      continue;
+    }
+    if (channel.value === 'deepseek-harness') {
+      const home = homedir();
+      const dshHome = resolve((process.env.DSH_HOME?.trim() || join(home, '.dsh')).replace(/^~(?=[\\/]|$)/, home));
+      const connector = join(dshHome, 'profiles', 'zhongshuo', 'node_modules', '@zhongshuo', 'dsh-runtime');
+      if (!['package.json', 'index.mjs', 'backend.mjs', 'protocol.mjs'].every(file => existsSync(join(connector, file)))) {
+        notes.push('已找到 DeepSeek Harness；请先运行安装目录 runtime-tools/deepseek-harness/setup.cmd 配置众说连接组件，再重新扫描');
+        continue;
+      }
+    }
+    // Both transports support omitting the model and let their own CLI resolve
+    // its configured default. Do not parse provider credentials or guess a model.
+    candidates.push({
+      kind: channel.value,
+      displayName: channel.value === 'pi' ? 'Pi' : 'DeepSeek Harness',
+      config: { kind: channel.value, model: modelId(process.env[channel.value === 'pi' ? 'ZS_PI_MODEL' : 'ZS_DSH_MODEL']), executable: channel.executable, permissionMode: 'bypassPermissions', effort: null },
+      reason: null,
+    });
+  }
+  for (const candidate of candidates) if (candidate.reason != null) notes.push(`${candidate.displayName}：${candidate.reason}`);
   return { candidates, notes };
 }
 
-function existingKindMember(db: ZhongshuoDatabase, projectId: string, kind: 'claude' | 'codex', displayName: string) {
+function existingKindMember(db: ZhongshuoDatabase, projectId: string, kind: RealRuntimeKind, displayName: string) {
   return db.prepare(`SELECT pm.id, pm.display_name
     FROM project_members pm
     LEFT JOIN agent_profiles ap ON ap.id=pm.profile_id
@@ -99,7 +131,7 @@ function hasDurableMemberReferences(db: ZhongshuoDatabase, memberId: string): bo
 
 /** Stable IDs plus an immediate transaction make reopen and concurrent calls duplicate-free.
  * Existing members are never renamed, rebound, enabled or removed. */
-export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, candidates: DefaultMemberCandidate[], transaction = true): DefaultMemberResult {
+export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, candidates: DefaultMemberCandidate[], transaction = true, joinExistingRooms = true): DefaultMemberResult {
   const result: DefaultMemberResult = { created: [], existing: [], skipped: [], removedLegacyPlaceholder: false };
   const project = db.prepare('SELECT status FROM projects WHERE id=?').get(projectId) as { status: string } | undefined;
   if (project == null || project.status !== 'active') {
@@ -108,7 +140,7 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
   }
   const execute = (): void => {
     const usable = candidates.filter((candidate) => {
-      if (candidate.config.kind !== candidate.kind || candidate.config.model == null) {
+      if (candidate.config.kind !== candidate.kind || (candidate.kind === 'claude' || candidate.kind === 'codex') && candidate.config.model == null) {
         result.skipped.push({ kind: candidate.kind, reason: '本机默认配置不完整' });
         return false;
       }
@@ -143,13 +175,16 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
         continue;
       }
       bindMemberRuntime(db, memberId, candidate.config);
-      db.prepare(`INSERT OR IGNORE INTO room_members (room_id, member_id)
+      if (joinExistingRooms) db.prepare(`INSERT OR IGNORE INTO room_members (room_id, member_id)
         SELECT id, ? FROM rooms WHERE project_id=? AND archived_at IS NULL`).run(memberId, projectId);
       result.created.push({ memberId, kind: candidate.kind, displayName: candidate.displayName });
     }
 
+    const availableMembers = [...result.created, ...result.existing].filter(item => db.prepare(
+      "SELECT 1 FROM project_members WHERE id=? AND enabled=1 AND profile_id IS NOT NULL",
+    ).get(item.memberId) != null);
     const kinds = new Set([...result.created.map((item) => item.kind), ...result.existing.map((item) => item.kind)]);
-    if (kinds.has('claude') && kinds.has('codex')) {
+    if (joinExistingRooms && kinds.has('claude') && kinds.has('codex')) {
       const placeholderId = `m_default_${projectId}_0`;
       const placeholder = db.prepare(`SELECT id,description,settings_revision FROM project_members
         WHERE id=? AND project_id=? AND principal_type='agent' AND profile_id IS NULL AND display_name='执行成员'`)
@@ -159,9 +194,11 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
         && (placeholder.description == null || placeholder.description.trim() === '')
         && db.prepare('SELECT 1 FROM daemon_state WHERE key=?').get(`appearance:avatar:member:${placeholder.id}`) == null;
       if (placeholder != null && untouched && !hasDurableMemberReferences(db, placeholder.id)) {
-        const claude = result.created.find((item) => item.kind === 'claude')
-          ?? result.existing.find((item) => item.kind === 'claude');
+        const claude = availableMembers.find((item) => item.kind === 'claude') ?? availableMembers[0];
         if (claude != null) {
+          db.prepare(`INSERT OR IGNORE INTO room_members (room_id,member_id)
+            SELECT id,? FROM rooms WHERE project_id=? AND coordinator_member_id=? AND archived_at IS NULL`)
+            .run(claude.memberId, projectId, placeholder.id);
           db.prepare('UPDATE rooms SET coordinator_member_id=?, revision=revision+1 WHERE project_id=? AND coordinator_member_id=?')
             .run(claude.memberId, projectId, placeholder.id);
           db.prepare('DELETE FROM room_members WHERE member_id=?').run(placeholder.id);
@@ -174,8 +211,8 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
     // Once discovery finds any usable AI, remove only that untouched placeholder and
     // hand the coordinator slot to the discovered member. Explicit user edits or any
     // durable history keep it intact.
-    const available = result.created[0] ?? result.existing[0];
-    if (available != null) {
+    const available = availableMembers[0];
+    if (joinExistingRooms && available != null) {
       const waiting = db.prepare(`SELECT id, description, settings_revision FROM project_members
         WHERE id=? AND project_id=? AND principal_type='agent' AND profile_id IS NULL
           AND enabled=0 AND display_name='待添加 AI'`)
@@ -185,6 +222,9 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
         && (waiting.description == null || waiting.description.trim() === '')
         && db.prepare('SELECT 1 FROM daemon_state WHERE key=?').get(`appearance:avatar:member:${waiting.id}`) == null;
       if (waiting != null && untouched && !hasDurableMemberReferences(db, waiting.id)) {
+        db.prepare(`INSERT OR IGNORE INTO room_members (room_id,member_id)
+          SELECT id,? FROM rooms WHERE project_id=? AND coordinator_member_id=? AND archived_at IS NULL`)
+          .run(available.memberId, projectId, waiting.id);
         db.prepare('UPDATE rooms SET coordinator_member_id=?, revision=revision+1 WHERE project_id=? AND coordinator_member_id=?')
           .run(available.memberId, projectId, waiting.id);
         db.prepare('DELETE FROM room_members WHERE member_id=?').run(waiting.id);

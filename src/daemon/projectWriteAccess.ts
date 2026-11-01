@@ -1,5 +1,6 @@
 import {isExternalRuntimeKind} from './externalRuntime.ts';
-import {isRealRuntimeKind} from '../contracts/runtimeKinds.ts';
+import {isRealRuntimeKind,runtimeExecutable} from '../contracts/runtimeKinds.ts';
+import {memberExecutableStatus} from './memberManagement.ts';
 import {externalRuntimeLaunchIdentity} from '../adapter/cli/configuration.ts';
 import { realpathSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -11,6 +12,11 @@ import {CLAUDE_PROJECT_WRITE_POLICY_HASH} from '../adapter/writeCapability.ts';
 
 export interface WriteScope {
   authorized: boolean; root: string; revision: number; physicalIdentity?:string;
+}
+function assertRuntimeProgram(runtime: ReturnType<typeof resolveMemberRuntime>): void {
+  if(isRealRuntimeKind(runtime.kind)&&memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind)).status==='missing'){
+    throw Error('成员的 CLI 执行程序未找到，可能已卸载。请重新安装后扫描本机 AI，或在 AI 设置中修改程序路径；本次未发送，草稿保留');
+  }
 }
 /** The snapshot contains digests only. Report known source labels, never values
  * from settings, authentication, or a caller-supplied evidence object. */
@@ -104,6 +110,7 @@ export function snapshotConversationWriteAccess(db:ZhongshuoDatabase,taskId:stri
   const row=db.prepare('SELECT owner_member_id,project_id FROM tasks WHERE id=?').get(taskId) as {owner_member_id:string;project_id:string};
   if(memberId)row.owner_member_id=memberId;
   const runtime=resolveMemberRuntime(db,row.owner_member_id,defaultKind),grant=projectWriteAccess(db,row.project_id);
+  assertRuntimeProgram(runtime);
   const p=db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(row.project_id) as {canonical_path:string};
   let snapshot:Record<string,unknown>;
   if(options?.analysisOnly===true||taskAnalysisOnly(db,taskId)){
@@ -128,6 +135,7 @@ export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null,
   }
   let snapshot=JSON.parse(task.write_scope_json) as Partial<WriteScope> & {executionMode?:string;runtime?:unknown};
   const runtime=resolveMemberRuntime(db,task.owner_member_id,process.env.ZS_RUNTIME??null);
+  assertRuntimeProgram(runtime);
   if(runtime.permissionMode==='bypassPermissions' || runtime.permissionMode==null&&isRealRuntimeKind(runtime.kind)) {
     const p=db.prepare('SELECT p.canonical_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?').get(taskId) as {canonical_path:string};
     const root=realpathSync.native(p.canonical_path);

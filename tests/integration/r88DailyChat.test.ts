@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,11 +6,21 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
 import { resolveCodexDefaultMetadata } from '../../src/adapter/codex/configuration.ts';
+import * as memberManagement from '../../src/daemon/memberManagement.ts';
+import * as cliEnvironment from '../../src/daemon/cliEnvironment.ts';
+
+beforeEach(() => {
+  vi.spyOn(cliEnvironment, 'refreshCliSearchPath').mockReturnValue(null);
+  const original = memberManagement.memberExecutableStatus;
+  vi.spyOn(memberManagement, 'memberExecutableStatus').mockImplementation((kind, executable) =>
+    kind === 'pi' || kind === 'deepseek-harness' ? {status: 'missing', reason: 'R88 fixture only installs Claude and Codex'} : original(kind, executable));
+});
 
 const roots: string[] = [];
 const databases: Array<ReturnType<typeof openDatabase>> = [];
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const db of databases.splice(0)) {
     try { db.close(); } catch { /* already closed */ }
   }
