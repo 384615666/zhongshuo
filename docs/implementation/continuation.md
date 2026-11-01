@@ -9,6 +9,7 @@
 - **安装器外观**：新增 `packaging/windows/branding/wizard-large-*.png`（164:314，七档 DPI）与 `wizard-small-*.png`（方形七档），由 `scripts/lib/wizard-images.ps1` 从根 `logo.png` 生成；`.iss` 用 `WizardImageFile`/`WizardSmallImageFile` 多档自动适配 DPI，显式恢复 `DisableWelcomePage=no`；删除默认 Inno 许可页与纯文本安装说明页（LICENSE/安装说明仍随包安装）；`[Messages]` 重写欢迎/准备/完成文案，完成页可打开众说或操作手册。安装逻辑/目录/数据策略/图标未变。实拍四页验证：`dist/r150-installer-shots/`。
 - **版本**：`package.json`/`packaging/windows/release.json` → `0.1.1`（Windows `0.1.1.65535`）；`releaseVersion` beta 简写改跟随当前核心版本，版本测试同步 0.1.1 基线；新增 `docs/releases/0.1.1.md`。
 - **发版**：已从 `a9caca4` 干净 worktree 构建并发布 0.1.1：https://github.com/384615666/zhongshuo/releases/tag/v0.1.1 （latest，tag=源码提交，公开 main 同步）。安装镜像 BUILD `bld_0793defc369ebf44`/clean/661 文件，EXE 159,306,032 字节 SHA256 `ba0c0747d902cee2e9fbb8688eb1aa1519337a95909a1f7d90e1321cd08c027d`，附 `.sha256`/`.release.json`；未签名。payload 已核对 logo/欢迎页/图标/手册/版本。隔离目录静默安装→卸载通过（未覆盖用户安装）；期间向导截图误触模板夹具安装，已用原 beta.3 包重装恢复并核对 667 文件/注册表/四个快捷方式/数据未变。用户旧版与数据未升级。详见 [R150](../reviews/r150-installer-release-20261101.md)。
+- **发版后支持（任务栏图标）**：用户装 0.1.1 后任务栏仍显 Electron 原子图标。核实安装版窗口/EXE/快捷方式图标均已是猫咪；根因是用户同时运行的旧 V78 便携版与安装版共用 AppUserModelID `com.zhongshuo.desktop`，被 Windows 合并成同一任务栏按钮并缓存旧 Electron 图标。经用户确认关闭旧 V78、重启安装版并重启 Explorer 刷新任务栏缓存后，图标已变为猫咪；旧数据未改。后续如需彻底避免便携/安装共用任务栏组，可在下一版本按安装形态区分 AUMID 并修正 EXE 版本资源描述（本轮未改）。
 
 ## 2026-11-01：R149 用户反馈——正式 logo 补全 + 前端开发说明文字清理
 

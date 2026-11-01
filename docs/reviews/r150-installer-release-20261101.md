@@ -31,3 +31,14 @@
 - `scripts/lib/wizard-images.ps1` 需要 Windows PowerShell 5.1 且脚本带 UTF-8 BOM（生成脚本已入库）；更换 logo 后重跑并重新构建安装器。
 - 安装器页面截图脚本仅用于内部视觉核对，属本机 `dist/` 证据，不入库。
 - 历史验证脚本（`scripts/verify-desktop-renderer.mjs` 等）仍断言旧可见文案；e2e 部分既有断言陈旧，均非产品测试范围。
+
+## 5. 发版后支持：任务栏仍显示 Electron 原子图标（2026-11-01）
+
+用户安装 0.1.1 后反馈任务栏图标仍是旧原子图标。排查：
+
+- 正在运行的安装版窗口 HICON 已是正式猫咪 logo（从 HWND 直接取出 1254×1254 原图），安装 EXE 图标、开始菜单/桌面快捷方式图标也都是品牌 ICO。
+- 根因：用户同时运行着 10:44 启动、窗口隐藏的旧 **V78 便携版**（`ZhongshuoDual\electron.exe`）；它与安装版都使用 `com.zhongshuo.desktop` 这个 AppUserModelID，Windows 把两者合并到同一个任务栏按钮，并按旧 Electron 进程的图标/描述显示为「Electron + 原子图标」，任务栏缓存持续沿用。
+- 处理（用户确认后）：关闭旧 V78（无在途 run；3 个 ACTIVE 任务为历史空闲状态，数据保留）→ 关闭并重启安装版 0.1.1 → 重启 Explorer 刷新任务栏缓存（同时记录并重新打开原有 4 个文件资源管理器窗口）。任务栏按钮现显示正式猫咪 logo；安装版仍在运行，旧数据未改动。
+- 未改代码/未再发包：该现象由本机旧开发构建与任务栏缓存导致，不是 0.1.1 安装包内容缺失。后续如需让便携版与安装版永不共用任务栏组，可在下一版本按安装形态区分 AppUserModelID，并考虑修正 EXE 版本资源中的 Electron 描述（本轮未做）。
+- 证据：`dist/r150-taskbar-diagnose/taskbar-final-crop.png`（本机 ignored 证据）。
+
