@@ -35,6 +35,8 @@ node scripts/make-desktop-daily.mjs desktop-daily-win-local
 
 构建结果位于 `dist/desktop/desktop-daily-win-local/`。双击其中的 `start-desktop.vbs` 启动应用，再按图文手册选择项目和添加 AI。该目录也附带离线操作手册。
 
+如需让新包直接使用已有数据，关闭旧程序后执行 `node scripts/install-existing-data-launcher.mjs <新包目录> <已有server-data的绝对路径>`，再双击新包的 `start-existing-data.vbs`。该入口固定使用选定目录；连接标记缺失时自动补建，找不到原数据库时会报错。启动失败可查看包目录的 `startup-existing-data.log`。
+
 ## 开发与验证
 
 ```powershell
