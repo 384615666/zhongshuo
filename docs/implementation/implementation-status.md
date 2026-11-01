@@ -1,5 +1,7 @@
 # 众说正式工程 · 施工总账
 
+R153四项反馈完成：输入栏原生右键编辑菜单；解除执行准入隐藏2上限并在AI设置提供全局/每项目/同渠道1–32，默认4/4/4；移除私信等普通页面的原界面入口/恢复撤销接正式命令；删除未接保存的假选区评论，真实附件文件级留言保留且说明当前无定位批注UI。设置早挂载/身份后就绪自动重读。全量335文件2889通过16跳过0失败，最后UI订阅修补后8focused/26交互通过，types/lint无新增、导航49/原生菜单13/最终安装36通过，0真实模型。beta.2程序4027968 clean/BUILD bld_50d8fd1be68d7d2f/665hash，EXE159491120字节SHAb578c2ed…；原安装/进程/数据保留，登记四链接恢复，不推送发布。见[R153](../reviews/r153-edit-concurrency-cleanup-20261101.md)。
+
 R152九项反馈完成：Windows关闭隐藏到原生托盘、菜单常用入口/优雅退出；Harness组件0.1.3持久归档及30/40/45秒metadata等待，包内正式IPC实测19模型；先提交分工/独立步骤同批入队；Office/PDF自动重建校验缓存；项目文件修改并发三档真实设置及migration061/租约保护；深色顶部栏、图片成功提示、手册导航对齐。完整330文件2871通过15跳过0失败，双types过、lint无新增，原生托盘9/UI173/Pi官方6/组件20及安装升级卸载71通过，零真实模型调用。本地候选0.1.3-beta.1程序b941251 clean/BUILD bld_e5104766980335db/665hash，EXE159510960字节SHA819a7158…；原安装/进程/用户数据保留，HKCU及四快捷方式恢复字节一致，不推送不发布。见[R152](../reviews/r152-nine-feedback-20261101.md)。
 
 R151按用户要求重写随包EXE版本资源并出0.1.2：`brand-executable.ps1` 同一次写入七尺寸图标组与 `RT_VERSION`（ProductName/FileDescription/OriginalFilename/公司/版权/版本=众说，en-US+zh-CN两套Unicode串表，独立进程回读校验），便携electron.exe与安装镜像Zhongshuo.exe均应用，installed-desktop增加nativeVersion，setAppDetails增加relaunchDisplayName；任务栏AUMID分离（安装版com.zhongshuo.desktop.app、便携/开发com.zhongshuo.desktop.portable，卸载AppId不变）以避开旧Electron名称/图标缓存；安装目录/数据策略不变。0.1.2已发布：https://github.com/384615666/zhongshuo/releases/tag/v0.1.2 （latest；tag=源码提交299fcb4；安装镜像bld_1a71ec20247c33c9 clean/661文件，EXE 159,327,758字节SHA256 ab4a01c6…，未签名）；镜像任务栏显示「众说」、隔离安装→卸载→恢复原0.1.1登记/快捷方式通过，全量2911通过0失败（仅未跟踪R130缺夹具4项）。见[R151](../reviews/r151-exe-version-release-20261101.md)。
