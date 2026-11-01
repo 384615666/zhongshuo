@@ -1,6 +1,12 @@
+<p align="center">
+  <img src="logo.png" alt="众说 Logo" width="360">
+</p>
+
 # 众说
 
 众说是一个 Windows 本地多 AI 协作工作台。以文件夹作为项目，在房间里交代工作，让不同 AI 分析、执行和核对，在同一条对话里查看进展、文件成果并继续修改。
+
+产品主页：[`site/index.html`](site/index.html)（浏览器打开）。
 
 ![众说房间界面](docs/user-guide/images/02-workspace.png)
 
