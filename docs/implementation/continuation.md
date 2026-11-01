@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R143 修复 V78 沿用数据启动器
+
+用户反馈start-existing-data.vbs无法打开。确认原数据pipe-name.txt缺失，R106遗留BAT拼出空管道，Windows listen EACCES；旧VBS隐藏失败且BAT无条件返回0。新增显式安装脚本和随包Node启动器：固定已有数据库目录、核SQLite头、缺标记一次补建/已有字节保留、清父环境覆盖、记录日志并提示失败，提前exit0但未认证亦报错。原默认入口和应用BUILD不改，修复用户指定V78原路径；今后用安装脚本生成，停止复制旧BAT。见[R143](../reviews/r143-existing-launcher-20261101.md)。
+
+13定向回归/types/lint、真实包VBS/BAT含中文空格特殊字符22项通过；原库正式VBS已打开，identity确认原目录，4项目/7房间/42任务/162消息/117调用前后不变，正常停机0、无遗留daemon。验证器早读body/错误project.list字段的失败报告保留，不算产品失败。原默认项目文件夹已不存在（UI目录失效），未猜测重建或改绑定；启动器修复不恢复丢失文件。0新模型调用。V78压缩包同步修正，程序622文件hash保持不变，包内LAUNCHER-FIX.json记独立启动器来源08a1f34。仅本地提交不推送，保留原未提交工作。
+
 ## 2026-11-01：R142 MCP/Skill 报告复核与网关配置独立性
 
 用户提供另一轮R141报告并强调Magpie是个人网关。确认产品无Magpie依赖，DSH安装保留既有profile；修复Pi执行配置摘要漏用户/项目mcp.json（有文件才加入，未配置MCP身份不变），4新增配置反例原2失败/修后8通过；修正文档dshweb配模不自动共享zhongshuo profile，保留既有provider/默认模型/MCP条目，不复制凭据或权限。见[R142](../reviews/r142-runtime-config-20261101.md)。
