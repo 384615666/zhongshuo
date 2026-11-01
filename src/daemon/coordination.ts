@@ -745,13 +745,18 @@ export function readCoordination(db:ZhongshuoDatabase,taskId:string,selectedRunI
     JOIN tasks t ON t.id=s.child_task_id JOIN project_members m ON m.id=t.owner_member_id AND m.project_id=t.project_id
     JOIN tasks parent ON parent.id=t.parent_task_id AND parent.project_id=t.project_id AND parent.conversation_id=t.conversation_id
     LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE s.run_id=? AND parent.id=? ORDER BY s.rowid`).all(run.run_id,taskId) as {step_key:string;role:string;handoff_json:string|null;id:string;title:string;status:string;owner_member_id:string;display_name:string;delivery_id:string|null;delivery_revision:number|null;manifest_hash:string|null}[];
-  const finalFiles=plan&&run.state==='completed'?new Map(managedHandoffFiles(db,run.run_id).map(f=>[f.path,f])):null;
+  let finalFiles:Map<string,FrozenFile>|null=null;
+  let versionReadError:string|null=null;
+  if(plan&&run.state==='completed'){
+    try{finalFiles=new Map(managedHandoffFiles(db,run.run_id).map(f=>[f.path,f]));}
+    catch(error){versionReadError=String(error);} // Old completed history remains readable; no dispatch or status rewrite.
+  }
   if(finalFiles&&run.integration_run_id){
     const after=db.prepare(`SELECT f.path,f.sha256,f.state FROM task_deliveries d JOIN change_sets c ON c.id IN(SELECT value FROM json_each(d.change_set_refs_json))
       JOIN change_set_files f ON f.change_set_id=c.id AND f.role='after' WHERE d.task_id=? AND d.run_id=? AND c.task_id=? ORDER BY f.rowid`).all(taskId,run.integration_run_id,taskId) as FrozenFile[];
     for(const file of after)finalFiles.set(file.path,file);
   }
-  return {runId:run.run_id,state:run.state,summary:plan?.summary??(run.state==='completed'?'本次由协调成员直接回答，未分工':'协调成员正在判断是否需要分工'),errorMessage:run.error_message,
+  return {runId:run.run_id,state:run.state,summary:plan?.summary??(run.state==='completed'?'本次由协调成员直接回答，未分工':'协调成员正在判断是否需要分工'),errorMessage:run.error_message??versionReadError,
     usedCalls:coordinationCallsUsed(db,run.run_id),maxCalls:coordinationCallLimit(db,run.run_id),enforcement:coordinationCallEnforcement(db,run.run_id),steps:rows.map(r=>{
       const snapshot=scope.find(m=>m.memberId===r.owner_member_id)?.writeScope;
       const runtime=snapshot?(JSON.parse(snapshot) as {runtime?:{kind?:string;model?:string}}).runtime:null;

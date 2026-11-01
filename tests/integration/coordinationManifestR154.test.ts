@@ -3,7 +3,7 @@ import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {collisionFixture,finish,ObservedAdapter,pause} from '../helpers/collisionHarnessR122.ts';
 import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
-import {assertCoordinationDispatch,pumpCoordinations} from '../../src/daemon/coordination.ts';
+import {assertCoordinationDispatch,pumpCoordinations,readCoordination} from '../../src/daemon/coordination.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
 const complete=(answer:string,files:string[]=[],extra:Record<string,unknown>={},delay=10):FakeTurnScript=>finish(JSON.stringify({
@@ -157,6 +157,31 @@ describe('R154 coordination manifests retain ownership and causal file versions'
       expect(observed).toHaveLength(2);expect(new Set(observed.map(file=>file.sha256)).size).toBe(1);
       expect(f.taskStatus(f.root.taskId)).toBe('BLOCKED');expect(f.started).not.toContain('verify');
       expect(f.count('SELECT count(*) n FROM task_deliveries WHERE task_id=?',f.root.taskId)).toBe(0);
+    }finally{await f.close();}
+  });
+
+  it('keeps an old completed record readable when its frozen manifests fail the strengthened conflict checks',async()=>{
+    const f=await fixture('converged');
+    try{
+      await f.pumpUntil(()=>['DONE','BLOCKED'].includes(f.taskStatus(f.root.taskId)));
+      const run=f.db.prepare('SELECT run_id FROM coordination_runs WHERE task_id=?').pluck().get(f.root.taskId) as string;
+      // Compatibility fixture: older builds accepted the equal after-images.
+      for(const step of f.db.prepare(`SELECT s.child_task_id,s.step_key,s.handoff_json,d.id,d.revision,d.manifest_hash
+        FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id JOIN task_deliveries d ON d.id=t.current_delivery_id
+        WHERE s.run_id=? AND s.step_key IN ('a','b')`).all(run) as {child_task_id:string;step_key:string;handoff_json:string;id:string;revision:number;manifest_hash:string}[]){
+        const handoff=JSON.parse(step.handoff_json) as {output?:unknown};
+        if(handoff.output)continue;
+        const files=f.db.prepare(`SELECT cf.path,cf.state,cf.sha256 FROM change_set_files cf JOIN change_sets c ON c.id=cf.change_set_id
+          WHERE c.task_id=? AND cf.role='after' AND cf.path='same.md'`).all(step.child_task_id);
+        handoff.output={id:step.id,revision:step.revision,manifest_hash:step.manifest_hash,files};
+        f.db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify(handoff),run,step.step_key);
+      }
+      f.db.prepare("UPDATE coordination_runs SET state='completed',error_message=NULL WHERE run_id=?").run(run);
+      const before=f.db.prepare('SELECT total_changes() n').get();
+      const detail=readCoordination(f.db,f.root.taskId,run);
+      expect(detail?.state).toBe('completed');expect(detail?.errorMessage).toContain('没有显式依赖交接');
+      expect(detail?.steps.every(step=>step.reviewVersionCurrent===null)).toBe(true);
+      expect(f.db.prepare('SELECT total_changes() n').get()).toEqual(before);
     }finally{await f.close();}
   });
 
