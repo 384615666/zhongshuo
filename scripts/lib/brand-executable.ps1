@@ -184,7 +184,15 @@ public static class ZhongshuoNativeVersion {
             committed=true;
         } finally { if(!committed) EndUpdateResourceW(update,true); }
         var info=FileVersionInfo.GetVersionInfo(executable);
-        if(info.ProductName!=productName || info.FileDescription!=fileDescription || info.OriginalFilename!=originalFilename || info.FileVersion!=version) throw new InvalidDataException("Version resource verification failed: " + info.ProductName + " | " + info.FileDescription + " | " + info.OriginalFilename + " | " + info.FileVersion);
+        bool matches=info.ProductName==productName && info.FileDescription==fileDescription && info.OriginalFilename==originalFilename && info.FileVersion==version;
+        // Windows can briefly return an empty version resource right after commit (handle/cache flush);
+        // retry before failing so a successful PE update is not misreported as a build failure.
+        for(int attempt=0; !matches && attempt<25; attempt++) {
+            System.Threading.Thread.Sleep(200);
+            info=FileVersionInfo.GetVersionInfo(executable);
+            matches=info.ProductName==productName && info.FileDescription==fileDescription && info.OriginalFilename==originalFilename && info.FileVersion==version;
+        }
+        if(!matches) throw new InvalidDataException("Version resource verification failed: " + info.ProductName + " | " + info.FileDescription + " | " + info.OriginalFilename + " | " + info.FileVersion);
         return new Result {Verified=true,ProductName=info.ProductName,FileDescription=info.FileDescription,FileVersion=info.FileVersion,ProductVersion=info.ProductVersion,OriginalFilename=info.OriginalFilename,CompanyName=info.CompanyName,Languages=languages.Length};
     }
 }
