@@ -18,9 +18,12 @@ const json = (target, value) => writeFileSync(target, JSON.stringify(value, null
 
 export function releaseVersion(input = release.version) {
   const version = input.startsWith('beta.') ? `0.1.0-${input}` : input;
-  const match = /^(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$/.exec(version);
-  if (!match || match.slice(1).some(part => Number(part) > 65535)) throw Error('Version must be X.Y.Z-beta.N (or beta.N), all numeric parts <= 65535');
-  return {version, numericVersion: match.slice(1).map(Number).join('.')};
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/.exec(version);
+  if (!match || match.slice(1,4).some(part => Number(part) > 65535)
+    || match[4] != null && Number(match[4]) >= 65535) throw Error('Version must be X.Y.Z or X.Y.Z-beta.N (or beta.N); core parts <= 65535, beta number < 65535');
+  // A stable release must compare higher than every beta of the same core in
+  // Windows' four-part file versions, while keeping its visible SemVer intact.
+  return {version, numericVersion: [...match.slice(1,4),match[4]??'65535'].map(Number).join('.')};
 }
 
 function listFiles(root) {
@@ -113,7 +116,7 @@ function compilerPath(override) {
 
 export async function makeInstaller(argv=process.argv.slice(2)) {
   const options=parseArgs(argv);
-  if(options.help){console.log('node scripts/make-windows-installer.mjs [--version beta.N|X.Y.Z-beta.N] [--skip-build] [--source-image DIR] [--output-dir DIR] [--prepare-only|--validate-template|--stage-only] [--iscc EXE] [--app-mutex NATIVE_NAME]');return;}
+  if(options.help){console.log('node scripts/make-windows-installer.mjs [--version X.Y.Z|X.Y.Z-beta.N|beta.N] [--skip-build] [--source-image DIR] [--output-dir DIR] [--prepare-only|--validate-template|--stage-only] [--iscc EXE] [--app-mutex NATIVE_NAME]');return;}
   const version=releaseVersion(options['--version']);
   const work=join(repo,'dist/windows-installer',version.version);mkdirSync(work,{recursive:true});
   const iconBytes=brandIco(),iconName=brandIconName(iconBytes);

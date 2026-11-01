@@ -24,6 +24,7 @@ import { brandWindowsExecutable } from './lib/brand-executable.mjs';
 
 const repo = resolve(import.meta.dirname, '..');
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
+const release = JSON.parse(readFileSync(join(repo,'packaging/windows/release.json'),'utf8'));
 
 const uiMain = join(repo, 'dist', 'ui', 'main.cjs');
 const daemonCjs = join(repo, 'dist', 'pack', 'daemon.cjs');
@@ -52,8 +53,8 @@ brandWindowsExecutable(join(staging,'electron.exe'),join(appDir,iconName));
 writeFileSync(join(appDir, 'package.json'), JSON.stringify({
   name: 'zhongshuo',
   productName: '众说',
-  version: '0.1.0',
-  description: '众说——本地多 Agent 协同工作台（便携预览版）',
+  version: release.version,
+  description: '众说——本地多 Agent 协同工作台',
   main: 'dist/ui/main.cjs',
   private: true,
 }, null, 2), 'utf8');

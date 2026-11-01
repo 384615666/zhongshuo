@@ -1,5 +1,7 @@
 # 众说正式工程 · 施工总账
 
+R148按用户明确授权正式发布0.1.0：公开main最新首页/README与R145—R147合到独立发布分支，统一根包/安装/便携版本，Windows正式四段0.1.0.65535确保高于beta.3；新增版本排序/非法输入测试，冻结构建/安装升级验证与GitHub Release准备中。见[R148](../reviews/r148-release-0.1.0-20261101.md)。
+
 R147修图标：beta.2已安装却旧图，实证EXE内嵌仍Electron、外置ICO正确，快捷方式固定路径缓存。补发行副本原生资源与全组回读、哈希图标路径、窗口PNG/任务栏AppDetails及既有快捷方式定向刷新，beta.3准备交付；用户进程/数据保持。详见[R147](../reviews/r147-native-icons-beta3-20261101.md)。
 
 beta.3最终包clean源码08c5cb0/BUILD bld_de7686891fe36cd1/660hash，158187993字节SHA155dc14a3b8804f63bd6ca4867efeb8d16d683c2925ddd0e2bf2770afa9238e8；17入口回归、双types/lint、Inno编译、7项真实原生图标/任务栏属性及停机通过。程序和快捷方式图标PNG均目视确认新猫咪，0模型、未覆盖运行中的beta.2、不推送；dist/installers可安装新EXE。
