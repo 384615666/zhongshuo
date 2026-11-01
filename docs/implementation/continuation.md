@@ -2,6 +2,14 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R144 Windows 安装 EXE 与安装测试
+
+用户反馈V78仍打不开并要求安装版。最新日志实为已有daemon重复启动锁冲突；安装版原生EXE/稳定根先单实例锁/重复唤起、隔离安装目录与数据、固定LOCALAPPDATA/Zhongshuo/data、清父环境覆盖、按根管道/失败日志及对话框。失败收口核本次daemon归属，无效参数不读旧根，数据后台兼容重命名EXE+明确同根重开。Inno当前用户中文安装/开始菜单/可选桌面/卸载登记，运行中更新卸载先拒绝，不强杀；卸载保留数据和未登记文件。便携原数据/进程不自动处理。见[R144](../reviews/r144-windows-installer-20261101.md)。
+
+安装包dist/installers/Zhongshuo-Setup-0.1.0-beta.1-x64.exe，clean源码a5e6292d81236e51f04c76b3617af33c73f98115，BUILD bld_ba7596538d3921d2，659hash，157626653字节，SHA256 de2780fd4f20ae1075971818d3f671109a589039434fe2a5b232aab008300bd1，未签名/无自动更新/未远端发布。已真实安装默认位置并留桌面众说入口，正式health/身份/659hash/22图手册确认，原新建测试数据不导入旧聊天。
+
+全量318文件2782通过14跳过0失败（最后保护修正前），最终相关40/双types/lint过。最终EXE真实32项安装→重复启动→运行中更新卸载拒绝→beta0到beta1→存储/记录保留→卸载字节保留全过，证据dist/r144-install/db6fdb54-bc4c-4c34-8dbf-869f6e1dcc97；首组83ca...含真实备份后台成功/进度/同根重开/正常退出0。中文UI安装及默认启动目视、合成活动锁错误框/退出1通过，dist/r144-ui与r144-startup-failure-visible。初次hidden宿主隐藏首原生错误框、模板类型编译失败与dirtybeta0夹具均保留说明，最终clean交付无此问题。0真实模型调用，不冒称替代四渠道MCP/Skill验收。仅本地提交，保留原续工与84未跟踪工作。
+
 ## 2026-11-01：R143 修复 V78 沿用数据启动器
 
 用户反馈start-existing-data.vbs无法打开。确认原数据pipe-name.txt缺失，R106遗留BAT拼出空管道，Windows listen EACCES；旧VBS隐藏失败且BAT无条件返回0。新增显式安装脚本和随包Node启动器：固定已有数据库目录、核SQLite头、缺标记一次补建/已有字节保留、清父环境覆盖、记录日志并提示失败，提前exit0但未认证亦报错。原默认入口和应用BUILD不改，修复用户指定V78原路径；今后用安装脚本生成，停止复制旧BAT。见[R143](../reviews/r143-existing-launcher-20261101.md)。
