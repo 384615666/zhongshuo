@@ -37,7 +37,7 @@ const install=kind=>{
     const entry=join(dir,'claude.exe');writeFileSync(entry,'non-executable CLI discovery fixture');return entry;
   }
   const name=kind==='deepseek-harness'?'dsh':kind;
-  const entry=join(lateBin,name+'.cjs');writeFileSync(entry,'throw Error("Fixture CLI must never execute");');
+  const entry=join(lateBin,name+(kind==='codex'?'.js':'.cjs'));writeFileSync(entry,'throw Error("Fixture CLI must never execute");');
   writeFileSync(join(lateBin,name+'.cmd'),`@node "${entry}" %*`);
   if(kind==='codex'){
     const dir=join(config,'codex');mkdirSync(dir,{recursive:true});writeFileSync(join(dir,'config.toml'),'model = "fixture-model"\n');
@@ -78,7 +78,8 @@ try{
     check(kind+' uninstall is reported without deleting binding',missing.executableStatus.status==='missing'&&JSON.stringify(missing.binding)===JSON.stringify(saved));
     const roster=(await command('member.list',{projectId})).items;
     check(kind+' unavailable without changing enable preference',roster.some(item=>item.id===member.memberId&&item.enabled&&item.runtimeAvailable===false));
-    const rejected=await raw('message.submit',{...message,intent:'default',body:'卸载后不能调用',mentions:[{kind:'member',memberId:member.memberId}]});
+    const rejected=await raw('message.submit',{...message,target:{kind:'room_root',projectId,roomId:fresh.room.id,conversationId:fresh.room.conversationId},intent:'default',body:'卸载后不能调用',mentions:[{kind:'member',memberId:member.memberId}]});
+    writeFileSync(join(run,kind+'-rejected.json'),JSON.stringify(rejected,null,2));
     check(kind+' request rejected before enqueue',!rejected.ok&&rejected.error.message.includes('执行程序未找到'));
     entry=install(kind);
     const restored=await command('member.discoverDefaults',{projectId});

@@ -21,4 +21,14 @@
 
 发行版本 `0.1.0-beta.2`，沿用原 AppId、当前用户安装目录与数据根。安装器/窗口/快捷方式继续使用根目录 logo.png。源码在独立 worktree 冻结，保留主目录其他 AI 的首页/README修改与原审计文件。
 
-安装镜像验证脚本 `scripts/verify-cli-lifecycle-r146.mjs` 使用实际随包 Node/daemon/数据库/IPC；仅将 Windows PATH 读取和 CLI 文件替换为隔离夹具，不改本机注册表、真实 CLI 或用户数据。真实桌面程序另行用独立数据根验证。最终包身份与检查结果在交付完成后补记。
+安装镜像验证脚本 `scripts/verify-cli-lifecycle-r146.mjs` 使用实际随包 Node/daemon/数据库/IPC；仅将 Windows PATH 读取和 CLI 文件替换为隔离夹具，不改本机注册表、真实 CLI 或用户数据。
+
+## 最终交付
+
+- clean 程序源码 `89d613506bb63e21d8049470c07d6d7932d8620c`；便携源镜像 `bld_6534a1f98cf9298d`，安装镜像 `bld_30574674228982a6`，659 个文件逐项 SHA256 校验通过。后续验证脚本夹具修正及本记录不改变该程序 BUILD。
+- 安装包 `dist/installers/Zhongshuo-Setup-0.1.0-beta.2-x64.exe`，158132428 字节；SHA256 `7c38dce097298c37550ed6d56c3e1fd01997525d1719b0f31d95e8e58fc27433`。附 `.sha256`、`.release.json`、独立数据测试入口与测试说明。未签名，未远端发布，也未替用户覆盖当前安装。
+- 包内生命周期 34 项通过，正式停机退出 0：`dist/r146-package/673ecb07-fa7a-4fa8-b0e8-be15a9a72e5c`。真实随包 daemon/Node/SQLite/IPC 执行四渠道文件安装/卸载/重装与 PATH 更新夹具。只读回查 `real_calls=0/tasks=0/messages=1`，原测试记录保留。
+- 实际原生 `Zhongshuo.exe` 在非主屏、独立数据根启动，扫描/可见结果/缺程序卡片/不可用房间/发送禁用共10项通过，正常退出0、daemon.pid消失。截图已目视核对：`dist/r146-ui/1b4822cc-f00f-48e7-bc6d-bab609269545`；只读回查 `real_calls=0/tasks=0/messages=0`。
+- 汇总 `dist/r146/delivery.json`。未改用户真实 CLI、注册表或原业务数据。独立测试入口使用 `%LOCALAPPDATA%/Zhongshuo/cli-lifecycle-beta2-test`，与默认业务根分开；同一测试入口重开保留本次测试历史。
+
+验证过程的原件保留：首个包内夹具把 Codex 脚本写成解析器不支持的 .cjs，后改成 .js；随后测试误向没有该成员的旧房间发送，按正式新房间收件范围修正。原生界面初次把提示文字当发送按钮文字、导航早于启动恢复、扫描期间再次点击的验证器错误，改为实际侧栏点击及等待控件可用后通过。未以这些夹具/脚本错误改动产品或冒称已测试真实 CLI 安装器。
