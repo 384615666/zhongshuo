@@ -1195,12 +1195,15 @@ export function readTaskExecutionStatus(
   }
   if (phase === 'UNKNOWN' && recovery?.code === 'RECONCILE_REQUIRED') {
     const sameShutdownTurn = shutdownContext != null && recovery.fact.turnId === shutdownContext.turn.id;
+    const heldTurn=recovery.fact.turnId?db.prepare(`SELECT r.task_id,a.run_id FROM agent_turns a
+      JOIN workflow_runs r ON r.id=a.run_id WHERE a.id=?`).get(recovery.fact.turnId) as {task_id:string;run_id:string}|undefined:undefined;
     projectionReason = {
       ...projectionReason,
       code: 'RECOVERY_REQUIRED',
       message: sameShutdownTurn ? projectionReason.message : recovery.message,
       source: 'recovery',
-      taskId: sameShutdownTurn ? shutdownContext!.turn.task_id : task.id,
+      taskId: heldTurn?.task_id ?? (sameShutdownTurn ? shutdownContext!.turn.task_id : task.id),
+      runId: heldTurn?.run_id ?? projectionReason.runId,
       turnId: recovery.fact.turnId ?? projectionReason.turnId,
       eventSeq: projectionReason.eventSeq,
     };
@@ -1238,7 +1241,7 @@ export function readTaskExecutionStatus(
     addAction({
       id: `recover:${recoveryTurnId}`,
       kind: 'recover',
-      label: '核对执行结果',
+      label: '检查中断',
       target: { kind: 'recovery', id: recoveryTurnId },
     });
   }

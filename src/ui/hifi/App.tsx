@@ -15,7 +15,7 @@ import { getState, setAppearanceState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
-import { OPEN_RECOVERY_EVENT } from './lib/recovery';
+import { OPEN_RECOVERY_EVENT, type RecoveryTarget } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom } from './loader';
 import { DmPage } from './DmPage';
@@ -181,6 +181,7 @@ export default function App() {
   const legacyActive = useStore((x) => x.legacyActive === true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryTarget, setRecoveryTarget] = useState<RecoveryTarget | undefined>();
   const [recoveryAttention, setRecoveryAttention] = useState(false);
   /** 恢复三态（R66 P5，review-r65 §F：启动已有 vs 运行中新增 vs 普通排队）——
    *  · 启动已有异常：首次检查即存在 → 自动开一次面板（既有合同）；
@@ -191,7 +192,8 @@ export default function App() {
   const [pendingWaitCount, setPendingWaitCount] = useState(0);
   const recoveryAutoShownRef = useRef(false);
   useEffect(() => {
-    const openRecovery = (): void => {
+    const openRecovery = (event: Event): void => {
+      setRecoveryTarget((event as CustomEvent<{ target?: RecoveryTarget }>).detail?.target);
       setRecoveryOrigin((current) => current ?? 'runtime');
       setRecoveryOpen(true);
     };
@@ -273,12 +275,12 @@ export default function App() {
     let cancelled = false;
     const check = () => {
       if (cancelled || document.body.classList.contains('legacy-on')) return;
-      void command<{ gateHeld: boolean; unknownTurns: Array<{ id: string }>; pendingRelease: Array<{ turnId: string }>; activeUndos: Array<{ id: string }>; interruptedRuns: Array<{ id: string }>; pendingDispatchCount: number }>('recovery.status', {})
+      void command<{ gateHeld: boolean; unknownTurns: Array<{ id: string;protectionReleased?:boolean }>; pendingRelease: Array<{ turnId: string }>; activeUndos: Array<{ id: string }>; interruptedRuns: Array<{ id: string }>; pendingDispatchCount: number }>('recovery.status', {})
         .then((r) => {
           if (cancelled) return;
           const entities: string[] = [];
           if (r.gateHeld) entities.push('gate:held');
-          for (const x of r.unknownTurns) entities.push(`turn:${x.id}`);
+          for (const x of r.unknownTurns) if(x.protectionReleased!==true)entities.push(`turn:${x.id}`);
           for (const x of r.pendingRelease) entities.push(`release:${x.turnId}`);
           for (const x of r.activeUndos) entities.push(`undo:${x.id}`);
           for (const x of r.interruptedRuns) entities.push(`run:${x.id}`);
@@ -660,7 +662,7 @@ export default function App() {
       {createRoomFor != null ? <CreateRoomModal projectId={createRoomFor} onClose={() => setCreateRoomFor(null)} /> : null}
 
       {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
-      {recoveryOpen ? <RecoveryPanel origin={recoveryOrigin} onClose={() => setRecoveryOpen(false)} /> : null}
+      {recoveryOpen ? <RecoveryPanel origin={recoveryOrigin} target={recoveryTarget} onClose={() => {setRecoveryOpen(false);setRecoveryTarget(undefined);}} /> : null}
       {s.ui.toast != null ? (
         <div className="toast-host" role="status" aria-live="polite">
           <button className={`toast ${s.ui.toast.tone}`} onClick={() => clearToast()}>

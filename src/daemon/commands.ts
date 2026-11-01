@@ -235,6 +235,7 @@ function managedJobObservation(jobId: string | null): ManagedJobObservation | nu
 import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
 import { verifyPreviousManagedOwnerExit } from './managed/previousOwnerExit.ts';
+import {inspectRecovery} from './recoveryInspection.ts';
 import { stripSingleJsonFence } from './dispatchWorker.ts';
 
 const localScope = (userId: string): string => `user:${userId}`;
@@ -2255,6 +2256,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           },
         });
       }
+      case 'recovery.inspect': {
+        if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','执行退出检查仅限本机桌面');
+        const params=z.strictObject({turnId:z.string().min(1)}).parse(env.params);
+        const result=inspectRecovery(deps.db,params.turnId,{
+          appDataDir:deps.appDataDir,instance:deps.recoveryInstance,query:deps.processQuery,treeScan:deps.processTree,
+          managedEvidence:jobId=>{const job=managedJobById(jobId);return job?{pid:job.pid,...job.releaseEvidence()}:undefined;},
+        });
+        if(!result)throw new DaemonCommandError('RESOURCE_NOT_FOUND','没有找到这次中断执行');
+        return withCommandId({ok:true,data:result});
+      }
       case 'recovery.probeProcess': {
         // DEV-13 第七轮：服务端退出取证（只读，不改 turn/租约/预算状态）。
         // 按 turn 的**已登记身份**（runtime_process_registry——worker 启动时写入）做 OS 核对，
@@ -2424,7 +2435,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const turn = deps.db.prepare('SELECT id, run_id, status, budget_mark, protection_state FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; budget_mark: string | null; protection_state: string | null } | undefined;
           if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
           const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
-          if (leases.length === 0 && turn.protection_state !== 'retained') {
+          const unknownNeedsClosure=turn.status==='UNKNOWN'&&!deps.db.prepare(`SELECT 1 FROM domain_events
+            WHERE turn_id=? AND kind='recovery.protectionReleased' AND json_extract(payload_json,'$.released')=1 LIMIT 1`).get(turn.id);
+          if (leases.length === 0 && turn.protection_state !== 'retained'&&!unknownNeedsClosure) {
             return { turnId: turn.id, stateChanged: false as const, releasedLeases: [] as string[], note: '该 turn 无未释放租约且无保留保护（protection_state 非 retained）——幂等 no-op' };
           }
           if (turn.budget_mark == null && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(turn.status)) {

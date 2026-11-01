@@ -2,6 +2,16 @@ import {describe,expect,it} from 'vitest';
 import {userFacingSystemText,userFacingSystemEventText} from '../../src/contracts/userFacingText.ts';
 
 describe('R119 legacy program status presentation',()=>{
+  it('points a retained execution error to the readonly interruption check without exposing refund instructions',()=>{
+    const raw='拒绝派发：turn=old-turn protection_state=retained。需人工退款或 recovery.reconcile。';
+    const text=userFacingSystemText(raw);
+    expect(text).toBe('上次执行尚未确认结束。请点击“检查中断”查看具体成员和程序检查结果，解除占用后再继续。');
+    expect(text).not.toMatch(/人工退款|reconcile|old-turn|retained/);
+    expect(raw).toContain('protection_state=retained');
+    expect(userFacingSystemEventText('tool.completed',raw)).toBe(raw);
+    expect(userFacingSystemEventText('unknown',raw)).toBe(raw);
+    expect(userFacingSystemText('protection_state=released，原结果保留')).toBe('protection_state=released，原结果保留');
+  });
   it('shows the actual failure without the old rule reference or development explanation',()=>{
     expect(userFacingSystemText('全员无有效输入（§6.1 INDEPENDENT 终结规则；不合成虚构研讨报告）'))
       .toBe('所有 AI 都未返回有效结果');

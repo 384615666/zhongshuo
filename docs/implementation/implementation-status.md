@@ -1,5 +1,7 @@
 # 众说正式工程 · 施工总账
 
+R155中断恢复闭环：readonly inspect显示实际阻塞child/成员/完整结果缺失/最后动作/退出结论，父入口绑定turn与child，明确ready才显式release并复查，UNKNOWN历史不变/不重放；legacy stop丢失引入系统Windowsboot+monotonic/时钟margin/排他锁/进程新代次与树重查证据，当前原Pi同boot仍需用户安装beta4后重启Windows再检查。修复无retained/no lease UNKNOWN释放noop及矛盾none登记。原库仅只读0修改，安装器不自动关程序。详见[R155](../reviews/r155-interrupted-recovery-20261101.md)，最终回归/本地包验收待收口，不推送。
+
 R154：只读真实安装库确认并行快照成果误归属、合法兄弟修订旧哈希误挡、具体dispatchBlocked展示遗漏及Pi正常停机中断UNKNOWN。交接按成功源声明/绑定快照投影、旧缓存不变，因果修订及启动版本重校验、未启动成员可见原因；停机last/history事务保存且显式OS/Job核查不降级。用户取消自动关闭实验，安装器恢复运行中拒绝安装，必须先退出再安装；helper/专项测试已删除。完整340文件2974通过17跳过0失败，最后6文件105交接/兼容回归、恢复安装原逻辑34及最终实际安装38通过；beta.3程序a8c2130 clean/BUILD bld_fe4c238a6d5bf64d/665hash、159498304字节SHA26d488cb…，根dist/installers已交付。原登记四快捷方式精确恢复，原安装/进程/数据未改，旧Pi UNKNOWN仍须核查，0模型不重放。只本地整合不推送发布，见[R154](../reviews/r154-installer-handoff-recovery-20261101.md)。
 
 R153四项反馈完成：输入栏原生右键编辑菜单；解除执行准入隐藏2上限并在AI设置提供全局/每项目/同渠道1–32，默认4/4/4；移除私信等普通页面的原界面入口/恢复撤销接正式命令；删除未接保存的假选区评论，真实附件文件级留言保留且说明当前无定位批注UI。设置早挂载/身份后就绪自动重读。全量335文件2889通过16跳过0失败，最后UI订阅修补后8focused/26交互通过，types/lint无新增、导航49/原生菜单13/最终安装36通过，0真实模型。beta.2程序4027968 clean/BUILD bld_50d8fd1be68d7d2f/665hash，EXE159491120字节SHAb578c2ed…；原安装/进程/数据保留，登记四链接恢复，不推送发布。见[R153](../reviews/r153-edit-concurrency-cleanup-20261101.md)。

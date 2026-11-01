@@ -22,7 +22,7 @@ const PHASE: Record<TaskExecutionPhase, {
   WAITING_FOR_PEER: { label: '等同伴', tone: 'warning', icon: 'clock' },
   WAITING_FOR_USER: { label: '等你处理', tone: 'warning', icon: 'hand' },
   STOPPING: { label: '正在停止', tone: 'warning', icon: 'stop' },
-  UNKNOWN: { label: '待核对', tone: 'danger', icon: 'help-circle' },
+  UNKNOWN: { label: '执行中断', tone: 'danger', icon: 'help-circle' },
   COMPLETED: { label: '已完成', tone: 'success', icon: 'check-circle' },
   FAILED: { label: '未完成', tone: 'danger', icon: 'x-circle' },
   CANCELLED: { label: '已停止', tone: 'neutral', icon: 'slash' },
@@ -63,7 +63,7 @@ function memberWaitingText(member: TaskExecutionMember): string {
   if (member.state === 'waiting-user') return `${member.displayName}等你回复`;
   if (member.state === 'starting') return `${member.displayName}等待开始`;
   if (member.state === 'stopping') return `${member.displayName}正在停止`;
-  if (member.state === 'unknown') return `${member.displayName}结果待核对`;
+  if (member.state === 'unknown') return `${member.displayName}执行中断，待检查`;
   return `${member.displayName}等待结果`;
 }
 
@@ -83,14 +83,14 @@ function friendlyDetail(status: TaskExecutionStatus): string | null {
       return '另一任务正在修改同一位置，结束后会继续。';
     }
     if (blocker?.reason === 'unknown-turn') {
-      return '上一项任务还在核对；确认结束后才能安全继续。';
+      return '上一项执行已中断；检查程序是否结束后才能安全继续。';
     }
     return '请求已登记，正在等待开始。';
   }
   if (status.phase === 'UNKNOWN') {
-    if (status.reason.code === 'PROTECTION_RETAINED') return '上一次执行还没确认结束；需要先核对，暂时不能继续。';
+    if (status.reason.code === 'PROTECTION_RETAINED') return '上次执行中断；请检查程序是否已结束，再继续任务。';
     if (status.reason.code === 'NO_EXECUTION_EVIDENCE') return '没有取得可确认的执行进展，正在安全等待刷新。';
-    return '上一次执行的结果还没确认；需要先核对，暂时不能继续。';
+    return '本轮未收到完整结果；请检查中断原因与执行是否已结束。';
   }
   if (status.phase === 'NOT_STARTED_FAILED' || status.phase === 'FAILED') {
     const text=executionReasonText(status);
@@ -131,7 +131,7 @@ export function taskExecutionStatusSummary(status: TaskExecutionStatus): TaskExe
   } else if (status.phase === 'WAITING_FOR_USER') {
     main = '等待你处理';
   } else if (status.phase === 'UNKNOWN') {
-    main = '执行结果待核对';
+    main = '执行中断，等待检查';
   } else if (status.phase === 'NOT_STARTED_FAILED') {
     main = '请求未能开始';
   } else if (status.phase === 'FAILED') {
@@ -215,7 +215,7 @@ export function ExecutionStatus({
   const noticeDetail=threadNotice&&status.phase==='WAITING_FOR_USER'&&(summary.detail?.length??0)>180
     ?'请答复下方 AI 提出的问题，再继续处理；完整问题保留在最新回复中。':summary.detail;
   const nextStep=status.phase==='FAILED'||status.phase==='NOT_STARTED_FAILED'
-    ?status.actions.some(action=>action.kind==='retry')?'可继续任务；不再处理时可结束任务。':status.actions.some(action=>action.kind==='recover')?'请先核对上次执行结果。':status.actions.some(action=>action.kind==='close')?'可查看原因，或结束这项任务。':'请查看原因后决定下一步。'
+    ?status.actions.some(action=>action.kind==='retry')?'可继续任务；不再处理时可结束任务。':status.actions.some(action=>action.kind==='recover')?'请先检查中断原因与程序检查结果。':status.actions.some(action=>action.kind==='close')?'可查看原因，或结束这项任务。':'请查看原因后决定下一步。'
     :null;
 
   return (
@@ -252,7 +252,7 @@ export function ExecutionStatus({
             onClick={onAction == null ? undefined : () => onAction(firstAction)}
           >
             <Icon name={ACTION_ICON[firstAction.kind]} size={12} />
-            {firstAction.label}
+            {firstAction.kind==='recover'?'检查中断':firstAction.label}
           </button>
         ) : null}
         {density==='compact'?remainingActions.filter(action=>action.kind==='close').map(action=><button
@@ -296,7 +296,7 @@ export function ExecutionStatus({
                   onClick={onAction == null ? undefined : () => onAction(action)}
                 >
                   <Icon name={ACTION_ICON[action.kind]} size={12} />
-                  {action.label}
+                  {action.kind==='recover'?'检查中断':action.label}
                 </button>
               ))}
             </div>

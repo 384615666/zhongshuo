@@ -2,6 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R155 中断检查与继续入口
+
+用户仍被旧Pi UNKNOWN/settled/retained挡住，且“核对执行结果”没有对象。原库只读确认旧completed stop被beta2空stop覆盖，当前无history/stalelock、同次Windows启动；不能重新开app就补造退出依据。新增本机readonly recovery.inspect与具体结果/最后动作/退出检查，父按钮精确指child/turn，文案改检查中断；明确ready才release、保留UNKNOWN和历史、不重放。新增丢失旧owner证据时的Windows reboot程序证据，系统启动时刻+monotonic/时间边界/当前锁/进程代次及树/重读核验，不把睡眠或重开app当重启，允许真正新PID代次复用。无retained/no lease但UNKNOWN未闭环不再release noop，矛盾none登记拒绝。
+
+用户这条仍须安装beta.4、保存其他工作并重启一次Windows，再检查中断→解除占用→回原任务继续；本轮不改原保护、不重启用户电脑/不执行原请求。安装器保持必须先退出再安装。具体定向/全量/候选包身份见[R155](../reviews/r155-interrupted-recovery-20261101.md)，最终产物验收待追加；仅本地不推送。
+
 ## 2026-11-01：R154 协作交接与恢复诊断
 
 本轮只读核实安装版真实记录，区分并行目录观察误归属、合法兄弟修订后旧版本校验、具体dispatchBlocked未显示和Pi无业务终态的正常停机中断。修复交接成果归属/旧污染缓存只读重投影、因果修订版本及启动前重校验、未启动成员的原因展示；正常停机证据事务保留last/history，仍须显式核查，不自动成功或重放。旧beta2已覆盖证据无法补造。用户最新决定取消自动关闭安装实验：安装器已恢复运行中拒绝安装，必须从托盘先退出，数据保留；实验helper/测试删除。

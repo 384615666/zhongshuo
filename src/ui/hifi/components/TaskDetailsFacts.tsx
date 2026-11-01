@@ -114,7 +114,7 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   if(latest.status==='WAITING'&&latest.mode==='AUTO'&&latest.stage==='分工执行')return '协作正在等待分工步骤完成；查看分工与活动进展。无需重新发送。';
   if (latest.status === 'WAITING') return '本次运行正在等待输入或批准；到回复串查看明确的待处理请求。';
   if (latest.status === 'STOPPING') return '停止请求已发出；先等待状态刷新，避免重复提交。';
-  if (latest.status === 'INTERRUPTED'&&!detail.failedRetry.available&&!detail.failedRetry.pending) return '本次回复中断，尚未确认结束。先检查上次回复状态，再决定是否继续。';
+  if (latest.status === 'INTERRUPTED'&&!detail.failedRetry.available&&!detail.failedRetry.pending) return '本次回复中断，尚未确认结束。先检查中断原因与程序是否已结束，再决定是否继续。';
   if (isRetryRunStatus(latest.status) && detail.failedRetry.pending) return '上次执行未完成；继续请求已排队，等待成员接续处理。请勿重复提交。';
   if (isRetryRunStatus(latest.status) && detail.failedRetry.blockReason) return `最近一次执行未完成。当前不能继续：${userFacingSystemText(detail.failedRetry.blockReason ?? '')}`;
   if (latest.status==='FAILED') return `最近一次运行失败；任务仍是${detail.task.status==='ACTIVE'?'待继续处理':'未完成'}。查看诊断和已有成果后，可继续任务或结束任务。${detail.failedRetry.formatRepair?'本次继续只补交已保存的结果。':''}`;
@@ -123,7 +123,7 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
 }
 
 const qualityLabel: Record<string,string> = { reported:'渠道报告', estimated:'估算', unknown:'未确认' };
-const executionLabel: Record<string,string> = { PENDING:'等待开始',DISPATCHING:'正在启动',RUNNING:'执行中',WAITING_APPROVAL:'等待批准',WAITING_INPUT:'等待输入',STOPPING:'停止中',SUCCEEDED:'执行成功',FAILED:'执行失败',CANCELLED:'已停止',UNKNOWN:'结果待核对' };
+const executionLabel: Record<string,string> = { PENDING:'等待开始',DISPATCHING:'正在启动',RUNNING:'执行中',WAITING_APPROVAL:'等待批准',WAITING_INPUT:'等待输入',STOPPING:'停止中',SUCCEEDED:'执行成功',FAILED:'执行失败',CANCELLED:'已停止',UNKNOWN:'执行中断' };
 const purposeLabel: Record<string,string> = { stage_work:'任务执行',checkpoint:'检查点',format_repair:'格式修复' };
 const roleLabel: Record<string,string> = { executor:'执行成员',coordinator:'协调成员',worker:'执行成员' };
 const eventLabel: Record<string,string> = {
@@ -286,7 +286,7 @@ export function ExecutionBlockerFacts({ detail }: { detail: TaskDetailsResult })
       {blocker.blockingRootTaskNumber != null ? ` · #${blocker.blockingRootTaskNumber}` : ''}
     </a></div> : null}
     {blocker.reason === 'unknown-turn' ? <div className="small">
-      <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={() => requestRecoveryOpen()}>检查上次回复</button>
+      <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={() => requestRecoveryOpen(blocker.blockingTurnId?{turnId:blocker.blockingTurnId,taskId:blocker.blockingTaskId??undefined,projectId:detail.task.projectId,requestTaskId:detail.task.id}:undefined)}>检查中断</button>
     </div> : null}
     <details className="small faint" style={{marginTop:6}}><summary>诊断详情</summary>
       <div>{userFacingSystemText(blocker.note)}</div>

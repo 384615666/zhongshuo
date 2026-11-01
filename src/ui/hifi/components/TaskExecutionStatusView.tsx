@@ -18,7 +18,14 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
     if(busy.current)return;
     busy.current=true;setError(null);
     try{
-      if(action.kind==='recover'){requestRecoveryOpen();return;}
+      const openRecovery=(turnId:string)=>{
+        const member=[...status.actualPerformingMembers,...status.waitingMembers].find(item=>item.turnId===turnId);
+        const matchingReason=status.reason.turnId===turnId;
+        requestRecoveryOpen({turnId,projectId:status.scope.projectId,requestTaskId:status.taskId,
+          taskId:matchingReason?status.reason.taskId??undefined:member?.taskId,
+          runId:matchingReason?status.reason.runId??undefined:member?.runId??undefined});
+      };
+      if(action.kind==='recover'){openRecovery(action.target.id);return;}
       if(action.kind==='close'){
         const key=JSON.stringify(action.binding);
         if(pending.current?.key!==key)pending.current={key,commandId:crypto.randomUUID()};
@@ -43,7 +50,7 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
         return;
       }
       const target=action.target;
-      if(target.kind==='recovery')requestRecoveryOpen();
+      if(target.kind==='recovery')openRecovery(target.id);
       else if(target.kind==='thread')navigate(`/thread/${target.id}`);
       else if(target.kind==='room')await openExternalDeepLink(`#task=${status.taskId}`);
       else await openExternalDeepLink(`#${target.kind==='delivery'?'delivery':target.kind==='dm'?'dm':'task'}=${target.id}`);

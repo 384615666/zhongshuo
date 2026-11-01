@@ -261,6 +261,11 @@ export function probeTurnExit(
     });
   }
   if (reg.process_model === 'none') {
+    if(reg.identity_source!=='none'||reg.pid!=null||reg.started_at_ms!=null){
+      return write({turnId,registryId:reg.id,processModel:reg.process_model,pid:reg.pid,observedAt:now,
+        result:'unknown',startedAtMs:reg.started_at_ms,reuseCheck:null,
+        detail:'无子进程登记与已记录的进程身份矛盾，不能据此解除占用'});
+    }
     return write({
       turnId, registryId: reg.id, processModel: 'none', pid: null, observedAt: now,
       result: 'no-os-process', startedAtMs: null, reuseCheck: null,

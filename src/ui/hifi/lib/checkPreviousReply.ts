@@ -1,3 +1,4 @@
+import type {RecoveryInspection} from '../../../contracts/recoveryInspection';
 type RecoveryCommand = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
 interface ReplyOccupancyStatus {
@@ -28,18 +29,27 @@ export function previousReplySummary(status: ReplyOccupancyStatus): string {
  * Only the backend can prove the old execution ended; never redispatch that request.
  */
 export function createPreviousReplyCheck(send: RecoveryCommand) {
-  const inFlight = new Map<string, Promise<void>>();
-  return (turnId: string): Promise<void> => {
+  const inFlight = new Map<string, Promise<RecoveryInspection>>();
+  const inspect = async (turnId: string) => {
+    const value = await send('recovery.inspect', {turnId}) as RecoveryInspection;
+    if (value.turnId !== turnId || value.schemaVersion !== 'recovery-inspection-v1') throw Error('中断检查对象已变化，请重新检查。');
+    return value;
+  };
+  return (turnId: string): Promise<RecoveryInspection> => {
     const existing = inFlight.get(turnId);
     if (existing) return existing;
     const pending = (async () => {
-      await send('recovery.reconcile', {
-        turnId, verdict: 'executed', note: '上次请求已派发，结果仍未知；核查并结束占用，不重发原请求',
-      });
+      const current = await inspect(turnId);
+      if (current.exitCheck.state !== 'ready' || current.exitCheck.action !== 'release') return current;
+      if (current.turnStatus === 'UNKNOWN' && !['settled','refunded'].includes(current.budgetMark ?? '')) {
+        await send('recovery.reconcile', {turnId, verdict:'executed', note:'程序已确认旧执行结束；保留未知业务结果，不重发原请求'});
+      }
       await send('recovery.releaseProtection', {
         turnId, note: '检查并继续排队消息；保留原执行结果', endPreviousExecution: true,
       });
-      await send('dispatch.resume', {confirm: true});
+      const refreshed = await inspect(turnId);
+      if (refreshed.exitCheck.state !== 'released') throw Error(refreshed.exitCheck.message || '占用尚未解除，请重新检查。');
+      return refreshed;
     })().finally(() => { inFlight.delete(turnId); });
     inFlight.set(turnId, pending);
     return pending;

@@ -54,7 +54,7 @@ describe('R102 recovery next steps in human language', () => {
     expect(top).toContain('Codex');
     expect(top).toContain('href="#task=root_task"');
     expect(top).toContain('上次写作');
-    expect(top).toContain('检查上次回复');
+    expect(top).toContain('检查中断');
     expect(top).not.toContain('retained');
     expect(top).not.toContain('UNKNOWN');
     expect(html).toContain(raw);
@@ -86,7 +86,7 @@ describe('R102 recovery next steps in human language', () => {
     const html = renderToStaticMarkup(createElement(ExecutionWaitActions, {blocker: dmBlocker}));
     const top = visible(html);
     expect(top).toContain('Codex 私信上次回复');
-    expect(top).toContain('检查上次回复');
+    expect(top).toContain('检查中断');
     expect(top).toContain('data-zs-open-recovery="1"');
     expect(top).not.toContain('#?');
     expect(top).not.toContain('租约');
@@ -100,7 +100,7 @@ describe('R102 recovery next steps in human language', () => {
 
   it('opens the recovery panel with a state check and no automatic retry promise', () => {
     const html = renderToStaticMarkup(createElement(RecoveryPanel, {onClose: () => {}, origin: 'runtime'}));
-    expect(html).toContain('检查上次回复');
+    expect(html).toContain('检查中断');
     expect(html).toContain('重新检查状态');
     expect(html).toContain('不会自动重发消息');
     expect(html).not.toContain('租约');
