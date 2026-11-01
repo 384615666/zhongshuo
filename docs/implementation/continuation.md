@@ -6,6 +6,8 @@
 
 用户明确要求当前图标修复版正式发布0.1.0。独立分支codex/release-0.1.0从公开main合R145—R147，保留最新主页/README。根包/安装/便携统一0.1.0；Windows数字版本0.1.0.65535高于beta.3，新增正式/预发布排序与非法版本回归。计划从冻结源码构建验证后推公开main/tag v0.1.0、发布GitHub Release；用户运行中的安装/数据不改、旧私有历史不引入。见[R148](../reviews/r148-release-0.1.0-20261101.md)，最终身份和发布结果待追加。
 
+0.1.0已正式发布（2026-11-01 14:53上海）：https://github.com/384615666/zhongshuo/releases/tag/v0.1.0 ，stable/latest、公开下载200。tag源码46e96a6、BUILD bld_c3d7de0e4422245c/660hash，EXE158174405字节SHA6da931962e24c6ce10a92844f3176b5e1fd41b4cd77b96f06bedb82c5bcfc4a2，EXE/校验/release.json三个远端digest核对一致。最终全量321文件2800通过14跳过0失败、双types/lint、实际升级32/包内CLI34/原生图标7通过，0模型调用。初轮1旧AppId字符串断言已同步并全量复验。公开main和本机main已同步发布源码，原未提交续工文字/审计保留；备份dist/release-workspace-backup及stash。安装验证临时卸载登记已还原，原beta.3四快捷方式已恢复，用户运行程序与聊天根未改。详细证据/声明见R148，后续本记录不改v0.1.0标签或包。
+
 ## 2026-11-01：R147 修复 beta.2 遗漏的原生 EXE/任务栏图标
 
 用户截图反馈旧图。核实确已安装beta.2，新ICO正确但EXE原生资源仍Electron，旧快捷方式复用固定图标路径导致缓存。现发行副本嵌入并回读所有图标组/语言/尺寸，哈希ICO文件名贯穿安装器/快捷方式/卸载，窗口PNG+setAppDetails；既有桌面入口即使未勾新建仍刷新，定向通知Shell，不删全局缓存/不重启Explorer。beta.3准备中，同AppId/数据根，用户运行中beta.2未关闭。见[R147](../reviews/r147-native-icons-beta3-20261101.md)。
