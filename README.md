@@ -1,28 +1,23 @@
-<div align="center">
-  <a href="site/index.html">
-    <img src="logo.png" alt="众说 Logo" width="280">
-  </a>
-  <h1>众说</h1>
-  <p>
-    <b>Windows 本地多 AI 协作工作台</b><br>
-    打开一个文件夹，让多个 AI 一起把事做成。
-  </p>
-  <p>
-    <a href="https://github.com/384615666/zhongshuo"><img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%2F11-2563eb?style=flat-square&logo=windows&logoColor=white"></a>
-    <a href="#为什么是众说"><img alt="local-first" src="https://img.shields.io/badge/local--first-0f766e?style=flat-square"></a>
-    <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-172431?style=flat-square"></a>
-    <a href="https://github.com/384615666/zhongshuo"><img alt="status beta" src="https://img.shields.io/badge/status-beta-2563eb?style=flat-square"></a>
-  </p>
-  <p>
-    <a href="site/index.html">产品主页</a>
-    &nbsp;·&nbsp;
-    <a href="docs/user-guide/README.md">操作手册</a>
-    &nbsp;·&nbsp;
-    <a href="#quick-start">快速开始</a>
-    &nbsp;·&nbsp;
-    <a href="https://github.com/384615666/zhongshuo">GitHub</a>
-  </p>
-</div>
+<a href="site/index.html">
+  <img src="docs/assets/readme-hero.png" alt="众说：Windows 本地多 AI 协作工作台">
+</a>
+
+<p align="center">
+  <a href="https://github.com/384615666/zhongshuo"><img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%2F11-2563eb?style=flat-square&logo=windows&logoColor=white"></a>
+  <a href="#为什么是众说"><img alt="local-first" src="https://img.shields.io/badge/local--first-0f766e?style=flat-square"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-172431?style=flat-square"></a>
+  <a href="https://github.com/384615666/zhongshuo"><img alt="status beta" src="https://img.shields.io/badge/status-beta-2563eb?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="site/index.html">产品主页</a>
+  &nbsp;·&nbsp;
+  <a href="docs/user-guide/README.md">操作手册</a>
+  &nbsp;·&nbsp;
+  <a href="#quick-start">快速开始</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/384615666/zhongshuo">GitHub</a>
+</p>
 
 <a href="site/index.html">
   <img src="site/assets/shots/room.png" alt="众说工作台：多个 AI 在同一个房间协作">
