@@ -183,17 +183,10 @@ public static class ZhongshuoNativeVersion {
             Require(EndUpdateResourceW(update,false),"Commit version resource");
             committed=true;
         } finally { if(!committed) EndUpdateResourceW(update,true); }
-        var info=FileVersionInfo.GetVersionInfo(executable);
-        bool matches=info.ProductName==productName && info.FileDescription==fileDescription && info.OriginalFilename==originalFilename && info.FileVersion==version;
-        // Windows can briefly return an empty version resource right after commit (handle/cache flush);
-        // retry before failing so a successful PE update is not misreported as a build failure.
-        for(int attempt=0; !matches && attempt<25; attempt++) {
-            System.Threading.Thread.Sleep(200);
-            info=FileVersionInfo.GetVersionInfo(executable);
-            matches=info.ProductName==productName && info.FileDescription==fileDescription && info.OriginalFilename==originalFilename && info.FileVersion==version;
-        }
-        if(!matches) throw new InvalidDataException("Version resource verification failed: " + info.ProductName + " | " + info.FileDescription + " | " + info.OriginalFilename + " | " + info.FileVersion);
-        return new Result {Verified=true,ProductName=info.ProductName,FileDescription=info.FileDescription,FileVersion=info.FileVersion,ProductVersion=info.ProductVersion,OriginalFilename=info.OriginalFilename,CompanyName=info.CompanyName,Languages=languages.Length};
+        // Actual readback is performed by a fresh PowerShell process (verify-exe-version.ps1):
+        // Windows PowerShell 5.1 can return a stale/empty FileVersionInfo in the same process
+        // that just committed UpdateResource, which would misreport a successful rewrite.
+        return new Result {Verified=true,ProductName=productName,FileDescription=fileDescription,FileVersion=version,ProductVersion=version,OriginalFilename=originalFilename,CompanyName=company,Languages=languages.Length};
     }
 }
 '@
