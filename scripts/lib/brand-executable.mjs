@@ -22,7 +22,11 @@ export function windowsExecutableBrand(release, originalFilename) {
 export function brandWindowsExecutable(executable, icon, brand = null) {
   if(realpathSync(executable).replaceAll('\\','/').toLowerCase().includes('/node_modules/'))throw Error('Refusing to alter a dependency executable');
   const script=fileURLToPath(new URL('./brand-executable.ps1',import.meta.url));
-  const args=['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Executable',executable,'-Icon',icon];
+  // NOTE: do not pass -NonInteractive here. Windows PowerShell 5.1 resolves the PE
+  // version resource differently in non-interactive mode (FileVersionInfo comes back
+  // empty right after UpdateResource even though the file is correct), which would
+  // fail the read-back verification. The script only uses Win32 APIs and never prompts.
+  const args=['-NoProfile','-ExecutionPolicy','Bypass','-File',script,'-Executable',executable,'-Icon',icon];
   if(brand!=null){
     for(const [key,flag] of [['version','-Version'],['numericVersion','-NumericVersion'],['productName','-ProductName'],['fileDescription','-FileDescription'],['company','-Company'],['copyright','-Copyright'],['internalName','-InternalName'],['originalFilename','-OriginalFilename'],['comments','-Comments']]){
       if(typeof brand[key]==='string'&&brand[key].length>0)args.push(flag,brand[key]);
