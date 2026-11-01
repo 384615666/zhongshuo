@@ -7,7 +7,8 @@
 用户要求在 0.1.1 任务栏图标修复后继续「重写 exe 并发版」：随包 `Zhongshuo.exe` 的 PE 版本资源仍继承 Electron（FileDescription/OriginalFilename/版本 44.4.5），任务栏与文件属性显示 Electron。
 
 - **实现**：`scripts/lib/brand-executable.ps1` 增加 `ZhongshuoNativeVersion`（Win32 UpdateResource 写 `RT_VERSION`，en-US+zh-CN 两套 Unicode 串表，由独立 PowerShell 进程回读 `FileVersionInfo` 校验；`windowsHide`/`-NonInteractive` 下同进程读取会返回空值，已验证规避）；`brand-executable.mjs` 新增 `windowsExecutableBrand(release, originalFilename)`，便携 `electron.exe` 与安装镜像 `Zhongshuo.exe` 均写入；`installed-desktop.json` 增加 `nativeVersion`；`main.ts` 的 `setAppDetails` 增加 `relaunchDisplayName='众说'`；任务栏 AUMID 分离：安装版 `com.zhongshuo.desktop.app`、便携/开发 `com.zhongshuo.desktop.portable`（卸载 AppId 不变），避开旧 Electron 的 AUMID 名称/图标缓存；版本 0.1.1→0.1.2。
-- **验证**：EXE 副本回读 ProductName/FileDescription=众说、FileVersion=0.1.2、OriginalFilename=Zhongshuo.exe、公司=众说开源项目，图标 7 帧回读通过；安装镜像 EXE 同样核对；用镜像 EXE + 新 AUMID 隔离启动，任务栏显示「众说」；0.1.2 干净构建/隔离安装/发布结果待补。
+- **验证**：EXE 副本回读 ProductName/FileDescription=众说、FileVersion=0.1.2、OriginalFilename=Zhongshuo.exe、公司=众说开源项目，图标 7 帧回读通过；从 `299fcb4` 干净构建安装镜像 `bld_1a71ec20247c33c9`（661 文件，nativeIcon/nativeVersion 规范），安装器 159,327,758 字节 SHA256 `ab4a01c6…`；镜像 EXE + 新 AUMID 隔离启动任务栏显示「众说」；最终安装器隔离安装→卸载→恢复原 0.1.1 登记/快捷方式通过，全量 2911 通过 0 失败（仅未跟踪 R130 缺夹具 4 项）。
+- **发布**：https://github.com/384615666/zhongshuo/releases/tag/v0.1.2 （latest；tag=源码提交 `299fcb4`，公开 main 同步；EXE/`.sha256`/`.release.json` 上传且 digest 与本地一致；未签名）。用户当前 0.1.1 安装与数据未动，需正常退出旧版后安装 0.1.2。
 - 详见 [R151](../reviews/r151-exe-version-release-20261101.md)。
 
 ## 2026-11-01：R150 安装向导美化 + 0.1.1 发版
@@ -81,6 +82,7 @@ beta.2已交付：clean程序源码89d6135/BUILD bld_30574674228982a6，659hash�
 V78：desktop-daily-win-v78-r142-runtime-config-20261101，clean源码e2d7a10339366ada5055372d688f8f77700d7853、BUILD bld_df3992438fc6001d。622hash/ZIP652 CRC通过/220454707字节，SHA256 57eb7184c493a8d8f1ebc3d2cbaf1179de62d48602346cdc2808078ee857637d。包内实际Electron/daemon14项/正常退出0通过，沿用数据入口与V77相同；正常退出旧版后start-existing-data.vbs。R141脚本不打入包，不修改Magpie或其他CLI配置，不新增推理。
 
 
+
 ## 2026-11-01：R140 恢复检查过滤已解决的历史中断
 
 用户反馈“查看中断任务”仍定位到已修复完成的旧任务。原库只读确认唯一INTERRUPTED属于DONE任务，后续最新SUCCEEDED；旧recovery.status无条件列全部历史中断。现仅每任务最新run仍INTERRUPTED且task非DONE/CANCELLED才提醒，历史保留；UNKNOWN/保留保护/撤销/门禁独立查询不隐藏。新正式方法在原库readonly+query_only读取interruptedRuns[]，其余空/门禁false，无写入。见[R140](../reviews/r140-recovery-current-20261101.md)。
@@ -148,6 +150,7 @@ V71：desktop-daily-win-v71-r134-message-repairs-20261031，clean源码1059a4441
 独立worktree基于干净1416cd2实施，原目录R130/R131未提交审计与并行站点工作不纳入本轮。297文件2578普通通过+3保留预期反例+1权限跳过，无失败；双types、9变更代码文件lint对照均12项既有/无新增；状态7项、短交流20项及相关173项通过。正式Electron/daemon25检查：1400ms延迟下横幅20ms即显，3200ms/失败history不挡task，长问句/详情入口/双作者/刷新去重通过，0真实业务调用；宽屏UI66项和手册19新图目视通过。V69基线失败保留。
 
 V70：desktop-daily-win-v70-r132-thread-feedback-20261030，clean源码cd1525b019b2340a25230bd0620f670ca3169aa1，BUILD bld_cb97c8eba0dcbb86。615程序hash一致、ZIP648文件CRC通过/220837918字节，SHA256 e94b5186977f8c1132dfa923e75c1dc95861bc6dc49b60c012c22f05d4a5e281。实际包内Electron/daemon、14章19图/新说明/原界面/正常退出通过；开发Electron加载包内代码25项复验通过(横幅17ms)，0真实业务调用。首次封装Electron忽略夹具入口未产报告作为验收方式失败保留并正常退出。沿用数据入口与V69字节相同；用户正常退出旧版后start-existing-data.vbs。实现/交付两提交发布公开main，凭据扫描与远端核对证据在dist/r132-feedback；测试证据在dist/r132-source/dist/r132-feedback。
+
 
 
 ## 2026-10-30：R130 V69 交付包暴力/异常操作对抗测试（仅测试，未改产品）

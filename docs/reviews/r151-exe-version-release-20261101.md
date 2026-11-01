@@ -24,9 +24,16 @@
 ## 验证
 
 - 原型：对 `node_modules/electron/dist/electron.exe` 副本执行脚本，新进程回读 `ProductName=众说`、`FileDescription=众说`、`FileVersion=0.1.2`、`OriginalFilename=Zhongshuo.exe`、`CompanyName=众说开源项目`，图标 7 帧/1 组回读通过。
-- 构建：从干净 worktree 构建 0.1.2，安装镜像内 `Zhongshuo.exe` 的 `FileVersionInfo` 与 `installed-desktop.json.nativeVersion` 均为众说/0.1.2；安装器身份/版本/哈希/清单/隐私扫描照旧。
-- 任务栏名称：用安装镜像 `Zhongshuo.exe --data-dir=<隔离目录>` + 新 AUMID 启动，任务栏按钮显示「众说 - 1 个运行窗口」（旧 AUMID 仍显示 Electron，证明缓存只影响旧 id）。
-- **待补**：0.1.2 安装包静默安装到隔离目录/卸载、GitHub Release 发布结果。
+- 构建：从 `299fcb4` 干净 worktree 构建 0.1.2，便携源镜像 `bld_073b2d0d45e27d21` clean，安装镜像 BUILD `bld_1a71ec20247c33c9`/commit `299fcb4`/dirty=false/661 文件；镜像内 `Zhongshuo.exe` 的 `FileVersionInfo` 为众说/0.1.2/Zhongshuo.exe/众说开源项目；`installed-desktop.json` 的 `nativeIcon`（7 帧 Verified）与 `nativeVersion`（众说/0.1.2）均为规范化结构；安装器 EXE 159,327,758 字节、SHA256 `ab4a01c6fd0f4992f4417290c6ef71a6e5f25634d19f05717d8ae28461ae054f`、FileVersion/ProductVersion 0.1.2、FileDescription 众说 Windows 安装程序。
+- 任务栏身份：用安装镜像 `Zhongshuo.exe --data-dir=<隔离目录>` 启动，默认安装版 AUMID 下任务栏按钮显示「众说 - 1 个运行窗口」且图标为正式猫咪 logo（截图 `dist/r151-tools/taskbar-0.1.2-aumid.png`）；旧 AUMID 仍显示 Electron，确认新 AUMID 生效。
+- 安装/卸载：最终 0.1.2 安装器静默装到隔离目录（665 文件；EXE 元数据/installed-desktop/nativeVersion/logo 均正确；卸载登记与开始菜单临时指向隔离目录）→ 静默卸载 exit 0、隔离目录清空；随后恢复原 0.1.1 的卸载登记与快捷方式（DisplayVersion=0.1.1、原图标、桌面上原本没有快捷方式则保持没有）。未启动安装后的程序，未动用户数据。
+- 全量测试：清除本机 `ELECTRON_RUN_AS_NODE=1` 后 vitest **2911 通过 / 0 失败 / 10 expected fail / 14 跳过**（唯一 4 项失败仍来自本机未跟踪、缺旧夹具的 `chaosR130Upgrade.test.ts`）；`tsconfig.hifi.json` 通过。
+
+## 发布结果（2026-11-01）
+
+- GitHub Release：https://github.com/384615666/zhongshuo/releases/tag/v0.1.2 （draft=false、prerelease=false、latest=true）。
+- tag `v0.1.2` 指向源码提交 `299fcb487161fc4132ec92fcaf744b3637d4c1c0`，公开 main 已同步；三项资产已上传，服务端 digest 与本地一致：EXE（159,327,758 字节，sha256:ab4a01c6…）、`.exe.sha256`、`.release.json`；未登录下载 HEAD 302→200、Content-Length 正确。
+- 未签名（如实 `signed:false`）。用户当前安装的 0.1.1 与数据未动；需正常退出旧版后运行 0.1.2 安装包升级。
 
 ## 未做
 
