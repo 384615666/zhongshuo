@@ -6,7 +6,9 @@
 
 用户仍被旧Pi UNKNOWN/settled/retained挡住，且“核对执行结果”没有对象。原库只读确认旧completed stop被beta2空stop覆盖，当前无history/stalelock、同次Windows启动；不能重新开app就补造退出依据。新增本机readonly recovery.inspect与具体结果/最后动作/退出检查，父按钮精确指child/turn，文案改检查中断；明确ready才release、保留UNKNOWN和历史、不重放。新增丢失旧owner证据时的Windows reboot程序证据，系统启动时刻+monotonic/时间边界/当前锁/进程代次及树/重读核验，不把睡眠或重开app当重启，允许真正新PID代次复用。无retained/no lease但UNKNOWN未闭环不再release noop，矛盾none登记拒绝。
 
-用户这条仍须安装beta.4、保存其他工作并重启一次Windows，再检查中断→解除占用→回原任务继续；本轮不改原保护、不重启用户电脑/不执行原请求。安装器保持必须先退出再安装。具体定向/全量/候选包身份见[R155](../reviews/r155-interrupted-recovery-20261101.md)，最终产物验收待追加；仅本地不推送。
+用户这条仍须安装beta.4、保存其他工作并重启一次Windows，再检查中断→解除占用→回原任务继续；本轮不改原保护、不重启用户电脑/不执行原请求。安装器保持必须先退出再安装。完整343文件3040通过16跳过1旧夹具失败，补齐只读夹具后10文件60项/R135内部78检查通过；最终恢复6文件152项、inspection10项、UI23项、独立7场景及双types/lint无新增通过，不宣称最终源码重跑全量。
+
+本地beta.4安装包已交付：程序5011619 clean/BUILD bld_d77fafd9e51e88c5/665hash，EXE159495307字节SHA256 311e6689a848e224eaa10909f36de81c090d4ef90643bcaaeffde69607f7fd16。最终实际安装42/42通过，健康/正式停机重开/卸载、包内inspect缺失轮次只读错误路径通过，0任务/轮次/模型；原beta3登记与四快捷方式精确恢复，原安装/进程/数据保留，fixture0。根dist/installers附EXE/校验/元数据。此验收没有解除用户原UNKNOWN；恢复仍按上述重启后显式操作。详见[R155](../reviews/r155-interrupted-recovery-20261101.md)，仅本地不推送发布。
 
 ## 2026-11-01：R154 协作交接与恢复诊断
 
