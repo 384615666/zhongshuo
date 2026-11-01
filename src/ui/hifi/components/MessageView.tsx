@@ -255,7 +255,7 @@ export function MessageView({
       {isRepairReplacement ? (
         <div className="panel success msg-repair-banner" data-zs-repair-lineage="replacement">
           <span className="panel-title"><Icon name="refresh" size={13} /> 补交版本</span>
-          <span className="small muted">已由明确的格式补交输出替代原始失败版本。</span>
+          <span className="small muted">已由补交版本替代原始失败版本。</span>
         </div>
       ) : null}
       {isRepairedSource ? (
@@ -303,11 +303,10 @@ export function MessageView({
               {!isHuman && author?.ordinal && author.ordinal > 1 ? <span className="small faint">#{author.ordinal}</span> : null}
               {message.collaborationStage != null ? <span className="msg-stage-tag"><Tag tone="info" icon="layers" title="已保存的研讨结果">{collaborationStageText(message.collaborationStage)}</Tag></span> : null}
               {isRepairedSource ? <Tag tone="neutral" icon="refresh" title="此文保留为历史原文，当前有效版本已补交">原答已补交</Tag> : null}
-              {isRepairReplacement ? <Tag tone="accent" icon="refresh" title="来自明确的格式补交输出">补交</Tag> : null}
+              {isRepairReplacement ? <Tag tone="accent" icon="refresh" title="来自补交版本">补交</Tag> : null}
               {!isHuman && message.kind === 'report' ? <Tag tone="accent" icon="file-text">报告</Tag> : null}
               {message.streaming ? <Tag tone="info" icon="loader">流式中</Tag> : null}
               <span className="msg-time">{clockTime(message.createdAt)}</span>
-              {message.threadMessageSeq !== undefined ? <span className="msg-seq" title="串内顺序号 thread_message_seq">#{message.threadMessageSeq}</span> : null}
               {message.saved ? <Icon name="bookmark" size={11} className="faint" /> : null}
             </div>
             {isHuman && readingAids === true ? <div className="msg-human-bubble">{messageContent}</div> : messageContent}
@@ -403,7 +402,6 @@ function MessageBody({
             <Icon name="layers" size={13} />
             分工计划 · {a.subtasks.length} 个子任务
             <span className="spacer" />
-            <span className="small faint">程序校验通过后才生成任务</span>
           </div>
           <div className="msg-card-body">
             {a.subtasks.map((st) => (
@@ -411,7 +409,7 @@ function MessageBody({
                 key={st.key}
                 className="subtask-row subtask-clickable"
                 onClick={() => onOpenSubtask?.({ taskId: st.taskId, number: st.number, title: st.title })}
-                title="点击 = 对该子任务定向跟进（task.steer），不经协调者转述"
+                title="点击可对该子任务定向跟进"
               >
                 <Icon name="corner-down-right" size={14} className="faint" style={{ marginTop: 3 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -449,10 +447,9 @@ function MessageBody({
         <div className="msg-card" style={{ marginTop: 8 }}>
           <div className="msg-card-head">
             <Icon name="file-text" size={13} />
-            报告 R{r.revision}
+            报告 · 第 {r.revision} 版
             {r.lateIncluded ? <Tag tone="warning" icon="clock">迟到纳入</Tag> : null}
             <span className="spacer" />
-            <span className="small faint mono">baseline_a1f9</span>
           </div>
           <div className="msg-card-body">
             <div className="report-card">
@@ -477,7 +474,7 @@ function MessageBody({
         <div className="msg-card" style={{ marginTop: 8 }}>
           <div className="msg-card-head">
             <Icon name="scale" size={13} />
-            争议 · 修订 r{d.revision}
+            争议 · 修订 {d.revision}
             <Tag
               tone={d.status === 'open' ? 'danger' : d.status === 'needs_user' ? 'warning' : d.status === 'resolved' ? 'success' : 'neutral'}
               icon={d.status === 'open' ? 'alert-circle' : d.status === 'needs_user' ? 'hand' : d.status === 'resolved' ? 'check-circle' : 'help-circle'}
@@ -506,9 +503,6 @@ function MessageBody({
                 <div className="position-reason">{p.reason}</div>
               </div>
             ))}
-            <div className="panel" style={{ marginTop: 8, padding: '7px 10px' }}>
-              主持者不能单方面把其他成员的反对标成同意；共识状态由程序按确认记录计算。
-            </div>
           </div>
         </div>
       ) : null}
@@ -534,8 +528,6 @@ function MessageBody({
               <dd>{ap.scope}</dd>
               <dt>来源</dt>
               <dd>{memberName} · 任务 {ap.taskId.replace('task_', '#')}</dd>
-              <dt>报文摘要</dt>
-              <dd className="mono-sm">{ap.payloadHash}</dd>
             </dl>
             {ap.decision ? (
               <div className={`panel ${ap.decision === 'allow_once' ? 'success' : 'danger'}`} style={{ marginTop: 9 }}>
@@ -556,7 +548,7 @@ function MessageBody({
                   <Icon name="x" size={12} /> 拒绝
                 </button>
                 <span className="small faint" style={{ alignSelf: 'center' }}>
-                  表情与这里的按钮是两回事：表情不构成授权
+                  表情不构成授权
                 </span>
               </div>
             )}
@@ -579,8 +571,8 @@ function MessageBody({
               />
             ) : (
               // DIRECT / AUTO 没有共识语义：显式说明，而不是留空或套一个假状态
-              <Tag plain icon="info" title="只有共同研讨模式才计算共识状态">
-                无共识语义（非研讨模式）
+              <Tag plain icon="info">
+                非研讨模式不计共识
               </Tag>
             )}
           </div>

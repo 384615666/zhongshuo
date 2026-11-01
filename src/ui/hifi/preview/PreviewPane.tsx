@@ -21,7 +21,7 @@ import {
   registerAttachmentResource, openPreview,
 } from '../data/actions-preview';
 import {
-  audienceAllows, openedFromAddsInfo, openedFromLabel, originLabel,
+  audienceAllows, openedFromAddsInfo, originLabel,
   resourceOf, revisionLabel, revisionOf as revOf,
 } from '../lib/resource';
 import { formatBytes, fullTime } from '../lib/format';
@@ -311,7 +311,7 @@ export function PreviewPane({
         <div className="preview-body">
           <div className="panel warning">
             <div className="panel-title"><Icon name="alert-triangle" size={13} /> 资源不可用</div>
-            这份资源或其指定版本已不存在。界面<strong>不会</strong>用同名文件顶替。
+            这份文件或其指定版本已不存在。
             <div className="panel-actions">
               <button className="btn sm" onClick={() => active && closePreviewTab(active.key)}>关闭此标签</button>
             </div>
@@ -331,7 +331,7 @@ export function PreviewPane({
   /** 摘录（r61 独立通道）：正文当前内容前 160 字入队——只有已装载文本可摘录。 */
   const doExcerpt = () => {
     const text = excerptTextOf(active.resourceId);
-    if (text == null || text.trim().length === 0) { toast('本预览还没有可摘录的内容文本（未装载或无文本层——OCR 未实现）', 'warn'); return; }
+    if (text == null || text.trim().length === 0) { toast('本预览还没有可摘录的文字内容（文件尚未加载完成，或没有可提取的文字）', 'warn'); return; }
     const rev = String(revisionLabel(resource, active.revision));
     const r = queueDraftInsert(quoteTarget.draftKey, `> 摘录「${resource.title}」${rev}：${text.replace(/\s+/g, ' ').trim().slice(0, 160)}`);
     if (r.ok) {
@@ -357,13 +357,13 @@ export function PreviewPane({
         const r = await command<{ filename: string | null; hash: string; bytes: number; bytesBase64: string }>('attachment.originalFile', { attachmentId: fa.attachmentId, conversationId: fa.conversationId ?? '' });
         name = r.filename ?? resource.title;
         contentBase64 = r.bytesBase64;
-        fact = `原件 ${r.bytes}B · sha256 ${r.hash.slice(0, 12)}…（服务端核验一致）`;
+        fact = `原件 ${r.bytes}B`;
       } else if (isWorktree) {
         const snap = worktreeSnapshots.get(`${resource.id}:${active.revision}`);
-        if (snap == null) { toast('这份工作区文件的读取快照不可用（重新打开文件后再保存）', 'warn'); return; }
+        if (snap == null) { toast('这份工作区文件的读取内容不可用（重新打开文件后再保存）', 'warn'); return; }
         if (resource.mutable && active.pendingRevision) { toast('磁盘上的文件已更新——请先点上方「重新加载」再保存（不静默另存新字节）', 'warn'); return; }
         contentBase64 = snap.bytesBase64;
-        fact = `工作区原文件 ${snap.bytes}B · sha256 ${snap.sha256.slice(0, 12)}…（读取时快照）`;
+        fact = `原文件 ${snap.bytes}B`;
       } else if (isDelivery) {
         const fd = resource.formalDelivery!;
         const doc = deliveryDocs.get(`${resource.id}:${active.revision}`);
@@ -373,7 +373,7 @@ export function PreviewPane({
         for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
         contentBase64 = btoa(bin);
         name = resource.title.endsWith('.md') ? resource.title : `${resource.title}.md`;
-        fact = `交付文档 v${fd.revision} · ${doc.bytes}B · 交付校验值 ${fd.manifestHash.slice(0, 12)}…${doc.hashMatch === false ? '（内容校验值与交付记录不同，验收使用交付记录中的版本）' : ''}`;
+        fact = `交付文档 v${fd.revision} · ${doc.bytes}B${doc.hashMatch === false ? '（内容与交付记录不同，请查看文件信息）' : ''}`;
       } else {
         toast('这种来源暂不支持保存原文件（会话导出在会话头部菜单）', 'warn');
         return;
@@ -513,7 +513,7 @@ export function PreviewPane({
           <span className="mono-sm">{url}</span>
         </span>
         <span className="spacer" />
-        <Tag plain title={isWorktree ? '项目工作区文件——只读快照' : isDelivery ? 'AI 交付文档' : '会话附件/成果——服务端托管'}>
+        <Tag plain title={isWorktree ? '项目工作区文件（只读）' : isDelivery ? 'AI 交付文档' : '会话附件或成果'}>
           {isWorktree ? '工作区只读' : isDelivery ? 'AI 交付文档' : '会话资源'}
         </Tag>
         {canChooseReading ? (
@@ -529,7 +529,7 @@ export function PreviewPane({
         <button
           className="preview-icon-btn"
           aria-label="下载原文件"
-          title={`保存当前这份文件的原件字节（${isFormalAttachment ? '服务端 sha256 核验' : isWorktree ? '读取时快照' : '交付正文'}）；路径经系统另存为对话框由你选择`}
+          title="保存当前这份文件的原件；可选择保存位置"
           disabled={dlBusy}
           onClick={() => void doDownloadOriginal()}
         >
@@ -546,7 +546,7 @@ export function PreviewPane({
       {resource.mutable && active.pendingRevision ? (
         <button
           className="tag-btn warning preview-dirty-banner"
-          title="磁盘上的文件已更新。点击重新加载会切换到这个标签的读取快照；已插入草稿的引用仍绑定原版本"
+          title="磁盘上的文件已更新。重新加载会显示最新内容；已插入草稿的引用仍指向原版本"
           onClick={() => { reloadResource(active.pendingRevision!, active.key); }}
         >
           <Icon name="alert-triangle" size={10} /> 磁盘已更新 · 重新加载
@@ -616,10 +616,10 @@ export function PreviewPane({
           <MenuItem icon="quote" title="把当前内容文本的前 160 字摘录到输入框正文（独立于文件引用）" onClick={() => { doExcerpt(); setMoreAt(null); }}>
             摘录到输入框
           </MenuItem>
-          <MenuItem icon="info" title="完整路径、版本、内容 hash、来源与可见范围" onClick={() => { setInfoOpen(true); setMoreAt(null); }}>文件信息</MenuItem>
+          <MenuItem icon="info" title="完整路径、版本、大小、来源与可见范围" onClick={() => { setInfoOpen(true); setMoreAt(null); }}>文件信息</MenuItem>
           <MenuItem
             icon="download"
-            title={`保存当前这份文件的原件字节（${isFormalAttachment ? 'attachment.originalFile：服务端 sha256 核验' : isWorktree ? '项目文件预览' : isDelivery ? 'delivery.document：交付文档正文（UTF-8）' : '当前来源'}）`}
+            title="保存当前这份文件的原件；可选择保存位置"
             disabled={dlBusy}
             onClick={() => { void doDownloadOriginal(); setMoreAt(null); }}
           >
@@ -651,7 +651,7 @@ export function PreviewPane({
 
       {infoOpen && resource != null && revision != null ? (
         <Modal onClose={() => setInfoOpen(false)} size="md" title="文件信息">
-          <FileInfoBody resource={resource} revision={revision} openedFrom={active.openedFrom} />
+          <FileInfoBody resource={resource} revision={revision} />
         </Modal>
       ) : null}
 
@@ -864,7 +864,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
         revisionLabel={revLabel}
         onDownload={dl}
         fallbackSheets={loaded.office?.sheets ?? []}
-        fallbackNote={loaded.extraction === 'failed' ? `提取不可用（${loaded.extractionError ?? '解析失败'}），暂时无法把文件内容发送给 AI` : undefined}
+        fallbackNote={loaded.extraction === 'failed' ? '文件内容解析失败，暂时无法把内容发送给 AI' : undefined}
         {...readerProps}
       />
     );
@@ -913,8 +913,8 @@ function BytesUnavailableView({ reason, onDownload, revLabel }: { reason: string
   return (
     <div className="preview-unsupported" data-zs-bytes-unavailable={reason.slice(0, 40)}>
       <Icon name="alert-triangle" size={20} className="faint" />
-      <div className="strong" style={{ marginTop: 8 }}>原件字节通道不可用</div>
-      <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{reason}——这份文件（{revLabel}）仍已保存，可下载原件；提取文本见「文件信息」。</div>
+      <div className="strong" style={{ marginTop: 8 }}>无法读取原件</div>
+      <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{reason}——这份文件（{revLabel}）已保存，可下载原件；提取文字见「文件信息」。</div>
       <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
     </div>
   );
@@ -944,7 +944,7 @@ function HtmlPageView({ html, filename }: { html: string; filename: string }) {
         data-zs-html-frame="1"
       />
       <div className="preview-html-note small faint">
-        静态页面预览：脚本已禁用、外部资源不加载（隔离渲染）；链接与交互暂不支持——切「源码」可看原文。
+        脚本已禁用、外部资源不加载；链接与交互暂不支持——切「源码」可查看原文。
       </div>
     </div>
   );
@@ -986,7 +986,6 @@ function CsvView({ text }: { text: string }) {
           ))}
         </tbody>
       </table>
-      <div className="small faint" style={{ marginTop: 8 }}>逻辑行数与单元格内的换行分别处理；引号内的逗号不作为分隔符。</div>
     </div>
   );
 }
@@ -1052,7 +1051,7 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
         <Icon name="file-text" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>这份交付没有可读文档</div>
         <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>
-          交付的最终输出未持久化为可读文档——交付身份仍有效：v{fd.revision} · 交付校验值 {fd.manifestHash.slice(0, 12)}…（验收/引用按「详情」与引用通道进行）。
+          这份交付没有可读文档（v{fd.revision}）；验收与引用仍可在「详情」中使用。
         </div>
         <div className="panel-actions">
           <button className="btn sm" onClick={onOpenComment}>评论此交付（会话锚点）</button>
@@ -1068,12 +1067,12 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
   if (viewMode === 'preview' && tc != null) {
     return (
       <div className="preview-read-doc" data-zs-delivery-doc="1">
-        <MarkdownView text={tc.changeSummary ?? '（changeSummary 缺失）'} />
+        <MarkdownView text={tc.changeSummary ?? '（未提供说明）'} />
         {tc.files != null && tc.files.length > 0 ? (
-          <div className="small" style={{ marginTop: 10 }} data-zs-delivery-files="1"><strong>涉及文件（点击在阅读器打开——文件本体与报告分列）</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => (
+          <div className="small" style={{ marginTop: 10 }} data-zs-delivery-files="1"><strong>涉及文件（点击打开）</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => (
             <li key={i} className="mono-sm">
               {f}
-              <button className="btn ghost sm" style={{ marginLeft: 6 }} data-zs-delivery-file={f} title="以工作区文件打开（只读快照：真实路径/hash/版本）" onClick={() => onOpenWorktreeFile(f, 0)}>打开文件</button>
+              <button className="btn ghost sm" style={{ marginLeft: 6 }} data-zs-delivery-file={f} title="以项目文件打开（只读）" onClick={() => onOpenWorktreeFile(f, 0)}>打开文件</button>
             </li>
           ))}</ul></div>
         ) : null}
@@ -1087,7 +1086,7 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
           <div className="small" style={{ marginTop: 8 }}><strong>遗留问题</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.remainingIssues.map((v, i) => <li key={i}>{v}</li>)}</ul></div>
         ) : null}
         <div className="small faint" style={{ marginTop: 10, borderTop: '1px solid var(--border,#dbe2ea)', paddingTop: 8 }}>
-          交付文档 v{fd.revision} · 交付校验值 {fd.manifestHash.slice(0, 12)}…；「源码」查看原始 JSON。
+          交付文档 v{fd.revision}；「源码」可查看原始内容。
         </div>
       </div>
     );
@@ -1111,7 +1110,7 @@ function openWorktreeFileFromDelivery(projectId: string, path: string, sizeBytes
    文件信息（工程字段/提取/模型窗——收进对话框，不占阅读主体）
    ============================================================ */
 
-function FileInfoBody({ resource, revision, openedFrom }: { resource: PreviewResource; revision: ResourceRevision; openedFrom: import('../data/types').ContextLocation }) {
+function FileInfoBody({ resource, revision }: { resource: PreviewResource; revision: ResourceRevision }) {
   const s = useStore((x) => x);
   const url = resource.relativePath ?? resource.title;
   return (
@@ -1121,9 +1120,8 @@ function FileInfoBody({ resource, revision, openedFrom }: { resource: PreviewRes
       <dt>版本</dt>
       <dd>
         {revisionLabel(resource, revision.revision)}
-        <span className="faint"> · {resource.mutable ? '工作区读取快照（随磁盘更新，需手动重新加载）' : '固定交付/附件版本'}</span>
+        <span className="faint"> · {resource.mutable ? '随磁盘更新，需手动重新加载' : '固定版本'}</span>
       </dd>
-      <dt>内容 hash</dt><dd className="mono-sm" style={{ overflowWrap: 'anywhere' }}>{revision.hash}</dd>
       <dt>大小</dt><dd>{formatBytes(revision.sizeBytes)}</dd>
       <dt>类型</dt><dd className="mono-sm">{resource.formalAttachment ? KIND_LABEL[resource.formalAttachment.kind] ?? resource.formalAttachment.kind : resource.mimeType}</dd>
       <dt>版本时间</dt><dd>{fullTime(revision.createdAt)}</dd>
@@ -1132,7 +1130,6 @@ function FileInfoBody({ resource, revision, openedFrom }: { resource: PreviewRes
       <dd>
         {resource.audience.kind === 'room' ? '本房间成员' : resource.audience.kind === 'dm' ? '仅这条私信的参与者' : '项目成员'}
       </dd>
-      <dt>本次打开位置</dt><dd>{openedFromLabel(s, openedFrom)}</dd>
     </dl>
   );
 }
@@ -1151,11 +1148,11 @@ function CommentDialog({ resource, revision, onClose }: { resource: PreviewResou
     <Modal
       size="md"
       title="评论此文件"
-      subtitle={`固定 ${resource.title} · v${revision.revision} · ${revision.hash.slice(0, 14)}`}
+      subtitle={`${resource.title} · v${revision.revision}`}
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">评论=向源会话发一条「仅记录」消息并携带本文件引用卡（不触发模型派发）</span>
+          <span className="small faint">评论会作为「仅记录」消息发到源会话，不触发模型。</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button
@@ -1181,12 +1178,12 @@ function CommentDialog({ resource, revision, onClose }: { resource: PreviewResou
         <div className="small faint" style={{ marginTop: 4, lineHeight: 1.65 }}>
           {isDm
             ? '这是私信来源的评论，只会进入该私信会话，不会出现在房间或公共成果列表。'
-            : '评论归属由文件来源决定，不因为当前正在看别的任务而改变。'}
+            : '评论会发送到文件的来源会话。'}
         </div>
       </div>
       <div className="panel" style={{ marginBottom: 12 }}>
         <div className="small faint" style={{ lineHeight: 1.65 }}>
-          版本固定为 <span className="mono-sm">v{revision.revision}</span>。文件更新后本条评论仍指向这个版本，锚点不会静默漂移。
+          评论固定在 <span className="mono-sm">v{revision.revision}</span>；文件更新后仍指向这个版本。
         </div>
       </div>
       <div className="field">
@@ -1196,7 +1193,7 @@ function CommentDialog({ resource, revision, onClose }: { resource: PreviewResou
           rows={4}
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="例如：这里的资源解析应该走受控读取层，不要在界面拼路径。"
+          placeholder="例如：这一段的说明需要更清楚。"
         />
       </div>
     </Modal>

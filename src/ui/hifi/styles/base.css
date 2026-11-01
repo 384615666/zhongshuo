@@ -147,6 +147,20 @@ code, pre, .mono {
   color: var(--text-inverse);
 }
 
+/* 正式品牌图（2026-11-01 用户指定根目录 logo.png）：欢迎页直接显示正式 logo，
+   不再用 CSS 画旧字标。原图白底方形，四周留白保留；用白色圆角托底保证深浅主题都清晰。 */
+.welcome-brand {
+  width: 132px;
+  height: 132px;
+  object-fit: contain;
+  display: block;
+  border-radius: 22px;
+  background: #fff;
+  border: 1px solid var(--border-subtle);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 /* ---------- 侧栏 ---------- */
 
 .sidebar {
@@ -2193,18 +2207,4 @@ table.tbl tbody tr:hover {
   height: 8px;
   border-radius: 2px;
   margin-right: 4px;
-}
-
-/* 原型水印，提醒当前是原型而非真实运行 */
-.proto-flag {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 7px;
-  border-radius: var(--r-full);
-  border: 1px dashed var(--border-strong);
-  color: var(--text-4);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
 }

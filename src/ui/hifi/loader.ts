@@ -239,8 +239,8 @@ async function initDraftPersistenceFromIdentity(): Promise<void> {
       const ns = `${id.appDataDir}|${id.localUserId}`;
       initDraftPersistence(ns);
       if (id.rootIdentityHealth === 'invalid-marker') {
-        recordWrite('app.identity', `数据根身份标记无效（${id.rootIdentityProblem ?? '未知原因'}）——原件未改动；本会话草稿按绝对路径键读写，逻辑身份继承暂停`);
-        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, recoveryNote: `数据根身份标记 root-identity.json 无效（${id.rootIdentityProblem ?? '未知原因'}）——**原件逐字保全，未换 ID**；本会话按绝对路径键读写（同目录内正常）。修复方法：人工核对 ${id.appDataDir}\\root-identity.json（内容应为 {"id":"dri_…","createdAt":…}），修正或删除该文件后重启应用——逻辑身份与跨目录继承即恢复。` } }));
+        recordWrite('app.identity', `草稿保存标记无效（${id.rootIdentityProblem ?? '未知原因'}）——原文件未改动；本会话草稿仍可正常编辑，暂不继承旧草稿`);
+        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, recoveryNote: `草稿保存标记无效（${id.rootIdentityProblem ?? '未知原因'}）——原文件未改动，本会话仍可正常编辑草稿。可到设置页重新检查。` } }));
       }
       return;
     }
@@ -313,11 +313,11 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
       }
     } catch (e) {
       // 目录校验不可用：仅已验证部分继承；未验证候选下次启动重试（标记不写 done）。
-      scanError = `旧目录身份核对不可用（${e instanceof Error ? e.message : String(e)}）——未验证候选保留，下次启动自动重试`;
+      scanError = `旧草稿目录检查不可用（${e instanceof Error ? e.message : String(e)}）——候选保留，下次启动自动重试`;
     }
   }
   if (validated.length > 0) {
-    mergeInheritedSnapshots(validated, `已从旧命名空间自动继承（${validated.map((c) => c.sourceDir).join('、')}；旧键原样保留）`);
+    mergeInheritedSnapshots(validated, `已从旧版本自动恢复草稿（${validated.map((c) => c.sourceDir).join('、')}；原记录保留）`);
   }
   setLegacyImportCandidates(importable, scanError);
   if (importable.length > 0) {
@@ -337,7 +337,7 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
 export async function rescanLegacyImport(): Promise<void> {
   try {
     const id = await command<{ localUserId: string; appDataDir: string; dataRootId: string | null }>('app.identity', {});
-    if (id.dataRootId == null) { setLegacyImportCandidates([], '当前无逻辑数据根身份（标记无效/不可用）——先修复 root-identity.json 再重扫'); return; }
+    if (id.dataRootId == null) { setLegacyImportCandidates([], '当前无法读取草稿存储标记——请先修复存储标记后重新扫描'); return; }
     await attemptLegacyInheritance(`v2.${id.dataRootId}|${id.localUserId}`, { localUserId: id.localUserId, appDataDir: id.appDataDir, dataRootId: id.dataRootId });
   } catch (e) {
     setLegacyImportCandidates([], `重扫失败：${e instanceof Error ? e.message : String(e)}`);

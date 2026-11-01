@@ -110,7 +110,7 @@ export function SettingsPage() {
           <div className="faint small" style={{ marginTop: 4 }}>当前生效值：{autoOpenSaved != null && autoOpenSaved !== '' ? autoOpenSaved : '（未设置）'}</div>
         </div>
         <div style={{ marginTop: 10 }}>
-          <div className="faint small">主池顶部的仓库状态条（原界面「仓库状态」开关）</div>
+          <div className="faint small">显示顶部的仓库状态条</div>
           <div className="row tight" style={{ marginTop: 4 }}>
             <button className="btn ghost sm" disabled={busy || repoVisible === 'true'} onClick={() => void saveSetting('repoStatus.visible', 'true', '「显示仓库状态」')}>显示</button>
             <button className="btn ghost sm" disabled={busy || repoVisible === 'false'} onClick={() => void saveSetting('repoStatus.visible', 'false', '「显示仓库状态」')}>隐藏</button>
@@ -120,20 +120,20 @@ export function SettingsPage() {
       </div>
 
       <div className="panel info" data-zs-settings-storage="1">
-        <div className="row tight"><strong>数据与草稿存储</strong><span className="faint small">（数据根位置与草稿快照健康度——日常可查）</span></div>
+        <div className="row tight"><strong>数据与草稿存储</strong><span className="faint small">（数据位置与草稿保存状态）</span></div>
         <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-          <div>数据根：<span className="mono small">{identity != null ? identity.appDataDir : '（读取中…）'}</span></div>
-          <div className="faint small">本项目数据（消息/任务/附件/凭据）都存放在这个目录；不同安装/演练环境使用各自独立的数据根。</div>
-          <div style={{ marginTop: 4 }}>草稿快照：
+          <div>数据位置：<span className="mono small">{identity != null ? identity.appDataDir : '（读取中…）'}</span></div>
+          <div className="faint small">消息、任务、附件和凭据都存放在这个目录。</div>
+          <div style={{ marginTop: 4 }}>草稿保存：
             {draftPersist.mode === 'on' && draftPersist.error == null ? <span className="faint small">正常（刷新/崩溃后草稿与未确认发送保留；普通草稿 24 小时过期）</span> : null}
-            {draftPersist.mode === 'locked' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>保全锁定——快照无法恢复且原件未能隔离：主键已保全（不覆盖），新写入仅内存态，发送暂不可用</span> : null}
+            {draftPersist.mode === 'locked' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>保全锁定——原草稿未能隔离，已保留不覆盖；新输入只保存在内存，暂时无法发送</span> : null}
             {draftPersist.mode === 'off' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>不可用（{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}）——草稿仅本次进程内有效</span> : null}
             {draftPersist.mode === 'on' && draftPersist.error != null ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>写入失败（{userFacingSystemText(draftPersist.error ?? '')}）——内存仍有效</span> : null}
           </div>
           {draftPersist.recoveryNote != null ? <div className="faint small" data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div> : null}
           {draftPersist.mode !== 'on' || draftPersist.error != null || draftPersist.recoveryNote != null ? (
             <div className="row tight" style={{ marginTop: 4 }}>
-              <button className="btn ghost sm" data-zs-draft-retry="1" title="重试草稿快照初始化（如已释放存储空间：原件隔离→恢复→建立新快照）" onClick={() => { retryDraftPersistence(); toast('已重试草稿快照初始化——状态按上方显示为准', 'info'); }}>重试草稿存储</button>
+              <button className="btn ghost sm" data-zs-draft-retry="1" title="释放存储空间后可重试恢复草稿保存" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试草稿存储</button>
             </div>
           ) : null}
         </div>
@@ -143,16 +143,16 @@ export function SettingsPage() {
         <div className="row tight"><strong>项目</strong></div>
         <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
           <div>当前项目：{project != null ? `${project.displayName}` : '（未打开）'}{project != null && (project.rootPath ?? '') !== '' ? <span className="faint small">（{project.rootPath}）</span> : null}</div>
-          <div className="faint small">成员 runtime 绑定/模型已在新界面成员页；任务验收策略等其余项目级设置在原界面「项目设置」：</div>
+          <div className="faint small">成员与 AI 设置在成员页管理；任务验收等其余项目设置：</div>
           <div className="row tight" style={{ marginTop: 4 }}>
-            <button className="btn ghost sm" onClick={() => navigate('/members')}>成员与 runtime 绑定（成员页）</button>
+            <button className="btn ghost sm" onClick={() => navigate('/members')}>成员与 AI 设置（成员页）</button>
             <button className="btn ghost sm" onClick={() => takeLegacy('members')}>其余项目设置（原界面）</button>
           </div>
         </div>
       </div>
 
       <div className="panel info">
-        <div className="row tight"><strong>远程访问</strong><span className="faint small">（实际监听事实——只读）</span></div>
+        <div className="row tight"><strong>远程访问</strong><span className="faint small">（只读）</span></div>
         {remoteErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>远程配置读取失败：{userFacingSystemText(remoteErr ?? '')}</div> : remote == null ? <div className="faint small" style={{ marginTop: 4 }}>读取中…</div> : (
           <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
             <div>模式：{remote.allowLan ? '局域网' : '仅本机'} · 状态：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
@@ -168,7 +168,7 @@ export function SettingsPage() {
       </div>
 
       <div className="panel info">
-        <div className="row tight"><strong>打开定位</strong><span className="faint small">（桌面端没有地址栏——粘贴「复制定位链接」产出的 #task=… 等深链）</span></div>
+        <div className="row tight"><strong>打开定位</strong><span className="faint small">（粘贴「复制定位链接」得到的定位链接）</span></div>
         <div className="row tight" style={{ marginTop: 6 }}>
           <input className="composer-input" style={{ flex: 1, minWidth: 160 }} placeholder="如 #task=task_ab12…（线程详情 →「复制定位链接」）" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
           <button className="btn ghost sm" onClick={() => void openDeepLink()}>打开定位</button>
@@ -190,7 +190,6 @@ export function SettingsPage() {
         <div className="row tight wrap" style={{ marginTop: 6 }}>
           <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>远程访问变更（原界面）</button>
         </div>
-        <div className="faint small" style={{ marginTop: 4 }}>成员 runtime 绑定、搜索与收藏、活动流、Git 历史（只读）已在新界面；线程「成果与附件」为线程内真实标签。</div>
       </div>
     </div>
   );

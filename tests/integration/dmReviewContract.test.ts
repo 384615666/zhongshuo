@@ -187,7 +187,7 @@ describe('第四十五轮 §3：DM 返工目标固定（真实 fake 链 + 原样
       expect(emitted[2]!.params).toMatchObject({ deliveryId: d3.id, deliveryRevision: 3, manifestHash: d3.manifest_hash });
       expect(backendErrors[0]).toContain('STALE_REVISION'); // 后端按版本绑定拒（第 3 版已处理）
       expect((db.prepare('SELECT review_status FROM task_deliveries WHERE id = ?').get(d4.id) as { review_status: string }).review_status).toBe('pending'); // 第 4 版零误审
-      expect(uiErrors.some((m) => m.includes('第 3 版快照'))).toBe(true); // UI 如实标注快照版本
+      expect(uiErrors.some((m) => m.includes('第 3 版'))).toBe(true); // UI 如实标注快照版本
     }
 
     // ---------- ④ 跨 DM 切换：明确作废、零提交 ----------

@@ -74,7 +74,7 @@ function injectMinimal() {
   drag.ondblclick = function () { var w = window.zsWindow; if (w != null) w.toggleMaximize(); };
   var note = document.createElement('span');
   note.className = 'zs-tb-note';
-  note.textContent = window.zsWindow != null ? '' : '浏览器宿主（窗口控制由桌面客户端提供）';
+  note.textContent = window.zsWindow != null ? '' : '网页预览（窗口控制由桌面客户端提供）';
   bar.appendChild(name);
   bar.appendChild(drag);
   bar.appendChild(note);

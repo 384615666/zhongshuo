@@ -17,7 +17,8 @@ const sha = data => createHash('sha256').update(data).digest('hex');
 const json = (target, value) => writeFileSync(target, JSON.stringify(value, null, 2) + '\n', 'utf8');
 
 export function releaseVersion(input = release.version) {
-  const version = input.startsWith('beta.') ? `0.1.0-${input}` : input;
+  // beta.N shorthand follows the current stable core (e.g. 0.1.1-beta.N after a 0.1.1 bump).
+  const version = input.startsWith('beta.') ? `${release.version.split('-')[0]}-${input}` : input;
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/.exec(version);
   if (!match || match.slice(1,4).some(part => Number(part) > 65535)
     || match[4] != null && Number(match[4]) >= 65535) throw Error('Version must be X.Y.Z or X.Y.Z-beta.N (or beta.N); core parts <= 65535, beta number < 65535');

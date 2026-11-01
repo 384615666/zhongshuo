@@ -16,7 +16,7 @@ import {
   consensusCopy, type Tone,
 } from '../lib/format';
 import type { Consensus, ErrorCode, RunStatus, TaskStatus, TurnStatus } from '../data/types';
-import { recordLocalOnly, useStore } from '../data/store';
+import { useStore } from '../data/store';
 
 /* ---------------- 状态标签 ---------------- */
 
@@ -81,12 +81,12 @@ export function CostText({
   const text = formatCost(quality, amount);
   if (quality === 'unknown') {
     return (
-      <span className="faint" title="该 runtime 未返回可比账单数据；未知不显示为 0">
+      <span className="faint" title="未获取到费用数据">
         {text}
       </span>
     );
   }
-  return <span title={quality === 'estimated' ? '按 provider 估算，非真实账单' : 'provider 上报值'}>{text}</span>;
+  return <span title={quality === 'estimated' ? '估算值，非实际账单' : '模型服务上报的费用'}>{text}</span>;
 }
 
 /* ---------------- 错误态（§16.5） ---------------- */
@@ -548,7 +548,7 @@ export type DetailHost = 'page' | 'panel';
  * API 与原生包装版完全一致（value/onChange/options/size/loading/disabled/title/ariaLabel）。
  */
 export function Select({
-  value, onChange, options, size, loading, loadingLabel = '装载中…', disabled, title, ariaLabel, searchable=false,
+  value, onChange, options, size, loading, loadingLabel = '加载中…', disabled, title, ariaLabel, searchable=false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -669,21 +669,6 @@ function useSelectListId(): string {
 export function hostClass(host: DetailHost | undefined, base: 'main' | 'page') {
   if (base === 'main') return host === 'panel' ? 'main as-panel' : 'main';
   return host === 'panel' ? 'page as-panel-page' : 'page';
-}
-
-/* ---------------- 原型标记 ---------------- */
-
-export function ProtoFlag({ note = '演示界面' }: { note?: string }) {
-  return (
-    <span
-      className="proto-flag"
-      title="此界面使用演示数据，刷新后会重置。"
-      onClick={() => recordLocalOnly('proto.flag.open', '查看了原型边界说明')}
-    >
-      <Icon name="sparkles" size={10} />
-      {note}
-    </span>
-  );
 }
 
 /* ---------------- 进度条 ---------------- */

@@ -56,7 +56,7 @@ class TitleBarBoundary extends Component<{ children: ReactNode }, { failed: bool
       return (
         <div className="zs-titlebar" data-zs-titlebar-rendered="react" data-zs-titlebar-degraded="1">
           <span className="zs-tb-name">众说</span>
-          <span className="zs-tb-stat" title="标题栏渲染出错，已降级为最小控制条；主界面不受影响（可重启应用恢复完整标题栏）">标题栏已降级</span>
+          <span className="zs-tb-stat" title="标题栏显示异常；主界面不受影响（重启应用可恢复完整标题栏）">标题栏已降级</span>
           <div className="zs-tb-drag" title="拖动窗口；双击最大化/还原" onDoubleClick={() => { void d?.toggleMaximize(); }} />
           <button type="button" className="zs-winbtn" title="最小化" aria-label="最小化" onClick={() => { void d?.minimize(); }}><Icon name="minus" size={12} /></button>
           <button type="button" className="zs-winbtn" title="最大化/还原" aria-label="最大化或还原" onClick={() => { void d?.toggleMaximize(); }}><Icon name="maximize" size={11} /></button>

@@ -9,9 +9,9 @@ node scripts/make-windows-installer.mjs
 # 复用 dist/desktop/众说-便携-win-x64（先逐文件校验原 BUILD/MANIFEST）
 node scripts/make-windows-installer.mjs --skip-build
 
-# 可选指定冻结镜像；也支持 beta.N 作为 0.1.0-beta.N 的简写
+# 可选指定冻结镜像；也支持 beta.N 作为当前稳定核心版本（release.json）的 beta 简写
 node scripts/make-windows-installer.mjs --skip-build --version beta.0
-node scripts/make-windows-installer.mjs --source-image D:/absolute/clean-image --version 0.1.0
+node scripts/make-windows-installer.mjs --source-image D:/absolute/clean-image --version 0.1.1
 
 # 小夹具实际编译模板；不构建完整镜像，不安装或启动
 node scripts/make-windows-installer.mjs --validate-template
@@ -24,7 +24,9 @@ node scripts/make-windows-installer.mjs --skip-build --stage-only
 
 `--output-dir DIR` 覆盖最终 EXE 目录；`--iscc FILE` 覆盖 Inno 编译器（也可用 `ISCC_EXE`）。默认发现当前用户的 Inno Setup 6 或 Program Files 安装。无需全局 npm/pnpm install。
 
-最终文件为 `dist/installers/Zhongshuo-Setup-0.1.0-x64.exe`，附 SHA256 和 `.release.json`。稳定版 `X.Y.Z` 映射 Windows 数字版本 `X.Y.Z.65535`，同核心版本的 beta.N 映射 `X.Y.Z.N`（N < 65535），确保正式版高于已安装 beta.3。所有版本保留相同 AppId `com.zhongshuo.desktop`，写 HKCU 的应用卸载登记；版本不加入 AppId 或安装目录。默认目录 `%LOCALAPPDATA%/Programs/Zhongshuo`，开始菜单快捷方式始终创建，桌面快捷方式可选。安装完成的“打开众说”默认为未勾选，静默安装永不启动应用。
+最终文件为 `dist/installers/Zhongshuo-Setup-0.1.1-x64.exe`，附 SHA256 和 `.release.json`。稳定版 `X.Y.Z` 映射 Windows 数字版本 `X.Y.Z.65535`，同核心版本的 beta.N 映射 `X.Y.Z.N`（N < 65535），确保正式版高于已安装 beta.3。所有版本保留相同 AppId `com.zhongshuo.desktop`，写 HKCU 的应用卸载登记；版本不加入 AppId 或安装目录。默认目录 `%LOCALAPPDATA%/Programs/Zhongshuo`，开始菜单快捷方式始终创建，桌面快捷方式可选。安装完成的“打开众说”默认为未勾选，静默安装永不启动应用。
+
+安装向导外观：`branding/wizard-large-*.png`（164:314，多档 DPI）与 `branding/wizard-small-*.png`（方形多档）由 `scripts/lib/wizard-images.ps1` 从根 `logo.png` 生成，`WizardImageFile`/`WizardSmallImageFile` 按当前 DPI 自动选最近档；`[Messages]` 覆盖欢迎/准备/完成页文案，去掉默认 Inno 许可与纯文本说明页（MIT 许可证与安装说明仍随包安装），完成页同时提供“打开众说/打开操作手册”。
 
 数据由主程序管理，默认 `%LOCALAPPDATA%/Zhongshuo/data`。安装器没有任何数据目录的 Files/Dirs/InstallDelete/UninstallDelete/UninstallRun 操作，不导入既有聊天。正常卸载只移除安装日志登记的程序文件，保留数据及未登记的用户文件。隔离 QA 启动应用时传显式 `--data-dir=<absolute ignored QA root>`。安装/卸载前对目标 Zhongshuo.exe 与随包 node.exe 做不写入的独占打开探测，若在使用则拒绝操作，不强杀。未启用会在静默时自动关闭用户应用的 Restart Manager；AppMutex 只有在主程序明确创建同名 mutex 后才允许 `--app-mutex NAME` 启用。
 

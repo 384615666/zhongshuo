@@ -85,7 +85,7 @@ function friendlyDetail(status: TaskExecutionStatus): string | null {
     if (blocker?.reason === 'unknown-turn') {
       return '上一项任务还在核对；确认结束后才能安全继续。';
     }
-    return '请求已登记，正在等待执行席位。';
+    return '请求已登记，正在等待开始。';
   }
   if (status.phase === 'UNKNOWN') {
     if (status.reason.code === 'PROTECTION_RETAINED') return '上一次执行还没确认结束；需要先核对，暂时不能继续。';
@@ -318,11 +318,10 @@ export function ExecutionStatus({
               ))}
               <div>事件 #{status.evidence.sourceHighWatermark} · 任务 {status.evidence.taskStatus} · 版本 {status.evidence.taskRevision} · 停止次数 {status.evidence.stopGeneration}</div>
               <div>运行 {status.evidence.runCount} · 执行轮次 {status.evidence.turnCount} · 进行中 {status.evidence.activeRunIds.length} · 待确认结果 {status.evidence.unknownTurnIds.length}</div>
-              <div>待派发队列 {status.evidence.outbox?.pendingCount ?? 0}</div>
+              <div>排队待执行 {status.evidence.outbox?.pendingCount ?? 0}</div>
               {status.existingResults.changeSets.map(change => (
                 <div key={change.id}>变更集 {change.id} · {change.applicationStatus}</div>
               ))}
-              <div>这里显示执行记录；如需操作，请使用任务页面的对应按钮。</div>
             </div>
           </details>
         </>

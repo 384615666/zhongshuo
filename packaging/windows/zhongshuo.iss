@@ -15,7 +15,8 @@ AppVerName=众说 {#ReleaseVersion}
 AppPublisher=众说开源项目
 AppPublisherURL=https://github.com/384615666/zhongshuo
 AppSupportURL=https://github.com/384615666/zhongshuo/issues
-AppComments=本地多 Agent 协同工作台。卸载保留用户数据。
+AppComments=本地多 Agent 协同工作台。安装、升级、卸载都保留用户数据。
+AppCopyright=Copyright (C) 2026 众说开源项目
 DefaultDirName={localappdata}\Programs\Zhongshuo
 DefaultGroupName=众说
 PrivilegesRequired=lowest
@@ -27,10 +28,14 @@ DisableDirPage=auto
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
 WizardStyle=modern
-WizardSizePercent=110
+WizardSizePercent=120
+; Inno 6.6+ 默认不显示欢迎页；这里要展示品牌大图与产品说明。
+DisableWelcomePage=no
+; 品牌外观（R150）：多档尺寸供 Inno 按当前 DPI 自动选最近档；只改外观，不改安装逻辑。
+; 品牌图由 scripts/lib/wizard-images.ps1 从根 logo.png 生成，保持 164:314 / 方形比例。
+WizardImageFile=branding\wizard-large-202.png,branding\wizard-large-269.png,branding\wizard-large-336.png,branding\wizard-large-403.png,branding\wizard-large-430.png,branding\wizard-large-498.png,branding\wizard-large-534.png
+WizardSmallImageFile=branding\wizard-small-58.png,branding\wizard-small-77.png,branding\wizard-small-97.png,branding\wizard-small-116.png,branding\wizard-small-124.png,branding\wizard-small-143.png,branding\wizard-small-159.png
 ShowLanguageDialog=no
-LicenseFile={#PayloadDir}\LICENSE
-InfoBeforeFile={#PayloadDir}\安装说明.txt
 SetupIconFile={#BrandIcon}
 UninstallDisplayName=众说
 UninstallDisplayIcon={app}\resources\app\{#BrandIconName}
@@ -64,6 +69,19 @@ AllowCancelDuringInstall=yes
 [Languages]
 Name: "zhcn"; MessagesFile: "compiler:Default.isl,{#SourcePath}ChineseSimplified.isl"
 
+[Messages]
+; 去掉默认安装器“工程感”：品牌化欢迎/准备/完成页，页数标题与按钮保持中文习惯。
+SetupAppTitle=众说 安装程序
+SetupWindowTitle=众说 安装程序
+WelcomeLabel1=欢迎安装 众说
+WelcomeLabel2=众说是本地多 Agent 协同工作台，%n项目、对话与任务数据都保存在本机。%n%n安装只写入程序目录，不会迁移或删除已有聊天数据；%n升级和卸载同样保留数据。
+ReadyLabel1=准备安装 众说
+ReadyLabel2a=点击「安装」开始；安装不需要管理员权限，也不会改动你的聊天记录。
+ReadyLabel2b=安装完成后可从开始菜单或桌面打开众说。
+FinishedHeadingLabel=众说 已安装完成
+FinishedLabel=双击桌面或开始菜单中的「众说」即可开始。%n%n项目和聊天数据保存在本机，升级和卸载都不会删除。
+FinishedLabelNoIcons=众说已安装完成。%n项目和聊天数据保存在本机，升级和卸载都不会删除。
+
 [Tasks]
 Name: "desktopicon"; Description: "在桌面创建众说快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked
 
@@ -72,12 +90,13 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop"
-Name: "{group}\众说操作手册"; Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"
-Name: "{group}\卸载众说"; Filename: "{uninstallexe}"
+Name: "{group}\众说操作手册"; Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"
+Name: "{group}\卸载众说"; Filename: "{uninstallexe}"; IconFilename: "{app}\resources\app\{#BrandIconName}"
 Name: "{userdesktop}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop"; Check: RefreshDesktopIcon
 
 [Run]
 Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; Description: "打开众说"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"; Description: "打开操作手册"; Flags: shellexec nowait postinstall skipifsilent unchecked
 
 ; No [InstallDelete], [UninstallDelete], [UninstallRun] or user-data [Dirs].
 ; Inno removes only recorded installed files/shortcuts/its uninstall registration.

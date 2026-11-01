@@ -193,7 +193,7 @@ export function LibraryPage() {
         </div>
 
         <div className="page-filters">
-          <label className="field inline" title="范围：当前项目 / 侧栏可见项目（navigation 偏好，无偏好=全部）/ 全部可访问项目">
+          <label className="field inline" title="范围：当前项目、侧栏可见项目或全部可访问项目">
             <span className="field-label">范围</span>
             <Select
               value={scope}
@@ -227,14 +227,14 @@ export function LibraryPage() {
                 <span className="field-label">作者</span>
                 <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
               </label>
-              <label className="field inline" title="日期按本机时区解释（toDay 含当日）">
+              <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
                 <span className="field-label">日期</span>
                 <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
                 <span className="faint small">至</span>
                 <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
               </label>
               {scope === 'project' && rooms.length > 0 ? (
-                <label className="field inline" title="限定会话（当前项目的房间）——线程=锚消息、任务=根消息统一生效">
+                <label className="field inline" title="限定会话（当前项目的房间）">
                   <span className="field-label">会话</span>
                   <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
                 </label>
@@ -243,15 +243,15 @@ export function LibraryPage() {
             </>
           ) : null}
           <span className="filter-note">
-            {tab === 'search' ? '搜索不覆盖文件正文，附件按所在消息的文件名检索' : `收藏总计 ${saved?.length ?? 0} 条；下方按当前范围筛选`}
+            {tab === 'search' ? '搜索范围为消息、线程和任务标题，不含文件正文' : `收藏总计 ${saved?.length ?? 0} 条`}
           </span>
         </div>
 
       {tab === 'search' ? (
         <>
-          {visibleSearchErr != null ? <div className="panel warning">搜索失败：{userFacingSystemText(visibleSearchErr ?? '')}——同条件旧结果保持；其它条件的结果未冒充当前检索（可重试）</div> : null}
+          {visibleSearchErr != null ? <div className="panel warning">搜索失败：{userFacingSystemText(visibleSearchErr ?? '')}。可重试</div> : null}
           {visibleResult == null && visibleSearchErr == null && q.trim().length === 0 && !searching ? (
-            <EmptyState icon="search" title="输入关键词开始搜索" detail="点击结果回到原消息。附件可按文件名搜索。" />
+            <EmptyState icon="search" title="输入关键词开始搜索" detail="按 Enter 检索，点击结果可回到原处。" />
           ) : null}
           {visibleResult == null && visibleSearchErr == null && (q.trim().length > 0 || searching) ? (
             <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
@@ -259,11 +259,11 @@ export function LibraryPage() {
           {visibleResult != null ? (
             <>
               {total === 0 ? (
-                <EmptyState icon="search" title="本页没有命中" detail={`第 ${visibleResult.page} 页——换关键词或范围再试；没有结果不等于内容不存在（附件正文提取未实施）。`} />
+                <EmptyState icon="search" title="本页没有命中" detail={`第 ${visibleResult.page} 页没有匹配结果，换关键词或范围再试。`} />
               ) : null}
               <div className="col" style={{ gap: 8 }}>
                 {rows.map((r) => (
-                  <button key={`${r.kind}-${r.messageId ?? r.threadId ?? r.taskId}`} className="card tight" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => locate(r.locate)} title={`定位：${r.locate}`}>
+                  <button key={`${r.kind}-${r.messageId ?? r.threadId ?? r.taskId}`} className="card tight" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => locate(r.locate)} title="点击回到原处">
                     <div className="row tight wrap">
                       <Tag tone="accent" icon="folder">{r.projectName}</Tag>
                       <Tag tone={r.kind === 'task' ? 'info' : 'neutral'} icon={r.kind === 'task' ? 'list' : r.kind === 'thread' ? 'message-circle' : 'message-square'}>
@@ -280,10 +280,9 @@ export function LibraryPage() {
               </div>
               <div className="row tight" style={{ marginTop: 10 }}>
                 <button className="btn ghost sm" disabled={visibleResult.page <= 1 || searching} onClick={() => searchNow(visibleResult.page - 1)}>上一页</button>
-                <span className="faint small">第 {visibleResult.page} 页（本页 {total} 条 · 每页 {visibleResult.pageSize}）</span>
+                <span className="faint small">第 {visibleResult.page} 页 · 本页 {total} 条</span>
                 <button className="btn ghost sm" disabled={total < visibleResult.pageSize || searching} onClick={() => searchNow(visibleResult.page + 1)}>下一页</button>
               </div>
-              <div className="faint small" style={{ marginTop: 6 }}>{visibleResult.attachmentNote}</div>
             </>
           ) : null}
         </>
@@ -303,11 +302,11 @@ export function LibraryPage() {
             : scope === 'visible' ? (saved ?? []).filter((it) => it.projectId != null && !visibleSet.has(it.projectId)).length : 0;
           return (
             <>
-              {scope === 'project' && projectId === '' ? <div className="panel info">尚未打开项目；请选择项目或切到其它范围。收藏事实仍保留。</div> : null}
-              {savedErr != null ? <div className="panel warning">收藏读取失败：{userFacingSystemText(savedErr ?? '')}——列表保持上次事实（可刷新重试）</div> : null}
+              {scope === 'project' && projectId === '' ? <div className="panel info">尚未打开项目；请选择项目或切到其它范围。收藏不会丢失。</div> : null}
+              {savedErr != null ? <div className="panel warning">收藏读取失败：{userFacingSystemText(savedErr ?? '')}。可刷新重试</div> : null}
               {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
               {saved != null && saved.length === 0 ? (
-                <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容；收藏本身不把内容共享给其他成员）。" />
+                <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮即可收藏；收藏不会改动原内容，也不会共享给其他成员。" />
               ) : null}
               {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && projectId === '') ? (
                 <div className="panel info">当前范围没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}{linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联` : ''}——切「全部可访问项目」可见。</div>
@@ -322,19 +321,15 @@ export function LibraryPage() {
                       <div className="spacer" />
                       <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
                       {it.kind === 'link' ? (
-                        <button
-                          className="btn ghost sm"
-                          title={`复制链接（${it.ref}）——应用内不自动打开外部网址`}
-                          onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}
-                        >复制链接</button>
+                        <button className="btn ghost sm" title="复制链接（应用内不自动打开外部网址）" onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}>复制链接</button>
                       ) : it.status === 'ok' ? (
-                        <button className="btn ghost sm" title={`定位：${it.locate}`} onClick={() => locate(it.locate)}>回原处</button>
+                        <button className="btn ghost sm" title="回到原处" onClick={() => locate(it.locate)}>回原处</button>
                       ) : it.status === 'missing' ? (
                         <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
                       ) : (
                         <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
                       )}
-                      <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（只删收藏行——原内容不动）">取消收藏</button>
+                      <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（不会删除原内容）">取消收藏</button>
                     </div>
                   </div>
                 ))}

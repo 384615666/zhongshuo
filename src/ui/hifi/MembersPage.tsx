@@ -138,7 +138,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       const outcome=await memberWrite(`member.setEnabled:${projectId}:${m.id}`,'member.setEnabled',{projectId,memberId:m.id,expectedRevision:m.revision,enabled:!m.enabled});
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       if(getState().activeProjectId!==projectId)return;
-      recordWrite('member.setEnabled', `${m.displayName} → ${!m.enabled ? '启用' : '停用'}（作用=之后的派发；在途不受影响）`);
+      recordWrite('member.setEnabled', `${m.displayName} → ${!m.enabled ? '启用' : '停用'}（只影响之后的新派发）`);
       toast(`已${!m.enabled ? '启用' : '停用'} ${m.displayName}（作用范围：之后的新派发）`, 'success');
       await reload();
     } catch (e) {
@@ -225,7 +225,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             <Select
               value={projectId}
               ariaLabel="成员所属项目"
-              title="成员是项目级实例：同一个渠道/模型在不同项目里是不同成员，身份与会话不合并"
+              title="成员按项目区分；切换项目会显示该项目的成员"
               onChange={(next) => { if (next !== projectId) { void import('./loader').then((m) => m.switchFocusProject(next)); navigate(`/project/${next}/members`); } }}
               options={projects.filter((p) => p.removedAt == null).map((p) => ({ value: p.id, label: p.displayName }))}
             />
@@ -250,7 +250,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             } finally { setScanning(false); }
           }}>{scanning ? '扫描中…' : '扫描本机 AI'}</button> : null}
           <button
-            className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="重新装载成员/工作量/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
+            className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="刷新成员、工作量与房间名单">刷新</button>
           {projArchived ? (
             <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已归档（只读）——不能添加成员</span>
           ) : projRemoved ? (
@@ -268,12 +268,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         </div> : null}
 
         {projectId == null || projectId === '' ? (
-          <div className="panel info">尚未打开项目——从侧栏项目菜单或顶栏「项目管理」进入（成员按项目分列）。</div>
+          <div className="panel info">尚未打开项目——请从侧栏项目菜单或顶栏「项目管理」进入。</div>
         ) : null}
         {err != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
-        {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的事实。` : '尚未取得工作量快照。'}</div> : null}
-        {workload.updatedAt ? <div className="faint small">工作量更新于 {fullTime(workload.updatedAt)}；负责的任务与实际在途执行分开统计。</div> : null}
-        {workload.data?.truncated ? <div className="faint small">工作量仅覆盖前 500 名成员；未读取的成员不推断为空。</div> : null}
+        {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的数据。` : '尚未取得工作量数据。'}</div> : null}
+        {workload.data?.truncated ? <div className="faint small">工作量仅统计前 500 名成员。</div> : null}
         {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
         {membersInScope != null && membersInScope.length === 0 ? (
@@ -317,27 +316,10 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                       title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
                       {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
                     </button>
-                    <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的 runtime 与模型（member.setRuntime——配置成功≠能力已认证）" onClick={() => openBind(m)}>
+                    <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的渠道与模型" onClick={() => openBind(m)}>
                       AI 设置…
                     </button>
                   </div>
-                ) : null}
-                {m.principalType === 'agent' && (runtimes[m.id]?.imageInput != null || runtimes[m.id]?.writeCapability != null) ? (
-                  <details className="small faint" data-zs-member-advanced={m.id} style={{ marginTop: 8 }}>
-                    <summary>高级状态</summary>
-                    <div style={{ marginTop: 5, lineHeight: 1.6 }}>
-                      {runtimes[m.id]?.imageInput != null ? <div data-zs-image-capability={m.id}>
-                        图片输入：{runtimes[m.id]!.imageInput!.status === 'supported' ? '自动传递图片' : '暂未确认'}<br />
-                        配置：{runtimes[m.id]!.imageInput!.configuration} · 模型：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
-                        渠道：{runtimes[m.id]!.imageInput!.channel}<br />
-                        协议：{runtimes[m.id]!.imageInput!.protocol}<br />
-                        依据：{userFacingSystemText(runtimes[m.id]!.imageInput!.reason ?? '')}
-                      </div> : null}
-                      {runtimes[m.id]?.writeCapability != null ? <div data-zs-write-capability={m.id}>
-                        项目编辑档：{runtimes[m.id]!.writeCapability!.status === 'supported' ? '已有匹配证据' : '暂无匹配证据'} · {userFacingSystemText(runtimes[m.id]!.writeCapability!.reason ?? '')}
-                      </div> : null}
-                    </div>
-                  </details>
                 ) : null}
               </div>
             );
@@ -348,7 +330,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         <TemplatePanel projectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
         <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
         <div className="panel">
-          <div className="faint small" style={{ marginBottom: 8 }}>成员参与派发的实际边界；建房默认全加入（★=该房间协调者）。</div>
+          <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
           {rooms.map((room) => {
             const list = roomMembers[room.id];
             const failure = roomMemberErrs[room.id];
@@ -357,7 +339,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                 <div className="row tight">
                   <Icon name="message-circle" size={12} />
                   <span className="small" style={{ fontWeight: 600 }}>{room.name}</span>
-                  <span className="faint small">{failure != null ? `名单读取失败（${failure}——保留上次事实，可刷新重试）` : list == null ? '（装载中…）' : `${list.length} 位`}</span>
+                  <span className="faint small">{failure != null ? `名单读取失败（${failure}——保留上次结果，可刷新重试）` : list == null ? '（装载中…）' : `${list.length} 位`}</span>
                 </div>
                 {list != null ? (
                   <div className="row tight wrap" style={{ marginTop: 4 }}>
@@ -429,7 +411,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const save = async () => {
     if (savePending.current||!formGuard.valid()) return;
-    if (form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 绑定必须显式指定模型（服务端同判）', 'warn'); return; }
+    if (form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 需要选择模型', 'warn'); return; }
     savePending.current = true; setBusy(true); setSaveError(null);
     try {
       const outcome=await memberWrite(`member.setRuntime:${targetProject}:${member.id}`,'member.setRuntime', {projectId:targetProject,expectedRevision:member.revision,
@@ -442,8 +424,8 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       if(!formGuard.valid())return;
       const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
-      recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}——配置成功≠能力已认证`);
-      toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
+      recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}`);
+      toast(`已保存 ${member.displayName} 的 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
       if (mounted.current) await onSaved();
     } catch (e) {
       if (!formGuard.valid())return;
@@ -455,11 +437,9 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
     <Modal
       size="md"
       title={`AI 设置 · ${member.displayName}`}
-      subtitle="选择本机已有渠道和模型，保存后用于之后的工作。"
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">{guard?.realDispatchGuard === true ? '当前为验收防护环境：真实渠道绑定会被拒绝' : '保存后显示 AI 的可用状态'}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn primary sm" disabled={busy||formGuard.invalid} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存 AI 设置'}</button>
@@ -487,7 +467,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
         <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
         <details><summary>高级：执行程序与权限</summary>
         <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" placeholder="留空使用本机 CLI" value={form.executable} onChange={e=>setForm(f=>({...f,executable:e.target.value}))}/></label>
-        <label className="field" title="新任务使用保存的权限档；已有任务保留原快照">
+        <label className="field" title="只影响之后新建的任务；已有任务保持原权限">
           <span className="field-label">保存的权限模式</span>
           <Select
             value={form.permissionMode}
@@ -529,7 +509,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
       const r=outcome.data;
       if(!formGuard.valid())return;
-      recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间；不自动协调者）`);
+      recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间）`);
       await onCreated(r.memberId);
     } catch (e) {
       if(formGuard.valid())setErr(`添加未确认：${userFacingSystemText((e as Error).message ?? '')}`); // 归档/移除守卫等真实原因上屏
@@ -539,11 +519,11 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
     <Modal
       size="md"
       title="添加 AI"
-      subtitle={`添加到 ${projectName}，沿用本机 CLI 当前渠道和账号。`}
+      subtitle={`添加到 ${projectName}`}
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">{stale ? '项目已切换——表单作废' : `名称可重复；创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
+          <span className="small faint">{stale ? '项目已切换——表单作废' : `创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn primary sm" disabled={busy || stale} data-zs-member-addsave={projectId} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
@@ -557,7 +537,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
         <div className="field">
           <label className="field-label">成员名称</label>
           <input className="input" value={name} autoFocus placeholder="例如 审查者、实现者" onChange={(e) => { setName(e.target.value); if (err != null) setErr(null); }} />
-          <div className="field-hint">稳定 ID 与显示名分开——改名不断历史引用；同名成员按实例短标识区分（卡片/名单/@/配置处都带 #短标识）。</div>
+          <div className="field-hint">名称可以重复；同名成员各自独立。</div>
         </div>
         <div className="field">
           <label className="field-label">说明（它会做什么）</label>

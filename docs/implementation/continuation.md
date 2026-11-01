@@ -2,6 +2,26 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R150 安装向导美化 + 0.1.1 发版
+
+用户要求：把 R149 的 logo/文案修复做成新安装包发版测试，并重做「很丑」的安装程序。
+
+- **安装器外观**：新增 `packaging/windows/branding/wizard-large-*.png`（164:314，七档 DPI）与 `wizard-small-*.png`（方形七档），由 `scripts/lib/wizard-images.ps1` 从根 `logo.png` 生成；`.iss` 用 `WizardImageFile`/`WizardSmallImageFile` 多档自动适配 DPI，显式恢复 `DisableWelcomePage=no`；删除默认 Inno 许可页与纯文本安装说明页（LICENSE/安装说明仍随包安装）；`[Messages]` 重写欢迎/准备/完成文案，完成页可打开众说或操作手册。安装逻辑/目录/数据策略/图标未变。实拍四页验证：`dist/r150-installer-shots/`。
+- **版本**：`package.json`/`packaging/windows/release.json` → `0.1.1`（Windows `0.1.1.65535`）；`releaseVersion` beta 简写改跟随当前核心版本，版本测试同步 0.1.1 基线；新增 `docs/releases/0.1.1.md`。
+- **发版**：计划从干净 worktree 构建安装器并校验，推公开 main + `v0.1.1` tag，GitHub Release 上传 EXE/SHA256/release.json；用户运行中的安装与数据不动、不自动安装。详见 [R150](../reviews/r150-installer-release-20261101.md)。
+- 发布结果待追加。
+
+## 2026-11-01：R149 用户反馈——正式 logo 补全 + 前端开发说明文字清理
+
+用户反馈 0.1.0 上线后 ①正式 logo 很多地方未替换（欢迎页旧「众」方块、旧构建任务栏 Electron 默认图标）②界面残留开发说明文字（截图：工作量更新时间/统计口径、成员卡「高级状态」、模板与房间名单说明、AI 设置副标题/思考等级来源/权限长说明/「保存后显示 AI 的可用状态」）。本轮已按截图全量清理并在全前端同标准扫除同类文案。
+
+- **logo**：`build-ui` 把根 `logo.png` 复制进 `dist/ui/renderer/assets/`；欢迎页改 `.welcome-brand` 正式 logo 图（保留原图比例/留白）；favicon、数据操作页品牌位、`main.ts` 窗口图标解析（应用根 PNG→渲染器副本→ICO，主窗口与进度窗口共用）、安装器「卸载/操作手册」快捷方式 ICO 全部补齐；`docs/user-guide/images` 20 张截图与手册首页重采集。旧 V78 包属构建产物过期，未改旧包/用户数据；`site/` 与 README 仍归用户安排的其他 AI。
+- **文案**：70+ 文件删除/改写实现与验收口径、诊断 details/内部 ID、分页时间戳统计说明、弹窗副标题/页脚、legacy 回退壳同类文案；保留状态/错误/空态/确认/破坏性后果/输入约束/真实数据事实/渠道安装步骤/明确标注的诊断折叠区；`data-*` 与 aria-label 语义未改。删除未引用且含「演示界面」文案的 `ProtoFlag`。活动页补未知事件 kind 与状态枚举的中文兜底。
+- **新增护栏**：`tests/browser/r149UiBrandingCopy.test.ts`（欢迎页/窗口/安装器使用正式 logo；禁止截图原句与同类开发文案回到可见字面量）；`scripts/capture-r149-ui.cjs`（隔离数据+fake runtime 的 20 场景 UI 证据脚本，未跟踪）。
+- **验证**：`build:ui` 成功且 dist logo SHA256=根 logo；`tsc -p tsconfig.hifi.json` 通过（全量仅余未跟踪 R130 夹具既有错误）；改动文件 lint 对 HEAD 新增 0；清除本机 `ELECTRON_RUN_AS_NODE=1` 后 vitest **2911 通过/0 失败/10 expected fail/14 跳过**（唯一 4 失败来自本机未跟踪且缺旧夹具的 R130 upgrade 测试）；真实界面 20/20 场景 `hifiOn=true/legacyOn=false/HARD=SOFT=0`，截图 `dist/r149-ui/after-cleanup-3/`；打包应用隔离冒烟通过（welcome logo 1254×1254 源图→132×132、EXE 图标回读为正式 logo）。
+- **产物**：便携包 `dist/desktop/desktop-daily-win-v79-r149-branding-copy-20261101`（BUILD `bld_9528a0d9ab5d4a0b`，dirty=true 因本机其他 AI 未跟踪工作；628 文件清单核对通过；已附操作手册与指向用户 V78 同一数据目录的 `start-existing-data.vbs`，但本轮未启动、未改用户数据）。未重编译/安装安装器、未发布 GitHub、未改旧包。
+- 详见 [R149](../reviews/r149-ui-branding-copy-20261101.md)。下一轮：用户验收 UI 后，如需正式发版再按 R148 流程重打包/装安装器；`scripts/verify-desktop-renderer.mjs` 等历史脚本仍有 `sha256=` 等旧断言待同步（工程脚本，非产品测试）。
+
 ## 2026-11-01：R148 以 0.1.0 正式发布
 
 用户明确要求当前图标修复版正式发布0.1.0。独立分支codex/release-0.1.0从公开main合R145—R147，保留最新主页/README。根包/安装/便携统一0.1.0；Windows数字版本0.1.0.65535高于beta.3，新增正式/预发布排序与非法版本回归。计划从冻结源码构建验证后推公开main/tag v0.1.0、发布GitHub Release；用户运行中的安装/数据不改、旧私有历史不引入。见[R148](../reviews/r148-release-0.1.0-20261101.md)，最终身份和发布结果待追加。
@@ -51,6 +71,7 @@ beta.2已交付：clean程序源码89d6135/BUILD bld_30574674228982a6，659hash�
 默认全量316文件2765通过14跳过0失败，证据dist/r142-full.json；官方5项已单独显式通过。原R141脚本本机改动SHA与worktree ignored副本核对一致，不加入发布程序或本轮git提交。
 
 V78：desktop-daily-win-v78-r142-runtime-config-20261101，clean源码e2d7a10339366ada5055372d688f8f77700d7853、BUILD bld_df3992438fc6001d。622hash/ZIP652 CRC通过/220454707字节，SHA256 57eb7184c493a8d8f1ebc3d2cbaf1179de62d48602346cdc2808078ee857637d。包内实际Electron/daemon14项/正常退出0通过，沿用数据入口与V77相同；正常退出旧版后start-existing-data.vbs。R141脚本不打入包，不修改Magpie或其他CLI配置，不新增推理。
+
 
 ## 2026-11-01：R140 恢复检查过滤已解决的历史中断
 
@@ -119,6 +140,17 @@ V71：desktop-daily-win-v71-r134-message-repairs-20261031，clean源码1059a4441
 独立worktree基于干净1416cd2实施，原目录R130/R131未提交审计与并行站点工作不纳入本轮。297文件2578普通通过+3保留预期反例+1权限跳过，无失败；双types、9变更代码文件lint对照均12项既有/无新增；状态7项、短交流20项及相关173项通过。正式Electron/daemon25检查：1400ms延迟下横幅20ms即显，3200ms/失败history不挡task，长问句/详情入口/双作者/刷新去重通过，0真实业务调用；宽屏UI66项和手册19新图目视通过。V69基线失败保留。
 
 V70：desktop-daily-win-v70-r132-thread-feedback-20261030，clean源码cd1525b019b2340a25230bd0620f670ca3169aa1，BUILD bld_cb97c8eba0dcbb86。615程序hash一致、ZIP648文件CRC通过/220837918字节，SHA256 e94b5186977f8c1132dfa923e75c1dc95861bc6dc49b60c012c22f05d4a5e281。实际包内Electron/daemon、14章19图/新说明/原界面/正常退出通过；开发Electron加载包内代码25项复验通过(横幅17ms)，0真实业务调用。首次封装Electron忽略夹具入口未产报告作为验收方式失败保留并正常退出。沿用数据入口与V69字节相同；用户正常退出旧版后start-existing-data.vbs。实现/交付两提交发布公开main，凭据扫描与远端核对证据在dist/r132-feedback；测试证据在dist/r132-source/dist/r132-feedback。
+
+
+## 2026-10-30：R130 V69 交付包暴力/异常操作对抗测试（仅测试，未改产品）
+
+用户要求对 V69 包（`dist/desktop/desktop-daily-win-v69-r129-room-navigation-20261030`）做暴力测试和正常人不会做的操作。六个并行测试流 + Lead 收尾复核：**260 个场景/用例单元、131 项守住、14 项确认缺陷（1 high / 2 medium / 11 low）、31 项语义边界、16 项限制**；0 真实模型调用、未改产品源码/包目录/用户数据、无孤儿进程。报告见 [R130](../reviews/r130-adversarial-chaos-20261030.md)，共享纪律/证据格式在 ignored `dist/r130-adversarial/BRIEF.md`、包内 Electron 混沌 harness 在 `dist/r130-adversarial/HARNESS.md`。
+
+最高优先级：①UPG-01（high）迁移前备份 `VACUUM INTO` 直接写正式名，升级中断会留下截断备份与完整备份并存，恢复时可能选错；②PV-B05（high 风险边界）1.16MB PNG 声明 20000×20000 可让 renderer 解码出 +2.1GB 工作集；③IN-DEF-04（medium）粘贴 1MB emoji/混合文本同步阻塞 38–70s（ASCII 71ms）。其余 low：启动版本地侧栏仍列归档项目（NAV-D01）、`task.stop` 对无法归属的 targetRunId 假成功（PROTO-DEFECT-01）、深色主题只写不读（IN-DEF-03）、320px 输入区 44px（IN-DEF-02）、英文技术错误直出（IN-DEF-01）、启动器目录含 `&`/`!` 时双击无反应或建错数据目录（PATH-01/02）、图片只校验 IHDR（PV-B02）、previewOffice 20MiB 上限未实现（PV-B11）、启动不校验 DB 完整性（UPG-02）、只读根无启动诊断（UPG-03）、dataCopy 目标消失泄漏原始 ENOENT（UPG-04）。
+
+R129 修复点在暴力场景下守住：侧栏独立索引 1029 采样 0 违规；同项目已载房间 1000ms 延迟下点击→路由 0.4–0.5ms 且 0 次 `room.list`；顶栏/欢迎页迟到读取不抢回；权限说明无常驻警告、错误只进运行设置菜单；“有新消息”浅色与选中房间/发送按钮一致。交付完整性：ZIP SHA256/648 条目 CRC/615 文件 MANIFEST/BUILD 身份全部复核通过，包内无运行数据或凭据。新增测试 3 文件（R130 Commands/Upgrade/Preview）+ 混沌脚本（均未提交）；全量默认回归清除宿主 `ELECTRON_RUN_AS_NODE=1` 后 298 文件 2653 passed + 10 expected fail + 1 skipped，exit 0。实现与测试改动当前只留工作区、未 git 提交，等待用户决定是否修复与是否提交。
+
+另会话独立复核（2026-10-30，结果送达用户前）：三处复跑与报告一致——`chaosR130Upgrade.test.ts` exit 0（28 passed + 4 expected fail）；`chaos-r130-navigation.cjs --only c4-project-dir-and-archive` 15 断言仅 NAV-D01 红、Electron 干净退出；`chaos-r130-input.cjs --group A` 21/21、本机实测 1MB emoji `pasteMs=48668ms`、Tab 峰值 1024MB、`realCalls=0`；r130 孤儿进程 0、包目录未生成 server-data。报告判定可复现。
 
 ## 2026-10-30：R129 侧栏/导航与权限说明完成，V69交付并推送
 

@@ -20,6 +20,22 @@ const zs = window.zs;
 const TASK_STATUS_TEXT = {
   ACTIVE: '进行中', DONE: '已完成', BLOCKED: '待处理', FAILED: '失败', CANCELLED: '已停止',
 };
+const RUN_STATUS_TEXT = {
+  QUEUED: '排队中', RUNNING: '执行中', WAITING: '等待成员', WAITING_APPROVAL: '等待授权',
+  WAITING_INPUT: '等待输入', STOPPING: '停止中', SUCCEEDED: '已完成', PARTIAL: '部分完成',
+  FAILED: '失败', CANCELLED: '已取消', INTERRUPTED: '中断',
+};
+const REVIEW_STATUS_TEXT = {
+  pending: '待验收', accepted: '已验收', changes_requested: '要求修改', superseded: '已被替代', not_required: '无需验收',
+};
+const CHANGE_APPLY_TEXT = { applied: '已应用', not_applied: '未应用', reverted: '已撤销', partial: '部分应用' };
+const CHANGE_FILE_STATE_TEXT = { present: '存在', absent: '不存在', unknown: '未知' };
+const REMINDER_OCCURRENCE_TEXT = {
+  awaiting_confirmation: '待确认', dispatched: '已派发', cancelled_by_user: '用户取消',
+  trigger_limit: '达到触发上限', schedule_corrupt: '计划异常', 'legacy-pending-recovered': '启动时恢复',
+  fired: '已触发', merged: '已合并', pending: '待处理',
+};
+const TOOL_OUTCOME_TEXT = { success: '成功', ok: '成功', completed: '已完成', failed: '失败', error: '出错', denied: '被拒绝' };
 const RUN_ACTIVE = ['QUEUED', 'RUNNING', 'WAITING', 'WAITING_APPROVAL', 'WAITING_INPUT'];
 const TASK_TERMINAL = ['DONE', 'BLOCKED', 'FAILED', 'CANCELLED'];
 
@@ -432,8 +448,8 @@ function renderAttachChips(kind) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'chip';
-    chip.textContent = `📎 ${att.filename}（${att.hash.slice(0, 8)}…${att.truncated ? ' 截断' : ''}）`;
-    chip.title = `点按预览副本（sha256=${att.hash}）——原文件修改不影响已发内容`;
+    chip.textContent = `📎 ${att.filename}${att.truncated ? '（已截断）' : ''}`;
+    chip.title = '点击预览已发送的副本；原文件修改不影响已发内容';
     chip.onclick = () => void previewAttachment(att.attachmentId, att.filename, att.kind).catch((e) => showError(`预览失败：${e.message}`));
     frag.append(chip);
   }
@@ -549,7 +565,7 @@ async function projectFilePreview(projectId, name) {
   const r = await command('project.file.read', { projectId, path: name });
   if (myGen !== previewGeneration) return; // 迟到作废
   const box = el('attach-preview');
-  if (box == null) { showError(`项目文件（${name}）：${r.bytes}B——容器缺失`); return; }
+  if (box == null) { showError(`项目文件（${name}）：${r.bytes}B——预览面板不可用，请刷新后重试`); return; }
   showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
@@ -651,15 +667,15 @@ function sanitizeSvg(svgText) {
 window.__zsSanitizeSvg = sanitizeSvg;
 
 /** 预览工具条（共享规格：复制引用/预览内搜索/行引用入草稿——版本/hash 准确，不自动发送）。 */
-function wirePreviewTools(wrap, { filename, hash, revision, pre }) {
+function wirePreviewTools(wrap, { filename, revision, pre }) {
   const tools = document.createElement('div');
   tools.className = 'preview-tools';
   const copyBtn = document.createElement('button');
   copyBtn.className = 'chip';
   copyBtn.textContent = '复制引用';
-  copyBtn.title = '复制资源身份引用（文件名+版本+hash——准确锚定所见资源）';
+  copyBtn.title = '复制引用（文件名与版本）';
   copyBtn.onclick = () => void (async () => {
-    const ref = revision != null ? `${filename} v${revision} sha256:${String(hash).slice(0, 12)}…` : `${filename}（${String(hash).slice(0, 40)}…）`;
+    const ref = revision != null ? `${filename} v${revision}` : filename;
     await navigator.clipboard.writeText(ref);
     showError(`已复制引用：${ref}`);
   })().catch((e) => showError(`复制失败：${e.message}`));
@@ -888,7 +904,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const pdf = await command('attachment.previewPdf', { attachmentId, page: 1, includeBytes: true });
     if (!alive()) return;
     const pbox = el('attach-preview');
-    if (pbox == null) { showError(`PDF 预览（${pdf.filename ?? filename}）：共 ${pdf.totalPages} 页——容器缺失`); return; }
+    if (pbox == null) { showError(`PDF 预览（${pdf.filename ?? filename}）：共 ${pdf.totalPages} 页——预览面板不可用，请刷新后重试`); return; }
     showAttachPreviewPanel();
     const bytesKey = `${attachmentId}:${pdf.hash}:v${pdf.revision}`;
     if (pdf.bytesBase64 != null) {
@@ -935,7 +951,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       const wrapP = document.createElement('div');
       const head2 = document.createElement('div');
       head2.className = 'meta';
-      head2.textContent = `📄 ${pdf.filename ?? filename} · 共 ${pdf.totalPages} 页 · 第 ${pg.page} 页 · sha256=${pdf.hash.slice(0, 12)}… · v${pdf.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+      head2.textContent = `📄 ${pdf.filename ?? filename} · 共 ${pdf.totalPages} 页 · 第 ${pg.page} 页 · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
       const nav = document.createElement('div');
       nav.className = 'attach-preview-nav';
       const prev = document.createElement('button');
@@ -971,7 +987,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       pre.textContent = pg.text.length === 0 ? '（本页无可提取文字，请查看上方页面预览）' : pg.text;
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `页面预览 · 文字识别不可用 · 文本截断：${pg.truncated ? '本页提取文本超 64KB 已截断' : '无'} · 解析器：${pdf.parser ?? '?'} · 提取时刻：${new Date(pdf.extractedAt).toLocaleString()}`;
+      note.textContent = `页面预览 · 暂不支持文字识别 · 文本截断：${pg.truncated ? '本页提取文本超 64KB 已截断' : '无'}`;
       wrapP.append(head2, nav, canvas, pre, note);
       pbox.replaceChildren(wrapP);
     };
@@ -990,11 +1006,11 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const img = await command('attachment.previewImage', { attachmentId });
     if (!alive()) return;
     const ibox = el('attach-preview');
-    if (ibox == null) { showError(`图片预览（${img.filename ?? filename}）：${img.width}×${img.height} ${img.bytes}B——页面容器缺失`); return; }
+    if (ibox == null) { showError(`图片预览（${img.filename ?? filename}）：${img.width}×${img.height} ${img.bytes}B——预览面板不可用，请刷新后重试`); return; }
     showAttachPreviewPanel();
     const ihead = document.createElement('div');
     ihead.className = 'meta';
-    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.mime} · 声明 ${img.width}×${img.height} · 原件 ${img.bytes}B · sha256=${img.hash.slice(0, 12)}… · v${img.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.width}×${img.height} · 原件 ${img.bytes}B · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
     const iclose = document.createElement('button');
     iclose.className = 'chip';
     iclose.textContent = '关闭预览';
@@ -1038,13 +1054,13 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const doc = await command('attachment.previewOffice', { attachmentId, includeBytes: true });
     if (!alive()) return;
     const obox = el('attach-preview');
-    if (obox == null) { showError(`Office 预览（${doc.filename ?? filename}）——页面容器缺失`); return; }
+    if (obox == null) { showError(`Office 预览（${doc.filename ?? filename}）——预览面板不可用，请刷新后重试`); return; }
     showAttachPreviewPanel();
     const owrap = document.createElement('div');
     const ohead = document.createElement('div');
     ohead.className = 'meta';
     const kindLabel = doc.kind === 'docx_file' ? 'DOCX 文档' : doc.kind === 'sheet_file' ? `表格（${doc.sourceFormat === 'csv' ? `CSV · ${doc.encoding}` : 'XLSX'}）` : 'PPTX 幻灯片';
-    ohead.textContent = `📘 ${doc.filename ?? filename} · ${kindLabel} · sha256=${doc.hash.slice(0, 12)}… · v${doc.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'} · 解析器 ${doc.parser}`;
+    ohead.textContent = `📘 ${doc.filename ?? filename} · ${kindLabel} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
     const oclose = document.createElement('button');
     oclose.className = 'chip';
     oclose.textContent = '关闭预览';
@@ -1073,7 +1089,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           if (!alive()) { dvBox.remove(); return; }
           const dvHead = document.createElement('div');
           dvHead.className = 'meta';
-          dvHead.textContent = `🖼 文档预览· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}`;
+          dvHead.textContent = '文档预览';
           // 如实分列（第四十二轮 §4）：嵌入 HTML 首版不支持、外部资源不加载——呈现给用户，
           // 不在验证报告里替产品声明未验证的能力。
           const dvNote = document.createElement('div');
@@ -1108,7 +1124,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         tbl.className = 'sheet-grid';
         const win = document.createElement('div');
         win.className = 'meta';
-        win.textContent = `工作表「${sheet.name}」· 实际 ${sheet.rowCount}×${sheet.colCount} · 预览窗口 ${sheet.cells.length}×${sheet.cells[0]?.length ?? 0}${sheet.rowTruncated || sheet.colTruncated ? '（仅显示部分内容）' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 部分公式无可用结果，预览不会计算公式' : ''}`;
+        win.textContent = `工作表「${sheet.name}」· ${sheet.rowCount}×${sheet.colCount}${sheet.rowTruncated || sheet.colTruncated ? '（仅显示部分内容）' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 部分公式没有可用结果（不会重新计算）' : ''}`;
         const cap = Math.ceil(sheet.colCount / 26) > 1 ? 'A' : 'A';
         void cap;
         for (let r = 0; r < sheet.cells.length; r += 1) {
@@ -1193,7 +1209,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `按页显示文字与备注；发送给 AI 的内容为提取文字`;
+      note.textContent = '发送给 AI 的内容为提取文字（含备注）';
       owrap.append(listBox, note);
       // ---- 视觉页预览（第四十轮·选型决定 A）：pptx-renderer 渲染器侧本地渲染 ----
       // 原件字节经 previewOffice includeBytes（audience+实根+sha256 核验+20MiB 前置上限）；
@@ -1214,7 +1230,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           vwrap.className = 'slides-pages';
           const vhead = document.createElement('div');
           vhead.className = 'meta';
-          vhead.textContent = `🖼 幻灯片预览· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}`;
+          vhead.textContent = '幻灯片预览';
           const zoomRow = document.createElement('div');
           zoomRow.className = 'git-row';
           const prevBtn = document.createElement('button');
@@ -1300,7 +1316,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · sha256=${r.hash.slice(0, 12)}… · v${r.revision} · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · 原始 ${r.originalBytes}B${r.truncated ? ` · 已截断（显示前 64KB）` : ' · 全文'} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
   const close = document.createElement('button');
   close.className = 'chip';
   close.textContent = '关闭预览';
@@ -1354,13 +1370,13 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     sec.className = 'attach-comments';
     const secHead = document.createElement('div');
     secHead.className = 'meta';
-    secHead.textContent = `评论（${(comments.items ?? []).length}）——锚定评论时资源版本（提交按所见 v${r.revision} 核对）；标旧=资源已更新（行号针对旧版）`;
+    secHead.textContent = `评论（${(comments.items ?? []).length}）——评论固定在所评版本；文件更新后标为旧版评论（行号针对旧版）`;
     sec.append(secHead);
     for (const c of comments.items ?? []) {
       const row = document.createElement('div');
       row.className = 'meta';
       const anchor = c.lineFrom != null ? `第 ${c.lineFrom}${c.lineTo != null ? `-${c.lineTo}` : ''} 行` : '';
-      row.textContent = `${c.authorId.slice(0, 8)} · v${c.anchoredTo.revision}${anchor ? ` · ${anchor}` : ''}${c.stale ? ' · 【旧版评论——资源已更新，行号针对 v' + c.anchoredTo.revision + '】' : ''}${c.quote != null ? ` · 引「${c.quote.slice(0, 40)}」` : ''}：${c.body}`;
+      row.textContent = `v${c.anchoredTo.revision}${anchor ? ` · ${anchor}` : ''}${c.stale ? ' · 【旧版评论——资源已更新，行号针对 v' + c.anchoredTo.revision + '】' : ''}${c.quote != null ? ` · 引「${c.quote.slice(0, 40)}」` : ''}：${c.body}`;
       sec.append(row);
     }
     const bodyInput = document.createElement('input');
@@ -1498,7 +1514,7 @@ async function renderBoard() {
         rEl.className = 'board-room';
         const rHead = document.createElement('div');
         rHead.className = 'meta';
-        rHead.textContent = `房间：${room.name}（${room.roomId.slice(0, 8)}）`;
+        rHead.textContent = `房间：${room.name}`;
         rEl.append(rHead);
         const cols = document.createElement('div');
         cols.className = 'board-cols';
@@ -1520,14 +1536,14 @@ async function renderBoard() {
             const card = document.createElement('button');
             card.className = 'board-card' + (c.exitUnconfirmed ? ' exit-unknown' : '');
             card.textContent = `${c.title}${c.exitUnconfirmed ? '（退出未确认）' : ''}${c.pendingDelivery != null ? `（待验收 v${c.pendingDelivery.revision}）` : ''}`;
-            card.title = `taskId=${c.taskId} · ${c.taskStatus}${c.runStatus != null ? ` · run=${c.runStatus}` : ''}——点击定位原串`;
+            card.title = '点击定位原串';
             card.onclick = () => { if (c.locate != null) location.hash = String(c.locate).slice(1); };
             wrap.append(card);
             if (c.runId != null && ['RUNNING', 'WAITING', 'QUEUED'].includes(c.runStatus)) {
               const stop = document.createElement('button');
               stop.className = 'chip';
               stop.textContent = '停止';
-              stop.title = `停止当前运行（${c.runId.slice(0, 8)}…，停止次数 ${c.stopGeneration ?? 0}）`;
+              stop.title = '停止当前运行';
               stop.onclick = () => void (async () => {
                 stop.disabled = true;
                 try {
@@ -1542,12 +1558,12 @@ async function renderBoard() {
               const accept = document.createElement('button');
               accept.className = 'chip';
               accept.textContent = '通过验收';
-              accept.title = `验收当前交付（${c.pendingDelivery.deliveryId.slice(0, 8)}… v${c.pendingDelivery.revision}；如需修改，请在线程内填写意见）`;
+              accept.title = `验收当前交付（v${c.pendingDelivery.revision}；如需修改，请在线程内填写意见）`;
               accept.onclick = () => void (async () => {
                 accept.disabled = true;
                 try {
                   const r = await command('task.review', { taskId: c.taskId, deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash, decision: 'accept' });
-                  showError(`验收通过：交付 v${r.deliveryRevision ?? c.pendingDelivery.revision}——任务 ${r.taskStatusAfter ?? ''}`);
+                  showError(`验收通过：交付 v${r.deliveryRevision ?? c.pendingDelivery.revision}——任务${TASK_STATUS_TEXT[r.taskStatusAfter] ?? r.taskStatusAfter ?? ''}`);
                 } catch (e) { showError(`验收失败：${e.message}`); accept.disabled = false; }
                 await renderBoard().catch(() => {});
               })().catch(() => {});
@@ -1592,7 +1608,7 @@ async function renderFiles() {
       row.textContent = text;
       row.title = title ?? text;
       if (locate != null) row.onclick = () => { location.hash = String(locate).slice(1); };
-      else { row.disabled = true; row.title = `${title ?? ''}（无深链——从所属会话进入）`; }
+      else { row.disabled = true; row.title = `${title ?? ''}（从所属会话进入）`; }
       const wrap = document.createElement('div');
       wrap.className = 'board-room';
       const tag = document.createElement('span');
@@ -1615,8 +1631,8 @@ async function renderFiles() {
     const attRows = (g.attachments ?? []).map((a) => {
       const row = document.createElement('button');
       row.className = 'chip';
-      row.textContent = `📎 ${a.filename}（${a.hash.slice(0, 8)}… v${a.revision}${a.audience === 'dm' ? ' · 私信' : ''}）`;
-      row.title = `${a.audience === 'dm' ? '私信资源（仅本人可见）' : '房间会话'} · ${a.conversationId}——点击预览`;
+      row.textContent = `📎 ${a.filename}${a.audience === 'dm' ? '（私信）' : ''}`;
+      row.title = `${a.audience === 'dm' ? '私信资源（仅本人可见）' : '房间会话'}——点击预览`;
       row.onclick = () => void previewAttachment(a.attachmentId, a.filename, a.kind).catch((e) => showError(`预览失败：${e.message}`));
       const wrap = document.createElement('div');
       wrap.className = 'board-room';
@@ -1626,13 +1642,13 @@ async function renderFiles() {
       wrap.append(tag, row);
       return wrap;
     });
-    const draftRows = (g.drafts ?? []).map((d) => mkRow('Agent 草稿', `草稿 ${d.changeSetId.slice(0, 8)}…（${d.applicationStatus}）${d.taskTitle != null ? ` · ${d.taskTitle}` : ''}`, d.locate, `change_set：${d.beforeRef.slice(0, 8)}…→${d.afterRef.slice(0, 8)}…`));
-    const delRows = (g.deliveries ?? []).map((d) => mkRow('交付成果', `📦 ${d.title} v${d.revision}（${d.manifestHash.slice(0, 8)}…${d.audience === 'dm' ? ' · 私信' : ''}）`, d.locate, `交付 ${d.deliveryId}`));
+    const draftRows = (g.drafts ?? []).map((d) => mkRow('Agent 草稿', `草稿「${d.taskTitle ?? '未命名任务'}」· ${({ applied: '已应用', reverted: '已还原', not_applied: '尚未应用', partial: '部分应用' })[d.applicationStatus] ?? d.applicationStatus}`, d.locate));
+    const delRows = (g.deliveries ?? []).map((d) => mkRow('交付成果', `📦 ${d.title} v${d.revision}${d.audience === 'dm' ? '（私信）' : ''}`, d.locate));
     const pfRow = (() => {
       if ((g.projectFiles ?? []).length === 0 && g.projectFilesNote == null) return null;
       const row = document.createElement('div');
       row.className = 'meta';
-      row.textContent = g.projectFilesNote != null ? `项目文件：${g.projectFilesNote}` : `项目文件（根目录 ${g.projectFiles.length} 项——来源=用户项目目录本身）：${g.projectFiles.slice(0, 20).map((f) => f.dir ? `${f.name}/` : f.name).join('、')}${g.projectFiles.length > 20 ? ' …' : ''}`;
+      row.textContent = g.projectFilesNote != null ? `项目文件：${g.projectFilesNote}` : `项目文件（${g.projectFiles.length} 项）：${g.projectFiles.slice(0, 20).map((f) => f.dir ? `${f.name}/` : f.name).join('、')}${g.projectFiles.length > 20 ? ' …' : ''}`;
       const wrapEl = document.createElement('div');
       wrapEl.className = 'board-room';
       wrapEl.append(row);
@@ -1641,7 +1657,7 @@ async function renderFiles() {
         const b = document.createElement('button');
         b.className = 'chip';
         b.textContent = f.name;
-        b.title = '点击读取只读快照（文本白名单——二进制走 Git/系统工具）';
+        b.title = '点击预览（只读）；二进制文件请用 Git 或系统工具打开';
         b.onclick = () => void projectFilePreview(g.projectId, f.name).catch((e) => showError(`项目文件读取失败：${e.message}`));
         wrapEl.append(b);
       }
@@ -1670,7 +1686,7 @@ async function renderCollaborators() {
   if (box == null || state.openThreadId == null) return;
   let data;
   try { data = await command('thread.collaborators', { threadId: state.openThreadId }); } catch { return; }
-  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · Agent 跟进 ${(data.agentFollowers ?? []).map((a) => `${a.memberId.slice(0, 6)}（${a.status}）`).join('、') || '无'} · 本次参与 ${(data.frozenParticipants ?? []).map((m) => m.slice(0, 6)).join('、') || '无'} · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).map((p) => `${p.memberId.slice(0, 6)}/${p.role}/${p.status}`).join('、') : '无'}`;
+  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · Agent 跟进 ${(data.agentFollowers ?? []).length} 位 · 本次参与 ${(data.frozenParticipants ?? []).length} 位 · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).length + ' 位' : '无'}`;
   box.classList.remove('hidden');
 }
 
@@ -1972,9 +1988,9 @@ async function renderReminderPanel() {
         ? `每周${WEEKDAY_LABELS[sched.weekday] ?? '?'} ${sched.time ?? '?'}（${it.timezone ?? 'UTC'}）`
         : `每天 ${sched.time ?? '?'}（${it.timezone ?? 'UTC'}）`;
     const budgetText = it.budgetLimit != null ? `预算 ${it.budgetLimit.sum} 次执行` : '无预算上限';
-    const statusText = it.status === 'active' ? (it.autoDispatch ? 'active·自动执行' : 'active·待确认') : `${it.status}${it.pausedReason != null ? `（${it.pausedReason}）` : ''}`;
+    const statusText = it.status === 'active' ? (it.autoDispatch ? '进行中·自动执行' : '进行中·到点待确认') : it.status === 'paused' ? `已暂停${it.pausedReason != null ? `（${it.pausedReason}）` : ''}` : ({ cancelled: '已取消' })[it.status] ?? it.status;
     const head = document.createElement('div');
-    head.textContent = `${it.title ?? it.reminderId} · ${planText} · ${budgetText} · ${statusText} · 下次 ${it.nextAt != null ? new Date(it.nextAt).toLocaleString() : '—'}`;
+    head.textContent = `${it.title ?? '提醒'} · ${planText} · ${budgetText} · ${statusText} · 下次 ${it.nextAt != null ? new Date(it.nextAt).toLocaleString() : '—'}`;
     box.append(head);
     const actions = document.createElement('div');
     actions.className = 'git-row';
@@ -2079,7 +2095,7 @@ async function renderReminderPanel() {
     if (hist.length > 0) {
       const h = document.createElement('div');
       h.className = 'meta';
-      h.textContent = `最近触发：${hist.slice(0, 5).map((o) => `${new Date(o.scheduled_at).toLocaleString()}→${o.outcome ?? o.status}${o.missed_count > 0 ? `（合并${o.missed_count}）` : ''}`).join('；')}`;
+      h.textContent = `最近触发：${hist.slice(0, 5).map((o) => `${new Date(o.scheduled_at).toLocaleString()}→${REMINDER_OCCURRENCE_TEXT[o.outcome] ?? (typeof o.outcome === 'string' && o.outcome.startsWith('paused:') ? '已暂停' : o.outcome ?? REMINDER_OCCURRENCE_TEXT[o.status] ?? o.status)}${o.missed_count > 0 ? `（合并${o.missed_count}）` : ''}`).join('；')}`;
       box.append(h);
     }
     frag.append(box);
@@ -2147,7 +2163,7 @@ async function renderDm() {
   el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}${fresh.title != null && fresh.title.length > 0 ? ` · ${fresh.title}` : ''}`;
   const queueNote = fresh.queuedCount > 0 && fresh.archivedAt == null && fresh.execState !== 'queued' ? ` · 排队 ${fresh.queuedCount}` : '';
   const interruptedNote = (fresh.interruptedTasks ?? []).length > 0
-    ? ` · 中断待恢复 ${fresh.interruptedTasks.length}（${fresh.interruptedTasks.map((t) => `${t.title}（上次运行 ${(t.lastRunStatus ?? '未知').toLowerCase()}${t.recoverable === false && t.blockReason != null ? `——${t.blockReason}` : ''}）`).join('；')}）`
+    ? ` · 中断待恢复 ${fresh.interruptedTasks.length}（${fresh.interruptedTasks.map((t) => `${t.title}（上次运行${RUN_STATUS_TEXT[t.lastRunStatus] ?? '未知'}${t.recoverable === false && t.blockReason != null ? `——${t.blockReason}` : ''}）`).join('；')}）`
     : '';
   el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}${interruptedNote}`;
   el('dm-stop-btn').classList.toggle('hidden', fresh.execState !== 'running');
@@ -2270,6 +2286,7 @@ const STAGE_TEXT = {
   SYNTHESIS: '整合', RATIFY: '逐结论确认', PUBLISH: '发布',
 };
 const MEMBER_STATUS_TEXT = { pending: '待产出', completed: '已产出', late: '迟到', absent: '缺席', failed: '失败' };
+const CONSENSUS_TEXT = { unanimous: '全体一致', qualified: '有条件同意', disputed: '存在未解决反对', unconfirmed: '未确认' };
 
 async function renderDeliberation() {
   const progress = el('delib-progress');
@@ -2309,9 +2326,9 @@ async function renderDeliberation() {
     return;
   }
   const claims = (rep.claimResults || []).map((c) =>
-    `<div class="claim"><span class="consensus ${c.consensus}">${c.consensus}</span><span>${c.statement || c.claimId}${c.missing > 0 ? `（${c.missing} 人未确认）` : ''}${c.objects > 0 ? `（${c.objects} 人反对）` : ''}</span></div>`).join('');
+    `<div class="claim"><span class="consensus ${c.consensus}">${CONSENSUS_TEXT[c.consensus] ?? c.consensus}</span><span>${c.statement || c.claimId}${c.missing > 0 ? `（${c.missing} 人未确认）` : ''}${c.objects > 0 ? `（${c.objects} 人反对）` : ''}</span></div>`).join('');
   const disputed = (rep.disputedClaims || []).map((d) => `<div>分歧：${d.statement}——${d.disagreementSummary}</div>`).join('');
-  report.innerHTML = `<div>最终报告（整体共识：<b class="consensus ${rep.overallConsensus}">${rep.overallConsensus ?? '-'}</b>）</div>${claims}${disputed ? `<div class="disputed-list">${disputed}</div>` : ''}`;
+  report.innerHTML = `<div>最终报告（整体共识：<b class="consensus ${rep.overallConsensus}">${CONSENSUS_TEXT[rep.overallConsensus] ?? rep.overallConsensus ?? '-'}</b>）</div>${claims}${disputed ? `<div class="disputed-list">${disputed}</div>` : ''}`;
   report.classList.remove('hidden');
 }
 
@@ -2339,8 +2356,7 @@ async function renderToolCalls(box) {
     row.dataset.toolCallId = t.toolCallId;
     const outcome = t.outcome ?? (t.startedAt != null && t.completedAt == null ? '进行中' : '未知');
     const when = t.startedAt != null ? new Date(t.startedAt).toLocaleTimeString() : '';
-    row.textContent = `${t.memberId ?? '?'} · ${t.toolName ?? '?'} · ${outcome}${when ? ' · ' + when : ''} · ${t.toolCallId}`;
-    row.title = `turn=${t.turnId ?? '?'} eventKeys=${(t.eventKeys ?? []).join(',')}`;
+    row.textContent = `${t.toolName ?? '工具'} · ${TOOL_OUTCOME_TEXT[t.outcome] ?? outcome}${when ? ' · ' + when : ''}`;
     section.appendChild(row);
   }
   box.appendChild(section);
@@ -2435,7 +2451,7 @@ async function renderChangeSets() {
     return; // 查询失败不阻断消息渲染（区块缺席=无可见变更，不伪造）
   }
   if ((data.items ?? []).length === 0) return;
-  const APP_STATUS = { applied: '已应用', not_applied: '未应用', reverted: '已撤销', partial: '部分应用' };
+  const APP_STATUS = CHANGE_APPLY_TEXT;
   const block = document.createElement('div');
   block.id = 'changeset-block';
   block.className = 'changeset-block';
@@ -2450,11 +2466,11 @@ async function renderChangeSets() {
     const UNDO_LABEL = { in_progress: '撤销进行中', failed: '撤销中断（待恢复续跑）', succeeded: '已撤销', conflict: '撤销冲突（不可自动继续）' };
     const undoText = cs.undoStatus != null ? `；撤销=${UNDO_LABEL[cs.undoStatus] ?? cs.undoStatus}` : '';
     const label = document.createElement('div');
-    label.textContent = `${cs.id.slice(0, 14)}… · ${APP_STATUS[cs.applicationStatus] ?? cs.applicationStatus} · ${cs.fileCount} 文件${undoText}`;
+    label.textContent = `${APP_STATUS[cs.applicationStatus] ?? cs.applicationStatus} · ${cs.fileCount} 文件${undoText}`;
     row.appendChild(label);
     const files = document.createElement('div');
     files.className = 'recovery-facts';
-    files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path}（${f.state}）`).join(String.fromCharCode(10));
+    files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path}（${CHANGE_FILE_STATE_TEXT[f.state] ?? f.state}）`).join(String.fromCharCode(10));
     row.appendChild(files);
     // 前像可用性（第九轮）：撤销/恢复依赖改前内容快照——不可得（unknown）的文件如实标注。
     const beforeFiles = cs.files.filter((f) => f.role === 'before');
@@ -2495,7 +2511,7 @@ function updateStopUi(snapshot) {
   }
   const chip = taskChip(snapshot.status);
   const run = snapshot.activeRun;
-  const runText = run != null ? ` · 运行 ${run.status}` : '';
+  const runText = run != null ? ` · ${RUN_STATUS_TEXT[run.status] ?? run.status}` : '';
   const stopping = run != null && run.status === 'STOPPING';
   // 启动失败原因如实上屏（第十六轮四：验收防护拒绝等——「待处理」无解释=用户不可知）。
   const failNote = snapshot.lastStartupFailureMessage != null ? ` · ${userFacingSystemText(snapshot.lastStartupFailureMessage)}` : '';
@@ -2542,7 +2558,7 @@ async function reviewTask(decision, note) {
       decision,
       ...(decision === 'changes_requested' && note != null ? { note } : {}),
     });
-    state.reviewConfirm = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
+    state.reviewConfirm = `验收已记录：交付${REVIEW_STATUS_TEXT[r.reviewStatus] ?? r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务${TASK_STATUS_TEXT[r.taskStatusAfter] ?? r.taskStatusAfter}`;
     state.reviewConfirmFor = snap.taskId;
     el('thread-status').textContent = state.reviewConfirm;
   } catch (error) {
@@ -2889,7 +2905,7 @@ async function toggleDiff(box, staged, btn) {
   if (r.patches.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'recovery-facts';
-    empty.textContent = '无差异（或仅未跟踪文件——未跟踪无 diff）';
+    empty.textContent = '无差异（或仅有未跟踪文件）';
     block.appendChild(empty);
   }
   appendPatches(block, r);
@@ -2902,8 +2918,8 @@ function appendPatches(block, r) {
   for (const patch of r.patches) {
     const head = document.createElement('div');
     head.className = 'meta';
-    const statNote = patch.stat === 'unknown' ? '（统计未知：numstat 不可用，未当作文本成功）' : patch.binary ? '（二进制文件，无文本差异）' : '';
-    const sourceNote = patch.source === 'worktree-content' ? '〔未跟踪文件内容·新增语义〕' : '';
+    const statNote = patch.stat === 'unknown' ? '（行数统计不可用）' : patch.binary ? '（二进制文件，无文本差异）' : '';
+    const sourceNote = patch.source === 'worktree-content' ? '〔未跟踪文件内容〕' : '';
     const countNote = patch.source !== 'worktree-content' && patch.addedCount != null ? `（+${patch.addedCount}/-${patch.deletedCount ?? 0}）` : '';
     head.textContent = `${sourceNote}${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${statNote}${countNote}${patch.truncated ? '（超限截断）' : ''}`;
     block.appendChild(head);
@@ -3024,7 +3040,7 @@ async function renderGitOps(force = false) {
   const batchBtn = document.createElement('button');
   batchBtn.className = 'chip';
   batchBtn.textContent = '按任务暂存';
-  batchBtn.title = '暂存该任务改动面的文件；任务开始前已存在的用户改动默认跳过，用户改动+任务改动同文件列为冲突不自动分离';
+  batchBtn.title = '暂存该任务涉及的文件；任务开始前已存在的改动默认跳过，同一文件混合改动列为冲突、不自动分离';
   batchBtn.onclick = () => void (async () => {
     const taskId = taskSelect.value;
     if (taskId === '') { say('请先选择任务（主池任务卡）——没有可选任务时，说明本项目还没有任务。'); return; }
@@ -3076,7 +3092,7 @@ async function renderGitOps(force = false) {
     doBtn.disabled = !p.canCommit;
     const stagedLines = p.staged.slice(0, 10).map((s) => `${s.xy} ${s.path}${s.renamedFrom != null ? `（← ${s.renamedFrom}）` : ''}`).join('\n');
     previewBox.textContent = [
-      `将提交（分支 ${p.branch ?? '（detached）'}，HEAD ${p.head == null ? '空仓库' : p.head.slice(0, 8)}，索引内容 tree ${p.indexTree == null ? '—' : p.indexTree.slice(0, 8)}）：`,
+      `将提交（分支 ${p.branch ?? '（detached）'}）：`,
       stagedLines || '（暂存区为空）',
       p.staged.length > 10 ? `（另 ${p.staged.length - 10} 个）` : '',
       p.canCommit ? '检查通过，可以提交。内容变化后需重新预览。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
@@ -3100,7 +3116,7 @@ async function renderGitOps(force = false) {
     doBtn.disabled = true;
     await refreshGitViews();
     const verifyNote = r.consistent === false
-      ? `（警告：提交后核对不一致——本次提交对象 ${r.commit.slice(0, 8)} 已落库，但仓库当前 HEAD 为 ${(r.headAfterActual ?? '?').slice(0, 8)}（外部又推进）；不自动回滚，请人工核对）`
+      ? '（警告：提交后核对不一致——提交已成功，但仓库当前状态又被外部推进；不会自动回滚，请人工核对）'
       : '';
     say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（已恢复已有提交）' : r.replayed === true ? '（已处理，显示原结果）' : ''}${verifyNote}`);
     msgInput.value = '';
@@ -3184,8 +3200,8 @@ async function renderGitOps(force = false) {
     const b = await command('git.branch.list', { projectId: state.projectId });
     const head = await currentHeadOfRepo();
     const rh = await command('git.remoteHead', { projectId: state.projectId, remote, branch: b.current });
-    const r = await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
-    say(`已推送 ${b.current}：${(r.from ?? '（空）').slice(0, 8)} → ${r.to.slice(0, 8)}（远端 ${remote}）`);
+    await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
+    say(`已推送 ${b.current}（远端 ${remote}）`);
   });
   remoteBtn('拉取', '快进拉取当前分支（分叉时需手动合并）', async () => {
     const remote = remoteInput.value.trim();
@@ -3193,7 +3209,7 @@ async function renderGitOps(force = false) {
     const head = await currentHeadOfRepo();
     const r = await command('git.pull', { projectId: state.projectId, remote, branch: b.current, expectedHead: head });
     await refreshGitViews();
-    say(`已拉取 ${r.pulledCount} 个提交 → ${r.to.slice(0, 8)}（远端 ${remote}）`);
+    say(`已拉取 ${r.pulledCount} 个提交（远端 ${remote}）`);
   });
   box.appendChild(remoteRow);
 
@@ -3265,12 +3281,12 @@ async function renderGitOps(force = false) {
         const line = document.createElement('div');
         line.className = 'git-row';
         const label = document.createElement('span');
-        label.textContent = `${item.oid.slice(0, 8)} ${new Date(item.timestamp * 1000).toLocaleString()} ${item.subject}${item.taskIds.length > 0 ? `〔关联任务 ${item.taskIds.join('、')}〕` : ''}`;
+        label.textContent = `${item.oid.slice(0, 8)} ${new Date(item.timestamp * 1000).toLocaleString()} ${item.subject}${item.taskIds.length > 0 ? `〔关联 ${item.taskIds.length} 个任务〕` : ''}`;
         line.appendChild(label);
         const diffBtn = document.createElement('button');
         diffBtn.className = 'chip';
-        diffBtn.textContent = 'diff';
-        diffBtn.title = '单提交聚合差异（parents/关联/正文；merge 提交选择比较父——差异绑定所选父）';
+        diffBtn.textContent = '差异';
+        diffBtn.title = '查看该提交的差异；合并提交可选择比较的父提交';
         diffBtn.onclick = () => void (async () => {
           const ex = document.getElementById(`commitdiff-${item.oid}`);
           if (ex != null) { ex.remove(); return; }
@@ -3282,7 +3298,7 @@ async function renderGitOps(force = false) {
           const metaOf = () => {
             const meta = document.createElement('div');
             meta.className = 'meta';
-            meta.textContent = `parents: ${d.commit.parents.map((p2) => p2.slice(0, 8)).join('、') || '（根提交）'} · ${d.commit.authorName}`;
+            meta.textContent = `作者 ${d.commit.authorName}`;
             return meta;
           };
           const renderPatches = (data) => {
@@ -3331,7 +3347,7 @@ async function renderGitOps(force = false) {
                   body.textContent = '';
                   const head = document.createElement('div');
                   head.className = 'meta';
-                  head.textContent = `对比父 ${d2.comparedParent.slice(0, 8)}（${(d2.parentsMeta ?? []).find((x) => x.oid === d2.comparedParent)?.subject ?? ''}）——差异相对该父`;
+                  head.textContent = `与「${(d2.parentsMeta ?? []).find((x) => x.oid === d2.comparedParent)?.subject ?? '所选父提交'}」对比——差异相对该提交`;
                   body.appendChild(head);
                   renderPatchesInto(body, d2, CHANGE);
                   renderParents(pm.oid);
@@ -3382,7 +3398,7 @@ async function renderGitOps(force = false) {
           undoBtn.onclick = () => void (async () => {
             const r = await command('git.commit.undo', { projectId: state.projectId, commitOid: item.oid, expectedHead: item.oid });
             await refreshGitViews();
-            say(`已软回退到 ${r.to.slice(0, 8)}（${r.movedToUnstaged} 项改动回到未暂存；文件未删除）`);
+            say(`已软回退到上一提交（${r.movedToUnstaged} 项改动回到未暂存；文件未删除）`);
           })().catch((error) => { say(`撤销失败：${error.message}`); });
           line.appendChild(undoBtn);
         }
@@ -3467,7 +3483,7 @@ function renderRecoveryPanel(panel, data) {
     row.className = 'recovery-row recovery-undo-row';
     row.dataset.changeSetId = u.changeSetId;
     const meta = document.createElement('span');
-    meta.textContent = `未完成撤销：${u.changeSetId}（${u.status === 'failed' ? '中断——待恢复续跑' : '进行中'}；遇到文件冲突会停止）`;
+    meta.textContent = `未完成撤销（${u.status === 'failed' ? '中断——待恢复续跑' : '进行中'}；遇到文件冲突会停止）`;
     row.appendChild(meta);
     if (u.status !== 'conflict') {
       const b = document.createElement('button');
@@ -3914,7 +3930,7 @@ el('dm-review-reject').onclick = () => {
     try {
       await command('task.review', { taskId: reviewAtOpen.taskId, deliveryId: reviewAtOpen.deliveryId, deliveryRevision: reviewAtOpen.revision, manifestHash: reviewAtOpen.manifestHash, decision: 'changes_requested', note });
       closeNoteRow();
-    } catch (e) { showError(`提交返工意见失败（第 ${reviewAtOpen.revision} 版快照）：${e.message}`); }
+    } catch (e) { showError(`提交返工意见失败（第 ${reviewAtOpen.revision} 版）：${e.message}`); }
     await renderDm();
   })().catch(() => {});
   row.querySelector('.git-row').append(input, confirmBtn);
@@ -4050,13 +4066,9 @@ async function renderMemberRuntimeSettings() {
     if (binding?.environment != null) state.runtimeEnvironment = binding.environment; // 防护包模式标志（绑定对话框 fake 选项）
     const kind = binding?.binding?.kind ?? null;
     const model = binding?.binding?.model ?? null;
-    const caps = binding?.installation?.capabilities_json != null
-      ? (() => { try { return JSON.parse(binding.installation.capabilities_json); } catch { return null; } })()
-      : null;
     const current = kind == null ? '未设置（使用默认运行渠道）' : `${kind}${model != null ? ` · ${model}` : ''}`;
-    const capNote = caps == null ? '' : ` ｜ 模型可用性：${caps.modelAvailability ?? '未记录'} · 权限认证：${caps.permissionAuth ?? '未记录'}（保存配置不会验证连接或权限）`;
     const label = document.createElement('span');
-    label.textContent = `${m.displayName ?? m.id}：${current}${capNote}${m.enabled === false ? ' ｜ 已停用（不参与之后派发）' : ''}`;
+    label.textContent = `${m.displayName ?? m.id}：${current}${m.enabled === false ? ' ｜ 已停用（不参与之后派发）' : ''}`;
     row.appendChild(label);
     // 协作参与开关（第十六轮六）：停用=该成员不再参与之后派发（协调者不可停用——服务端校验）。
     const toggleBtn = document.createElement('button');
@@ -4314,7 +4326,7 @@ async function renderRemoteSettings() {
       row.append(caFp);
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `证书 Subject=${cfg.certSubject ?? '?'} · Issuer=${cfg.certIssuer ?? '?'} · 有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}）`;
+      meta.textContent = `证书有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}（监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}）`;
       row.append(meta);
       // LAN 地址明细（第三十八轮：多网卡逐地址可复制+虚拟网卡标注——UI 监听选项只有回环与
       // 0.0.0.0 两种，客户端实际访问哪个地址从这份列表选；虚拟段（198.18.x.x 等）明确标注
@@ -4407,9 +4419,9 @@ function wireRemoteSettings() {
         s.textContent = `自检 ${r.pass}/${r.total}${r.ok ? '（全部通过）' : '（存在失败项——见明细）'}`;
         const d = document.createElement('div');
         d.className = 'meta';
-        d.textContent = (r.items ?? []).map((i) => `${i.ok ? '✓' : '✗'} ${i.name}`).join('；') + (r.resultsFile ? `——结果文件 ${r.resultsFile}` : '');
+        d.textContent = (r.items ?? []).map((i) => `${i.ok ? '✓' : '✗'} ${i.name}`).join('；');
         out.append(s, d);
-      } catch (e) { showError(`自检失败：${e.message}（仅测试环境可用）`); }
+      } catch (e) { showError(`自检失败：${e.message}`); }
     })();
   }
   el('remote-pair-btn').onclick = () => void (async () => {

@@ -103,7 +103,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       const r = await command<{ followed: boolean; muted: boolean }>('thread.subscribe', { threadId, ...patch });
       setSub({ followed: r.followed, muted: r.muted });
       recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
-      toast(patch.mute === true ? '已静音（未读/通知聚合排除；待办保留）' : patch.follow === true ? '已关注（有新回复进「待我处理」）' : '订阅已更新', 'success');
+      toast(patch.mute === true ? '已静音（新回复不提醒；待办保留）' : patch.follow === true ? '已关注（有新回复进「待我处理」）' : '订阅已更新', 'success');
     } catch (e) { toast(`订阅更新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setSubBusy(false); }
   };
@@ -242,7 +242,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     return (
       <div className="page-stack" style={{ padding: 16 }}>
         {readError != null ? (
-          <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照——可返回主池重进）</div>
+          <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——可返回主池重进）</div>
         ) : (
           <div className="panel info">正在打开回复串…</div>
         )}
@@ -283,7 +283,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       openedFrom: target,
     });
     openPreviewTab(rid, d.revision, { target });
-    recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（交付校验值 ${d.manifestHash.slice(0, 8)}…）`);
+    recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}`);
   };
 
   const doStop = async () => {
@@ -357,7 +357,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     void (async () => {
       try {
         const r = await executeTaskRework(snapshot, threadId);
-        if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前返工事实`, 'error'); void loadThread(threadId); return; }
+        if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前状态`, 'error'); void loadThread(threadId); return; }
         toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
         void loadThread(threadId);
       } finally { setBusyRework(false); }
@@ -384,7 +384,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         <button role="tab" aria-selected={tab === 'task'} className="btn ghost sm" style={tab === 'task' ? { fontWeight: 600 } : undefined} onClick={() => setTab('task')}>
           <Icon name="list" size={13} /> 详情
         </button>
-        <button role="tab" aria-selected={tab === 'artifacts'} className="btn ghost sm" style={tab === 'artifacts' ? { fontWeight: 600 } : undefined} onClick={() => setTab('artifacts')} title="本线程的会话附件（真实版本/hash，可预览）与本任务交付成果">
+        <button role="tab" aria-selected={tab === 'artifacts'} className="btn ghost sm" style={tab === 'artifacts' ? { fontWeight: 600 } : undefined} onClick={() => setTab('artifacts')} title="本线程的附件与本任务交付成果（可预览）">
           <Icon name="file-text" size={13} /> 成果与附件
         </button>
         {/* 人的阅读订阅（r56：thread.subscribe——与 Agent 执行名单分列；纯偏好写）。 */}
@@ -392,7 +392,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           className="btn ghost sm"
           disabled={subBusy}
           data-zs-thread-follow={sub?.followed ? '1' : '0'}
-          title={sub?.followed === true ? '已关注：有新回复进「待我处理」（点击取消）' : '关注本线程：有新回复进「待我处理」（人的阅读订阅——不改执行名单）'}
+          title={sub?.followed === true ? '已关注：有新回复进「待我处理」（点击取消）' : '关注本线程：有新回复进「待我处理」'}
           onClick={() => void toggleSub({ follow: !(sub?.followed ?? false) })}
         >
           <Icon name="star" size={13} />{sub?.followed === true ? '已关注' : '关注'}
@@ -401,7 +401,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           className="btn ghost sm"
           disabled={subBusy}
           data-zs-thread-mute={sub?.muted ? '1' : '0'}
-          title={sub?.muted === true ? '已静音：未读/通知聚合排除（待办保留）——点击取消' : '静音：未读/通知聚合排除，待办保留'}
+          title={sub?.muted === true ? '已静音：新回复不提醒（待办保留）——点击取消' : '静音：新回复不提醒，待办保留'}
           onClick={() => void toggleSub({ mute: !(sub?.muted ?? false) })}
         >
           <Icon name={sub?.muted === true ? 'eye-off' : 'eye'} size={13} />{sub?.muted === true ? '已静音' : '静音'}
@@ -419,7 +419,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           : statusLabel != null ? <Tag tone={statusTone} icon="activity">{taskNo} {statusLabel}</Tag> : null}
       </div>
 
-      {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
+      {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——重试=切换视图或等待自动刷新）</div> : null}
 
       {tab === 'replies' ? (
         <>
@@ -443,7 +443,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                 </div>
               ) : null}
             </div>
-            {msgs.length === 0 ? <div className="panel info">暂无回复——发送第一条跟进（不另建根任务）。</div> : null}
+            {msgs.length === 0 ? <div className="panel info">暂无回复——发送第一条跟进。</div> : null}
             {msgs.map((m) => (
               <div key={m.id} className="msg-item">
                 {m.threadMessageSeq === firstUnreadSeq ? <div className="unread-divider" style={{ borderTop: '1px solid var(--accent, #2563eb)', margin: '8px 0', fontSize: 11, color: 'var(--accent, #2563eb)', textAlign: 'center' }}>以上未读之后的新回复</div> : null}
@@ -507,16 +507,15 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       ) : tab === 'task' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }} className="page-stack">
           {isRecordThread || detail == null ? (
-            <div className="panel info">这是历史记录串（无根任务）：历史消息保持原样；继续回复会发送一条新的 AI 请求。</div>
+            <div className="panel info">这是历史记录串：历史消息保持原样；继续回复会发送一条新的 AI 请求。</div>
           ) : (
             <>
               <div className="panel info">
                 <div className="row tight wrap">
                   <strong>#{detail.roomTaskNumber} {detail.title}</strong>
                   <Tag tone={detail.status === 'DONE' ? 'success' : detail.status === 'REVIEW' ? 'info' : 'neutral'} icon="activity">{STATUS_LABEL[detail.status] ?? detail.status}</Tag>
-                  {detail.activeRun != null ? <span className="faint small">run {STATUS_LABEL[detail.activeRun.status] ?? detail.activeRun.status}</span> : <span className="faint small">无活跃 run</span>}
+                  {detail.activeRun != null ? <span className="faint small">运行 {STATUS_LABEL[detail.activeRun.status] ?? detail.activeRun.status}</span> : <span className="faint small">无进行中的运行</span>}
                 </div>
-                <div className="faint small" style={{ marginTop: 4 }}>状态会在刷新时按实际进度更新。</div>
                 {detail.lastStartupFailureMessage != null ? <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div> : null}
                 <div className="row tight" style={{ marginTop: 8 }}>
                   {stoppable ? (
@@ -524,7 +523,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                       {stopping || runStopping ? '停止中…' : '停止任务'}
                     </button>
                   ) : null}
-                  <button className="btn ghost sm" title="刷新任务详情（绑定服务端当前事实）" onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'))}>刷新详情</button>
+                  <button className="btn ghost sm" title="刷新任务详情" onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'))}>刷新详情</button>
                   {/* 定位链接（r53 §5/T6）：桌面端没有地址栏——给用户一个**可复制**的正式定位符
                       （外部深链 #task=<实体ID>——不是房间任务序号 #N）。粘贴入口（打开定位）随
                       H3 设置页归位；当前跳转核验由工程验证器执行，用户项只核对复制格式。 */}
@@ -539,7 +538,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                       );
                     }}
                   >复制定位链接</button>
-                  <span className="faint small">关闭本视图不会停止执行——执行属于任务，不属于页面。</span>
+                  <span className="faint small">关闭本视图不会停止执行。</span>
                 </div>
               </div>
 
@@ -574,7 +573,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                                 value={reviewBox.note}
                                 onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })}
                               />
-                            ) : <div className="faint small">将确认成果 v{reviewBox.snapshot.deliveryRevision} 完成。<details className="faint"><summary>版本身份</summary>{reviewBox.snapshot.deliveryId} · {reviewBox.snapshot.manifestHash}</details></div>}
+                            ) : <div className="faint small">将确认成果 v{reviewBox.snapshot.deliveryRevision} 完成。</div>}
                             <div className="row tight" style={{ marginTop: 6 }}>
                               <button className="btn sm" onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认完成' : '保存修改意见'}</button>
                               <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
@@ -635,7 +634,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                   <button
                     key={a.attachmentId}
                     className="msg-attach"
-                    title={`预览 ${a.filename}——${ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · sha256=${a.hash.slice(0, 12)}… · 上传于 ${new Date(a.createdAt).toLocaleString()}`}
+                    title={`预览 ${a.filename}——${ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · 上传于 ${new Date(a.createdAt).toLocaleString()}`}
                     onClick={() => openPreview({ attachmentId: a.attachmentId, filename: a.filename, kind: a.kind, conversationId, origin: '成果与附件', hashHint: a.hash, revisionHint: a.revision })}
                   >
                     <Icon name="file-text" size={12} />
@@ -675,7 +674,6 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                       <button className="btn ghost sm" onClick={() => { setTab('task'); openReview('accept'); }}>确认完成</button>
                       <button className="btn ghost sm" onClick={() => { setTab('task'); openReview('rework'); }}>按意见修改</button>
                     </> : <button className="btn ghost sm" onClick={() => setTab('task')}>查看版本</button>}
-                    <details className="faint small" style={{ width: '100%' }}><summary>版本身份</summary>{d.deliveryId} · {d.manifestHash}</details>
                   </div>
                 ))}
               </div>

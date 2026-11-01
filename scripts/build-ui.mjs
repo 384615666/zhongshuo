@@ -90,6 +90,9 @@ await build({
 copyFileSync(join(root, 'node_modules', '@extend-ai', 'react-xlsx', 'dist', 'duke_sheets_wasm_bg.wasm'), join(hifiOut, 'duke_sheets_wasm_bg.wasm'));
 
 cpSync(join(root, 'src', 'ui', 'renderer'), join(root, 'dist', 'ui', 'renderer'), { recursive: true });
+// 正式品牌图：构建时从仓库根 logo.png 复制进渲染器资产（源码 assets/ 不入库）。
+// 界面、favicon 与窗口图标回退共用这一份，避免打包/开发形态各自找图。
+copyFileSync(join(root, 'logo.png'), join(root, 'dist', 'ui', 'renderer', 'assets', 'logo.png'));
 // Legacy pages share the same system-copy presentation as the current UI.
 await build({
   entryPoints: [join(root, 'src', 'ui', 'renderer', 'app.js')],
@@ -103,4 +106,4 @@ await build({
 // Generate both editions on every UI build; never ship a stale checked-in HTML copy.
 writeUserGuide();
 packageUserGuideAssets(join(root, 'dist', 'ui', 'renderer', 'user-guide'));
-process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/pdfjs + assets/vendor + hifi/xlsx 引擎资产）\n');
+process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/logo.png + assets/pdfjs + assets/vendor + hifi/xlsx 引擎资产）\n');

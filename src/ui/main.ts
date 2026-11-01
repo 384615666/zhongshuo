@@ -66,6 +66,28 @@ if (installedDesktop) {
 }
 let startupLog: string | null = null;
 let startupFailureShown = false;
+
+/** 原生 ICO（安装器/便携构建由根目录 logo.png 转换并随包）；开发形态允许缺失。 */
+function resolveDesktopIconPath(): string {
+  let icon = join(appRoot, 'Zhongshuo.ico');
+  try {
+    const metadata = JSON.parse(readFileSync(join(appRoot, installedDesktop ? 'installed-desktop.json' : 'desktop-brand.json'), 'utf8')) as { icon?: unknown };
+    if (typeof metadata.icon === 'string' && /^Zhongshuo-(?:[a-f0-9]{12})\.ico$/.test(metadata.icon)) icon = join(appRoot, metadata.icon);
+  } catch { /* 旧映像没有品牌元数据——按既有 ico 回退。 */ }
+  return icon;
+}
+
+/** 窗口图标优先正式 logo 原图（PNG），其次渲染器随包副本（dist/ui/renderer/assets/logo.png），
+ *  最后回退原生 ICO。这样开发形态、便携包与旧构建刷新 UI 后都能显示正式 logo。 */
+function resolveWindowIconPath(): string | null {
+  const candidates = [
+    join(appRoot, 'logo.png'),
+    join(appRoot, 'dist', 'ui', 'renderer', 'assets', 'logo.png'),
+    resolveDesktopIconPath(),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
 async function failDesktopStartup(error: unknown): Promise<void> {
   if (startupFailureShown) return;
   startupFailureShown = true;
@@ -551,12 +573,8 @@ let dataOperationStarting = false;
   if (simMode) {
     process.stderr.write('[zhongshuo-ui] 模拟验证模式：ZS_RUNTIME=fake + 真实派发防护——即使保存了真实 runtime 绑定，派发也会在 spawn 前被拒绝（不发出真实模型请求）\n');
   }
-  let desktopIcon=join(appRoot,'Zhongshuo.ico');
-  try {
-    const metadata=JSON.parse(readFileSync(join(appRoot,installedDesktop?'installed-desktop.json':'desktop-brand.json'),'utf8')) as {icon?:unknown};
-    if(typeof metadata.icon==='string'&&/^Zhongshuo-(?:[a-f0-9]{12})\.ico$/.test(metadata.icon))desktopIcon=join(appRoot,metadata.icon);
-  } catch { /* Older/development images use the existing icon fallback. */ }
-  const windowIcon=existsSync(join(appRoot,'logo.png'))?join(appRoot,'logo.png'):existsSync(desktopIcon)?desktopIcon:null;
+  const desktopIcon = resolveDesktopIconPath();
+  const windowIcon = resolveWindowIconPath();
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -913,11 +931,13 @@ function dataProgressText(status: DataJobStatus | null, action: DataCopyJob['act
 
 async function showDataProgressWindow(jobFile: string): Promise<void> {
   const job = loadDataCopyJob(jobFile);
+  const progressIcon = resolveWindowIconPath();
   const win = new BrowserWindow({
     width: 650,
     height: 390,
     show: false,
     resizable: true,
+    ...(progressIcon != null ? { icon: progressIcon } : {}),
     title: '众说 · 数据操作',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });

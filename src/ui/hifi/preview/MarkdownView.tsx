@@ -487,7 +487,7 @@ function parseChart(source: string): ChartSpec | null {
 function ChartView({ source }: { source: string }) {
   const chart = useMemo(() => parseChart(source), [source]);
   if (chart == null) {
-    return <CodeCard text={source} lang="chart" safeNote="图表数据未通过有界 JSON 校验，保留为安全文本；不会执行配置或脚本。" />;
+    return <CodeCard text={source} lang="chart" safeNote="图表数据格式无效，已按文本显示；不会执行配置或脚本。" />;
   }
   const max = Math.max(...chart.data.map((item) => Math.abs(item.value)), 1);
   return (

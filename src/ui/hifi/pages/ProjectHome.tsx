@@ -31,7 +31,7 @@ export function WelcomePage() {
       <div className="page narrow">
         <div style={{ textAlign: 'center', padding: '38px 0 26px' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
-            <span className="brand-mark" style={{ width: 46, height: 46, fontSize: 22, borderRadius: 12 }}>众</span>
+            <img className="welcome-brand" data-zs-welcome-logo="1" src="assets/logo.png" alt="众说" width={132} height={132} draggable={false} />
           </div>
           <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>打开文件夹，和 AI 一起完成工作</h1>
           <p className="muted" style={{ marginTop: 10, fontSize: 13, maxWidth: '62ch', marginInline: 'auto', lineHeight: 1.75 }}>

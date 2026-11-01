@@ -53,7 +53,7 @@ type NavItem = { key: AppSettingsSection; label: string; icon: string; hint: str
 const NAV: NavItem[] = [
   { key: 'general', label: '通用', icon: 'settings', hint: '启动与打开位置' },
   { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
-  { key: 'notifications', label: '通知', icon: 'bell', hint: '按真实线程订阅管理桌面通知静音' },
+  { key: 'notifications', label: '通知', icon: 'bell', hint: '管理桌面通知静音' },
   { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: '调用预算、AI 成员的模型与权限' },
   { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
   { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
@@ -71,10 +71,10 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用预算 调用次数 次数预算 启用 开启 关闭 上限 callBudget budget DIRECT AUTO DELIBERATE', match: 'call-budget' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
-  { section: 'connections', label: '远程访问监听事实', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
+  { section: 'connections', label: '远程访问状态', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
   { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
   { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
-  { section: 'data', label: '草稿快照健康与重试', keywords: '草稿 快照 保存 锁定 重试', match: '草稿快照' },
+  { section: 'data', label: '草稿保存与重试', keywords: '草稿 保存 锁定 重试', match: '草稿保存' },
   { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
   { section: 'data', label: '归档管理', keywords: '归档 项目 房间 恢复历史', match: '归档管理' },
   { section: 'data', label: '已移除的项目', keywords: '移除 项目 重新关联', match: '已移除的项目' },
@@ -317,7 +317,7 @@ function SectionAppearance() {
   }, []);
   return (
     <div>
-      <SectionHead title="外观" sub={<>主题、头像显示与个人图片（本机偏好，随数据根保存）。</>} />
+      <SectionHead title="外观" sub={<>主题、头像显示与个人图片（只在本机生效）。</>} />
       <SettingsRow id="appearance-theme" label="主题" hint="浅色 / 深色">
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
@@ -739,13 +739,10 @@ function SectionRuntime() {
       })}
       {members.length === 0 ? <div className="panel info">还没有 AI 成员。打开项目后，在成员页添加 AI。</div> : null}
       <DetailFold summary="运行环境详情">
-        <SettingsRow label="本机运行状态" hint="用于排查为什么这里不能发送真实任务">
+        <SettingsRow label="本机运行状态" hint="本机当前能否发送真实任务">
           <div className="row tight">
             <Tag tone={guard?.fakeAllowed === false ? 'neutral' : 'warning'} icon={guard?.fakeAllowed === false ? 'check-circle' : 'alert-triangle'}>
               {guard == null ? '读取中…' : guard.fakeAllowed ? '当前为演练环境' : '日常运行'}
-            </Tag>
-            <Tag tone={guard?.realDispatchGuard ? 'success' : 'neutral'} icon={guard?.realDispatchGuard ? 'check-circle' : 'info'}>
-              {guard == null ? '' : guard.realDispatchGuard ? '真实任务发送检查已开启' : '真实任务发送检查未开启'}
             </Tag>
           </div>
         </SettingsRow>
@@ -867,7 +864,7 @@ function SectionConnections() {
       </DetailFold>
       <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-title">配对与设备</div>
-      <SettingsRow label="生成配对码" hint="仅本机可信入口；一次有效、5 分钟过期。码只在本次回执显示，不进入诊断或日志。" wide control={
+      <SettingsRow label="生成配对码" hint="仅本机可信入口；一次有效、5 分钟过期。配对码只显示这一次，不写入诊断或日志。" wide control={
         <div>
           <button className="btn sm" disabled={busy || remote?.running !== true} onClick={() => void createPair()}>生成配对码</button>
           {pair != null ? <div className="panel warning" style={{ marginTop: 6 }}>
@@ -877,7 +874,7 @@ function SectionConnections() {
           </div> : null}
         </div>
       } />
-      <SettingsRow label="已配对设备" hint="吊销后设备凭据、会话和事件流立即失效（remote.devices.list / remote.device.revoke）" wide control={
+      <SettingsRow label="已配对设备" hint="吊销后该设备的凭据、会话和事件流立即失效" wide control={
         <div className="col" style={{ gap: 6 }}>
           {devicesErr != null ? <div className="panel warning">读取失败：{userFacingSystemText(devicesErr ?? '')}</div> : devices == null ? <span className="small faint">读取中…</span> : devices.length === 0 ? <span className="small faint">暂无设备</span> : devices.map((d) => (
             <div key={d.deviceId} className="row tight wrap small">
@@ -929,10 +926,10 @@ function SectionData() {
   const clearDrafts = () => {
     const r = clearPersistedSnapshot();
     if (!r.ok) { toast(userFacingSystemText(r.error ?? '清理失败'), 'error'); return; }
-    if (!r.hadKey) { setCleared('没有已保存的草稿快照（活动键不存在）'); toast('没有已保存的草稿快照', 'info'); return; }
-    recordWrite('drafts.clear', `清空本地草稿快照键 ${r.key?.slice(0, 40)}…（未确认发送账本一并清除——当前页面内存态保留至关闭）`);
-    setCleared(`${new Date().toLocaleTimeString()} 已清除活动命名空间键（重新写入将建立新快照）`);
-    toast('本地草稿快照已清除', 'success');
+    if (!r.hadKey) { setCleared('没有已保存的草稿'); toast('没有已保存的草稿', 'info'); return; }
+    recordWrite('drafts.clear', `清空本地草稿（未确认发送一并清除；当前页面内容保留到关闭）`);
+    setCleared(`${new Date().toLocaleTimeString()} 已清除本地草稿（之后输入会重新保存）`);
+    toast('本地草稿已清除', 'success');
   };
   const legacy = draftPersist.legacyImport;
   const doImport = async (key: string, dir: string) => {
@@ -942,13 +939,13 @@ function SectionData() {
       if (!r.ok) { toast(userFacingSystemText(r.error ?? '导入失败'), 'error'); return; }
       const o = r.outcome;
       const refusedCount = o?.refusedVersions.length ?? 0;
-      toast(`已导入 ${dir} 的旧键：草稿 ${o?.mergedDrafts ?? 0} 条、待确认发送 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、拒收不支持版本来源 ${refusedCount} 个（原件保持）` : ''}——旧键原样保留`, 'success');
-      recordWrite('draft.inherit', `用户确认导入旧目录 ${dir}（结果见恢复说明；原件保留）`);
+      toast(`已从 ${dir} 导入旧草稿 ${o?.mergedDrafts ?? 0} 条、待确认发送 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、跳过不支持的 ${refusedCount} 个来源（原文件保留）` : ''}——原文件不动`, 'success');
+      recordWrite('draft.inherit', `用户确认导入旧目录 ${dir}（原文件保留）`);
     } finally { setImportBusy(null); }
   };
   return (
     <div>
-      <SectionHead title="数据与存储" sub={<>数据位置、草稿快照健康与清理。</>} />
+      <SectionHead title="数据与存储" sub={<>数据位置、草稿保存与清理。</>} />
       <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '（读取中…）'} />
       <div className="card" style={{ marginBottom: 14 }} data-zs-data-guide="1">
         <div className="card-title">备份全部数据与使用已有数据</div>
@@ -965,7 +962,7 @@ function SectionData() {
             <Icon name="folder" size={13} /> {dataOpBusy === 'import' ? '正在准备…' : '选择已有数据'}
           </button>
         } />
-        <SettingsRow label="最近一次数据操作" hint="完成事实会在这里重新读取；失败或中断不会自动重试" control={
+        <SettingsRow label="最近一次数据操作" hint="结果会在这里重新读取；失败或中断不会自动重试" control={
           <div className="col" style={{alignItems:'flex-end',gap:5,minWidth:230}}>
             {dataOpError != null ? <Tag tone="danger" icon="alert-triangle">无法读取：{userFacingSystemText(dataOpError ?? '')}</Tag> : dataOp?.latest == null ? <span className="small faint">还没有数据操作记录</span> : (
               <Tag tone={dataOp.latest.state === 'succeeded' ? 'success' : dataOp.latest.state === 'failed' || dataOp.latest.state === 'unknown' ? 'warning' : 'info'} icon={dataOp.latest.state === 'succeeded' ? 'check-circle' : dataOp.latest.state === 'copying' || dataOp.latest.state === 'waiting-close' ? 'clock' : 'alert-triangle'}>
@@ -978,10 +975,10 @@ function SectionData() {
           </div>
         } />
       </div>
-      <SettingsRow label="草稿快照健康" hint="草稿/未确认发送账本的持久化状态（刷新/崩溃后保留；普通草稿 24 小时过期）">
+      <SettingsRow label="草稿保存" hint="草稿和未确认发送的保存状态（刷新或崩溃后仍保留；普通草稿 24 小时过期）">
         <div className="small" style={{ lineHeight: 1.7 }}>
           {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
-          {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定（主键已保全不覆盖；发送暂不可用）</Tag> : null}
+          {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定（草稿已保留、不会被覆盖；发送暂不可用）</Tag> : null}
           {draftPersist.mode === 'off' ? <Tag tone="warning" icon="alert-triangle">不可用（{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}）</Tag> : null}
           {draftPersist.mode === 'on' && draftPersist.error != null ? <Tag tone="warning" icon="alert-triangle">写入失败（{userFacingSystemText(draftPersist.error ?? '')}）</Tag> : null}
         </div>
@@ -989,23 +986,23 @@ function SectionData() {
       {draftPersist.recoveryNote != null ? (
         <div className="small faint" style={{ padding: '0 14px 6px' }} data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div>
       ) : null}
-      <SettingsRow label="重试 / 清理" hint="锁定后释放存储可重试初始化；清理=删除当前活动命名空间的草稿快照键（不可恢复）">
+      <SettingsRow label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）">
         <div className="row tight">
-          <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿快照初始化——状态按上方显示为准', 'info'); }}>重试快照</button>
+          <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试保存</button>
           <button className="btn sm" onClick={clearDrafts}>清理本地草稿</button>
         </div>
       </SettingsRow>
       {cleared != null ? <div className="small faint" style={{ padding: '0 14px 6px' }}>{cleared}</div> : null}
       <SettingsRow
-        label="旧数据目录继承"
-        hint="首次从 v3/v4 升级或整目录复制后，旧草稿/未确认发送账本的导入入口（旧数据根没有身份标记——不能自动确认同根，由你逐键确认）"
+        label="从旧版本导入草稿"
+        hint="首次从旧版本升级或复制数据目录后，可在这里导入旧的草稿和未确认发送记录。"
       >
         <div className="small" style={{ lineHeight: 1.7, minWidth: 320 }}>
           <div className="row tight">
-            <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重扫旧命名空间键——结果按下方候选为准', 'info')); }}>重扫旧目录</button>
+            <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重新扫描旧目录，结果见下方', 'info')); }}>重扫旧目录</button>
           </div>
           {legacy == null || legacy.candidates.length === 0 ? (
-            <div className="faint" style={{ marginTop: 4 }}>当前没有待确认的旧目录候选（自动继承通道：同目录升级/逻辑身份同根——无需人工确认）。</div>
+            <div className="faint" style={{ marginTop: 4 }}>当前没有待确认的旧目录。</div>
           ) : (
             <div className="col" style={{ gap: 6, marginTop: 6 }} data-zs-legacy-candidates="1">
               {legacy.error != null ? <div style={{ color: 'var(--warning,#b45309)' }}>上次扫描：{userFacingSystemText(legacy.error ?? '')}</div> : null}
@@ -1013,7 +1010,7 @@ function SectionData() {
                 <div key={c.key} className="row tight" style={{ padding: '4px 6px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }} data-zs-legacy-candidate={c.dir}>
                   <Icon name="folder" size={12} />
                   <span className="mono-sm" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.key}>{c.dir}</span>
-                  {c.hasStateDb === true ? <Tag tone="info">含数据根</Tag> : c.hasStateDb === false ? <Tag tone="neutral">目录无 state.sqlite</Tag> : null}
+                  {c.hasStateDb === true ? <Tag tone="info">含数据</Tag> : c.hasStateDb === false ? <Tag tone="neutral">无数据文件</Tag> : null}
                   {c.importedAt != null ? (
                     <Tag tone="success" icon="check">已导入 {new Date(c.importedAt).toLocaleTimeString()}</Tag>
                   ) : (
@@ -1040,7 +1037,7 @@ function SectionData() {
           <ArchiveManager embedded />
         </div>
       </SettingsRow>
-      <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同目录即恢复原 projectId">
+      <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目">
         <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
       </SettingsRow>
     </div>

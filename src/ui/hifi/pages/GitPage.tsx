@@ -227,7 +227,7 @@ export function GitPage({
       setCommitRead(prev => ({ key: commitReadKey, data: prev?.key === commitReadKey ? prev.data : null, error: null, loading: true }));
       try {
         const data = await loadCommitDiff(projectId, activeCommitHash, parentOid);
-        if (data.commit.oid !== activeCommitHash || (parentOid != null && data.comparedParent !== parentOid)) throw Error('提交或比较父身份不匹配，请重新读取');
+        if (data.commit.oid !== activeCommitHash || (parentOid != null && data.comparedParent !== parentOid)) throw Error('提交或比较的父提交已变化，请重新读取');
         if (!cancelled) setCommitRead({ key: commitReadKey, data, error: null, loading: false });
       } catch (e) { if (!cancelled) setCommitRead(prev => ({ key: commitReadKey, data: prev?.key === commitReadKey ? prev.data : null, error: (e as Error).message, loading: false })); }
       finally { busy = false; }
@@ -250,7 +250,7 @@ export function GitPage({
     return (
       <div className={`fg-body${narrow ? ' narrow' : ''}`} data-pane={pane}>
         <div className="fg-pane fg-pane-list"><div className="fg-pane-head git-list-head"><span className="small faint">Git</span></div></div>
-        <div className="fg-pane fg-pane-detail"><div className="fg-pane-scroll"><div className="panel info">正在读取仓库状态（git.status / branch.list / history）…</div></div></div>
+        <div className="fg-pane fg-pane-detail"><div className="fg-pane-scroll"><div className="panel info">正在读取仓库状态…</div></div></div>
       </div>
     );
   }
@@ -261,12 +261,11 @@ export function GitPage({
         <EmptyState
           icon={branchReadError != null ? 'alert-triangle' : 'folder'}
           title={branchReadError != null ? '分支列表读取失败' : project?.isGit === false ? '尚未初始化 Git' : '没有 Git 数据'}
-          detail={branchReadError != null ? `${userFacingSystemText(branchReadError ?? '')}；当前分支/工作区仍按 git.status 显示。` : '众说不自动 git init，也不会替你在项目里插入配置。你可以自行初始化后回到这里。'}
+          detail={branchReadError != null ? `${userFacingSystemText(branchReadError ?? '')}；当前分支/工作区仍可显示。` : '众说不会自动初始化 Git，也不修改你的项目配置。你可以自行初始化后回到这里。'}
         />
         {branchReadError != null ? <div className="panel-actions"><button className="btn sm" onClick={() => void refreshGitState(projectId)}>重试读取</button></div> : <div className="panel">
-          <div className="panel-title"><Icon name="info" size={13} /> 非 Git 目录下的改动记录仍然完整</div>
-          任务改动照旧记录成改动集并支持 diff 与撤销（E15：非 Git 目录用整目录快照做内容级前像）。
-          Git 标签只提供版本控制本身的能力，两者互不替代。
+          <div className="panel-title"><Icon name="info" size={13} /> 改动记录不受影响</div>
+          任务改动仍会记录，并可查看 diff 与撤销。
           <div className="panel-actions">
             <button className="btn sm" onClick={() => navigate(`/project/${projectId}/files?tab=files`)}>
               <Icon name="file-text" size={12} /> {embedded ? '返回文件' : '去看文件与改动'}
@@ -377,7 +376,7 @@ export function GitPage({
         onChange={(ev) => setCommitMessage(projectId, ev.target.value)}
       />
       <div className="small faint">{commitReason}</div>
-      <details className="small faint"><summary>提交方式</summary>产品内提交不会执行 Git hooks；如果项目要求提交钩子，请先在自己的 Git 工具完成检查。Git 提交与任务验收分别处理。</details>
+      <details className="small faint"><summary>提交方式</summary>产品内提交不会执行 Git hooks；如果项目要求提交钩子，请先在自己的 Git 工具完成检查。</details>
     </div>
   );
 
@@ -451,7 +450,7 @@ export function GitPage({
                             <button
                               type="button"
                               className="btn ghost sm"
-                              title="取消暂存：独立操作，不影响你正在看哪个文件"
+                              title="取消暂存"
                               onClick={(ev) => {
                                 ev.stopPropagation(); // 不要把这次点击当成"选中该文件"
                                 unstageFile(projectId, e.path);
@@ -468,7 +467,7 @@ export function GitPage({
                         </ListRow>
                       ))}
                       <div className="git-note">
-                        选中任一文件可在右侧复核；「取消暂存」与该行的选中互不影响。
+                        选中任一文件可在右侧复核。
                       </div>
                     </>
                   )}
@@ -567,7 +566,6 @@ export function GitPage({
                     ))
                   )}
                 </div>
-                <div className="git-note">提交 ≠ 验收。验收只在任务交付里做，Git 页不做审批中心。</div>
               </>
             ) : null}
 
@@ -587,7 +585,7 @@ export function GitPage({
                     </ListRow>
                   ))}
                   <div className="small faint" style={{ padding: '4px 8px 2px' }}>
-                    切换分支不会替你 stash 未提交改动——它们会跟着过去。
+                    切换分支后，未提交的改动会跟着过去。
                   </div>
                 </div>
                 <div className="git-list-sec">
@@ -632,12 +630,12 @@ export function GitPage({
                     {activeEntry.staged ? <Tag tone="info" icon="bookmark">已暂存</Tag> : null}
                     {activeEntry.additions > 0 ? <span className="small" style={{ color: 'var(--success)' }}>+{activeEntry.additions}</span> : null}
                     {activeEntry.deletions > 0 ? <span className="small" style={{ color: 'var(--danger)' }}>−{activeEntry.deletions}</span> : null}
-                    {activeEntry.changeSetId ? <Tag plain icon="layers">改动集</Tag> : null}
+                    {activeEntry.changeSetId ? <Tag plain icon="layers">任务改动</Tag> : null}
                     {activeEntry.userPreExisting ? (
                       <Tag
                         tone="warning"
                         icon="user"
-                        title="这个文件在你发起任务之前就有未提交修改。任务不会覆盖它，按任务批量暂存也会跳过；要提交需显式勾选。"
+                        title="这个文件在你发起任务前已有未提交修改；任务不会覆盖它，批量暂存会跳过它。"
                       >
                         你自己在任务前改过
                       </Tag>
@@ -654,7 +652,7 @@ export function GitPage({
                   {activeEntry.state === 'conflicted' ? (
                     <div className="panel danger" style={{ marginTop: 10 }}>
                       <div className="panel-title"><Icon name="alert-triangle" size={13} /> 冲突未解决</div>
-                      冲突文件不会被提交。众说不提供"全部用某一边覆盖"——冲突时保留三方内容让你逐个看。
+                      冲突文件不会被提交。众说不会替你选择保留哪一边；可查看三方内容后手动解决。
                       <div className="panel-actions">
                         <button className="btn sm" onClick={() => setConflictPath(activeEntry.path)}>查看三方内容</button>
                       </div>
@@ -671,8 +669,8 @@ export function GitPage({
                     <div className="spacer" />
                     <button className="btn ghost sm" disabled={entryRead?.key === entryReadKey && entryRead.loading} onClick={() => entryReload.current()}>刷新差异</button>
                   </div>
-                  {entryReadError ? <div className="panel warning" role="alert">差异读取失败：{userFacingSystemText(entryReadError ?? '')}。{entryDiff ? '保留上次确认的差异。' : '尚未取得该版本差异。'}可点「刷新差异」重试。</div> : null}
-                  {entryRead?.key === entryReadKey && entryRead.at != null ? <div className="small faint">差异更新于 {fullTime(entryRead.at)}{entryRead.loading ? ' · 正在刷新…' : ''}</div> : null}
+                  {entryReadError ? <div className="panel warning" role="alert">差异读取失败：{userFacingSystemText(entryReadError ?? '')}。{entryDiff ? '保留上次读取的差异。' : '尚未取得该版本差异。'}可点「刷新差异」重试。</div> : null}
+                  {entryRead?.key === entryReadKey && entryRead.loading ? <div className="small faint">正在刷新差异…</div> : null}
                   {activeEntry.staged ? (
                     <div className="git-note" style={{ margin: '0 0 6px' }}>
                       显示的是<strong>{activeEntry.staged ? '已暂存内容' : '工作区当前内容'}</strong>的差异。
@@ -683,7 +681,7 @@ export function GitPage({
                   ) : entryDiff.binary ? (
                     <div className="panel">
                       <div className="panel-title"><Icon name="info" size={13} /> 二进制文件</div>
-                      不生成逐行 diff；路径与增减统计为事实（git numstat）。
+                      不生成逐行 diff；显示路径与增删行数统计。
                     </div>
                   ) : entryDiff.hunks.length > 0 ? (
                     <>
@@ -694,8 +692,8 @@ export function GitPage({
                     <div className="panel">
                       <div className="panel-title"><Icon name="info" size={13} /> 没有可展示的文本 diff</div>
                       {activeEntry.state === 'deleted'
-                        ? '文件已删除，按路径记录删除事实。'
-                        : '二进制、超大文件或未跟踪新文件可能没有 unified diff 正文。'}
+                        ? '该文件已删除。'
+                        : '二进制、超大文件或未跟踪的新文件没有文本 diff。'}
                     </div>
                   )}
                 </div>
@@ -735,7 +733,7 @@ export function GitPage({
                           })()}
                         </button>
                       ) : null}
-                      {activeCommit.changeSetId ? <Tag plain icon="layers">关联改动集</Tag> : null}
+                      {activeCommit.changeSetId ? <Tag plain icon="layers">关联任务改动</Tag> : null}
                     </div>
 
                     {/* §10.5：这里只如实展示关联交付的状态，决定一律去交付详情做。
@@ -758,7 +756,7 @@ export function GitPage({
                             : delivery.status === 'changes_requested' ? 'danger' : 'neutral';
                       return (
                         <div className="row tight wrap" style={{ marginTop: 8 }}>
-                          <Tag tone={tone} icon={delivery.status === 'pending' ? 'eye' : 'info'} title="验收针对整个交付，不针对单个提交">
+                          <Tag tone={tone} icon={delivery.status === 'pending' ? 'eye' : 'info'} title="验收针对整个交付">
                             {label}
                           </Tag>
                           <button
@@ -768,7 +766,7 @@ export function GitPage({
                               const th = task ? s.threads.find((x) => x.id === task.conversationThreadId) : undefined;
                               if (th) navigate(`/project/${projectId}/room/${th.roomId}?thread=${th.id}&tab=delivery`);
                             }}
-                            title="去任务交付详情查看与决定；Git 页不承担审批"
+                            title="去任务交付详情查看与决定"
                           >
                             <Icon name="corner-down-right" size={11} /> 查看交付详情
                           </button>
@@ -798,10 +796,10 @@ export function GitPage({
                         </>
                       ) : null}
                     </div>
-                    {commitError ? <div className="panel warning" role="alert">提交差异读取失败：{userFacingSystemText(commitError ?? '')}。{commitData ? '保留上次确认内容。' : '尚未取得该提交差异。'}</div> : null}
+                    {commitError ? <div className="panel warning" role="alert">提交差异读取失败：{userFacingSystemText(commitError ?? '')}。{commitData ? '保留上次读取的内容。' : '尚未取得该提交差异。'}</div> : null}
                     <button className="btn ghost sm" disabled={commitRead?.key === commitReadKey && commitRead.loading} onClick={() => commitReload.current()}>刷新提交差异</button>
                     {(commitData?.parentsMeta?.length ?? 0) > 1 ? <div className="row wrap" data-zs-git-parents>
-                      <span className="small faint">合并提交 · 选择比较父</span>
+                      <span className="small faint">合并提交 · 选择要比较的父提交</span>
                       {commitData!.parentsMeta!.map(p => <button key={p.oid} className={`chip${commitData?.comparedParent === p.oid ? ' on' : ''}`} onClick={() => setCommitParent({ oid: activeCommit.hash, parent: p.oid })}>{p.oid.slice(0,8)} · {p.subject}</button>)}
                     </div> : null}
                     {commitData?.mergeNote ? <div className="panel info">{commitData.mergeNote}</div> : null}
@@ -845,7 +843,7 @@ export function GitPage({
 
                 {/* reflog：撤销入口保留，说明照旧（软回退，不丢文件） */}
                 <div className="card">
-                  <div className="section-title"><Icon name="clock" size={13} /> 最近操作（reflog）</div>
+                  <div className="section-title"><Icon name="clock" size={13} /> 最近操作</div>
                   {git.reflog.slice(0, 8).map((r, i) => (
                     <div key={i} className="row tight wrap small" style={{ marginBottom: 4 }}>
                       <span className="mono-sm faint">{r.op}</span>
@@ -856,12 +854,11 @@ export function GitPage({
                     </div>
                   ))}
                   <div className="panel" style={{ marginTop: 10 }}>
-                    <div className="panel-title"><Icon name="info" size={13} /> 撤销提交是软回退</div>
-                    众说不用 <code>git reset --hard</code>、不强制 checkout、不删除你的项目文件。
-                    撤销后提交内容回到工作区，一个文件都不会丢。
+                    <div className="panel-title"><Icon name="info" size={13} /> 撤销提交会保留文件内容</div>
+                    撤销不会删除你的项目文件；提交内容会回到工作区，一个文件都不会丢。
                     <div className="panel-actions">
                       <button className="btn danger sm" onClick={() => { const head=git.commits[0]; if(head)setUndoApproved({commitOid:head.hash,expectedHead:head.hash,expectedBranch:git.currentBranch,subject:head.subject}); }} disabled={git.commits.length === 0 || !!git.readErrors?.history || !git.currentBranch || git.currentBranch === 'HEAD'}>
-                        <Icon name="corner-up-left" size={12} /> 撤销当前 HEAD 提交
+                        <Icon name="corner-up-left" size={12} /> 撤销当前提交
                       </button>
                     </div>
                   </div>
@@ -889,7 +886,7 @@ export function GitPage({
                           <span className="mono-sm">{r.url}</span>
                         </div>
                         <div className="small faint" style={{ marginTop: 6 }}>
-                          {r.authState === 'unknown' ? '读取远端配置不会验证账号；推送或拉取时按实际回执报告结果。本地远端可能无需网络凭据。' : '实际推送或拉取失败会就地显示原因。'}
+                          {r.authState === 'unknown' ? '读取远端配置不会验证账号；推送或拉取时会显示实际结果。本地远端可能无需网络凭据。' : '推送或拉取失败时会就地显示原因。'}
                         </div>
                       </div>
                     );
@@ -936,7 +933,7 @@ export function GitPage({
                     </button>
                   </div>
                   <div className="small faint" style={{ marginTop: 6 }}>
-                    在已确认的提交上创建分支。需要切换时，在分支列表选择目标后明确切换。
+                    基于当前提交创建分支；创建后需要切换时，在分支列表选择目标后切换。
                   </div>
                 </div>
               </>

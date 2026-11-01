@@ -24,10 +24,10 @@ export function RuntimeModel({projectId,kind,executable,value,onChange,disabled}
       {value:'',label:catalog?'选择模型':'正在读取模型清单…'},
       ...options,
     ]}/>
-    <div className="field-hint">{error?`模型清单读取失败：${userFacingSystemText(error ?? '')}；保存值保留。`:catalog?.warning??(catalog?`${catalog.source}${catalog.truncated?'（部分列表）':''}`:'读取元数据，不发送任务。')}{savedOutsideCatalog?' 当前保存的模型不在本次清单中，保存值未改写。':null}
+    <div className="field-hint">{error?`模型清单读取失败：${userFacingSystemText(error ?? '')}；保存值保留。`:catalog?.warning??(catalog?(catalog.truncated?'列表较长，仅显示部分。':null):'正在读取模型清单…')}{savedOutsideCatalog?' 当前保存的模型不在清单中，已原样保留。':null}
       <button className="btn ghost sm" disabled={disabled} onClick={()=>setRefresh(n=>n+1)}>重新读取</button>
     </div>
     {catalog?.program.status==='missing'?<div className="panel warning">当前未找到执行程序，可在高级设置选择程序后再使用。</div>:null}
-    <details><summary className="small faint">高级：查看或手动指定完整模型 ID</summary><input className="input" aria-label="手动模型 ID" disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} placeholder="使用当前渠道实际支持的模型 ID"/><div className="small faint">完整 ID 会原样保存并按原值发送。</div></details>
+    <details><summary className="small faint">高级：查看或手动指定完整模型 ID</summary><input className="input" aria-label="手动模型 ID" disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} placeholder="使用当前渠道实际支持的模型 ID"/><div className="small faint">填写渠道支持的完整模型 ID。</div></details>
   </div>;
 }

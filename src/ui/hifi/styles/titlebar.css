@@ -172,11 +172,6 @@
     display: none;
   }
 }
-@media (max-width: 1180px) {
-  .titlebar .proto-flag {
-    display: none;
-  }
-}
 @media (max-width: 1040px) {
   .titlebar-project-btn {
     max-width: 190px;

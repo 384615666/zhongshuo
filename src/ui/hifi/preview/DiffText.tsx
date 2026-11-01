@@ -64,8 +64,7 @@ export function DiffText({
     return (
       <div className="panel warning">
         <div className="panel-title"><Icon name="alert-triangle" size={13} /> 不具备完整比较内容</div>
-        缺少一侧的固定基线，因此不能生成完整 diff。
-        界面不会用"当前文件"顶替缺失的一侧（那会让人以为改动已经发生）。
+        缺少一侧的版本，无法生成完整对比。
         <div className="small faint" style={{ marginTop: 6 }}>
           已有一侧内容仍可单独阅读。
         </div>
@@ -80,7 +79,7 @@ export function DiffText({
         <Icon name="arrow-right" size={12} className="faint" />
         <span className="pill add"><Icon name="plus" size={10} /> {rightLabel}</span>
         <div className="spacer" />
-        <span className="small faint">+{added} / −{removed} 行 · 两侧均为固定版本</span>
+        <span className="small faint">+{added} / −{removed} 行</span>
       </div>
       <div className="preview-diff-body">
         {lines.map((l, i) => (

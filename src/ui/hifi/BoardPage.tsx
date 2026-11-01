@@ -66,15 +66,15 @@ export function BoardPage() {
       <div className="row tight" style={{ marginBottom: 8 }}>
         <Icon name="list" size={14} />
         <strong>任务看板</strong>
-        <select className="pdf-zoom" value={scope} onChange={(e) => setScope(e.target.value === 'all' ? 'all' : 'project')} title="范围：当前项目（显式指定）或全部可访问项目（按你的可见项目集过滤）">
+        <select className="pdf-zoom" value={scope} onChange={(e) => setScope(e.target.value === 'all' ? 'all' : 'project')} title="范围：当前项目或全部可访问项目">
           <option value="project">当前项目</option>
           <option value="all">全部可访问项目</option>
         </select>
         <span className="faint small">点击任务卡片，查看回复、补充要求或验收成果</span>
         <button className="btn ghost sm" onClick={() => void reload()} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
       </div>
-      {err != null ? <div className="panel warning">看板装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
-      {group == null && err == null ? <div className="panel info">{loading ? '正在装载…' : '当前项目没有任务。'}</div> : null}
+      {err != null ? <div className="panel warning">看板加载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
+      {group == null && err == null ? <div className="panel info">{loading ? '正在加载…' : '当前项目没有任务。'}</div> : null}
       {groups.map((group) => group.rooms.map((room) => {
         const byColumn = new Map<BoardCard['column'], BoardCard[]>(COLUMN_ORDER.map((c) => [c, []]));
         for (const c of room.cards) byColumn.get(c.column)?.push(c);
@@ -101,7 +101,7 @@ export function BoardPage() {
                         key={card.taskId}
                         className="root-card"
                         style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }}
-                        title={`打开线程详情（${card.locate}）`}
+                        title="打开线程详情"
                         onClick={() => openCard(card)}
                       >
                         <div className="row tight">
@@ -122,7 +122,6 @@ export function BoardPage() {
           </div>
         );
       }))}
-      <div className="faint small" style={{ marginTop: 10 }}>{userFacingSystemText(data?.note ?? '')} · 点击任务卡片，进入详情停止任务或验收成果。</div>
     </div>
   );
 }

@@ -51,7 +51,7 @@ function loadVendorScript(rel: string): Promise<void> {
     if (existing.dataset.loaded === 'true') return Promise.resolve();
     return new Promise((resolve, reject) => {
       existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () => reject(new Error(`vendor 脚本加载失败：${rel}`)));
+      existing.addEventListener('error', () => reject(new Error(`加载预览组件失败：${rel}`)));
     });
   }
   return new Promise((resolve, reject) => {
@@ -59,7 +59,7 @@ function loadVendorScript(rel: string): Promise<void> {
     s.src = new URL(rel, document.baseURI).href;
     s.dataset.zsVendor = rel;
     s.onload = () => { s.dataset.loaded = 'true'; resolve(); };
-    s.onerror = () => reject(new Error(`vendor 脚本加载失败：${rel}`));
+    s.onerror = () => reject(new Error(`加载预览组件失败：${rel}`));
     document.head.append(s);
   });
 }
@@ -74,7 +74,7 @@ export function loadRendererDocxPreview() {
       await loadVendorScript('assets/vendor/jszip.min.js');
       await loadVendorScript('assets/vendor/docx-preview.min.js');
       const w = window as unknown as { docx?: DocxRenderer };
-      if (w.docx == null) throw new Error('docx-preview 全局未就绪');
+      if (w.docx == null) throw new Error('预览组件未就绪');
       return w.docx;
     })();
   }

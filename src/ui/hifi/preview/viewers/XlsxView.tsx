@@ -118,7 +118,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
   useEffect(() => {
     if (engineLoadError != null) { setEngineError(engineLoadError); setEngineFailed(true); return; }
     const onFail = (ev: Event) => {
-      setEngineError(String((ev as CustomEvent<string>).detail ?? '引擎加载失败'));
+      setEngineError(String((ev as CustomEvent<string>).detail ?? '表格引擎加载失败'));
       setEngineFailed(true);
     };
     window.addEventListener('zs:xlsx-engine-failed', onFail);
@@ -139,7 +139,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
     return (
       <div className="xlsx-view xlsx-fallback" data-zs-xlsx-view="fallback" data-zs-xlsx-fail={engineError?.slice(0, 40) ?? ''} data-zs-xlsx-sheet={sh?.name ?? ''}>
         <div className="xlsx-fallback-note panel info">
-          <div className="panel-title"><Icon name="alert-triangle" size={13} /> 高保真表格引擎不可用（{userFacingSystemText(engineError ?? '未知')}）——以下为提取网格回退：字符串单元格、无样式/合并渲染。原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
+          <div className="panel-title"><Icon name="alert-triangle" size={13} /> 表格预览引擎不可用（{userFacingSystemText(engineError ?? '未知')}）——以下为简化网格，只显示单元格文字，无样式与合并。原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
           <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
         </div>
         {fallbackSheets.length > 1 ? (
@@ -149,9 +149,9 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
             ))}
           </div>
         ) : null}
-        {sh == null ? <div className="panel info">无工作表数据（提取不可用）。</div> : (
+        {sh == null ? <div className="panel info">无法读取工作表数据。</div> : (
           <div className="xlsx-fallback-meta small faint">
-            工作表「{sh.name}」· 实际 {sh.rowCount}×{sh.colCount} · 窗口 {sh.cells.length}×{sh.cells[0]?.length ?? 0}{sh.rowTruncated || sh.colTruncated ? '（窗口外未呈现）' : ''}{(sh.merges?.length ?? 0) > 0 ? ` · 合并 ${sh.merges?.length} 处（回退视图未渲染）` : ''}{sh.formulaMissing ? ' · ⚠ 存在无缓存值公式格（公式不执行）' : ''}{fallbackNote ? ` · ${fallbackNote}` : ''}
+            工作表「{sh.name}」· {sh.rowCount}×{sh.colCount}{sh.rowTruncated || sh.colTruncated ? '（仅显示部分内容）' : ''}{(sh.merges?.length ?? 0) > 0 ? ` · 合并单元格 ${sh.merges?.length} 处` : ''}{sh.formulaMissing ? ' · ⚠ 部分公式没有可用结果（不会重新计算）' : ''}{fallbackNote ? ` · ${fallbackNote}` : ''}
           </div>
         )}
         {sh != null ? (
@@ -183,10 +183,10 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
           rounded={false}
           showDefaultToolbar={false}
           toolbar={renderTabs}
-          loadingState={<div className="panel info" data-zs-xlsx-loading="1">正在解析表格（WASM 引擎）…</div>}
+          loadingState={<div className="panel info" data-zs-xlsx-loading="1">正在解析表格…</div>}
           errorState={(error: Error) => {
             window.setTimeout(() => { setEngineError(error.message.slice(0, 120)); setEngineFailed(true); }, 0);
-            return <div className="panel info">表格引擎错误：{error.message.slice(0, 120)}——切换回退视图…</div>;
+            return <div className="panel info">表格预览出错：{error.message.slice(0, 120)}——正在切换为简化视图…</div>;
           }}
         />
       </Suspense>

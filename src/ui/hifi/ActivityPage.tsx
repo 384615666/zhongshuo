@@ -24,6 +24,19 @@ interface ActivityItem {
 
 const PAGE_LIMIT = 60;
 
+/** 事件类型兜底：未映射的内部 kind（如 changeset.finalized）不把英文键直接摊给用户。 */
+const unknownActivityKindLabel = (label: string): string => /[a-z]\.[a-z]/i.test(label) ? '活动记录' : label;
+
+/** 活动摘要里可能出现的原始状态枚举（payload.status/disposition）翻成用户语言。 */
+const ACTIVITY_STATUS_TEXT: Record<string, string> = {
+  ACTIVE: '执行中', DONE: '已完成', REVIEW: '待验收', BLOCKED: '受阻', CANCELLED: '已取消',
+  QUEUED: '排队中', RUNNING: '运行中', WAITING_USER: '待你处理', WAITING_APPROVAL: '等待批准',
+  INTERRUPTED: '已中断', SUCCEEDED: '已完成', FAILED: '失败', PENDING: '等待中', UNKNOWN: '结果待确认',
+  ready: '已就绪', dispatched: '已派发', queued: '排队中', completed: '已完成', started: '已开始',
+};
+const activitySummaryText = (kind: string, summary: string): string =>
+  summary.length === 0 ? '暂无活动说明' : ACTIVITY_STATUS_TEXT[summary] ?? userFacingSystemEventText(kind, summary);
+
 export function ActivityPage() {
   const projectId = useStore((s) => s.activeProjectId);
   const [scope, setScope] = useState<'all' | 'project'>('all'); // §17.7：聚合流默认全部可访问项目
@@ -125,28 +138,27 @@ export function ActivityPage() {
               <option value="project">当前项目</option>
             </select>
           </label>
-          <span className="filter-note">domain_events 只读聚合——DM 事件仅本人参与可见；读活动≠执行动作</span>
           <div className="spacer" />
           <button className="btn ghost sm" onClick={() => void load('reset')}>刷新</button>
         </div>
-        {visibleErr != null ? <div className="panel warning">活动流读取失败：{userFacingSystemText(visibleErr ?? '')}——同范围已加载内容保持；其它范围旧结果未冒充当前结果（可刷新重试）</div> : null}
-        {gapNotice && visibleItems != null ? <div className="panel info">刷新期间新增活动超过首页窗口；已从最新事件重新定位。点“加载更早”可按游标补读，中间历史未被假装连续。</div> : null}
-        {visibleItems == null && visibleErr == null ? <div className="panel info">正在装载…</div> : null}
+        {visibleErr != null ? <div className="panel warning">活动流读取失败：{userFacingSystemText(visibleErr ?? '')}。已加载的内容会保留，可刷新重试</div> : null}
+        {gapNotice && visibleItems != null ? <div className="panel info">刷新期间新增的活动较多，列表已从最新事件重新加载；点「加载更早」可继续查看更早的活动。</div> : null}
+        {visibleItems == null && visibleErr == null ? <div className="panel info">正在加载…</div> : null}
         {visibleItems != null && visibleItems.length === 0 && visibleErr == null ? (
           <EmptyState icon="activity" title="当前范围内还没有活动事件" detail="任务执行、交付和恢复等活动会按时间倒序显示。" />
         ) : null}
         {visibleItems != null && visibleItems.length > 0 ? (
           <>
-            <div className="faint small" style={{ marginBottom: 6 }}>共已加载 {visibleItems.length} 条 · 按发生时间倒序（同毫秒按 seq 决定性排序——不漏同刻事件）</div>
+            <div className="faint small" style={{ marginBottom: 6 }}>共已加载 {visibleItems.length} 条 · 按发生时间倒序</div>
             <div className="col" style={{ gap: 6 }}>
               {visibleItems.map((it) => {
                 const loc = locateOf(it);
                 return (
                   <div key={`${it.eventId}:${it.seq}`} className="card tight" data-zs-activity-item={it.kind} data-zs-activity-id={it.eventId}>
                     <div className="row tight wrap">
-                      <Tag tone="neutral" icon="clock">{it.kindLabel}</Tag>
+                      <Tag tone="neutral" icon="clock">{unknownActivityKindLabel(it.kindLabel)}</Tag>
                       <Tag tone="accent" icon="folder">{it.projectName}</Tag>
-                      <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.summary.length > 0 ? userFacingSystemEventText(it.kind,it.summary) : '暂无活动说明'}</span>
+                      <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activitySummaryText(it.kind, it.summary)}</span>
                       <span className="faint small">{new Date(it.at).toLocaleString()}</span>
                       {loc != null ? <button className="btn ghost sm" onClick={loc.go}>{loc.label}</button> : null}
                     </div>
@@ -159,7 +171,6 @@ export function ActivityPage() {
                 {loading ? '加载中…' : hasMore ? '加载更早' : '没有更早的事件了'}
               </button>
             </div>
-            <div className="faint small" style={{ marginTop: 6 }}>点击加载更多可查看较早的活动记录。</div>
           </>
         ) : null}
       </div>

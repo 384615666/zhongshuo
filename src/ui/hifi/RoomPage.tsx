@@ -59,11 +59,11 @@ export function RoomPage({ roomId }: { roomId: string }) {
     <div className="page-stack" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
       <div className="row tight wrap" style={{ padding: '10px 14px 0' }}>
         <span className="section-title">#{room.name}</span>
-        <span className="faint small">{roomMembers.length > 0 ? `成员：${roomMembers.map((m) => m.displayName).join('、')}` : rosterError != null ? '成员名单读取失败（保留上次名单；重试=切换视图）' : '暂无启用成员（仅记录仍可保存；派发需先有成员）'}</span>
+        <span className="faint small">{roomMembers.length > 0 ? `成员：${roomMembers.map((m) => m.displayName).join('、')}` : rosterError != null ? '成员名单读取失败（保留上次名单；重试=切换视图）' : '暂无启用成员（仍可仅记录）'}</span>
         <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在原界面打开本房间，管理附件、任务与成果" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面打开本房间</button>
       </div>
       <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
-        {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
+        {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——重试=切换视图或等待自动刷新）</div> : null}
         {cards.length === 0 && readError == null ? <div className="panel info">主池暂无线程——发送第一条（或仅记录）。</div> : null}
         {cards.map((c) => (
           <div
@@ -126,7 +126,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
           // 不从 UI 目标重造，review-r48 §3）；unknown 时按发起键冻结这份原信封。
           const intent = p.sendAs === 'record' ? 'record_only' : 'default';
           if (roomMembers.length === 0 && intent === 'default') {
-            return { status: 'failed', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
+            return { status: 'failed', error: '该房间没有启用成员——无法发送（可先用「仅记录」保存）' };
           }
           const draftKey = `room:${roomId}`;
           const refs = attachmentRefsFromDraft(draftKey, intent);
@@ -142,7 +142,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
           else confirmOutboundUnknown(draftKey, env);
           if (r.status === 'ok') {
             void loadRoomPool(roomId).catch(() => { /* 读取失败另有呈现 */ });
-            toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
+            toast(intent === 'record_only' ? '已仅记录（不会发送给 AI）' : '已发送', 'success');
             return { status: 'ok' };
           }
           return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${userFacingSystemText(r.error ?? '')}` } : { status: 'unknown', error: r.error };

@@ -68,18 +68,18 @@ function locateLegacyRoom(roomId: string, name: string): string | null {
   const byId = document.querySelector(`#room-list .room-item[data-room-id="${CSS.escape(roomId)}"]`) as HTMLElement | null;
   if (byId != null) { byId.click(); return null; }
   const byName = [...document.querySelectorAll('#room-list .room-item')].find((b) => (b.textContent ?? '').includes(name));
-  if (byName != null) { (byName as HTMLElement).click(); return `已按名称回退定位房间「${name}」（原界面缺 data-room-id——建议升级包）`; }
-  return `原界面未找到房间「${name}」（${roomId}）`;
+  if (byName != null) { (byName as HTMLElement).click(); return `已按名称定位房间「${name}」`; }
+  return `原界面未找到房间「${name}」`;
 }
 function locateLegacyDm(conversationId: string, fallbackLabel: string): string | null {
   const byId = document.querySelector(`#dm-list button[data-conversation-id="${CSS.escape(conversationId)}"]`) as HTMLElement | null;
   if (byId != null) { byId.click(); return null; }
-  return `原界面未找到私信会话 ${conversationId}（${fallbackLabel}）——不按名称猜测`;
+  return `原界面未找到私信会话「${fallbackLabel}」`;
 }
 
 function openDetails(id: string): string | null {
   const el = document.getElementById(id) as HTMLDetailsElement | null;
-  if (el == null) return `原界面面板 #${id} 未找到`;
+  if (el == null) return '原界面面板未找到';
   el.open = true;
   el.scrollIntoView({ block: 'start' });
   return null;
@@ -87,7 +87,7 @@ function openDetails(id: string): string | null {
 
 function togglePanel(toggleId: string, panelId?: string): string | null {
   const btn = document.getElementById(toggleId);
-  if (btn == null) return `原界面入口 #${toggleId} 未找到`;
+  if (btn == null) return '原界面入口未找到';
   // 已可见则不再点击（toggle 语义：重复点击=关闭——review-r46 定位重试的竞态源）。
   if (panelId != null) {
     const panel = document.getElementById(panelId);
@@ -99,7 +99,7 @@ function togglePanel(toggleId: string, panelId?: string): string | null {
   if (panelId != null) {
     const panel = document.getElementById(panelId);
     const visible = panel != null && !panel.classList.contains('hidden') && getComputedStyle(panel).display !== 'none';
-    if (!visible) return `#${panelId} 点击后仍不可见（legacy 启动中——重试）`;
+    if (!visible) return '原界面正在打开，面板尚未显示（重试中）';
   }
   return null;
 }
@@ -171,7 +171,7 @@ class HifiErrorBoundary extends Component<{ children: ReactNode }, { failed: str
     hifiStyleLink()?.setAttribute('disabled', 'disabled'); // 回退时关闭 hifi 全局样式（r47 §5）
     if (w.__zsLegacyStart != null && w.__zsLegacyStarted !== true) { w.__zsLegacyStart(); w.__zsLegacyStarted = true; }
   }
-  render() { return this.state.failed == null ? this.props.children : <div style={{ padding: 24 }}>界面渲染失败（{this.state.failed}）——已回退原界面。</div>; }
+  render() { return this.state.failed == null ? this.props.children : <div style={{ padding: 24 }}>界面渲染失败，已回退原界面。</div>; }
 }
 
 export default function App() {
@@ -394,7 +394,7 @@ export default function App() {
               </div>
               <button
                 className={`side-item${navActive.files ? ' active' : ''}`}
-                title="文件与 Git：同一项目页内两个标签（真实目录树 + Git 全链）"
+                title="文件与 Git：查看项目目录与 Git 状态"
                 onClick={() => navigate(project != null ? `/project/${project.id}/files` : '/files')}
               >
                 <Icon name="diff" size={14} />
@@ -402,7 +402,7 @@ export default function App() {
               </button>
               <button
                 className={`side-item${navActive.tasks ? ' active' : ''}`}
-                title="任务看板：全部可访问项目聚合"
+                title="任务看板：查看全部可访问项目的任务"
                 onClick={() => navigate('/board')}
               >
                 <Icon name="list" size={14} />
@@ -485,7 +485,7 @@ export default function App() {
                           </button>
                           <button
                             className="side-row-act"
-                            title={`在「${p.displayName}」中新建房间（真实 room.create）`}
+                            title={`在「${p.displayName}」中新建房间`}
                             onClick={(e) => { e.stopPropagation(); setCreateRoomFor(p.id); }}
                           >
                             <Icon name="plus" size={14} />
@@ -549,11 +549,11 @@ export default function App() {
                 className={`side-item${recoveryAttention ? ' zs-recovery-attention' : ''}`}
                 title={recoveryAttention
                   ? recoveryOrigin === 'runtime'
-                    ? `恢复检查：本次运行新出现需要处理的事项（未知/中断/保护）——点击查看与分列操作`
-                    : `恢复检查：存在需要处理的事项——点击查看与分列操作`
+                    ? `恢复检查：本次运行新出现需要处理的事项（未知/中断/保护）——点击查看`
+                    : `恢复检查：存在需要处理的事项——点击查看`
                   : pendingWaitCount > 0
-                    ? `恢复检查：${pendingWaitCount} 条排队意图等待派发（普通排队，非故障）`
-                    : '恢复检查：查看恢复事实'}
+                    ? `恢复检查：${pendingWaitCount} 条请求正在排队等待派发（非故障）`
+                    : '恢复检查：查看恢复与保护'}
                 data-zs-recovery-attention={recoveryAttention ? '1' : '0'}
                 onClick={() => setRecoveryOpen(true)}
               >
@@ -650,7 +650,7 @@ export default function App() {
           >
             <div className="col" style={{ gap: 10 }}>
               <div className="small muted" style={{ lineHeight: 1.75 }}>
-                「移除」= 从应用的项目列表解除关联：**不删除磁盘文件、不删除历史记录**（重新打开同一目录即恢复，projectId 不变）。
+                「移除」= 从应用的项目列表解除关联：不删除磁盘文件、不删除历史记录（重新打开同一目录即恢复）。
               </div>
               <div className="small faint">目录：{p.rootPath}</div>
             </div>
@@ -928,14 +928,14 @@ function EditProjectInfoModal({ projectId, onClose }: { projectId: string; onClo
         <div className="field">
           <label className="field-label">显示名称</label>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="项目显示名" />
-          <div className="field-hint">只改应用里的显示名称，**不会**重命名磁盘目录。</div>
+          <div className="field-hint">只改应用里的显示名称，不会重命名磁盘目录。</div>
         </div>
         <div className="field">
           <label className="field-label">描述（可选）</label>
           <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="例如：订单表回填与数据修复" />
         </div>
         {err != null ? <div className="panel warning">保存失败：{userFacingSystemText(err ?? '')}（若项目已被他端修改请刷新重试）</div> : null}
-        <div className="small faint">目录：{p.rootPath} · revision {p.revision}</div>
+        <div className="small faint">目录：{p.rootPath}</div>
       </div>
     </Modal>
   );

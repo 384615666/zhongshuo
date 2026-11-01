@@ -11,7 +11,7 @@ import { refreshMembers, switchFocusProject } from '../loader';
 import { memberWrite } from '../data/memberWrites';
 import { recordWrite } from '../data/store';
 import { EditMemberModal, SaveMemberTemplateModal, UnknownMemberOperations } from '../components/MemberManagementForms';
-import { BindRuntimeModal, runtimeAuthOf, type MemberRow, type RuntimeInfo } from '../MembersPage';
+import { BindRuntimeModal, type MemberRow, type RuntimeInfo } from '../MembersPage';
 import { runtimePermissionLabel } from '../lib/runtimePermissions';
 import { runtimeModelDisplayName } from '../lib/format';
 
@@ -91,7 +91,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
           {member != null ? <Avatar name={member.displayName} color={memberColor(member.id)} size={36} round subject={`member:${member.id}`} /> : null}
           <div style={{ minWidth: 0 }}>
             <div className="page-title" style={{ fontSize: 18 }}>{member != null ? member.displayName : '成员详情'}</div>
-            <div className="page-sub">{project.displayName} · {member?.description ?? '项目级成员实例'}</div>
+            <div className="page-sub">{project.displayName} · {member?.description ?? '项目成员'}</div>
           </div>
           <div className="page-head-actions">
             <button className="btn sm" onClick={() => navigate(`/project/${projectId}/members`)}><Icon name="arrow-left" size={12} /> 返回成员管理</button>
@@ -115,30 +115,22 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>类型</dt><dd>{member.principalType === 'agent' ? 'AI 成员' : '本地用户'}</dd>
                 <dt>状态</dt><dd>{member.enabled ? '启用' : '停用'}</dd>
                 <dt>AI 渠道</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已配置` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 使用默认配置` : '未配置'}</dd>
-                <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${userFacingSystemText(runtime.executableStatus.reason ?? '')}`:runtime?.executableStatus?.status==='found'?'已找到程序引用（未执行认证）':'尚未确认'}</dd>
+                <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${userFacingSystemText(runtime.executableStatus.reason ?? '')}`:runtime?.executableStatus?.status==='found'?'已找到程序':'尚未确认'}</dd>
                 <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '（未获确认）'}</dd>
               </dl>
-              <details className="small" style={{ marginTop: 10 }}>
-                <summary>高级身份信息</summary>
-                <div className="mono-sm faint" style={{ marginTop: 6, overflowWrap: 'anywhere' }}>成员 ID：{member.id}</div>
-              </details>
-              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{userFacingSystemText(runtimeError ?? '')}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
+              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{userFacingSystemText(runtimeError ?? '')}（保留上次结果） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
             </div>
 
             <div className="card">
               <div className="card-title" style={{ marginBottom: 12 }}>模型与能力</div>
               <dl className="kv">
                 <dt>模型</dt><dd title={modelId?`完整模型 ID：${modelId}`:undefined}>{modelName}</dd>
-                <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未解析'}</dd>
+                <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未设置'}</dd>
                 <dt>保存的权限模式</dt><dd>{runtimePermissionLabel(runtime?.binding?.permissionMode,effective?.kind)}</dd>
-                <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}<div className="small faint">按本机 CLI / 模型列表保存并传入；渠道未回报有效等级时不作已生效认证。</div></dd>
+                <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}</dd>
                 <dt>文件访问权限</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{userFacingSystemText(runtime.permissionExecution.reason ?? '')}</div>:null}</dd>
-                <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>
-                <dt>项目编辑档历史证据</dt><dd>{runtime?.writeCapability?.status==='supported'?'匹配历史证据':'无匹配证据'}<div className="small faint">{userFacingSystemText(runtime?.writeCapability?.reason??'未提供证据')}</div></dd>
-                <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}{runtime?.imageInput?.reason != null ? ` · ${userFacingSystemText(runtime.imageInput.reason ?? '')}` : ''}</dd>
-                <dt>历史识图证据</dt><dd>{runtime?.imageInput?.evidence?'当前组合匹配历史证据':'本组合没有匹配的历史证据；不阻止自动输入'}</dd>
+                <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}</dd>
               </dl>
-              {runtime?.imageInput != null ? <details style={{ marginTop: 8 }}><summary>识图配置依据</summary><div className="small mono" style={{ overflowWrap: 'anywhere' }}>配置 {runtime.imageInput.configuration} · 模型 {runtime.imageInput.model ?? '未指定'} · 权限 {runtime.imageInput.permissionMode} · 渠道 {runtime.imageInput.channel} · 协议 {runtime.imageInput.protocol}</div></details> : null}
               {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>AI 设置…</button> : null}
             </div>
           </div>

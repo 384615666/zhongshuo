@@ -52,6 +52,7 @@ interface GitCommitDiff {
 }
 
 const KIND_LABEL: Record<string, string> = { text_file: '文本', image_file: '图片', pdf_file: 'PDF', docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯片' };
+const DRAFT_STATUS_LABEL: Record<string, string> = { applied: '已应用', reverted: '已还原', partial: '部分应用', pending: '未应用' };
 /** 与 daemon TEXT_PREVIEW_EXTENSIONS 同源核对（白名单外不显示预览按钮——点击前如实禁用）。 */
 const TEXT_EXTS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.log', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.rs', '.rb', '.php', '.swift', '.kt', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.html', '.htm', '.css', '.scss', '.vue', '.svelte', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lua', '.r', '.m', '.pl']);
 
@@ -165,25 +166,25 @@ export function FilesPage() {
         <strong>文件与 Git</strong>
         <div className="row tight">
           <button className="btn ghost sm" style={tab === 'files' ? { fontWeight: 700 } : undefined} onClick={() => setTab('files')}>文件</button>
-          <button className="btn ghost sm" style={tab === 'git' ? { fontWeight: 700 } : undefined} onClick={() => setTab('git')}>Git 诊断</button>
+          <button className="btn ghost sm" style={tab === 'git' ? { fontWeight: 700 } : undefined} onClick={() => setTab('git')}>Git</button>
         </div>
         <button className="btn ghost sm" onClick={() => (tab === 'files' ? void reloadFiles() : void reloadGit())}>刷新</button>
       </div>
 
       {tab === 'files' ? (
         <>
-          {filesErr != null ? <div className="panel warning">Files 装载失败：{userFacingSystemText(filesErr ?? '')}</div> : null}
-          {group == null && filesErr == null ? <div className="panel info">正在装载…</div> : null}
+          {filesErr != null ? <div className="panel warning">文件列表加载失败：{userFacingSystemText(filesErr ?? '')}</div> : null}
+          {group == null && filesErr == null ? <div className="panel info">正在加载…</div> : null}
           {group != null ? (
             <>
               <div className="panel info" style={{ marginTop: 0 }}>
-                <div className="row tight"><strong>项目文件</strong><span className="faint small">（项目根一层；文本文件可只读快照预览——快照≠托管副本，不进模型输入）</span></div>
+                <div className="row tight"><strong>项目文件</strong><span className="faint small">（项目根目录一层；文本文件可预览）</span></div>
                 {group.projectFilesNote != null ? <div className="panel warning" style={{ marginTop: 6 }}>{group.projectFilesNote}</div> : null}
                 <div className="row tight wrap" style={{ marginTop: 6 }}>
                   {group.projectFiles.map((f) => {
                     const isText = !f.dir && TEXT_EXTS.has((f.name.slice(f.name.lastIndexOf('.')).toLowerCase()));
                     return (
-                      <span key={f.name} className="chip mono" title={f.dir ? '目录（浏览走系统资源管理器）' : isText ? '文本文件——点击只读快照预览' : '非白名单类型——预览走 Git/系统工具'}>
+                      <span key={f.name} className="chip mono" title={f.dir ? '目录' : isText ? '文本文件——点击预览' : '此类型暂不支持预览'}>
                         {f.dir ? '📁' : '📄'} {f.name}
                         {isText ? <button disabled={busy} onClick={() => void openProjectFile(f.name)}>预览</button> : null}
                       </span>
@@ -191,22 +192,22 @@ export function FilesPage() {
                   })}
                   {group.projectFiles.length === 0 ? <span className="faint small">（空目录）</span> : null}
                 </div>
-                {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>快照不可用：{userFacingSystemText(snapshotErr ?? '')}</div> : null}
+                {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>预览失败：{userFacingSystemText(snapshotErr ?? '')}</div> : null}
                 {snapshot != null ? (
                   <div style={{ marginTop: 8 }}>
-                    <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes}B{snapshot.truncated ? ' · 内容未完整读取' : ''} · 只读快照</span></div>
+                    <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes}B{snapshot.truncated ? ' · 内容未完整读取' : ''} · 只读</span></div>
                     <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 320, overflow: 'auto', marginTop: 6, border: '1px solid var(--border,#dbe2ea)', padding: 8, background: '#fff' }}>{snapshot.content}</pre>
                   </div>
                 ) : null}
               </div>
               <div className="panel info">
-                <div className="row tight"><strong>托管附件</strong><span className="faint small">（上传进会话的资源——点击预览；标注 dm=仅本人参与的私信）</span></div>
+                <div className="row tight"><strong>托管附件</strong><span className="faint small">（会话附件——点击预览；私信附件仅你可见）</span></div>
                 <div className="row tight wrap" style={{ marginTop: 6 }}>
                   {group.attachments.map((a) => (
-                    <span key={a.attachmentId} className="chip mono" title={`${a.filename} · ${KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · sha256=${a.hash.slice(0, 12)}… · ${a.audience === 'dm' ? '私信（仅本人可见）' : '房间'}${a.locate != null ? ` · ${a.locate}` : ''}`}>
+                    <span key={a.attachmentId} className="chip mono" title={`${a.filename} · ${KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · ${a.audience === 'dm' ? '私信（仅本人可见）' : '房间'}`}>
                       <Icon name="paperclip" size={11} />
                       {a.filename}
-                      {a.audience === 'dm' ? <Tag tone="neutral">dm</Tag> : null}
+                      {a.audience === 'dm' ? <Tag tone="neutral">私信</Tag> : null}
                       <button onClick={() => openPreview({ attachmentId: a.attachmentId, filename: a.filename, kind: a.kind, conversationId: a.conversationId, origin: a.audience === 'dm' ? '私信附件' : '房间附件', hashHint: a.hash, revisionHint: a.revision })}>预览</button>
                     </span>
                   ))}
@@ -214,46 +215,45 @@ export function FilesPage() {
                 </div>
               </div>
               <div className="panel info">
-                <div className="row tight"><strong>Agent 草稿（变更集）</strong><span className="faint small">（点击定位到任务）</span></div>
+                <div className="row tight"><strong>Agent 草稿</strong><span className="faint small">（点击定位到任务）</span></div>
                 <div style={{ marginTop: 6 }}>
                   {group.drafts.map((d) => (
                     <button key={d.changeSetId} className="root-card" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }} onClick={() => locate(d.locate)}>
                       <span className="small" style={{ fontWeight: 600 }}>{d.taskTitle ?? d.changeSetId}</span>
-                      <span className="faint small"> · {d.applicationStatus}{d.beforeRef != null && d.afterRef != null ? ` · ${String(d.beforeRef).slice(0, 8)}→${String(d.afterRef).slice(0, 8)}` : ''}</span>
+                      <span className="faint small"> · {DRAFT_STATUS_LABEL[d.applicationStatus] ?? d.applicationStatus}</span>
                     </button>
                   ))}
                   {group.drafts.length === 0 ? <span className="faint small">（暂无）</span> : null}
                 </div>
               </div>
               <div className="panel info">
-                <div className="row tight"><strong>交付成果</strong><span className="faint small">（点击定位到线程详情的交付验收）</span></div>
+                <div className="row tight"><strong>交付成果</strong><span className="faint small">（点击定位到交付验收）</span></div>
                 <div style={{ marginTop: 6 }}>
                   {group.deliveries.map((d) => (
                     <button key={d.deliveryId} className="root-card" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }} onClick={() => locate(d.locate)}>
                       <span className="small" style={{ fontWeight: 600 }}>{d.title}</span>
-                      <span className="faint small"> · v{d.revision} · 交付校验值 {d.manifestHash.slice(0, 10)}…{d.reviewedAt != null ? ` · 已复核 ${new Date(d.reviewedAt).toLocaleString()}` : ' · 待验收'}{d.audience === 'dm' ? ' · dm' : ''}</span>
+                      <span className="faint small"> · v{d.revision}{d.reviewedAt != null ? ` · 已复核 ${new Date(d.reviewedAt).toLocaleString()}` : ' · 待验收'}{d.audience === 'dm' ? ' · 私信' : ''}</span>
                     </button>
                   ))}
                   {group.deliveries.length === 0 ? <span className="faint small">（暂无）</span> : null}
                 </div>
               </div>
-              <div className="faint small">{userFacingSystemText(files?.note ?? '')}</div>
             </>
           ) : null}
         </>
       ) : (
         <>
           {git == null ? <div className="panel info">{busy ? '正在读取仓库状态…' : '尚未读取'}</div> : git.ok === false ? (
-            <div className="panel warning">仓库状态不可用（{git.code}）：{git.message}</div>
+            <div className="panel warning">仓库状态不可用：{git.message}</div>
           ) : (
             <>
               <div className="panel info" style={{ marginTop: 0 }}>
-                <div className="row tight"><strong>分支 {git.branch}</strong>{git.projectRootIsWorktreeRoot ? null : <span className="faint small">（项目根是工作树子目录——仓库根：{git.worktreeRoot}）</span>}</div>
+                <div className="row tight"><strong>分支 {git.branch}</strong>{git.projectRootIsWorktreeRoot ? null : <span className="faint small">（仓库根：{git.worktreeRoot}）</span>}</div>
                 <div className="faint small" style={{ marginTop: 4 }}>暂存 {git.staged.length} · 未暂存 {git.unstaged.length} · 未跟踪 {git.untracked.length}{git.truncated ? '（状态条目超限已截断）' : ''}</div>
                 <div className="row tight" style={{ marginTop: 6 }}>
                   <button className="btn ghost sm" disabled={busy} onClick={() => void loadDiff(false)}>未暂存 diff</button>
                   <button className="btn ghost sm" disabled={busy} onClick={() => void loadDiff(true)}>已暂存 diff</button>
-                  <button className="btn ghost sm" title="暂存/提交/推送等写操作在原界面仓库区（定向打开并定位）" onClick={() => takeLegacy('git')}>在原界面执行 Git 操作</button>
+                  <button className="btn ghost sm" title="在原有界面执行暂存、提交、推送" onClick={() => takeLegacy('git')}>在原界面执行 Git 操作</button>
                 </div>
               </div>
               {(['staged', 'unstaged', 'untracked'] as const).map((k) => {
@@ -279,7 +279,7 @@ export function FilesPage() {
                   <div className="row tight">
                     <strong>diff 正文</strong>
                     {diff.truncatedOverall ? <Tag tone="warning" icon="alert-triangle">部分截断/省略</Tag> : null}
-                    {diff.filesOmitted != null && diff.filesOmitted > 0 ? <span className="faint small">未读取正文 {diff.filesOmitted} 项（身份仍列出）</span> : null}
+                    {diff.filesOmitted != null && diff.filesOmitted > 0 ? <span className="faint small">未读取正文 {diff.filesOmitted} 项（文件名仍列出）</span> : null}
                   </div>
                   {diff.patches.map((p) => (
                     <div key={p.path + p.change} style={{ marginTop: 8 }}>
@@ -301,7 +301,7 @@ export function FilesPage() {
               <div className="panel info" data-zs-git-history="hifi">
                 <div className="row tight">
                   <strong>提交历史</strong>
-                  <span className="faint small">（git.history 只读——双父提交带 merge 标；点「对比」看该提交相对所选父的差异）</span>
+                  <span className="faint small">（只读提交历史；合并提交可选择要比较的父提交）</span>
                   <span className="spacer" style={{ flex: 1 }} />
                   <button className="btn ghost sm" disabled={busy} onClick={() => void loadHistory()}>刷新历史</button>
                 </div>
@@ -313,14 +313,14 @@ export function FilesPage() {
                     {history.items.map((h) => (
                       <div key={h.oid} className="row tight" style={{ padding: '4px 2px', borderBottom: '1px solid var(--border,#eef2f7)' }} data-zs-git-commit={h.oid.slice(0, 8)}>
                         <span className="mono small" style={{ color: 'var(--text-3)' }}>{h.oid.slice(0, 8)}</span>
-                        {h.parents.length > 1 ? <Tag tone="info">merge {h.parents.length} 父</Tag> : null}
+                        {h.parents.length > 1 ? <Tag tone="info">合并提交 · {h.parents.length} 个父提交</Tag> : null}
                         {history.head === h.oid ? <Tag tone="success">HEAD</Tag> : null}
                         <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.subject}</span>
                         <span className="faint small">{h.authorName} · {new Date(h.timestamp * 1000).toLocaleDateString()}</span>
-                        <button className="btn ghost sm" data-zs-git-diffbtn={h.oid.slice(0, 8)} title="看该提交相对所选父的差异（git.commitDiff——只读）" onClick={() => void loadCommitDiff(h.oid)}>对比</button>
+                        <button className="btn ghost sm" data-zs-git-diffbtn={h.oid.slice(0, 8)} title="查看该提交相对所选父提交的差异" onClick={() => void loadCommitDiff(h.oid)}>对比</button>
                       </div>
                     ))}
-                    {history.hasMore ? <div className="faint small" style={{ marginTop: 4 }}>（仅列最近 {history.items.length} 条——更多历史走 git 客户端）</div> : null}
+                    {history.hasMore ? <div className="faint small" style={{ marginTop: 4 }}>（仅显示最近 {history.items.length} 条；更早的历史请用 Git 客户端查看）</div> : null}
                   </div>
                 ) : null}
               </div>
@@ -367,7 +367,7 @@ export function FilesPage() {
                   {commitDiff.patches.length === 0 && commitDiff.mergeNote == null ? <div className="faint small" style={{ marginTop: 6 }}>（无差异条目）</div> : null}
                 </div>
               ) : null}
-              <div className="faint small">这里可查看 Git 状态与历史，未提交的内容会保留。提交或推送请点击上方按钮进入原界面；任务成果需另行验收。</div>
+              <div className="faint small">未提交的内容会保留；提交或推送请点击上方按钮进入原界面。</div>
             </>
           )}
         </>

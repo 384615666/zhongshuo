@@ -467,7 +467,7 @@ export function quoteResource(
     const revText = rev.content.kind === 'text' || rev.content.kind === 'markdown' || rev.content.kind === 'code' || rev.content.kind === 'csv'
       ? rev.content.text : '';
     const body = excerpt?.trim() ?? revText.replace(/\s+/g, ' ').trim().slice(0, 160);
-    const line = `> 引用交付「${fd.taskTitle || res.title}」v${fd.revision}（manifest ${fd.manifestHash.slice(0, 12)}…）${body.length > 0 ? `：${body}` : ''}`;
+    const line = `> 引用交付「${fd.taskTitle || res.title}」v${fd.revision}${body.length > 0 ? `：${body}` : ''}`;
     const r = queueDraftInsert(targetDraftKey, line);
     if (r.ok) {
       recordWrite('preview.quote', `已将交付 v${fd.revision} 引用到目标输入框`);

@@ -76,6 +76,15 @@ const FORMAL_LIMITS = {
   access: '按项目授权和成员配置访问文件',
 } as const;
 
+/** 运行状态的中文展示（本页任务概况只显示最近运行状态，不回显原始枚举）。 */
+const RUN_STATUS_LABEL: Record<string, string> = {
+  QUEUED: '排队中', ACTIVE: '执行中', RUNNING: '执行中', WAITING: '等待中',
+  WAITING_APPROVAL: '等待批准', WAITING_INPUT: '等待输入', STOPPING: '停止中',
+  SUCCEEDED: '已完成', COMPLETED: '已完成', DONE: '已完成', FAILED: '失败',
+  INTERRUPTED: '已中断', PARTIAL: '部分完成', CANCELLED: '已取消', UNKNOWN: '结果待确认',
+  BLOCKED: '受阻', REVIEW: '待验收',
+};
+
 /** 打开会话附件：登记资源（真实 attachmentId/audience）→ 共享预览标签。 */
 function openAttachment(att: FormalAttachmentSummary, openedFrom: ContextLocation, conversationId: string): void {
   registerAttachmentResource({
@@ -607,7 +616,7 @@ export function RoomPage({
             {room.archivedAt ? (
               <MenuItem
                 icon="refresh"
-                title="取消归档后可继续发任务；旧的待派发任务不会自动重放（room.archive unarchive）"
+                title="取消归档后可继续发任务；旧的排队任务不会自动重新发送"
                 onClick={() => {
                   setRoomMenuAnchor(null);
                   void roomArchiveReal(room.id, room.revision, 'unarchive').then((r) => {
@@ -902,8 +911,7 @@ function RoomPool({
           </div>
           <div className="panel" style={{ margin: 0 }}>
             <div className="panel-title"><Icon name="archive" size={13} /> 房间已归档</div>
-            已归档房间为只读：不能新增任务、不被提醒唤醒；迟到的运行事件只进入审计与恢复记录。
-            取消归档后可以继续，但不会把旧的待派发任务全部重放。
+            已归档房间为只读：不能新增任务，也不会被提醒唤醒。取消归档后可以继续，但旧任务不会自动重新发送。
           </div>
         </div>
       )}
@@ -980,7 +988,7 @@ export function RootCard({
           : delivery.status === 'blocked' ? '交付未完成'
             : '本轮已结束 · 旧格式';
   const deliveryFactLine = deliveryLabel == null ? null
-    : `程序交付：${deliveryLabel}${delivery?.overallConsensus === 'disputed' ? ' · 仍有分歧' : delivery?.overallConsensus === 'unconfirmed' ? ' · 仍有成员未确认' : delivery?.overallConsensus === 'qualified' ? ' · 附条件确认' : ''}`;
+    : `交付状态：${deliveryLabel}${delivery?.overallConsensus === 'disputed' ? ' · 仍有分歧' : delivery?.overallConsensus === 'unconfirmed' ? ' · 仍有成员未确认' : delivery?.overallConsensus === 'qualified' ? ' · 附条件确认' : ''}`;
   // 主池只留 2 条预览：它是"要不要点进去"的判断依据，不是正文（§3.4 允许 2—3 条）
   const preview = thread ? replyPreview(s, thread.id, 2).filter(reply=>!(reply.formalRepairLineage?.state==='repaired'&&reply.formalRepairLineage.messageRole==='source')) : [];
 
@@ -1106,7 +1114,7 @@ export function RootCard({
                 key={att.artifactId}
                 data-zs-artifact-id={att.artifactId}
                 className="msg-attach"
-                title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不派任务、不发言`}
+                title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不会创建任务或发送消息`}
                 onClick={(e) => {
                   e.stopPropagation();
                   openAttachment(att, {
@@ -1124,7 +1132,7 @@ export function RootCard({
         ) : null}
 
         <div className="root-foot">
-          <span className="small faint">这条消息没有派发任务，因此没有回复串</span>
+          <span className="small faint">这条消息没有创建任务，因此没有回复串</span>
           <div className="spacer" />
           <RootCardActions message={message} saved={saved}/>
         </div>
@@ -1209,8 +1217,8 @@ export function RootCard({
       {!isDiscussion && task?.currentRunBudget ? (
         <div className="faint small">
           {task.currentRunBudget.enforcement === 'disabled'
-            ? `本轮调用次数限制已关闭（仅真实记账）：已记录 ${task.currentRunBudget.usedTurns} 次`
-            : <>本次调用预算：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次调用
+            ? `本轮调用次数限制已关闭：已记录 ${task.currentRunBudget.usedTurns} 次`
+            : <>本次调用：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次
               {task.currentRunBudget.remainingTurns > 0 ? ` · 剩余 ${task.currentRunBudget.remainingTurns} 次` : ' · 已用尽'}</>}
         </div>
       ) : null}
@@ -2000,7 +2008,7 @@ function ThreadPanel({
         <div className="panel warning" style={{ margin: '8px 12px 0' }}>
           <div className="panel-title">
             <Icon name="clock" size={13} />
-            等 {memberLabel(byId(s.members, absence.memberId))}（已 {Math.round((Date.now() - absence.since) / 60000)} 分钟，容忍 {Math.round(absence.graceMs / 60000)} 分钟）
+            等 {memberLabel(byId(s.members, absence.memberId))}（已等 {Math.round((Date.now() - absence.since) / 60000)} 分钟，最多等待 {Math.round(absence.graceMs / 60000)} 分钟）
           </div>
           超过等待时间后会先带着现有成果继续，不会打断仍在工作的成员。需要它继续参与时，可在串里重新 @ 它。
         </div>
@@ -2213,7 +2221,7 @@ function ThreadPanel({
             const draftKey = `thread:${threadId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
+            if (entityConversationId === '') return { status: 'failed', error: '线程信息尚未装载——稍后重试' };
             const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             env.quoteIds = p.quoteIds;
@@ -2280,7 +2288,7 @@ function ThreadDetails({
         recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
         toast('继续请求已入队', 'success');
       } catch (e) {
-        toast(`继续被拒：${userFacingSystemText((e as Error).message ?? '')}——请按当前任务事实重新决定`, 'error');
+        toast(`继续被拒：${userFacingSystemText((e as Error).message ?? '')}——请按当前任务状态重新决定`, 'error');
       } finally {
         setRetryBusyTask((current) => current === snapshot.taskId ? null : current);
         formal.refresh();
@@ -2299,13 +2307,13 @@ function ThreadDetails({
   const groups: { key: DetailsSection; label: string; icon: string; hint: string }[] = [
     { key: 'overview', label: isDiscussion ? '记录信息' : '任务概况', icon: 'list', hint: isDiscussion ? '根消息与参与者' : '标题、编号、完整原始要求、状态与方式' },
     { key: 'members', label: '参与成员', icon: 'users', hint: '线程成员与跟进名单：移出=停止自动唤醒，历史保留，可再 @ 回来' },
-    { key: 'activity', label: '活动与进展', icon: 'activity', hint: '本串执行记录与普通过程说明（路由推导、校验通过、阶段推进）' },
+    { key: 'activity', label: '活动与进展', icon: 'activity', hint: '本串执行记录与过程说明' },
   ];
   if (task) {
-    groups.push({ key: 'run', label: '运行详情', icon: 'terminal', hint: '工具活动、用量、错误与原始诊断' });
+    groups.push({ key: 'run', label: '运行详情', icon: 'terminal', hint: '工具活动、用量与错误记录' });
   }
   if (hasDelivery || section === 'delivery') {
-    groups.push({ key: 'delivery', label: '交付与验收', icon: 'check-circle', hint: '完成摘要、版本、验证、残余问题与验收决定（可选验收的唯一入口）' });
+    groups.push({ key: 'delivery', label: '交付与验收', icon: 'check-circle', hint: '完成摘要、版本、验证与残余问题；验收在这里完成' });
   }
   if (task && formal.data?.runs[0]?.mode === 'DELIBERATE') {
     groups.push({ key: 'deliberation', label: '研讨详情', icon: 'layers', hint: '初稿、互评、争议、确认矩阵' });
@@ -2341,8 +2349,7 @@ function ThreadDetails({
         {active !== section ? (
           <div className="panel info" style={{ margin: '0 0 10px' }}>
             <div className="panel-title"><Icon name="info" size={13} /> 该分组在当前任务上不适用</div>
-            原链接指向的分组（{section}）在这个线程里没有对应内容，已显示任务概况。
-            这不会改动任何任务、交付或运行状态。
+            这个分组在这个线程里没有对应内容，已显示任务概况。
           </div>
         ) : null}
         {active === 'overview' ? (
@@ -2415,7 +2422,7 @@ function ThreadOverview({
         dispatchParts.push(`已点名 ${named.map((id) => memberLabel(byId(s.members, id))).join('、')}`);
       }
     }
-    if (parentTask) dispatchParts.push(`子任务 of #${parentTask.roomTaskNumber}`);
+    if (parentTask) dispatchParts.push(`所属父任务 #${parentTask.roomTaskNumber}`);
   }
 
   return (
@@ -2439,12 +2446,12 @@ function ThreadOverview({
                 {latestRun ? <RunStatusTag status={latestRun.status as WorkflowRun['status']} /> : null}
               </dd>
               <dt>方式</dt>
-              <dd title={modeCopy?.detail}>{modeCopy?.label ?? '读取运行详情后显示'}</dd>
+              <dd title={modeCopy?.detail}>{modeCopy?.label ?? '暂无记录'}</dd>
               <dt>阶段</dt>
               <dd>{latestRun ? (latestRun.stage == null ? '无阶段记录' : stageLabel(latestRun.stage as WorkflowRun['stage'])) : '尚无运行详情'}</dd>
               {dispatchParts.length > 0 ? (
                 <>
-                  <dt>派发</dt>
+                  <dt>指派</dt>
                   <dd>{dispatchParts.join(' · ')}</dd>
                 </>
               ) : null}
@@ -2472,9 +2479,8 @@ function ThreadOverview({
         <ThreadTaskFacts threadId={threadId} task={task} formal={formal} />
       ) : (
         <div className="panel info">
-          <div className="panel-title"><Icon name="info" size={13} /> 记录串没有任务、运行与验收</div>
-          记录只保存消息：不调用模型、不派工、没有任务号。需要 AI 处理这些内容时，把要点引用或复制到普通输入里发送
-          （本轮不做"把记录转成任务"的一键转换）。
+          <div className="panel-title"><Icon name="info" size={13} /> 记录串</div>
+          记录只保存消息，不创建任务。需要 AI 处理时，把要点引用或复制到输入框发送。
         </div>
       )}
     </div>
@@ -2513,7 +2519,7 @@ function ThreadPendingStrip({
         <div className="card tight">
           <div className="row tight wrap">
             <Icon name="eye" size={13} />
-            <span className="strong" style={{ fontSize: 12 }}>交付 r{pendingDelivery.revision} 等你验收</span>
+            <span className="strong" style={{ fontSize: 12 }}>交付 v{pendingDelivery.revision} 等你验收</span>
             <span className="small faint truncate">{pendingDelivery.summary}</span>
             <div className="spacer" />
             <button className="btn sm primary" onClick={() => onOpenSection('delivery')}>
@@ -2544,7 +2550,7 @@ function ThreadPendingStrip({
             <span className="strong" style={{ fontSize: 12 }}>
               运行{run.status === 'FAILED' ? '失败' : run.status === 'PARTIAL' ? '只完成一部分' : '被中断'}
             </span>
-            <span className="small faint truncate">已停止、结果不确定等状态在运行详情里有真实记录</span>
+            <span className="small faint truncate">结果不确定等情况可在运行详情查看</span>
             <div className="spacer" />
             <button className="btn sm" onClick={() => onOpenSection('run')}>
               运行详情
@@ -2676,7 +2682,7 @@ function ThreadArtifacts({
       <EmptyState
         icon="file-text"
         title={isDiscussion ? '还没有附件' : '还没有成果'}
-        detail={isDiscussion ? '这条记录还没有携带附件。' : '成员的报告、附件与交付物会汇总在这里（按本线程的会话与任务聚合）。'}
+        detail={isDiscussion ? '这条记录还没有携带附件。' : '成员的报告、附件与交付物会汇总在这里。'}
       />
     );
   }
@@ -2740,12 +2746,11 @@ function ThreadArtifacts({
                         openedFrom: target,
                       });
                       openPreviewTab(rid, d.revision, { target });
-                      recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（交付校验值 ${d.manifestHash.slice(0, 8)}…）`);
+                      recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}`);
                     }}
                   >打开/保存文件</button>
                   <button className="btn ghost sm" onClick={onReview}>确认或修改</button>
                 </div>
-                <details className="small faint"><summary>版本身份</summary>{d.deliveryId} · {d.manifestHash}</details>
               </div>
             ))}
           </>
@@ -2767,15 +2772,15 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
   return (
     <>
     <div className="card tight">
-      <div className="section-title">任务当前事实</div>
-      <div className="small">{recentRun != null ? `最近运行：${recentRun.status}` : formal != null ? '尚无运行' : detail?.activeRun != null ? `最近运行：${detail.activeRun.status}` : '正在读取运行事实'}</div>
+      <div className="section-title">任务当前状态</div>
+      <div className="small">{recentRun != null ? `最近运行：${RUN_STATUS_LABEL[recentRun.status] ?? recentRun.status}` : formal != null ? '尚无运行' : detail?.activeRun != null ? `最近运行：${RUN_STATUS_LABEL[detail.activeRun.status] ?? detail.activeRun.status}` : '正在读取运行状态'}</div>
       {detail?.lastStartupFailureMessage != null ? (
         <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div>
       ) : null}
       <div className="row tight" style={{ marginTop: 8 }}>
         <button
           className="btn ghost sm"
-          title="刷新任务详情（绑定服务端当前事实）"
+          title="刷新任务详情"
           onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'))}
         >刷新详情</button>
         <button
@@ -2790,7 +2795,6 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
           }}
         >复制定位链接</button>
       </div>
-      <details className="small faint"><summary>操作版本信息</summary>任务 revision {detail?.revision ?? task.revision} · 停止请求版本 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
     </div>
     {formal ? <TaskExtraFacts detail={formal}/> : null}
     </>
@@ -2863,7 +2867,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
                         value={reviewBox.note}
                         onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })}
                       />
-                    ) : <div className="faint small">将确认成果 v{reviewBox.snapshot.deliveryRevision} 完成。<details className="faint"><summary>版本身份</summary>{reviewBox.snapshot.deliveryId} · {reviewBox.snapshot.manifestHash}</details></div>}
+                    ) : <div className="faint small">将确认成果 v{reviewBox.snapshot.deliveryRevision} 完成。</div>}
                     <div className="row tight" style={{ marginTop: 6 }}>
                       <button className="btn sm primary" onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认完成' : '保存修改意见'}</button>
                       <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
@@ -2886,14 +2890,14 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
               <button
                 className="btn sm"
                 disabled={busyRework}
-                title={`执行返工（task.executeRework——同任务新执行；绑定 v${rp.deliveryRevision} 完整身份）`}
+                title={`让 AI 按已保存的意见修改；完成后生成新版本`}
                 onClick={() => {
                   const snapshot = { taskId: task.id, deliveryId: rp.deliveryId, deliveryRevision: rp.deliveryRevision, manifestHash: rp.manifestHash, sourceRunId: rp.sourceRunId };
                   setBusyRework(true);
                   void (async () => {
                     try {
                       const r = await executeTaskRework(snapshot, threadId);
-                      if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前返工事实`, 'error'); void loadThread(threadId); return; }
+                      if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前状态`, 'error'); void loadThread(threadId); return; }
                       toast('返工执行已入队（完成后交付升级为新待验收版本）', 'success');
                       void loadThread(threadId);
                     } finally { setBusyRework(false); }
@@ -2975,8 +2979,7 @@ function RoomTasks({ roomId }: { roomId: string }) {
   return (
     <div className="page" style={{ paddingTop: 14 }}>
       <div className="panel info" style={{ marginBottom: 14 }}>
-        看板是既有 Task 表的视图，点击任意一项打开同一根消息与回复串。
-        变更负责人或恢复取消任务走状态机与审计，不通过拖拽直接修改执行中的会话归属；首版允许按钮改状态，拖拽后置。
+        看板按状态列出本房间的任务，点击任一任务打开它的回复串。
       </div>
       {BOARD_GROUPS.map((g) => {
         const items = tasks.filter((t) => g.statuses.includes(t.status));
@@ -2998,7 +3001,7 @@ function RoomTasks({ roomId }: { roomId: string }) {
                     <div className="row tight wrap">
                       <span className="root-task-no">#{t.roomTaskNumber}</span>
                       <TaskStatusTag status={t.status} />
-                      {run ? <Tag plain icon="git-commit">{run.mode}</Tag> : null}
+                      {run ? <Tag plain icon="git-commit">{routeModeCopy[run.mode as keyof typeof routeModeCopy]?.label ?? '任务'}</Tag> : null}
                       <div className="spacer" />
                       {subs.length > 0 ? <Tag plain icon="layers">{subs.length} 子任务</Tag> : null}
                     </div>
@@ -3009,7 +3012,6 @@ function RoomTasks({ roomId }: { roomId: string }) {
                       <Tag plain icon={t.reviewPolicy === 'user_review' ? 'eye' : 'check-circle'}>
                         {t.reviewPolicy === 'user_review' ? '代码人工审阅' : '报告自动交付'}
                       </Tag>
-                      <span>rev {t.revision}</span>
                     </div>
                   </div>
                 );
@@ -3053,12 +3055,11 @@ function RoomFiles({
         这里汇总本房间的附件和已提交成果。工作区文件改动与 Git 状态分别在侧栏对应页面查看。
       </div>
 
-      {/* 决策 31 / 33（M3 批次）：附件七类格式与文件选区评论 */}
+      {/* 附件七类格式与文件选区评论 */}
       <div className="card tight" style={{ marginBottom: 14 }}>
-        <div className="row tight wrap">
+        <div className="row tight wrap" data-batch="M3">
           <Icon name="paperclip" size={13} className="faint" />
           <span className="strong" style={{ fontSize: 12 }}>支持保存与预览的附件格式</span>
-          <Tag plain data-batch="M3">M3 批次</Tag>
         </div>
         <div className="row tight wrap" style={{ marginTop: 7 }}>
           {['文本 / 代码', '图片', 'PDF', 'Word', 'Excel', 'PowerPoint', 'CSV'].map((t) => (
@@ -3068,15 +3069,15 @@ function RoomFiles({
         <details className="small faint" style={{ marginTop: 8 }}>
           <summary>查看格式与安全说明</summary>
           <div style={{ lineHeight: 1.65, marginTop: 6 }}>
-            文件可保存和预览；成员能否解析取决于当前 AI 配置。系统不会执行文件内脚本，也不会把整个来源目录加入权限。
+            文件可保存和预览；成员能否读取取决于当前 AI 配置。系统不会执行文件内的脚本。
           </div>
         </details>
         <div className="row tight wrap" style={{ marginTop: 8 }}>
           <button className="btn sm" onClick={() => setCommentOpen(true)}>
-            <Icon name="message-square" size={12} /> 文件选区评论（决策 33）
+            <Icon name="message-square" size={12} /> 文件选区评论
           </button>
           <span className="small faint">
-            以 artifactId/version/hash 与文本、行范围锚定，评论在原任务串内显示；文件更新后旧评论标为旧版，不静默漂移
+            评论会显示在原任务串里；文件更新后，旧评论会标为旧版。
           </span>
         </div>
       </div>
@@ -3137,7 +3138,6 @@ function RoomFiles({
               <div className="row tight wrap small faint" style={{ marginTop: 5 }}>
                 <Tag plain icon="user">{memberLabel(byId(s.members, a.authorId))}</Tag>
                 <span>{formatBytes(a.sizeBytes)}</span>
-                <span className="mono-sm">{a.hash}</span>
               </div>
               <div className="row tight wrap" style={{ marginTop: 6 }}>
                 <Tag plain>{a.mimeType === 'text/markdown' ? 'Markdown' : '文本'}</Tag>
@@ -3162,7 +3162,7 @@ function RoomFiles({
           <div className="row tight wrap">
             <Icon name="diff" size={14} className="faint" />
             <span className="strong" style={{ fontSize: 12 }}>
-              {s.tasks.find((t) => t.id === c.taskId)?.title ?? c.taskId}
+              {s.tasks.find((t) => t.id === c.taskId)?.title ?? '未命名任务'}
             </span>
             <Tag
               tone={c.applicationStatus === 'reverted' ? 'neutral' : c.applicationStatus === 'applied' ? 'success' : 'warning'}
@@ -3173,34 +3173,26 @@ function RoomFiles({
             </Tag>
             <div className="spacer" />
             <button className="btn ghost sm" onClick={() => navigate(`/project/${s.activeProjectId}/changes`)}>
-              查看 diff
+              查看改动
             </button>
           </div>
           <div className="small faint" style={{ marginTop: 4 }}>
-            {c.files.length} 个文件 · after {c.afterRef}
+            {c.files.length} 个文件
           </div>
         </div>
       ))}
 
-      {/* 文件选区评论（决策 33，M3 批次）：锚点类型与"旧版不漂移"口径 */}
+      {/* 文件选区评论：评论位置与"旧版不漂移"说明 */}
       {commentOpen ? (
         <Modal
           size="md"
           title="文件选区评论"
-          subtitle="决策 33 · M3 批次 · 以 artifactId/version/hash 与文本或行范围锚定"
           onClose={() => setCommentOpen(false)}
           footer={
             <>
-              <span className="small faint">评论是文件线程的普通回复，有 re: 引用可回精确位置</span>
+              <span className="small faint">评论会保存为文件回复</span>
               <div className="spacer" />
               <button className="btn" onClick={() => setCommentOpen(false)}>关闭</button>
-              <button
-                className="btn"
-                disabled
-                title="暂不支持评论选中文本；可在预览面板点击「评论此文件」添加文件评论"
-              >
-                提交评论（未接入）
-              </button>
             </>
           }
         >
@@ -3208,14 +3200,14 @@ function RoomFiles({
             PDF 和图片暂不支持定位评论。
           </div>
           <div className="field">
-            <label className="field-label">支持的五类锚点</label>
+            <label className="field-label">支持的评论位置</label>
             <div className="col" style={{ gap: 6 }}>
               {[
-                ['Markdown 段落 / 章节', '按标题与段落锚定'],
-                ['文本与代码单/多行', '按行号范围锚定'],
-                ['CSV 单/多行', '按行锚定'],
-                ['HTML 渲染区域', '按元素锚定'],
-                ['视频时间点', '按时间戳锚定'],
+                ['Markdown 段落 / 章节', '按标题与段落'],
+                ['文本与代码单/多行', '按行号范围'],
+                ['CSV 单/多行', '按行'],
+                ['HTML 渲染区域', '按元素'],
+                ['视频时间点', '按时间戳'],
               ].map(([t, d]) => (
                 <div key={t} className="row tight">
                   <Icon name="check" size={12} style={{ color: 'var(--success)', marginTop: 4 }} />
@@ -3235,7 +3227,7 @@ function RoomFiles({
               defaultValue="这里的两处 import 应该走 contracts，不要直接引 persistence。"
             />
             <div className="field-hint">
-              需要频道成员身份；版本关系记录为 artifactId + version + hash，文件更新后旧评论标记为旧版。
+              文件更新后，旧评论会标记为旧版。
             </div>
           </div>
         </Modal>
@@ -3276,7 +3268,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
           <button
             className="btn danger"
             disabled={saveBusy}
-            title="归档=只读保留历史（room.archive；有未结束任务时服务端拒绝，给出去停止的入口）"
+            title="归档后只读并保留历史；有未结束任务时不能归档"
             onClick={() => {
               setSaveBusy(true);
               void roomArchiveReal(room.id, room.revision, 'archive').then((r) => {
@@ -3328,8 +3320,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
           ))}
         </select>
         <div className="field-hint">
-          协调者是房间级字段（rooms.coordinator_member_id）。不写 @ 的任务由它接单，它可以自己直接完成，
-          也可以提交结构化分工计划。新建房间沿用项目当前默认协调者。
+          不写 @ 的任务由协调者接单，它可以自己完成，也可以分给其他成员。新建房间沿用项目当前默认协调者。
         </div>
       </div>
 
@@ -3339,8 +3330,8 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
         房间成员<span className="count">{roomMembers.length}</span>
       </div>
       <div className="field-hint" style={{ marginBottom: 10 }}>
-        房间成员决定这个房间可见与可派发的范围。与「线程跟进名单」不是一回事：
-        跟进名单控制的是某个任务要不要自动唤醒谁。
+        房间成员决定谁可以接收这个房间的任务。与「线程跟进名单」不同：
+        跟进名单决定某个任务要不要自动唤醒谁。
       </div>
 
       <div className="col" style={{ gap: 8 }}>
@@ -3426,7 +3417,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
       {activeTasks.length > 0 ? (
         <div className="panel danger" style={{ marginBottom: 12 }}>
           <div className="panel-title"><Icon name="octagon" size={13} /> 当前有 {activeTasks.length} 个活跃任务，不能归档</div>
-          归档前会检查所有根任务、子任务与待派发项。存在活跃工作时先阻止归档，并在这里给出停止入口。
+          请先停止或完成这些任务，再归档。
           <div className="panel-actions">
             {activeTasks.map((t) => (
               <button
@@ -3443,8 +3434,8 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
       ) : null}
       <div className="panel warning">
         <div className="panel-title"><Icon name="alert-triangle" size={13} /> 归档后会发生什么</div>
-        房间变只读、不创建新任务、不被提醒唤醒；迟到的运行事件只进入审计与恢复记录。
-        取消归档后可以继续，但不会把旧的待派发任务全部重放。已归档房间的成员与历史消息都保留。
+        房间变只读，不能创建新任务，也不会被提醒唤醒。
+        取消归档后可以继续，但旧任务不会自动重新发送。已归档房间的成员与历史消息都保留。
       </div>
     </Modal>
   );

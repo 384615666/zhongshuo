@@ -97,7 +97,7 @@ export function LiveProgressCard({
           </ol>
         </details>
       ) : null}
-      {readError ? <div className="small faint">进展刷新失败，保留上次事实 · {readAt ? new Date(readAt).toLocaleTimeString() : '时间未知'} · {userFacingSystemText(readError ?? '')}</div> : null}
+      {readError ? <div className="small faint">进展刷新失败，保留上次内容 · {readAt ? new Date(readAt).toLocaleTimeString() : '时间未知'} · {userFacingSystemText(readError ?? '')}</div> : null}
     </div>
   );
 }

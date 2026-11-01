@@ -201,7 +201,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
     if (project != null && boundId !== projectId) {
       return (
         <div className="main"><div className="page">
-          <ErrorState code="STALE_REVISION" detail="正在切换项目设置；旧项目的编辑与回执不会写入当前项目。" />
+          <ErrorState code="STALE_REVISION" detail="正在切换项目设置；此前项目的编辑不会写入当前项目。" />
         </div></div>
       );
     }
@@ -287,7 +287,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 {pendingReviewError?.projectId === project.id ? <span className="small faint">待验收数量读取失败：{userFacingSystemText(pendingReviewError.message ?? '')}（去待我处理查看）</span> : null}
               </SwitchRow>
               <div className="pset-note">
-                关闭验收不等于自动批准权限、自动提交或推送 Git。这个开关与项目是否为 Git 仓库无关。
+                关闭验收不等于自动批准权限、自动提交或推送 Git。
               </div>
             </div>
           </section>
@@ -305,9 +305,6 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                     disabled={collabSaving}
                     onCommit={(value) => { void saveCollab({ turnDeadlineMs: value }); }}
                   />
-                  <div className="pset-note">
-                    默认不设总时长上限；启用后达到设定时间会中断，且只对之后开始的执行生效。
-                  </div>
                   {collabSaving ? <div className="small faint">正在保存…</div> : null}
                 </>
               )}
@@ -324,9 +321,6 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                   <div className="pset-row-hint">同一目录中的文件修改依次执行，其他任务排队。</div>
                 </div>
                 <Tag tone="success" icon="check-circle">单写者（当前策略）</Tag>
-              </div>
-              <div className="pset-note">
-                同一位置的文件修改会依次执行；这里显示当前策略。
               </div>
               <ProjectWriteAccessPanel key={projectId} projectId={projectId} name={project.displayName} path={project.rootPath??''}/>
             </div>
@@ -348,7 +342,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 <div className="strong" style={{ fontSize: 12 }}>归档项目</div>
                 <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
                   退出日常项目列表、历史保留只读；其下房间不再收消息、不建任务、不被唤醒。磁盘文件不受影响。
-                  {unfinishedCount != null ? unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束，需要先处理。</> : <> 最近读取没有未结束任务；归档时服务端会再次复查。</> : <> 未结束任务数读取中；归档时服务端会再次复查。</>}
+                  {unfinishedCount != null ? unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束，需要先处理。</> : <> 没有未结束的任务。</> : <> 未结束任务数读取中。</>}
                   {unfinishedReadError != null ? <> 最近一次任务数读取失败：{userFacingSystemText(unfinishedReadError ?? '')}（请先到任务看板查看最新状态）。</> : null}
                 </div>
               </div>
@@ -406,8 +400,8 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
           }
         >
           <div className="small muted" style={{ lineHeight: 1.75 }}>
-            归档后项目退出日常项目列表、历史保留只读；恢复不会重放旧的待派发任务。磁盘文件与历史记录不受影响。
-            存在未结束任务时服务端会拒绝（不自动停止/派发）。
+            归档后项目退出日常项目列表，历史保留只读；恢复后不会补跑归档期间的任务。磁盘文件与历史记录不受影响。
+            存在未结束任务时不能归档（不会自动停止或派发任务）。
           </div>
         </Modal>
       ) : null}

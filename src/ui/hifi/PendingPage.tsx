@@ -115,22 +115,22 @@ export function PendingPage() {
         {/* 筛选行（R66 P4：范围显式呈现 + seg 分段控件——与其他页同套）。 */}
         <div className="page-filters">
           <div className="seg" role="group" aria-label="范围" data-zs-pending-scope={scope}>
-            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')} title="查看你有权访问的全部项目；隐藏项目后，其待办仍会保留">
+            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')} title="查看全部可访问项目的待办；隐藏项目里的待办也会保留">
               全部可访问项目{data != null ? `（${totalCount(data.projects)}）` : ''}
             </button>
-            <button className={scope === 'project' ? 'on' : ''} onClick={() => setScope('project')} title="只看当前项目——其它项目的待办仍在（切回全部可见）">
+            <button className={scope === 'project' ? 'on' : ''} onClick={() => setScope('project')} title="只看当前项目的待办；其它项目的待办不会消失">
               当前项目{scope === 'project' && data != null ? `（${totalCount(sections)}）` : ''}
             </button>
           </div>
-          <span className="filter-note">点击卡片查看详情；需要执行或验收的事项，请在详情页确认。</span>
+          <span className="filter-note">点击卡片查看详情；执行或验收请在详情页操作。</span>
           <div className="spacer" />
           <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
         </div>
         {scope === 'project' && omittedProjects.length > 0 ? (
-          <div className="faint small" style={{ marginBottom: 6 }}>范围=当前项目——另有 {omittedProjects.length} 个项目的待办未显示（切「全部可访问项目」可见，不会因此清掉）。</div>
+          <div className="faint small" style={{ marginBottom: 6 }}>当前只显示本项目——另有 {omittedProjects.length} 个项目的待办未显示（切换到「全部可访问项目」可见，不会被清掉）。</div>
         ) : null}
         {projectMissing ? <div className="panel info">尚未打开项目；请选择项目或切回「全部可访问项目」。全部待办仍保留。</div> : null}
-        {err != null ? <div className="panel warning">装载失败：{userFacingSystemText(err ?? '')}。当前显示上次读取的列表，可刷新重试。</div> : null}
+        {err != null ? <div className="panel warning">加载失败：{userFacingSystemText(err ?? '')}。当前显示上次读取的列表，可刷新重试。</div> : null}
         {data != null && empty && !projectMissing ? (
           <EmptyState icon="check-circle" title="没有需要你处理的事情" detail={scope === 'project' ? '当前项目没有待处理事项。' : '全部可访问项目都没有待处理事项。'} />
         ) : null}
@@ -145,7 +145,7 @@ export function PendingPage() {
                 <Row key={t.task_id}>
                   <Icon name="package" size={13} />
                   <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>待验收{t.title != null ? `：${t.title}` : `任务 ${t.task_id.slice(0, 12)}…`}</span>
-                  {t.actionable && t.revision != null ? <Tag tone="info">交付 v{t.revision} · {String(t.manifest_hash ?? '').slice(0, 8)}…</Tag> : <Tag tone="neutral" >无可批准交付</Tag>}
+                  {t.actionable && t.revision != null ? <Tag tone="info">交付 v{t.revision}</Tag> : <Tag tone="neutral" >无待验收交付</Tag>}
                   <button className="btn ghost sm" disabled={!t.actionable} title={t.actionable ? '打开对话串详情并验收当前成果' : '这份成果已处理或已有新版本，打开对话串查看'} onClick={() => locate(`#task=${t.task_id}`)}>定位</button>
                   {!t.actionable ? <span className="faint small">这份成果已处理或已有新版本</span> : null}
                 </Row>
@@ -193,7 +193,6 @@ export function PendingPage() {
             </div>
           </div>
         ))}
-        {data != null ? <div className="faint small" style={{ marginTop: 10 }}>汇总时间 {new Date(data.generatedAt).toLocaleTimeString()}</div> : null}
       </div>
     </div>
   );

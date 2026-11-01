@@ -40,7 +40,7 @@ import { LiveProgressCard } from './components/LiveProgress';
 import { DmInterruptedNotice } from './components/DmInterruptedNotice';
 
 const EXEC_TEXT: Record<string, string> = {
-  idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务',
+  idle: '', running: '运行中…', queued: '排队等待', paused: '队列已暂停', interrupted: '有中断待恢复的任务',
 };
 const EMPTY: never[] = [];
 const FORMAL_LIMITS = {
@@ -208,12 +208,12 @@ export function DmPage() {
     // 提交前核对：框属于哪个会话就用哪个会话的快照（捕获的 conversationId/revision）——
     // 切走后当前 active 不是目标=作废零提交（r57 跨会话误提交修复）。
     const target = dms.find((d) => d.id === renaming.conversationId);
-    if (target == null) { toast('重命名目标已不可用（会话已切换或移除）——框已作废', 'warn'); setRenaming(null); return; }
+    if (target == null) { toast('重命名目标已不可用（会话已切换或移除）——已关闭重命名框', 'warn'); setRenaming(null); return; }
     setBusy('rename');
     try {
       await command('conversation.rename', { conversationId: renaming.conversationId, title: renameText.trim(), expectedRevision: renaming.revision });
       recordWrite('conversation.rename', `私信重命名 →「${renameText.trim()}」`);
-      toast('已重命名（revision CAS 通过）', 'success');
+      toast('已重命名', 'success');
       setRenaming(null);
       await reloadAll();
     } catch (e) {
@@ -240,7 +240,7 @@ export function DmPage() {
     try {
       await command('conversation.restore', { conversationId: active.id });
       recordWrite('conversation.restore', '恢复私信（不自动续跑——排队消息等待发送或 dm.resume）');
-      toast('已取消归档（不自动续跑——排队消息用「继续队列」显式推进）', 'success');
+      toast('已取消归档', 'success');
       await reloadAll();
     } catch (e) { toast(`恢复失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
@@ -251,7 +251,7 @@ export function DmPage() {
     try {
       await command('task.stop', { taskId: active.activeTaskId, targetRunId: active.activeRunId, expectedStopGeneration: active.activeStopGeneration ?? 0 });
       recordWrite('task.stop', `停止私信执行（task ${active.activeTaskId.slice(0, 10)}… run ${active.activeRunId.slice(0, 10)}… 停止次数 ${active.activeStopGeneration ?? 0}）`);
-      toast('停止请求已提交（等活跃 turn 结束——队列进入暂停）', 'success');
+      toast('停止请求已提交，队列将暂停', 'success');
       await reloadAll();
     } catch (e) { toast(`停止失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
@@ -262,7 +262,7 @@ export function DmPage() {
     try {
       const r = await command<{ enqueued: number | boolean }>('dm.resume', { conversationId: active.id });
       recordWrite('dm.resume', `继续队列（泵 ${typeof r.enqueued === 'number' ? r.enqueued : Number(r.enqueued)} 条）`);
-      toast(`已继续队列（本次泵入 ${typeof r.enqueued === 'number' ? r.enqueued : r.enqueued ? 1 : 0} 条排队消息）`, 'success');
+      toast(`已继续队列（本次发出 ${typeof r.enqueued === 'number' ? r.enqueued : r.enqueued ? 1 : 0} 条排队消息）`, 'success');
       await reloadAll();
     } catch (e) { toast(`继续失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
@@ -277,7 +277,7 @@ export function DmPage() {
     if (reviewBox == null) return;
     if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) { toast('请填写修改意见，AI 会据此继续修改。', 'warn'); return; }
     // 提交前核对：当前会话必须还是框的归属会话（跨会话切换后 UI 已作废；此处双保险）。
-    if (active?.id !== reviewBox.conversationId) { toast('验收目标已切换（框属其它会话）——作废零提交', 'warn'); setReviewBox(null); return; }
+    if (active?.id !== reviewBox.conversationId) { toast('验收目标已切换——本框已关闭，请重新操作', 'warn'); setReviewBox(null); return; }
     setBusy('review');
     try {
       // r57：复用正式适配器 submitTaskReview（返工 note 字段——旧实现误传 reviewComment 被拒）。
@@ -293,7 +293,7 @@ export function DmPage() {
         || active.pendingReview.taskId !== reviewBox.snapshot.taskId
         || active.pendingReview.deliveryId !== reviewBox.snapshot.deliveryId
         || active.pendingReview.revision !== reviewBox.snapshot.deliveryRevision;
-      toast(`提交失败：${userFacingSystemText(r.error ?? '')}${stale ? '（交付已变化——本框作废，请对新版本重新操作）' : '（意见已保留，可修正后重提）'}`, 'error');
+      toast(`提交失败：${userFacingSystemText(r.error ?? '')}${stale ? '（交付已变化——验收框已失效，请对新版本重新操作）' : '（意见已保留，可修正后重提）'}`, 'error');
       if (stale) setReviewBox(null);
       await reloadAll().catch(() => { /* 同上：刷新失败不阻断忙态释放 */ });
     } finally {
@@ -313,7 +313,7 @@ export function DmPage() {
         ...(it.lastRunId != null ? { sourceRunId: it.lastRunId } : {}),
       });
       recordWrite('task.redispatch', `${it.formatRepair ? '私信输出格式修复' : '私信中断恢复'} task ${it.taskId.slice(0, 10)}…（来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`);
-      toast(it.formatRepair ? '格式修复请求已提交（不会重执行业务写入）' : '继续请求已提交', 'success');
+      toast(it.formatRepair ? '格式修复请求已提交（不会重做交付内容）' : '继续请求已提交', 'success');
       await reloadAll();
     } catch (e) { toast(`恢复被拒：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
@@ -334,7 +334,7 @@ export function DmPage() {
       recordWrite('task.redispatch', `${it.formatRepair ? '私信格式修复' : '私信失败任务显式继续'}（task ${it.taskId.slice(0, 10)}…）`);
       toast(it.formatRepair ? '格式修复请求已入队；不会自动重发旧任务' : '继续请求已入队', 'success');
     } catch (e) {
-      toast(`继续被拒：${userFacingSystemText((e as Error).message ?? '')}——请按当前任务事实重新决定`, 'error');
+      toast(`继续被拒：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
     } finally {
       await reloadAll().catch(() => { /* 保留原事实与错误，下次读取重试 */ });
       setBusy(null);
@@ -350,8 +350,8 @@ export function DmPage() {
     void (async () => {
       try {
         const r = await executeTaskRework(snapshot);
-        if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前返工事实`, 'error'); await reloadAll(); return; }
-        toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
+        if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新，请重试`, 'error'); await reloadAll(); return; }
+        toast('返工执行已入队', 'success');
         await reloadAll();
       } finally { setBusy(null); }
     })();
@@ -391,7 +391,7 @@ export function DmPage() {
               <Icon name="file-text" size={12} /> 文件
             </button>
           </div>
-          <span className="small faint">空间不足，已切为单区域；隐藏区域仍保留阅读位置与草稿</span>
+          <span className="small faint">空间不足，已切为单区域</span>
         </div>
       ) : null}
 
@@ -415,7 +415,7 @@ export function DmPage() {
             <div className="dm-list" style={{ flex: 1, minHeight: 0, overflow: 'auto' }} data-zs-dm-list="hifi">
               {dailyDms.length === 0 ? (
                 <div className="small faint" style={{ padding: 14 }} data-testid="dm-empty">
-                  还没有私聊。点右上角 + 新建一个（1 对 1，独立会话与可见范围）。
+                  还没有私聊。点右上角 + 新建一个。
                 </div>
               ) : null}
               {dailyDms.map((d) => {
@@ -488,7 +488,7 @@ export function DmPage() {
                     <span className="faint small">
                       {EXEC_TEXT[active.execState ?? 'idle'] ?? ''}
                       {active.queuedCount != null && active.queuedCount > 0 ? ` · 排队 ${active.queuedCount} 条` : ''}
-                      {active.stopPending === true ? ' · 停止退出未确认' : ''}
+                      {active.stopPending === true ? ' · 停止尚未确认' : ''}
                     </span>
                     <span style={{ flex: 1 }} />
                     {/* R74-P2：收起预览后的重开入口（与房间头部同款——hidden 时 PreviewPane
@@ -499,7 +499,7 @@ export function DmPage() {
                       <button className="btn ghost sm" disabled={busy != null} title="停止当前执行；如果任务状态已更新，请刷新后再试" onClick={() => void doStop()}>停止执行</button>
                     ) : null}
                     {active.execState === 'paused' || (active.queuedCount ?? 0) > 0 ? (
-                      <button className="btn ghost sm" disabled={busy != null} title="继续队列（dm.resume——显式泵一条排队消息，不自动连发）" onClick={() => void doResume()}>继续队列</button>
+                      <button className="btn ghost sm" disabled={busy != null} title="继续队列" onClick={() => void doResume()}>继续队列</button>
                     ) : null}
                     <button
                       className="icon-btn sm"
@@ -532,8 +532,8 @@ export function DmPage() {
                     <div className="row tight wrap">
                       <Icon name="package" size={13} />
                       <strong>待验收交付</strong>
-                      <Tag tone="info">v{active.pendingReview.revision} · 交付校验值 {active.pendingReview.manifestHash.slice(0, 10)}…</Tag>
-                      <span className="faint small">验收当前打开的交付版本；交付更新后，请重新打开验收框</span>
+                      <Tag tone="info">v{active.pendingReview.revision}</Tag>
+                      <span className="faint small">交付更新后，请重新打开验收框</span>
                       <span style={{ flex: 1 }} />
                       <button className="btn ghost sm" disabled={busy != null || reviewBox != null} onClick={() => openReview('accept')}>验收通过</button>
                       <button className="btn ghost sm" disabled={busy != null || reviewBox != null} onClick={() => openReview('rework')}>要求返工</button>
@@ -551,15 +551,15 @@ export function DmPage() {
                             || p.manifestHash !== reviewBox.snapshot.manifestHash;
                           return stale ? (
                             <>
-                              <div className="panel warning">交付已变化（打开时 v{reviewBox.snapshot.deliveryRevision}，当前 {p != null ? `v${p.revision}` : '无待验收交付'}）——本框作废。</div>
+                              <div className="panel warning">交付已变化（打开时 v{reviewBox.snapshot.deliveryRevision}，当前 {p != null ? `v${p.revision}` : '无待验收交付'}）——验收框已失效。</div>
                               <div className="row tight">
-                                <button className="btn ghost sm" onClick={() => setReviewBox(null)}>关闭作废框</button>
+                                <button className="btn ghost sm" onClick={() => setReviewBox(null)}>关闭</button>
                               </div>
                             </>
                           ) : reviewBox.mode === 'rework' ? (
                             <textarea className="composer-input" style={{ width: '100%', minHeight: 56 }} placeholder="修改意见（必填）" value={reviewBox.note} onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })} />
                           ) : (
-                            <div className="faint small">将验收通过 v{reviewBox.snapshot.deliveryRevision}（交付校验值 {reviewBox.snapshot.manifestHash.slice(0, 10)}…）。</div>
+                            <div className="faint small">将验收通过 v{reviewBox.snapshot.deliveryRevision}。</div>
                           );
                         })()}
                         {(() => {
@@ -586,7 +586,7 @@ export function DmPage() {
                       <Tag tone="warning">v{active.reworkPending.deliveryRevision} 被要求修改</Tag>
                       <span style={{ flex: 1 }} />
                       {active.reworkPending.queued ? (
-                        <span className="faint small">完成后交付升级为新待验收版本</span>
+                        <span className="faint small">完成后可重新验收</span>
                       ) : (
                         <button className="btn sm" disabled={busy != null} data-zs-dm-rework-run="1" title={`按你的意见修改 v${active.reworkPending.deliveryRevision} 成果`} onClick={doExecuteRework}>执行返工</button>
                       )}
@@ -601,7 +601,7 @@ export function DmPage() {
                 {showFailedPanel ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">
                     <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>失败任务待处理</strong><span className="faint small">任务尚未完成；继续需要明确点击，旧结果不会自动重发</span></div>
-                    {failedView.error != null ? <div className="small" style={{ marginTop: 5 }}>失败任务读取失败：{userFacingSystemText(failedView.error ?? '')}（保留上次成功读取的事实）</div> : null}
+                    {failedView.error != null ? <div className="small" style={{ marginTop: 5 }}>失败任务读取失败：{userFacingSystemText(failedView.error ?? '')}（保留上次读取的内容）</div> : null}
                     {failedItemsWithoutRecoveryDuplicate.map((it) => <div key={it.taskId} style={{ marginTop: 7 }}>
                       <div className="row tight wrap">
                         <span style={{ flex: 1, minWidth: 0 }}>{it.title}</span><Tag tone="danger">运行失败</Tag>
@@ -611,14 +611,14 @@ export function DmPage() {
                       </div>
                       {it.blockReason != null ? <details className="faint small"><summary>诊断详情</summary>{userFacingSystemText(it.blockReason ?? '')}</details> : null}
                     </div>)}
-                    {failedView.truncated ? <div className="faint small">仅显示最近 20 个失败任务；其余请从原界面逐项查看。</div> : null}
+                    {failedView.truncated ? <div className="faint small">仅显示最近 20 个失败任务。</div> : null}
                   </div>
                 ) : null}
                 <div className="msg-list is-replies" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                   {readError != null ? (
                     <div className="panel info" style={{ borderColor: 'var(--warning)' }} data-zs-dm-readerror="1">
-                      读取失败：{userFacingSystemText(readError ?? '')}（保留上次快照）
-                      <button className="btn ghost sm" style={{ marginLeft: 8 }} disabled={busy != null} title="立即重读本会话（后台 5s 轻量刷新也会自动重试）" onClick={() => { void loadDmHistory(activeId).catch(() => { /* 失败仍由面板呈现 */ }); }}>重试</button>
+                      读取失败：{userFacingSystemText(readError ?? '')}（保留上次读取的内容）
+                      <button className="btn ghost sm" style={{ marginLeft: 8 }} disabled={busy != null} title="立即重读本会话" onClick={() => { void loadDmHistory(activeId).catch(() => { /* 失败仍由面板呈现 */ }); }}>重试</button>
                     </div>
                   ) : null}
                   {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
@@ -666,7 +666,7 @@ export function DmPage() {
                   ))}
                 </div>
                 {active.archivedAt != null ? (
-                  <div className="panel info" style={{ margin: '0 14px 12px' }}>已归档会话禁止新发——「取消归档」在右上 ⋯ 菜单（恢复后排队消息用「继续队列」显式推进，不自动续跑）。</div>
+                  <div className="panel info" style={{ margin: '0 14px 12px' }}>已归档会话禁止新发；可在右上 ⋯ 菜单取消归档。</div>
                 ) : (
                   <Composer
                     target={{ kind: 'dm', roomId: `dm:${active.id}`, dmId: active.id }}
@@ -736,7 +736,7 @@ export function DmPage() {
           <div className="menu-label">{dmTitle} · 会话操作</div>
           <MenuItem icon="edit" title="重命名私信" onClick={() => { setRenameText(active?.title ?? ''); setRenaming({ conversationId: activeId, revision: active?.revision ?? 0 }); setOpsAt(null); }}>重命名…</MenuItem>
           {active?.archivedAt != null ? (
-            <MenuItem icon="refresh" title="取消归档（conversation.restore——不自动续跑）" onClick={() => { setOpsAt(null); void doRestore(); }}>取消归档</MenuItem>
+            <MenuItem icon="refresh" title="取消归档（不自动续跑）" onClick={() => { setOpsAt(null); void doRestore(); }}>取消归档</MenuItem>
           ) : (
             <MenuItem icon="archive" title="归档后可查看历史；正在执行的任务会停止。" onClick={() => { setOpsAt(null); void doArchive(); }}>归档会话…</MenuItem>
           )}
@@ -770,7 +770,6 @@ function CreateDmModal({ members, onClose, onCreated }: {
     <Modal
       size="md"
       title="新建私聊"
-      subtitle="1 对 1：选择一位成员（独立会话与可见范围——同一成员可有多条私聊，互不串上下文）"
       onClose={onClose}
       footer={
         <>

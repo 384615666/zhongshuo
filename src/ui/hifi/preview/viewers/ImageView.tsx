@@ -48,12 +48,12 @@ export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, on
       onPointerMove={(e) => { const d = drag.current; if (d != null) setOffset({ x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y }); }}
       onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}>
       <img src={dataUrl} alt={filename} draggable={false} data-zs-image-preview="hifi"
-        onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth === 0 || img.naturalHeight === 0) setError('浏览器未解码出有效图片尺寸'); else { setError(null); setSize({ width: img.naturalWidth, height: img.naturalHeight }); } }}
-        onError={() => setError('图片字节已读取，但浏览器无法解码。文件可能损坏或格式不受支持；已保存原件保留。')}
+        onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth === 0 || img.naturalHeight === 0) setError('图片尺寸无法读取'); else { setError(null); setSize({ width: img.naturalWidth, height: img.naturalHeight }); } }}
+        onError={() => setError('图片无法解码，文件可能损坏或格式不受支持；原件已保存。')}
         style={{ width: size.width > 0 ? size.width * scale : undefined, height: size.height > 0 ? size.height * scale : undefined,
           visibility: size.width > 0 && visibleLayout && error == null ? 'visible' : 'hidden', transform: `translate(${offset.x}px, ${offset.y}px)` }} />
       {error != null ? <div className="zs-image-error" role="alert" data-zs-preview-error={error}>{userFacingSystemText(error ?? '')}<button className="btn sm" onClick={onRetry}>重试预览</button><button className="btn sm" onClick={onDownload}>另存原件</button></div> : null}
     </div>
-    <div className="small faint">{error != null ? '预览失败' : size.width > 0 && visibleLayout ? `${size.width} × ${size.height} · 拖动查看` : '正在解码和布局图片…'}</div>
+    <div className="small faint">{error != null ? '预览失败' : size.width > 0 && visibleLayout ? `${size.width} × ${size.height} · 拖动查看` : '正在显示图片…'}</div>
   </div>;
 }

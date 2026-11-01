@@ -44,11 +44,10 @@ export function DmInterruptedNotice({tasks, memberName, queuedCount = 0, busy = 
           {task.recoverable ? <button type="button" className="btn sm" disabled={busy} title={notDispatchedTask ? '使用当前配置重新提交这条消息' : undefined} onClick={() => onRecover(task)}>{task.formatRepair ? '修复回复格式' : notDispatchedTask ? '按当前配置重新提交' : '继续这次请求'}</button> : null}
         </div>
         {notDispatchedTask ? <div className="small" style={{marginTop: 4, color: 'var(--text-2)', overflowWrap: 'anywhere'}} data-zs-dm-predispatch-reason="1">失败原因：{userFacingSystemText(task.lastFailureReason ?? '记录中未提供具体原因')}</div> : null}
-        <details className="small faint" style={{marginTop: 4, overflowWrap: 'anywhere'}}><summary>{notDispatchedTask ? '未派发详情' : '诊断详情'}</summary>
-          <div>任务：{task.taskId} · {notDispatchedTask ? '尚未发给 AI' : `上次执行：${task.lastRunId ?? '未记录'} · 状态：${task.lastRunStatus ?? '未记录'}`}</div>
+        {(!notDispatchedTask && task.lastFailureReason) || task.blockReason ? <details className="small faint" style={{marginTop: 4, overflowWrap: 'anywhere'}}><summary>{notDispatchedTask ? '未派发详情' : '诊断详情'}</summary>
           {!notDispatchedTask && task.lastFailureReason ? <div>中断记录：{userFacingSystemText(task.lastFailureReason)}</div> : null}
           {task.blockReason ? <div>当前限制：{userFacingSystemText(task.blockReason ?? '')}</div> : null}
-        </details>
+        </details> : null}
       </div>
     })}
   </div>;

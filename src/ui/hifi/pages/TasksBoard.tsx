@@ -143,17 +143,17 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
               options={[{ value: 'all', label: '当前范围全部房间' }, ...scopeRooms.map((r) => ({ value: r.roomId, label: `${r.projectName} · ${r.name}` }))]}
             />
           </label>
-          <span className="filter-note">{data == null ? '正在读取任务' : `共 ${totalCount} 项`} · 在任务详情中处理</span>
+          <span className="filter-note">{data == null ? '正在读取任务' : `共 ${totalCount} 项`}</span>
           <button className="btn ghost" disabled={reading} onClick={() => setGen((v) => v + 1)}>{reading ? '读取中…' : '刷新'}</button>
         </div>
 
         {err != null ? (
-          <div className="panel warning">看板读取失败：{userFacingSystemText(err ?? '')}。{data != null ? '保留上次已确认的任务；可点击刷新重试。' : '可点击刷新重试。'}</div>
+          <div className="panel warning">看板读取失败：{userFacingSystemText(err ?? '')}。{data != null ? '保留上次读取的任务；可点击刷新重试。' : '可点击刷新重试。'}</div>
         ) : null}
         {data == null ? (
           <div className="panel info">{err?'尚未取得这个范围的看板。':'正在读取看板…'}</div>
         ) : totalCount === 0 ? (
-          <EmptyState icon="list" title="这个范围里还没有任务" detail="在对话池发布一条任务后，看板会按项目与状态自动分组。" />
+          <EmptyState icon="list" title="这个范围里还没有任务" detail="在对话池发布任务后，看板会显示在这里。" />
         ) : (
           data.groups.filter((g) => cardsOf(g).length > 0 || roomFilter === 'all').map((g) => {
             const list = cardsOf(g);
@@ -189,7 +189,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                 data-zs-task-id={c.taskId}
                                 style={{ cursor: 'pointer' }}
                                 onClick={() => {
-                                  if (c.threadId == null) { toast('该任务无线程（异常形态）——不定位', 'warn'); return; }
+                                  if (c.threadId == null) { toast('该任务没有可打开的线程', 'warn'); return; }
                                   void openExternalDeepLink(c.locate).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
                                 }}
                               >
@@ -197,10 +197,10 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                   {c.roomTaskNumber != null ? <span className="root-task-no">#{c.roomTaskNumber}</span> : null}
                                   <TaskStatusTag status={c.taskStatus as 'OPEN'} />
                                   {c.runStatus != null && c.runStatus !== c.taskStatus ? <Tag plain icon="activity">{({ QUEUED: '运行已排队', RUNNING: '运行中', WAITING: '运行等待中', FAILED: '本轮运行失败', SUCCEEDED: '本轮运行成功', STOPPING: '正在停止', INTERRUPTED: '运行中断', CANCELLED: '运行已停止' } as Record<string, string>)[c.runStatus] ?? c.runStatus}</Tag> : null}
-                                  {c.exitUnconfirmed ? <Tag tone="warning" icon="help-circle" title="运行中断且存在结果未知的 turn（恢复中心/详情取证）">退出未确认</Tag> : null}
-                                  {c.pendingDelivery != null ? <Tag tone="warning" icon="eye" title={`待验收交付 v${c.pendingDelivery.revision}（交付校验值 ${c.pendingDelivery.manifestHash.slice(0, 8)}…）——在对话串详情验收当前交付`}>待验收 v{c.pendingDelivery.revision}</Tag> : null}
+                                  {c.exitUnconfirmed ? <Tag tone="warning" icon="help-circle" title="运行已中断，结果未确认；可在线程详情中确认">退出未确认</Tag> : null}
+                                  {c.pendingDelivery != null ? <Tag tone="warning" icon="eye" title={`待验收交付 v${c.pendingDelivery.revision}——在对话串详情验收`}>待验收 v{c.pendingDelivery.revision}</Tag> : null}
                                 </div>
-                                <div className="strong" style={{ marginTop: 6, fontSize: 12.5 }}>{c.title || '（标题未装载——进线程查看）'}</div>
+                                <div className="strong" style={{ marginTop: 6, fontSize: 12.5 }}>{c.title || '（标题暂不可用，进线程查看）'}</div>
                                 {c.statusReason != null ? <div className="small faint clamp-2" style={{ marginTop: 3 }}>{c.statusReason}</div> : null}
                                 <div className="row tight wrap small faint" style={{ marginTop: 8 }}>
                                   <Tag tone="accent" icon="folder">{project?.displayName ?? g.displayName}</Tag>

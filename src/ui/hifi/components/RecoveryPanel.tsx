@@ -110,7 +110,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
   const submitReconcile = async () => {
     if (recon == null) return;
     if (recon.note.trim().length === 0) { toast('请填写判断依据，说明你如何确认这次执行的结果', 'warn'); return; }
-    if (recon.verdict === 'notStarted' && !recon.manualRiskAck) { toast('notStarted（人工分离）需勾选风险确认：租约与准入会保留，不凭人工解除物理写入保护', 'warn'); return; }
+    if (recon.verdict === 'notStarted' && !recon.manualRiskAck) { toast('选择「未启动」需先勾选风险确认：文件保护会继续保留，不会人工解除', 'warn'); return; }
     setBusy(`recon:${recon.turnId}`);
     try {
       await command('recovery.reconcile', { turnId: recon.turnId, verdict: recon.verdict, note: recon.note.trim(), ...(recon.verdict === 'notStarted' ? { manualRiskAck: true } : {}) });
@@ -128,7 +128,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
     try {
       const r = await command<{ stateChanged: boolean; note?: string; releasedLeases: string[] }>('recovery.releaseProtection', { turnId: relNote.turnId, note: relNote.note.trim() });
       recordWrite('recovery.releaseProtection', `解除保护 ${relNote.turnId.slice(0, 12)}…（${r.stateChanged ? `释放 ${r.releasedLeases.length} 租约` : '已处理，无需重复操作'}）`);
-      toast(r.stateChanged ? `保护已解除（释放 ${r.releasedLeases.length} 项文件保护）` : `未变化：${r.note ?? '无未释放租约且无保留保护'}`, r.stateChanged ? 'success' : 'info');
+      toast(r.stateChanged ? `保护已解除（释放 ${r.releasedLeases.length} 项文件保护）` : `未变化：${r.note ?? '没有需要解除的保护'}`, r.stateChanged ? 'success' : 'info');
       setRelNote(null);
       await reload();
     } catch (e) { toast(`解除保护被拒：${userFacingSystemText((e as Error).message ?? '')}（仍需确认执行已结束，文件保护已保留）`, 'error'); }
@@ -207,9 +207,6 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           {data.pendingDispatchCount > 0 ? (
             <div className="panel info">
               <div className="row tight"><strong>排队消息（{data.pendingDispatchCount}）</strong></div>
-              <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
-                {data.pendingDispatchKeys.map((k) => <div key={k}>{k}</div>)}
-              </div>
             </div>
           ) : null}
           {data.gateHeld ? (
@@ -219,14 +216,9 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                 <strong>排队消息已暂停</strong>
                 <span className="faint small">上次退出时有执行尚未确认结束。新请求已暂停；当前 {data.pendingDispatchCount} 条消息仍在排队，确认后继续处理。</span>
               </div>
-              {data.pendingDispatchKeys.length > 0 ? (
-                <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
-                  {data.pendingDispatchKeys.map((k) => <div key={k}>{k}</div>)}
-                </div>
-              ) : null}
               <div className="row tight" style={{ marginTop: 8 }}>
                 <button className="btn sm" disabled={busy != null} title="确认后继续处理排队消息" onClick={() => void resumeGate()}>
-                  {busy === 'gate' ? '确认中…' : '确认继续派发'}
+                  {busy === 'gate' ? '确认中…' : '确认继续处理'}
                 </button>
                 <span className="faint small">允许继续后，结果不明的执行仍需逐项核对。要继续中断的任务，请打开任务详情或对应私信。</span>
               </div>
@@ -238,11 +230,9 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               {data.unknownTurns.map((t) => (
                 <div key={t.id} style={{ marginTop: 8, padding: 8, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
                   <div className="row tight wrap">
-                    <Tag tone="warning" icon="alert-triangle">{t.status}</Tag>
-                    <span className="mono small">{t.id.slice(0, 16)}…</span>
-                    <span className="faint small">阶段 {userFacingSystemText(t.stageKey ?? '')}</span>
+                    <Tag tone="warning" icon="alert-triangle">结果待核对</Tag>
                     <span style={{ flex: 1 }} />
-                    <button className="btn ghost sm" title="定位回原任务上下文（定位≠执行）" onClick={() => locate(`#task=${t.taskId}`)}>定位任务</button>
+                    <button className="btn ghost sm" title="打开原任务查看" onClick={() => locate(`#task=${t.taskId}`)}>定位任务</button>
                     <button className="btn ghost sm" disabled={busy != null} onClick={() => setRecon(recon?.turnId === t.id ? null : { turnId: t.id, verdict: 'executed', note: '', manualRiskAck: false })}>对账…</button>
                   </div>
                   {recon?.turnId === t.id ? (
@@ -254,7 +244,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                           onChange={(v) => setRecon({ ...recon, verdict: v as typeof recon.verdict })}
                           options={[
                             { value: 'executed', label: '已执行（将检查是否结束）' },
-                            { value: 'notStarted', label: '未启动（退回调用预算，保留文件保护）' },
+                            { value: 'notStarted', label: '未启动（退回调用次数，保留文件保护）' },
                             { value: 'keepUnknown', label: '暂时无法确认' },
                           ]}
                         />
@@ -275,19 +265,17 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
           ) : null}
           {data != null && data.pendingRelease.length > 0 ? (
             <div className="panel info">
-              <div className="row tight"><strong>待解除保护（{data.pendingRelease.length}）——预算已处置、保护未解除</strong></div>
+              <div className="row tight"><strong>待解除保护（{data.pendingRelease.length}）——确认执行结束后解除</strong></div>
               {data.pendingRelease.map((p) => (
                 <div key={p.turnId} style={{ marginTop: 8, padding: 8, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
                   <div className="row tight wrap">
-                    <Tag tone={p.protectionState === 'retained' ? 'warning' : 'neutral'} icon="lock">{p.protectionState ?? '?'}</Tag>
-                    <span className="mono small">{p.turnId.slice(0, 16)}…</span>
-                    <span className="faint small">turn {p.turnStatus} · 租约 {p.leaseCount} · 最近取证 {p.lastProbeResult ?? '无'}</span>
+                    <Tag tone={p.protectionState === 'retained' ? 'warning' : 'neutral'} icon="lock">{p.protectionState === 'retained' ? '保护中' : '待确认'}</Tag>
                     <span style={{ flex: 1 }} />
                     <button className="btn ghost sm" disabled={busy != null} onClick={() => setRelNote(relNote?.turnId === p.turnId ? null : { turnId: p.turnId, note: '' })}>解除保护…</button>
                   </div>
                   {relNote?.turnId === p.turnId ? (
                     <div className="page-stack" style={{ marginTop: 8 }}>
-                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="请填写解除依据。只有确认执行已结束，且能识别对应进程时，才能解除保护。" value={relNote.note} onChange={(e) => setRelNote({ ...relNote, note: e.target.value })} />
+                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="请填写解除依据。只有确认执行已结束，才能解除保护。" value={relNote.note} onChange={(e) => setRelNote({ ...relNote, note: e.target.value })} />
                       <div className="row tight">
                         <button className="btn sm" disabled={busy != null} onClick={() => void submitRelease()}>{busy === `rel:${p.turnId}` ? '提交中…' : '提交解除'}</button>
                         <button className="btn ghost sm" onClick={() => setRelNote(null)}>取消</button>
@@ -303,8 +291,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               <div className="row tight"><strong>中断的执行（{data.interruptedRuns.length}）</strong><span className="faint small">点击定位打开原任务；可在任务详情或私信中继续执行</span></div>
               {data.interruptedRuns.map((r) => (
                 <div key={r.id} className="row tight" style={{ marginTop: 6 }}>
-                  <span className="mono small">{r.id.slice(0, 14)}…</span>
-                  <span className="faint small">{r.status}</span>
+                  <span className="faint small">已中断</span>
                   <span style={{ flex: 1 }} />
                   <button className="btn ghost sm" onClick={() => locate(`#task=${r.task_id}`)}>定位任务</button>
                 </div>
@@ -317,7 +304,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               <div className="small" style={{ marginTop: 4, lineHeight: 1.8 }}>
                 {data.stopRecord != null ? <div>上次退出：{fmtAt(data.stopRecord.at)} · 阶段 {data.stopRecord.phase ?? '?'}{data.stopRecord.reason != null ? ` · ${userFacingSystemText(data.stopRecord.reason ?? '')}` : ''}{data.stopRecord.drainPending === true ? ' · 停止时仍有执行未确认结束' : ''}</div> : null}
                 {data.activeUndos.length > 0 ? <div>未完成的撤销 {data.activeUndos.length} 项——请到原界面继续撤销；检查文件版本后才能继续修改</div> : null}
-                {data.heldLeases.length > 0 ? <div>未释放租约 {data.heldLeases.length} 项（过期的保护仍需确认后才能解除）</div> : null}
+                {data.heldLeases.length > 0 ? <div>仍有 {data.heldLeases.length} 项文件保护未解除（确认执行结束后才能解除）</div> : null}
               </div>
             </div>
           ) : null}

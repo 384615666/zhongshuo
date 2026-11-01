@@ -25,7 +25,7 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
     const visible=()=>document.visibilityState!=='hidden'&&!document.body.classList.contains('legacy-on');
     const load=(cursor:string|null|undefined=wanted)=>{if(!alive||!visible())return;const desired=cursor===null?undefined:cursor;if(busy){if(wanted!==desired)generation.current++;wanted=desired;reread=true;return;}wanted=desired;busy=true;reread=false;const id=++generation.current;
       setPage(old=>({key,data:old.key===key?old.data:null,before:old.key===key?old.before:undefined,error:old.key===key?old.error:null,at:old.key===key?old.at:null,loading:true}));
-      void readPage(projectId,conversationId,desired).then(data=>{if(alive&&id===generation.current&&visible()){if(data.conversationId!==conversationId){setPage(old=>({...old,error:'任务列表回执不属于当前私信',loading:false}));return;}before=desired;saveReadingPosition(`dm-page:${key}`,desired??null);setPage({key,data,before:desired,error:null,loading:false,at:Date.now()});setChosen(old=>{if(old?.key===key)return old;const saved=readingPosition<string>(`dm-task:${key}`);return typeof saved==='string'?{key,id:saved}:data.items[0]?{key,id:data.items[0].id}:null;});}},(e:unknown)=>{if(alive&&id===generation.current&&visible())setPage(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{busy=false;if(alive&&reread&&visible())load();});};
+      void readPage(projectId,conversationId,desired).then(data=>{if(alive&&id===generation.current&&visible()){if(data.conversationId!==conversationId){setPage(old=>({...old,error:'任务列表不属于当前私信',loading:false}));return;}before=desired;saveReadingPosition(`dm-page:${key}`,desired??null);setPage({key,data,before:desired,error:null,loading:false,at:Date.now()});setChosen(old=>{if(old?.key===key)return old;const saved=readingPosition<string>(`dm-task:${key}`);return typeof saved==='string'?{key,id:saved}:data.items[0]?{key,id:data.items[0].id}:null;});}},(e:unknown)=>{if(alive&&id===generation.current&&visible())setPage(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{busy=false;if(alive&&reread&&visible())load();});};
     trigger.current=load;
     const visibility=()=>{if(visible())load();else{generation.current++;reread=true;}};
     document.addEventListener('visibilitychange',visibility);
@@ -36,8 +36,8 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
   const current=page.key===key?page:null;const remembered=readingPosition<string>(`dm-task:${key}`);const taskId=chosen?.key===key?chosen.id:typeof remembered==='string'?remembered:undefined;
   const row=current?.data?.items.find(x=>x.id===taskId);
   const options=current?.data?.items.map(t=>({value:t.id,label:t.title}))??[];
-  if(taskId&&!options.some(o=>o.value===taskId))options.unshift({value:taskId,label:'继续查看当前任务（本页之外）'});
-  return <Modal title="私信任务记录" subtitle="查看当前私信的任务、执行情况和成果版本。" size="lg" onClose={onClose}>
+  if(taskId&&!options.some(o=>o.value===taskId))options.unshift({value:taskId,label:'当前任务'});
+  return <Modal title="私信任务记录" size="lg" onClose={onClose}>
     <div data-zs-dm-task-records="1" className="thread-details" style={{height:'min(65vh,680px)',minHeight:240}}>
       <div className="row tight wrap" style={{padding:'8px 0'}}>
         <Select value={taskId??''} options={options} ariaLabel="选择私信任务" onChange={id=>{saveReadingPosition(`dm-task:${key}`,id);setChosen({key,id});}}/>
@@ -46,10 +46,10 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
         {current?.data?.nextCursor?<button className="btn ghost sm" disabled={current.loading} onClick={()=>trigger.current?.(current.data!.nextCursor!)}>加载更早任务</button>:null}
         <button className="btn ghost sm" disabled={current?.loading} onClick={()=>trigger.current?.()}>刷新任务列表</button>
       </div>
-      {current?.at?<span className="faint small">任务列表更新于 {fullTime(current.at)} · 每页最多20项</span>:null}
-      {current?.error?<div className="panel warning">任务列表读取失败：{userFacingSystemText(current.error ?? '')}；{current.data?'保留本页':'尚未取得快照'}，可刷新重试。</div>:null}
+      {current?.at?<span className="faint small">任务列表更新于 {fullTime(current.at)}</span>:null}
+      {current?.error?<div className="panel warning">任务列表读取失败：{userFacingSystemText(current.error ?? '')}；{current.data?'保留本页':'尚未取得任务列表'}，可刷新重试。</div>:null}
       {current?.loading?<span className="faint small">正在读取任务列表…</span>:null}
-      {current?.data?.items.length===0?<div className="panel info">{current.before?'本页没有更早任务；其他窗口保留。':'此私信还没有任务。仅记录的消息不会创建任务。'}</div>:null}
+      {current?.data?.items.length===0?<div className="panel info">{current.before?'本页没有更早任务。':'此私信还没有任务。'}</div>:null}
       {taskId?<DmTaskRecord key={`${key}:${taskId}`} projectId={projectId} conversationId={conversationId} taskId={taskId} revision={row?.revision} runStatus={row?.latestRun?.status} onRetry={onRetry} retryBusy={retryBusy} acceptedRetry={acceptedRetry}/>:null}
     </div>
   </Modal>;
@@ -65,7 +65,7 @@ function DmTaskRecord({projectId,conversationId,taskId,revision,runStatus,onRetr
       {detail?<>
         <div className="card tight"><strong>{detail.task.title}</strong><TaskStatusTag status={detail.task.status as Parameters<typeof TaskStatusTag>[0]['status']}/></div>
         {section==='overview'?<><TaskExtraFacts detail={detail}/><ActualMembers detail={detail}/></>:null}
-        {section==='run'?<>{detail.failedRetry.available&&!onRetry?<div className="panel info">私信失败入口正在读取；详情保留，等待会话快照或回到原失败任务卡核对。历史阅读不会派发。</div>:null}<RunExtraFacts detail={detail} onSelectRun={formal.selectRun} onRetryFailed={onRetry?()=>{void onRetry(detail).finally(formal.refresh);}:undefined} retryBusy={retryBusy||acceptedRetry===`${detail.task.id}:${detail.latestRunId}`}/></>:null}
+        {section==='run'?<>{detail.failedRetry.available&&!onRetry?<div className="panel info">失败重试入口正在读取；可回到原失败任务卡查看或重试。</div>:null}<RunExtraFacts detail={detail} onSelectRun={formal.selectRun} onRetryFailed={onRetry?()=>{void onRetry(detail).finally(formal.refresh);}:undefined} retryBusy={retryBusy||acceptedRetry===`${detail.task.id}:${detail.latestRunId}`}/></>:null}
         {section==='activity'?<TaskEventFacts detail={detail}/>:null}
         {section==='delivery'?<DeliveryHistoryFacts detail={detail}/>:null}
       </>:null}

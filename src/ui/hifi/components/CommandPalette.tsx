@@ -98,7 +98,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     for (const d of s.dms) if (query.length === 0 || hit(`${d.peerDisplayName ?? ''} ${d.title ?? ''}`)) out.push({ key: `dm-${d.id}`, section: '私信', label: `${d.peerDisplayName ?? '成员'}${d.title != null && d.title.length > 0 ? ` · ${d.title}` : ''}`, icon: 'message-square', hint: d.archivedAt != null ? '私信 · 已归档' : '私信', go: () => navigate(`/dm/${d.id}`) });
     for (const m of s.members) if (query.length === 0 || hit(m.displayName)) out.push({ key: `member-${m.id}`, section: '成员', label: m.displayName, icon: 'sparkles', hint: `成员 · ${m.enabled ? '启用' : '停用'}`, go: () => navigate(`/project/${m.projectId}/member/${m.id}`) });
     for (const t of tasks) if (query.length === 0 || hit(t.title)) out.push({ key: `task-${t.taskId}`, section: '任务', label: t.title, icon: 'list', hint: `任务 · ${taskStatusLabel(t)}`, go: locateGo(t.locate) });
-    for (const [i, r] of searchRows.entries()) out.push({ key: `sr-${i}`, section: r.kind === 'message' ? '消息' : '线程', label: r.snippet.slice(0, 60), icon: r.kind === 'message' ? 'message-square' : 'message-circle', hint: `${r.projectName} · 检索命中`, go: locateGo(r.locate) });
+    for (const [i, r] of searchRows.entries()) out.push({ key: `sr-${i}`, section: r.kind === 'message' ? '消息' : '线程', label: r.snippet.slice(0, 60), icon: r.kind === 'message' ? 'message-square' : 'message-circle', hint: r.projectName, go: locateGo(r.locate) });
     return out.slice(0, 24);
   }, [query, s.rooms, s.dms, s.members, s.projects, tasks, searchRows]);
 
@@ -139,9 +139,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           <span className="kbd">Esc</span>
         </div>
         <div className="overlay-body" style={{ padding: 8, overflow: 'auto', minHeight: 120 }}>
-          {tasksErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>任务聚合读取失败：{userFacingSystemText(tasksErr ?? '')}（仍可查找房间、私信、成员和操作）</div> : null}
+          {tasksErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>任务读取失败：{userFacingSystemText(tasksErr ?? '')}（仍可查找房间、私信、成员和操作）</div> : null}
           {searchErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>检索失败：{userFacingSystemText(searchErr ?? '')}（房间/私信/任务/动作仍可用）</div> : null}
-          {items.length === 0 && query.length > 0 ? <div className="panel info" style={{ margin: 4, padding: 8 }}>没有匹配结果（消息/线程走服务端检索，其余按已装载事实过滤）。</div> : null}
+          {items.length === 0 && query.length > 0 ? <div className="panel info" style={{ margin: 4, padding: 8 }}>没有匹配结果。</div> : null}
           {items.map((it, i) => (
             <button
               key={it.key}
@@ -157,9 +157,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               {i === sel ? <Tag plain icon="corner-down-left">Enter</Tag> : null}
             </button>
           ))}
-        </div>
-        <div className="row tight" style={{ padding: '6px 14px', borderTop: '1px solid var(--border-subtle,#e6eaf0)' }}>
-          <span className="small faint">选择结果可打开对应页面；执行、验收和解除保护需在该页面确认。搜索范围不含文件正文。</span>
         </div>
       </div>
     </div>
