@@ -8,7 +8,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { packageUserGuideAssets, renderUserGuide } from './package-user-guide.mjs';
 import { brandIco, brandIconName } from './lib/brand-icon.mjs';
-import { brandWindowsExecutable } from './lib/brand-executable.mjs';
+import { brandWindowsExecutable, windowsExecutableBrand } from './lib/brand-executable.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const configDir = join(repo, 'packaging/windows');
@@ -146,10 +146,10 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     privacyCheck(sourceImage);
     image=mkdtempSync(join(work,'image-'));cpSync(sourceImage,image,{recursive:true});
     renameSync(join(image,'electron.exe'),join(image,release.executable));
-    const nativeIcon=brandWindowsExecutable(join(image,release.executable),icon);
+    const nativeIcon=brandWindowsExecutable(join(image,release.executable),icon,windowsExecutableBrand({...release,...version},release.executable));
     const fuses=disableRunAsNode(join(image,release.executable));
     const appDir=join(image,'resources/app');
-    const metadata={...release,...version,executable:release.executable,icon:iconName,nativeIcon,fuses};
+    const metadata={...release,...version,executable:release.executable,icon:iconName,nativeIcon,nativeVersion:nativeIcon.Version,fuses};
     json(join(appDir,'installed-desktop.json'),metadata);
     const pkg=JSON.parse(readFileSync(join(appDir,'package.json'),'utf8'));
     json(join(appDir,'package.json'),{...pkg,version:version.version,productName:release.productName,description:'众说——本地多 Agent 协同工作台'});

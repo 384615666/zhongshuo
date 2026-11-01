@@ -1,11 +1,25 @@
-param([Parameter(Mandatory=$true)][string]$Executable, [Parameter(Mandatory=$true)][string]$Icon)
+﻿param(
+  [Parameter(Mandatory=$true)][string]$Executable,
+  [Parameter(Mandatory=$true)][string]$Icon,
+  [string]$Version,
+  [string]$NumericVersion,
+  [string]$ProductName = '众说',
+  [string]$FileDescription = '众说',
+  [string]$Company = '众说开源项目',
+  [string]$Copyright = 'Copyright (C) 2026 众说开源项目',
+  [string]$InternalName = 'Zhongshuo',
+  [string]$OriginalFilename = 'Zhongshuo.exe',
+  [string]$Comments = '本地多 Agent 协同工作台'
+)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;
+using System.Text;
 using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 public static class ZhongshuoNativeIcon {
@@ -83,5 +97,105 @@ public static class ZhongshuoNativeIcon {
         return new Result {Groups=groups.Count,Frames=count,Languages=groups.Select(g=>g.Language).Distinct().Count(),Verified=true};
     }
 }
+
+/**
+ * Rewrites the PE version-info resource (RT_VERSION) so Windows taskbar/tooltip,
+ * file properties and future shell pick up the product name instead of "Electron".
+ * Icon resources are untouched. Supplied strings are written for en-US and zh-CN
+ * Unicode string tables; every existing version language block is replaced.
+ */
+public static class ZhongshuoNativeVersion {
+    delegate bool Languages(IntPtr module, IntPtr type, IntPtr name, ushort language, IntPtr parameter);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr LoadLibraryExW(string file, IntPtr reserved, uint flags);
+    [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool EnumResourceLanguagesW(IntPtr module, IntPtr type, IntPtr name, Languages callback, IntPtr parameter);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr BeginUpdateResourceW(string file, bool deleteExisting);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool UpdateResourceW(IntPtr update, IntPtr type, IntPtr name, ushort language, byte[] data, uint size);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool EndUpdateResourceW(IntPtr update, bool discard);
+    static void Require(bool ok, string operation) { if(!ok) throw new Win32Exception(Marshal.GetLastWin32Error(), operation); }
+    static void U16(List<byte> b, ushort v) { b.Add((byte)(v & 0xFF)); b.Add((byte)(v >> 8)); }
+    static void U32(List<byte> b, uint v) { for(int i=0;i<4;i++) b.Add((byte)((v >> (8*i)) & 0xFF)); }
+    static void Align(List<byte> b) { while(b.Count % 4 != 0) b.Add(0); }
+    static int Begin(List<byte> b, ushort valueLength, ushort type) { int start=b.Count; U16(b,0); U16(b,valueLength); U16(b,type); return start; }
+    static void End(List<byte> b, int start) { Align(b); int length=b.Count-start; b[start]=(byte)(length & 0xFF); b[start+1]=(byte)((length >> 8) & 0xFF); }
+    static void Key(List<byte> b, string key) { b.AddRange(Encoding.Unicode.GetBytes(key + "\0")); Align(b); }
+    static void StringBlock(List<byte> b, string key, string value) {
+        byte[] encoded=Encoding.Unicode.GetBytes(value + "\0");
+        int start=Begin(b,(ushort)encoded.Length,1);
+        Key(b,key);
+        b.AddRange(encoded);
+        End(b,start);
+    }
+    static byte[] Build(string version, string numericVersion, string productName, string fileDescription, string company, string copyright, string internalName, string originalFilename, string comments, ushort language, ushort codePage) {
+        string[] parts=(numericVersion ?? version).Split('.');
+        uint[] nums=new uint[4];
+        for(int i=0;i<4;i++) { uint parsed; nums[i]=i<parts.Length && uint.TryParse(parts[i],out parsed) ? parsed : 0; }
+        var b=new List<byte>();
+        int root=Begin(b,52,0);
+        Key(b,"VS_VERSION_INFO");
+        U32(b,0xFEEF04BD); U32(b,0x00010000);
+        U32(b,(nums[0]<<16)|(nums[1]&0xFFFF)); U32(b,(nums[2]<<16)|(nums[3]&0xFFFF));
+        U32(b,(nums[0]<<16)|(nums[1]&0xFFFF)); U32(b,(nums[2]<<16)|(nums[3]&0xFFFF));
+        U32(b,0x0000003F); U32(b,0); U32(b,0x00040004); U32(b,1); U32(b,0); U32(b,0); U32(b,0);
+        int sfi=Begin(b,0,1);
+        Key(b,"StringFileInfo");
+        int table=Begin(b,0,1);
+        Key(b,language.ToString("X4")+codePage.ToString("X4"));
+        StringBlock(b,"CompanyName",company);
+        StringBlock(b,"FileDescription",fileDescription);
+        StringBlock(b,"FileVersion",version);
+        StringBlock(b,"InternalName",internalName);
+        StringBlock(b,"LegalCopyright",copyright);
+        StringBlock(b,"OriginalFilename",originalFilename);
+        StringBlock(b,"ProductName",productName);
+        StringBlock(b,"ProductVersion",version);
+        if(!string.IsNullOrEmpty(comments)) StringBlock(b,"Comments",comments);
+        End(b,table);
+        End(b,sfi);
+        int vfi=Begin(b,0,1);
+        Key(b,"VarFileInfo");
+        int var=Begin(b,4,0);
+        Key(b,"Translation");
+        U32(b,((uint)language<<16)|codePage);
+        End(b,var);
+        End(b,vfi);
+        End(b,root);
+        return b.ToArray();
+    }
+    public class Result { public bool Verified; public string ProductName; public string FileDescription; public string FileVersion; public string ProductVersion; public string OriginalFilename; public string CompanyName; public int Languages; }
+    public static Result Replace(string executable, string version, string numericVersion, string productName, string fileDescription, string company, string copyright, string internalName, string originalFilename, string comments) {
+        ushort[] languages=new ushort[]{0x0409,0x0804};
+        var payloads=new Dictionary<ushort,byte[]>();
+        foreach(ushort lang in languages) payloads[lang]=Build(version,numericVersion,productName,fileDescription,company,copyright,internalName,originalFilename,comments,lang,0x04B0);
+        var existing=new List<ushort>();
+        IntPtr module=LoadLibraryExW(executable,IntPtr.Zero,0x22);
+        Require(module!=IntPtr.Zero,"Load executable for version enumeration");
+        try {
+            Languages cb=delegate(IntPtr m,IntPtr t,IntPtr n,ushort language,IntPtr p) { existing.Add(language); return true; };
+            EnumResourceLanguagesW(module,new IntPtr(16),new IntPtr(1),cb,IntPtr.Zero);
+        } finally { FreeLibrary(module); }
+        IntPtr update=BeginUpdateResourceW(executable,false);
+        Require(update!=IntPtr.Zero,"Begin version update");
+        bool committed=false;
+        try {
+            foreach(ushort lang in existing.Distinct()) Require(UpdateResourceW(update,new IntPtr(16),new IntPtr(1),lang,null,0),"Delete old version resource");
+            foreach(var pair in payloads) Require(UpdateResourceW(update,new IntPtr(16),new IntPtr(1),pair.Key,pair.Value,(uint)pair.Value.Length),"Write version resource");
+            Require(EndUpdateResourceW(update,false),"Commit version resource");
+            committed=true;
+        } finally { if(!committed) EndUpdateResourceW(update,true); }
+        var info=FileVersionInfo.GetVersionInfo(executable);
+        if(info.ProductName!=productName || info.FileDescription!=fileDescription || info.OriginalFilename!=originalFilename || info.FileVersion!=version) throw new InvalidDataException("Version resource verification failed: " + info.ProductName + " | " + info.FileDescription + " | " + info.OriginalFilename + " | " + info.FileVersion);
+        return new Result {Verified=true,ProductName=info.ProductName,FileDescription=info.FileDescription,FileVersion=info.FileVersion,ProductVersion=info.ProductVersion,OriginalFilename=info.OriginalFilename,CompanyName=info.CompanyName,Languages=languages.Length};
+    }
+}
 '@
-[ZhongshuoNativeIcon]::Replace($Executable, $Icon) | ConvertTo-Json -Compress
+$iconResult=[ZhongshuoNativeIcon]::Replace($Executable, $Icon)
+if ([string]::IsNullOrEmpty($Version)) {
+  $iconResult | ConvertTo-Json -Compress
+  exit 0
+}
+$versionResult=[ZhongshuoNativeVersion]::Replace($Executable, $Version, $NumericVersion, $ProductName, $FileDescription, $Company, $Copyright, $InternalName, $OriginalFilename, $Comments)
+[pscustomobject]@{
+  Groups=$iconResult.Groups; Frames=$iconResult.Frames; Languages=$iconResult.Languages; Verified=$iconResult.Verified;
+  Version=$versionResult
+} | ConvertTo-Json -Compress -Depth 5

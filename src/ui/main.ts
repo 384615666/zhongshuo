@@ -595,7 +595,8 @@ let dataOperationStarting = false;
       backgroundThrottling: false,
     },
   });
-  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0});
+  // Windows 任务栏/通知身份：AppId、正式图标与显示名保持一致（不沿用 Electron 默认描述）。
+  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchDisplayName:'众说'});
   const disposeTaskNotificationIpc = registerTaskNotificationIpc({
     ipcMain,
     assertTrustedSender,

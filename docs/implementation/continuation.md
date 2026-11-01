@@ -2,6 +2,14 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R151 重写随包 EXE 版本资源 + 0.1.2 发版
+
+用户要求在 0.1.1 任务栏图标修复后继续「重写 exe 并发版」：随包 `Zhongshuo.exe` 的 PE 版本资源仍继承 Electron（FileDescription/OriginalFilename/版本 44.4.5），任务栏与文件属性显示 Electron。
+
+- **实现**：`scripts/lib/brand-executable.ps1` 增加 `ZhongshuoNativeVersion`（Win32 UpdateResource 写 `RT_VERSION`，en-US+zh-CN 两套 Unicode 串表，写后回读 `FileVersionInfo` 校验）；`brand-executable.mjs` 新增 `windowsExecutableBrand(release, originalFilename)`，便携 `electron.exe` 与安装镜像 `Zhongshuo.exe` 均写入；`installed-desktop.json` 增加 `nativeVersion`；`main.ts` 的 `setAppDetails` 增加 `relaunchDisplayName='众说'`；版本 0.1.1→0.1.2。
+- **验证**：EXE 副本回读 ProductName/FileDescription=众说、FileVersion=0.1.2、OriginalFilename=Zhongshuo.exe、公司=众说开源项目，图标 7 帧回读通过；0.1.2 干净构建/隔离安装/发布结果待补。
+- 详见 [R151](../reviews/r151-exe-version-release-20261101.md)。
+
 ## 2026-11-01：R150 安装向导美化 + 0.1.1 发版
 
 用户要求：把 R149 的 logo/文案修复做成新安装包发版测试，并重做「很丑」的安装程序。

@@ -1,5 +1,7 @@
 # 众说正式工程 · 施工总账
 
+R151按用户要求重写随包EXE版本资源并出0.1.2：`brand-executable.ps1` 同一次写入七尺寸图标组与 `RT_VERSION`（ProductName/FileDescription/OriginalFilename/公司/版权/版本=众说，en-US+zh-CN两套Unicode串表，写后回读校验），便携electron.exe与安装镜像Zhongshuo.exe均应用，installed-desktop增加nativeVersion，setAppDetails增加relaunchDisplayName；AppId/目录/数据策略不变。版本0.1.2（数字0.1.2.65535）；干净构建、隔离安装与GitHub Release进行中。见[R151](../reviews/r151-exe-version-release-20261101.md)。
+
 R150按用户要求把R149品牌/文案修复做成0.1.1安装包发版，并重做安装向导视觉：品牌多档DPI侧栏图/页眉图（根logo生成）、恢复品牌欢迎页、去掉默认许可与纯文本说明页、产品向中文页文案、完成页打开众说/手册；安装逻辑与数据策略不变。0.1.1已发布：https://github.com/384615666/zhongshuo/releases/tag/v0.1.1 （latest；tag=源码提交a9caca4，安装镜像bld_0793defc369ebf44/clean/661文件，EXE 159,306,032字节SHA256 ba0c0747…，未签名）。payload logo/欢迎页/图标/手册/版本核对通过，隔离目录安装→卸载通过、用户旧版与数据未动；期间截图误触模板夹具安装已用beta.3重装恢复并核对。见[R150](../reviews/r150-installer-release-20261101.md)。
 
 R149按用户反馈补齐正式logo并清理前端开发说明文字：欢迎页旧「众」方块→正式logo原图（构建复制进渲染器资产），favicon/数据操作页/窗口图标解析/安装器卸载与手册快捷方式ICO全补；成员页「高级状态」诊断块、工作量统计口径、模板与房间名单长说明、AI设置副标题/来源/权限长说明/「保存后显示AI的可用状态」等全前端同类文案清理，保留错误/确认/破坏性后果/真实事实/诊断折叠区。新增R149 UI证据脚本与品牌/文案护栏测试；真实界面20/20场景HARD=SOFT=0、全量2911通过0失败（仅本机未跟踪R130缺夹具4项）、hifi类型通过、改动文件lint对HEAD新增0；便携包V79已出（含手册与沿用数据入口，未改用户数据/未安装发布）。见[R149](../reviews/r149-ui-branding-copy-20261101.md)。
