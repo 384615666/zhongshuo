@@ -177,14 +177,14 @@ begin
   if TaskDialogMsgBox('众说正在运行',
     '继续安装需要先关闭此安装目录中的众说。正在执行的任务会停止，请先保存需要的内容。' + #13#10 +
     '是否先尝试正常关闭并继续安装？如果仍无法关闭，会另行询问是否强制关闭。',
-    mbConfirmation, MB_YESNO, ['正常关闭并继续', '取消安装'], IDNO) <> IDYES then exit;
+    mbConfirmation, MB_YESNO, ['取消安装', '正常关闭并继续'], 0) <> IDNO then exit;
   Code := CheckInstallationProcesses('Graceful', False);
   if (Code = 0) and not InstalledFilesBusy() then begin Result := ''; exit; end;
   if Code <> 10 then exit;
   if TaskDialogMsgBox('众说仍未完全关闭',
     '是否强制关闭此安装目录中已核实归属的众说及其后台进程，再继续安装？' + #13#10 +
     '强制关闭可能中断正在执行的任务、丢失未保存的内容；任务可能需要下次打开后恢复。',
-    mbConfirmation, MB_YESNO, ['强制关闭并继续安装', '取消安装'], IDNO) <> IDYES then exit;
+    mbConfirmation, MB_YESNO, ['取消安装', '强制关闭并继续安装'], 0) <> IDNO then exit;
   Code := CheckInstallationProcesses('Force', True);
   if Code <> 0 then exit;
   { Re-enumerate after shutdown and recheck both executable locks before Inno

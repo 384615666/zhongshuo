@@ -38,4 +38,4 @@
 
 补齐历史读取兼容：复核原合成 P1 的旧 DONE 库，新增冲突检查原会令详情读取抛错；现在只在 completed 历史投影中捕获并展示原因，评审版本保持未知，旧状态/记录不改，执行检查不放宽。原合成库只读重验可正常读取，独立边界审查通过；兼容夹具补齐旧版已保存的正式交接缓存后验证读取零修改。最终 **6 文件、105 项通过**（`dist/r154-final-regressions3.json`），types/lint 再验通过。`fc282a9` 首次包未用于安装验收，兼容补修后重新冻结构建最终候选。
 
-`5a61230` 安装器实际 UI 首次进入运行检测后发现 `TaskDialogMsgBox: Invalid Buttons`。模板编译无法发现该运行时错误；原因是把 `MB_DEFBUTTON2` 混入 TaskDialog 按钮参数。依据本机 Inno 官方示例改用 `MB_YESNO`，默认取消通过独立 DefaultButton 参数 `IDNO` 指定。失败 run `ui-7c00649ba48e4164aa2a69a19fce7907` 已取消并完整恢复真实登记、四快捷方式和原程序/进程身份；不算通过。修补后再次冻结构建并重新实测三分支。
+`5a61230` 安装器实际 UI 首次进入运行检测后发现 `TaskDialogMsgBox: Invalid Buttons`。模板编译无法发现该运行时错误；原因是把 `MB_DEFBUTTON2` 混入 TaskDialog 按钮参数。改用受支持的 `MB_YESNO`；随后目视复核发现该 API 最后参数是 ShieldButton，不能当默认项使用。对照 [Inno 官方签名](https://jrsoftware.org/ishelp/topic_isxfunc_taskdialogmsgbox.htm) 最终设为 0，并将取消置第一项、继续置第二项（IDNO），默认焦点取消且无提权盾牌。两次旧 UI run 均取消并完整恢复真实登记、四快捷方式和原程序/进程身份，不算最终三分支通过。最终修补后重新编译并实测。
