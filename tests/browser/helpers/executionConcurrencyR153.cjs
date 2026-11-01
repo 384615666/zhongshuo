@@ -39,11 +39,11 @@ window.zs={command:async e=>{
  if(e.method==='app.appearance.get')return{ok:true,data:{showAvatars:true,avatars:{}}};
  return{ok:false,error:{code:'SYNTHETIC_ONLY',message:'没有连接真实服务'}};
 },onDisconnect(){},onReconnected(){}};
-initDraftPersistence('r153-execution-concurrency-synthetic');
 function Harness(){const route=useHashRoute();return <div className="hifi-root"><SettingsPage query={parseQuery(route)}/></div>;}
 if(!location.hash)location.hash='/settings?section=runtime';
 createRoot(document.getElementById('root')).render(<Harness/>);
 window.fixture={
+ boot:()=>initDraftPersistence('r153-execution-concurrency-synthetic'),
  server:()=>clone(server),mode:value=>{mode=value;},readError:()=>{readError=true;},holdRead:()=>{holdRead=true;},releaseSet:()=>releaseSet?.(),releaseRead:()=>releaseRead?.(),held:()=>({set:!!releaseSet,read:!!releaseRead}),
  navigate:section=>navigate('/settings?section='+section),environment:()=>{server.facts={revision:0,limits:{globalMaxInFlight:9,perProjectMaxInFlight:8,perProviderMaxInFlight:7},source:'environment'};persist();},
  input:(name,value)=>{const e=document.querySelector('input[name="'+name+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,value);e.dispatchEvent(new Event('input',{bubbles:true}));},
@@ -69,14 +69,18 @@ app.whenReady().then(async()=>{
  try{
   win=new BrowserWindow({show:false,width:1440,height:1080,webPreferences:{offscreen:true,backgroundThrottling:false,contextIsolation:true,nodeIntegration:false,sandbox:true}});
   const js=code=>win.webContents.executeJavaScript(code);
-  const reload=()=>new Promise(done=>{win.webContents.once('did-finish-load',done);win.webContents.reload();});
+  const reload=async()=>{await new Promise(done=>{win.webContents.once('did-finish-load',done);win.webContents.reload();});await js('fixture.boot()');};
   const until=async code=>{for(let i=0;i<200;i++){if(await js(code))return;await pause(20);}throw Error('timeout '+code);};
   const panel='[data-settings-row="execution-concurrency"]';
   const values=()=>js('Object.fromEntries([...document.querySelectorAll('+JSON.stringify(panel+' input[name]')+')].map(e=>[e.name,e.value]))');
   const inputs=async(g,p,c)=>{await js('fixture.input("globalMaxInFlight",'+JSON.stringify(String(g))+')');await js('fixture.input("perProjectMaxInFlight",'+JSON.stringify(String(p))+')');await js('fixture.input("perProviderMaxInFlight",'+JSON.stringify(String(c))+')');};
   const idle='!!document.querySelector("input[name=globalMaxInFlight]")&&!document.querySelector("input[name=globalMaxInFlight]").disabled';
   const setCount=()=>js('fixture.server().calls.filter(e=>e.method==="app.executionConcurrency.set").length');
-  await win.loadFile(path.join(__dirname,'index.html'));await until(idle);
+  await win.loadFile(path.join(__dirname,'index.html'));
+  await until('document.querySelector("[data-settings-row=execution-concurrency]")?.textContent.includes("正在确认数据位置")');
+  check('restored settings route mounts before root identity without inventing defaults',await js('!fixture.server().calls.some(e=>e.method==="app.executionConcurrency.get")&&document.querySelector("input[name=globalMaxInFlight]").disabled'));
+  await js('fixture.boot()');await until(idle);
+  check('late root identity automatically loads settings without a manual refresh',await js('document.querySelector("input[name=globalMaxInFlight]").value==="4"'));
   check('actual default 4/4/4',JSON.stringify(await values())===JSON.stringify({globalMaxInFlight:'4',perProjectMaxInFlight:'4',perProviderMaxInFlight:'4'}));
   await js('fixture.navigate("appearance")');await until('!document.querySelector("[data-settings-row=execution-concurrency]")');
   await js('fixture.environment();fixture.navigate("runtime")');await until(idle+'&&document.body.textContent.includes("来自启动设置")');

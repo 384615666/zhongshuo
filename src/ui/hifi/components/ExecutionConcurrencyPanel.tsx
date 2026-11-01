@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { z } from 'zod';
 import { executionConcurrencyLimitsSchema, type ExecutionConcurrencyLimits, type ExecutionConcurrencySettings } from '../../../contracts/executionConcurrency';
 import { userFacingSystemText } from '../../../contracts/userFacingText';
@@ -27,8 +27,15 @@ function storedRequest(key: string): Pending | null {
   return pendingSchema.parse(JSON.parse(raw));
 }
 
+const subscribeNamespace = (listener: () => void) => {
+  window.addEventListener('zs-member-writes', listener);
+  return () => window.removeEventListener('zs-member-writes', listener);
+};
+
 export function ExecutionConcurrencyPanel({ readOnly = false }: { readOnly?: boolean }) {
-  const namespace = readingNamespace();
+  // A restored settings route can mount before identity boot finishes. The
+  // existing root-ready event must trigger a new read even with no AI members.
+  const namespace = useSyncExternalStore(subscribeNamespace, readingNamespace, () => null);
   const storageKey = namespace ? namespace.replace('zs.hifi.reading.', 'zs.hifi.executionConcurrency.') : null;
   const [facts, setFacts] = useState<ExecutionConcurrencySettings | null>(null);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
