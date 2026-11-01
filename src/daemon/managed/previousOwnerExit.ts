@@ -10,12 +10,18 @@ import { join } from 'node:path';
 import { checkProcessLiveness, analyzeProcessTree } from '../processCheck.ts';
 import { getProcessTreeIdentities, type ProcessRegistryRow, type QueryFn, type RegistryDb } from '../processRegistry.ts';
 import type { TreeScan } from '../processCheck.ts';
+import { selectCompletedDaemonStop } from '../stopHistory.ts';
+
+type PreviousOwner =
+  | { basis: 'archived-lock'; pid: number; startedAt: number; archivedAt: number }
+  | { basis: 'completed-stop-record'; pid: number; startedAt: null; archivedAt: null;
+    stoppedAt: number; persistedAt: number; phase: 'closed' | 'forced-closed'; turnId: string };
 
 export interface PreviousOwnerExitEvidence {
   source: 'windows-job-kill-on-owner-exit';
   managedJobId: string;
   registryId: number;
-  owner: { pid: number; startedAt: number; archivedAt: number };
+  owner: PreviousOwner;
   currentOwner: { pid: number; startedAt: number };
   rootPid: number;
   observedAt: number;
@@ -23,6 +29,10 @@ export interface PreviousOwnerExitEvidence {
   killOnJobClose: true;
   handleInherited: false;
   releasable: true;
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function readOwner(path: string): { pid: number; startedAt: number } {
@@ -44,11 +54,12 @@ export function verifyPreviousManagedOwnerExit(
   const now = options.now ?? Date.now();
   if (reg.identity_source !== 'managed-job' || !['shared', 'per-turn'].includes(reg.process_model)
     || !isRealRuntimeKind(reg.adapter_kind) || reg.pid == null || reg.started_at_ms == null
+    || !positiveInteger(reg.pid) || !positiveInteger(reg.started_at_ms) || !positiveInteger(reg.registered_at)
     || reg.managed_job_id == null || reg.note !== `job=${reg.managed_job_id}`) fail('缺少完整的本机受管登记');
   const job = /^job-([0-9a-z]+)-(\d+)$/.exec(reg.managed_job_id!);
   const jobCreatedAt = job == null ? NaN : parseInt(job[1]!, 36);
   if (job == null || Number(job[2]) !== reg.pid || !Number.isSafeInteger(jobCreatedAt)
-    || reg.started_at_ms! > jobCreatedAt || jobCreatedAt > reg.registered_at) fail('job 稳定身份与根进程/登记时间不符');
+    || jobCreatedAt <= 0 || reg.started_at_ms! > jobCreatedAt || jobCreatedAt > reg.registered_at) fail('job 稳定身份与根进程/登记时间不符');
   const locks = join(options.appDataDir, 'locks');
   const current = readOwner(join(locks, 'daemon.lock.d', 'owner.json'));
   if (current.pid !== process.pid || current.pid !== options.instance.pid || current.startedAt !== options.instance.startedAt
@@ -61,9 +72,27 @@ export function verifyPreviousManagedOwnerExit(
     const owner = readOwner(join(locks, entry.name, 'owner.json'));
     if (owner.startedAt <= jobCreatedAt && reg.registered_at <= archivedAt) owners.push({ ...owner, archivedAt });
   }
-  if (owners.length !== 1) fail('没有唯一覆盖 job 创建及登记的旧锁代次');
-  const owner = owners[0]!;
-  if (owner.pid === current.pid || owner.startedAt > reg.started_at_ms! || owner.archivedAt > now) fail('旧锁代次边界或持有者不符');
+  if (owners.length > 1) fail('没有唯一覆盖 job 创建及登记的旧锁代次');
+  let owner: PreviousOwner;
+  let stopSnapshot: ReturnType<typeof selectCompletedDaemonStop>;
+  if (owners.length === 1) {
+    const archived = owners[0]!;
+    if (archived.pid === current.pid || archived.startedAt > reg.started_at_ms! || archived.archivedAt > now) fail('旧锁代次边界或持有者不符');
+    owner = { basis: 'archived-lock', ...archived };
+  } else {
+    // Normal shutdown removes its lock instead of archiving it. Only a locally
+    // persisted completed stop bound to this exact turn can replace that lock
+    // evidence; it does not supply an owner start time or prove OS exit itself.
+    stopSnapshot = selectCompletedDaemonStop(db, reg.turn_id);
+    if (stopSnapshot == null) return fail('缺少绑定目标 turn 的可信已完成停机记录');
+    const stop = stopSnapshot.record;
+    if (stop.pid === current.pid || stop.pid === reg.pid) fail('已完成停机记录未绑定旧持有者');
+    if (stop.at < reg.registered_at || stop.at >= current.startedAt
+      || stopSnapshot.persistedAt >= current.startedAt) fail('停机记录与登记/当前 daemon 的时间边界不符');
+    owner = { basis: 'completed-stop-record', pid: stop.pid, startedAt: null, archivedAt: null,
+      stoppedAt: stop.at, persistedAt: stopSnapshot.persistedAt,
+      phase: stop.phase, turnId: reg.turn_id };
+  }
   const query = options.query ?? checkProcessLiveness;
   // Reject live/reused/unknown identities. A user request is not exit evidence.
   if (query(owner.pid).state !== 'exited') fail('旧 daemon PID 仍存在、已复用或无法核实');
@@ -77,6 +106,10 @@ export function verifyPreviousManagedOwnerExit(
   // Re-read the lock after OS calls: a changed generation invalidates this proof.
   const after = readOwner(join(locks, 'daemon.lock.d', 'owner.json'));
   if (after.pid !== current.pid || after.startedAt !== current.startedAt) fail('核查期间单实例锁已变化');
+  if (stopSnapshot != null) {
+    const stopAfter = selectCompletedDaemonStop(db, reg.turn_id);
+    if (JSON.stringify(stopAfter) !== JSON.stringify(stopSnapshot)) fail('核查期间停机记录已变化');
+  }
   return {
     source: 'windows-job-kill-on-owner-exit', managedJobId: reg.managed_job_id!, registryId: reg.id,
     owner, currentOwner: current, rootPid: reg.pid!, observedAt: now,

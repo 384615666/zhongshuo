@@ -19,6 +19,7 @@ import { readExecutionBlocker } from './taskDetails.ts';
 import { readDmProgress, readThreadProgress } from './threadMembers.ts';
 import {readFailedTaskRetry} from './taskRetry.ts';
 import {readTaskClosure} from './taskClosure.ts';
+import {selectCompletedDaemonStop} from './stopHistory.ts';
 
 interface TaskRow {
   id: string;
@@ -139,6 +140,7 @@ const FAILURE_EVENT_KINDS = [
   'task.deliberationPrepareFailed',
   'task.memberDisabledBlocked',
   'coordination.blocked',
+  'coordination.dispatchBlocked',
   'run.deliberationBlocked',
   'run.reconcileRequired',
   'run.failed',
@@ -186,13 +188,13 @@ function refs(raw: string): string[] {
   }
 }
 
-function readPayloadMessage(payload: JsonObject): string | null {
+function readPayloadMessage(payload: JsonObject, includeStatus = true): string | null {
   return boundedText(payload.message)
     ?? boundedText(payload.question)
     ?? boundedText(payload.reason)
     ?? boundedText(payload.note)
     ?? boundedText(payload.resultSummary)
-    ?? boundedText(payload.status);
+    ?? (includeStatus ? boundedText(payload.status) : null);
 }
 
 function activityFromProgress(progress: ThreadVisibleProgress | undefined) {
@@ -234,7 +236,21 @@ function failureReasonFromEvent(event: EventRow | undefined): string | null {
   const payload = parseObject(event.payload_json);
   if (event.kind === 'task.statusChanged' && payload.status !== 'BLOCKED') return null;
   if (event.kind === 'turn.statusChanged' && payload.status !== 'FAILED') return null;
-  return readPayloadMessage(payload);
+  return readPayloadMessage(payload, false);
+}
+
+/** Explanation only: a completed daemon stop never releases a turn's protection. */
+function shutdownInterruption(db: ZhongshuoDatabase, turn: TurnRow): { seq: number } | null {
+  try {
+    const stop = selectCompletedDaemonStop(db, turn.id);
+    if (stop == null) return null;
+    return db.prepare(`SELECT seq FROM domain_events WHERE task_id=? AND run_id=? AND turn_id=?
+      AND kind='turn.statusChanged' AND json_extract(payload_json,'$.status')='UNKNOWN'
+      AND json_extract(payload_json,'$.reason')='provider-interrupted-without-terminal-proof'
+      AND created_at<=? ORDER BY seq DESC LIMIT 1`).get(turn.task_id, turn.run_id, turn.id, stop.record.at) as { seq: number } | undefined ?? null;
+  } catch {
+    return null; // Conflicting or invalid history cannot become a shutdown claim.
+  }
 }
 
 function businessEventLabel(event: EventRow): {
@@ -887,21 +903,52 @@ export function readTaskExecutionStatus(
     b.at - a.at || (b.sourceEventSeq ?? -1) - (a.sourceEventSeq ?? -1));
   const lastBusinessActivity = activityCandidates[0] ?? null;
 
+  // Failure explanations follow the selected task's latest run and that
+  // coordination's children. Later events from older plans are still history.
+  const failureScopes: Array<{ taskId: string; runId: string | null }> = [{ taskId: task.id, runId: selectedLatestRun?.id ?? null }];
+  if (selectedLatestRun != null) {
+    const coordination = db.prepare(`SELECT c.run_id FROM coordination_runs c WHERE c.task_id=?
+      AND (c.run_id=? OR c.integration_run_id=? OR EXISTS (SELECT 1 FROM coordination_integration_attempts i
+        WHERE i.coordination_run_id=c.run_id AND i.execution_run_id=?)) LIMIT 1`)
+      .get(task.id, selectedLatestRun.id, selectedLatestRun.id, selectedLatestRun.id) as { run_id: string } | undefined;
+    if (coordination != null) {
+      const children = db.prepare(`SELECT t.id taskId,
+        (SELECT r.id FROM workflow_runs r WHERE r.task_id=t.id ORDER BY r.rowid DESC LIMIT 1) runId
+        FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id
+        WHERE s.run_id=? AND t.project_id=? AND t.conversation_id=? AND t.status NOT IN ('DONE','CANCELLED')`)
+        .all(coordination.run_id, task.project_id, task.conversation_id) as Array<{ taskId: string; runId: string | null }>;
+      failureScopes.push(...children);
+    }
+  }
+  const failureConditions = failureScopes.map(() => '(e.task_id=? AND e.run_id IS ?)');
+  const failureParams: Array<string | number | null> = failureScopes.flatMap(scope => [scope.taskId, scope.runId]);
+  if (selectedLatestRun != null && task.status === 'BLOCKED') {
+    // A new dispatch can fail before it creates a run. Only accept an unbound
+    // event after evidence from this latest run, never an older attempt's event.
+    const lastRunEvent = db.prepare('SELECT MAX(seq) seq FROM domain_events WHERE task_id=? AND run_id=?')
+      .get(task.id, selectedLatestRun.id) as { seq: number | null };
+    if (lastRunEvent.seq != null) {
+      failureConditions.push('(e.task_id=? AND e.run_id IS NULL AND e.seq>?)');
+      failureParams.push(task.id, lastRunEvent.seq);
+    }
+  }
   const failureEvent = db.prepare(
     `SELECT e.seq,e.kind,e.created_at,e.task_id,e.run_id,e.turn_id,
             COALESCE(json_extract(e.payload_json,'$.memberId'),a.member_id) member_id,
             NULL AS message_body_json,e.payload_json
      FROM domain_events e LEFT JOIN agent_turns a ON a.id=e.turn_id
-     WHERE e.task_id IN (${marks})
+     WHERE e.project_id=? AND (e.conversation_id=? OR e.conversation_id IS NULL)
+       AND (${failureConditions.join(' OR ')})
        AND e.kind IN (${FAILURE_EVENT_KINDS.map(() => '?').join(',')})
      ORDER BY e.seq DESC LIMIT 40`,
-  ).all(...scopeIds, ...FAILURE_EVENT_KINDS) as EventRow[];
+  ).all(task.project_id, task.conversation_id, ...failureParams, ...FAILURE_EVENT_KINDS) as EventRow[];
   const latestFailures=selectedLatestRun==null?[]:failureEvent.filter(event=>event.run_id===selectedLatestRun.id);
-  const latestFailure=latestFailures.find(event=>failureReasonFromEvent(event)!=null);
+  const latestFailure=failureEvent.find(event=>failureReasonFromEvent(event)!=null);
   const genericNoAnalysis=latestFailure?.kind==='run.deliberationBlocked'
     && /未收到有效分析|全员无有效输入/.test(failureReasonFromEvent(latestFailure)??'');
   const durableFailure=(genericNoAnalysis?latestFailures.find(event=>['turn.startupFailed','turn.startupCancelled','run.stepFailed','turn.statusChanged'].includes(event.kind)&&failureReasonFromEvent(event)!=null):undefined)
-    ??latestFailure??failureEvent.find(event=>failureReasonFromEvent(event)!=null);
+    ??(latestFailure?.kind==='coordination.blocked'?failureEvent.find(event=>event.task_id!==task.id&&failureReasonFromEvent(event)!=null):undefined)
+    ??latestFailure;
   const notStarted=selectedLatestRun==null?undefined:db.prepare(`SELECT count(*) total,
     sum(CASE WHEN a.status='CANCELLED' AND a.exec_started_at IS NULL AND EXISTS(SELECT 1 FROM domain_events e
       WHERE e.turn_id=a.id AND e.run_id=a.run_id AND e.kind='turn.startupCancelled'
@@ -942,6 +989,7 @@ export function readTaskExecutionStatus(
 
   let phase: TaskExecutionPhase;
   let projectionReason: TaskExecutionReason;
+  let shutdownContext: { turn: TurnRow; seq: number } | null = null;
   const latestStatus = selectedLatestRun?.status ?? null;
   const blockerReason = blocker?.reason ?? null;
   const activeUserWait = waitingForUser != null
@@ -959,13 +1007,18 @@ export function readTaskExecutionStatus(
   } else if (unknownTurns.length > 0) {
     phase = 'UNKNOWN';
     const retained = unknownTurns.find(turn => turn.protection_state === 'retained');
+    const turn = retained ?? unknownTurns[0]!;
+    const shutdown = shutdownInterruption(db, turn);
+    if (shutdown != null) shutdownContext = { turn, seq: shutdown.seq };
     projectionReason = reason(
       retained == null ? 'UNKNOWN_TURN' : 'PROTECTION_RETAINED',
-      retained?.protection_state === 'retained'
+      shutdown != null
+        ? `应用关闭时本轮中断，未收到完整结果；请先检查上次执行已结束，再继续处理。${retained != null ? '执行保护仍保留。' : ''}`
+        : retained?.protection_state === 'retained'
         ? '执行保护仍保留；在程序证据解除前，结果不能视为已结束。'
         : '执行结果不确定，等待正式核对与保护解除。',
       'recovery',
-      { taskId: unknownTurns[0]!.task_id, runId: unknownTurns[0]!.run_id, turnId: unknownTurns[0]!.id },
+      { taskId: turn.task_id, runId: turn.run_id, turnId: turn.id, eventSeq: shutdown?.seq },
     );
   } else if (activeUserWait) {
     phase = 'WAITING_FOR_USER';
@@ -1110,7 +1163,7 @@ export function readTaskExecutionStatus(
       durableFailure == null ? 'run' : 'run',
       {
         taskId: durableFailure?.task_id ?? task.id,
-        runId: durableFailure?.run_id ?? selectedLatestRun?.id,
+        runId: durableFailure == null ? selectedLatestRun?.id : durableFailure.run_id,
         turnId: durableFailure?.turn_id,
         eventSeq: durableFailure?.seq,
       },
@@ -1141,12 +1194,13 @@ export function readTaskExecutionStatus(
     };
   }
   if (phase === 'UNKNOWN' && recovery?.code === 'RECONCILE_REQUIRED') {
+    const sameShutdownTurn = shutdownContext != null && recovery.fact.turnId === shutdownContext.turn.id;
     projectionReason = {
       ...projectionReason,
       code: 'RECOVERY_REQUIRED',
-      message: recovery.message,
+      message: sameShutdownTurn ? projectionReason.message : recovery.message,
       source: 'recovery',
-      taskId: recovery.fact.turnId == null ? task.id : task.id,
+      taskId: sameShutdownTurn ? shutdownContext!.turn.task_id : task.id,
       turnId: recovery.fact.turnId ?? projectionReason.turnId,
       eventSeq: projectionReason.eventSeq,
     };

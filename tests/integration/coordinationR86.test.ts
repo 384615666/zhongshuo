@@ -752,7 +752,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
           const review=f.db.prepare("SELECT child_task_id FROM coordination_steps WHERE step_key='review'").get() as {child_task_id:string};
           expect(f.db.prepare('SELECT count(*) n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?').get(review.child_task_id)).toEqual({n:0});
           const blocked=f.db.prepare("SELECT payload_json FROM domain_events WHERE kind='coordination.dispatchBlocked' ORDER BY rowid DESC LIMIT 1").get() as {payload_json:string};
-          expect(blocked.payload_json).toContain('文件字节已变化');
+          expect(blocked.payload_json).toContain('没有显式依赖交接');
           expect(coordination.error_message).toContain('review');
           expect(f.adapter.startTurnLog).toHaveLength(3); // planner + write + independent revise; review never starts
         }else{

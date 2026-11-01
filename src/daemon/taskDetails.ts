@@ -336,7 +336,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
         // Read the member's durable failure separately from the bounded activity
         // page: a busy peer's tool events must not hide a seat that never started.
         const e=db.prepare(`SELECT kind,created_at,payload_json FROM domain_events
-          WHERE run_id=? AND task_id=? AND kind='run.stepFailed' AND json_extract(payload_json,'$.memberId')=?
+          WHERE run_id=? AND task_id=? AND kind IN ('run.stepFailed','coordination.dispatchBlocked') AND json_extract(payload_json,'$.memberId')=?
           ORDER BY seq DESC LIMIT 1`).get(r.id,runTaskId,p.member_id) as {kind:string;created_at:number;payload_json:string}|undefined;
         if(!e)return {};
         const payload=parse(e.payload_json) as {message?:unknown;code?:unknown}|null;
@@ -396,12 +396,24 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     if((db.prepare('SELECT status FROM agent_turns WHERE run_id=? ORDER BY rowid DESC LIMIT 1').get(runId) as {status:string}|undefined)?.status==='SUCCEEDED')return null;
     const row = db.prepare(`SELECT seq,kind,created_at,run_id,turn_id,payload_json FROM domain_events
       WHERE run_id=? AND task_id=? AND project_id=? AND (conversation_id=? OR conversation_id IS NULL)
-        AND (kind IN ('turn.failed','run.failed','turn.outputInvalid') OR kind='turn.statusChanged' AND json_extract(payload_json,'$.status')='FAILED')
-      ORDER BY CASE kind WHEN 'turn.failed' THEN 0 WHEN 'run.failed' THEN 1 WHEN 'turn.outputInvalid' THEN 2 ELSE 3 END,seq DESC
+        AND (kind IN ('turn.failed','run.failed','turn.outputInvalid','coordination.dispatchBlocked') OR kind='turn.statusChanged' AND json_extract(payload_json,'$.status')='FAILED')
+      ORDER BY CASE kind WHEN 'coordination.dispatchBlocked' THEN 0 WHEN 'turn.failed' THEN 0 WHEN 'run.failed' THEN 1 WHEN 'turn.outputInvalid' THEN 2 ELSE 3 END,seq DESC
       LIMIT 1`).get(runId, runTaskId, projectId, conversationId) as EventRow | undefined;
     const event = row == null ? null : eventOf(row);
-    return event == null ? null : { eventKind: event.kind, at: event.at, message: event.summary || null, code: event.code ?? null };
+    return event == null ? null : { eventKind: event.kind, at: event.at, message: event.summary && event.summary !== event.status ? event.summary : null, code: event.code ?? null };
   };
+  const memberFailures: NonNullable<TaskDetailsResult['memberFailures']> = coordination == null ? [] : coordination.steps.flatMap(step => {
+    if (step.status !== 'BLOCKED' || db.prepare('SELECT 1 FROM workflow_runs WHERE task_id=? LIMIT 1').get(step.taskId)) return [];
+    const row = db.prepare(`SELECT seq,kind,created_at,run_id,turn_id,payload_json FROM domain_events
+      WHERE task_id=? AND project_id=? AND (conversation_id=? OR conversation_id IS NULL)
+        AND run_id IS NULL AND kind='coordination.dispatchBlocked' ORDER BY seq DESC LIMIT 1`)
+      .get(step.taskId, projectId, conversationId) as EventRow | undefined;
+    if (row == null) return [];
+    const event = eventOf(row);
+    return [{ coordinationRunId: coordination.runId, coordinationStepKey: step.key, taskId: step.taskId,
+      memberId: step.memberId, memberName: step.displayName, runId: null, notStarted: true,
+      failure: { eventKind: event.kind, at: event.at, message: event.summary || null, code: event.code ?? null, eventSeq: event.seq } }];
+  });
   const memberRuns: TaskDetailMemberRun[] = memberRunRows.items.map((r) => {
     const run = loadRun(r, r.task_id);
     const lastActivityAt = run.events.reduce<number | null>((latest, event) => latest == null || event.at > latest ? event.at : latest, null);
@@ -442,7 +454,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     coordination,
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),
     latestRunId, currentRunId, selectedRunId, runs,
-    ...(coordination == null ? {} : { memberRuns, memberRunsTruncated: memberRunRows.truncated }),
+    ...(coordination == null ? {} : { memberRuns, memberRunsTruncated: memberRunRows.truncated, ...(memberFailures.length ? { memberFailures } : {}) }),
     events,
     deliveries: deliveryRows.items.map((d) => ({ id: d.id, revision: d.revision, manifestHash: d.manifest_hash,
       runId: d.run_id, reviewStatus: d.review_status, reviewedAt: d.reviewed_at, reviewNote: d.review_note,

@@ -24,6 +24,7 @@ import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
 import { registerTurnProcess, recordProcessTreeObservation } from '../../src/daemon/processRegistry.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from '../../src/daemon/processCheck.ts';
+import { persistDaemonStopRecord } from '../../src/daemon/stopHistory.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-probe7-'));
 afterAll(() => {
@@ -294,6 +295,179 @@ describe.skipIf(process.platform !== 'win32')('R103 previous managed owner recov
     });
     await h.cmd('recovery.reconcile', { turnId: t.turnId, verdict: 'executed', note: '请求已派发，结束上次执行，不重放' });
     return { ...h, ...t, dir, archive, current, instance, owner, rootPid, jobId };
+  }
+
+  function persistCompletedStop(h: Awaited<ReturnType<typeof previousOwnerFixture>>, overrides: Record<string, unknown> = {}, removeArchive = true) {
+    if (removeArchive) rmSync(h.archive, { recursive: true });
+    const record = { pid: h.owner.pid, at: h.instance.startedAt - 1000, phase: 'closed', stopRequestsSentTo: [h.turnId], ...overrides };
+    h.db.prepare("INSERT INTO daemon_state(key,value,updated_at) VALUES('daemon:stop:last',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+      .run(JSON.stringify(record), h.instance.startedAt - 999);
+    return record;
+  }
+
+  for (const phase of ['closed', 'forced-closed'] as const) {
+    it(`R154 completed ${phase} stop replaces absent archive only on explicit release, preserving UNKNOWN and accounting`, async () => {
+      const checkedPids: number[] = [];
+      const tree = vi.fn<NonNullable<DaemonCommandDeps['processTree']>>(() => ({ state: 'checked', survivors: [], verifiedHistoricalPids: [] }));
+      const h = await previousOwnerFixture({ query: pid => { checkedPids.push(pid); return { state: 'exited', pid }; }, tree });
+      try {
+        const stop = persistCompletedStop(h, { phase });
+        recordProcessTreeObservation(h.db, h.turnId, h.rootPid, [{ pid: 777003, ppid: h.rootPid, startedAt: h.instance.startedAt - 15_000 }]);
+        const before = h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId);
+        const outbox = h.db.prepare('SELECT * FROM outbox ORDER BY id').all();
+        await h.cmd('recovery.reconcile', { turnId: h.turnId, verdict: 'executed', note: '仍不能自动解除保护' });
+        expect(h.db.prepare('SELECT status FROM workspace_leases WHERE lock_domain=?').get(h.leaseDomain)).toEqual({ status: 'active' });
+        expect(h.releasedTurns).toEqual([]);
+        await expect(h.cmd('recovery.releaseProtection', { turnId: h.turnId, note: '普通释放' })).rejects.toThrow('未持有');
+        checkedPids.length = 0;
+        tree.mockClear();
+        const result = await h.cmd<{ reason: string; releasedLeases: string[] }>('recovery.releaseProtection', { turnId: h.turnId, note: '核查并结束上次执行', endPreviousExecution: true });
+        expect(result).toMatchObject({ reason: 'protection-released-previous-managed-owner-exit', releasedLeases: [h.leaseDomain] });
+        expect(checkedPids).toEqual(expect.arrayContaining([h.owner.pid, h.rootPid, 777003]));
+        expect(tree).toHaveBeenCalledWith(h.rootPid, expect.arrayContaining([{ pid: 777003, startedAt: h.instance.startedAt - 15_000 }]));
+        expect(h.db.prepare('SELECT status,budget_mark,protection_state FROM agent_turns WHERE id=?').get(h.turnId)).toEqual({ status: 'UNKNOWN', budget_mark: 'settled', protection_state: 'released' });
+        expect(h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId)).toEqual(before);
+        expect(h.db.prepare('SELECT * FROM outbox ORDER BY id').all()).toEqual(outbox);
+        const audit = h.db.prepare("SELECT payload_json FROM domain_events WHERE turn_id=? AND kind='recovery.protectionReleased'").get(h.turnId) as { payload_json: string };
+        expect(JSON.parse(audit.payload_json).previousOwnerEvidence).toMatchObject({
+          source: 'windows-job-kill-on-owner-exit', managedJobId: h.jobId, currentOwner: h.instance,
+          owner: { basis: 'completed-stop-record', pid: h.owner.pid, startedAt: null, archivedAt: null,
+            stoppedAt: stop.at, persistedAt: h.instance.startedAt - 999, phase, turnId: h.turnId },
+          killOnJobClose: true, handleInherited: false,
+        });
+        expect(h.releasedTurns).toEqual([h.turnId]);
+        expect(await h.cmd('recovery.releaseProtection', { turnId: h.turnId, note: '重复检查', endPreviousExecution: true })).toMatchObject({ stateChanged: false });
+        expect(h.releasedTurns).toEqual([h.turnId]);
+      } finally { h.db.close(); }
+    });
+  }
+
+  it('R154 existing archive remains authoritative even when stop record is unusable', async () => {
+    const h = await previousOwnerFixture();
+    try {
+      persistCompletedStop(h, { phase: 'incomplete', pid: h.instance.pid, stopRequestsSentTo: [] }, false);
+      await h.cmd('recovery.releaseProtection', { turnId: h.turnId, note: '沿用归档证明', endPreviousExecution: true });
+      const audit = h.db.prepare("SELECT payload_json FROM domain_events WHERE turn_id=? AND kind='recovery.protectionReleased'").get(h.turnId) as { payload_json: string };
+      expect(JSON.parse(audit.payload_json).previousOwnerEvidence.owner).toMatchObject({ basis: 'archived-lock', ...h.owner });
+    } finally { h.db.close(); }
+  });
+
+  it('R154 history survives unrelated later stops and releases only after the complete owner/job proof', async () => {
+    const h = await previousOwnerFixture();
+    try {
+      const old = persistCompletedStop(h);
+      persistDaemonStopRecord(h.db, old, h.instance.startedAt - 999);
+      persistDaemonStopRecord(h.db, { pid: 777009, at: h.instance.startedAt - 500, phase: 'closed', stopRequestsSentTo: [] }, h.instance.startedAt - 499);
+      expect(h.releasedTurns).toEqual([]);
+      await h.cmd('recovery.releaseProtection', { turnId: h.turnId, note: '按持久历史核查', endPreviousExecution: true });
+      expect(h.releasedTurns).toEqual([h.turnId]);
+      expect(h.db.prepare('SELECT status,protection_state FROM agent_turns WHERE id=?').get(h.turnId)).toEqual({ status: 'UNKNOWN', protection_state: 'released' });
+    } finally { h.db.close(); }
+  });
+
+  for (const fault of ['different-owner', 'different-stop', 'wrong-key', 'malformed-history', 'owner-alive', 'tree-failed', 'history-changed', 'conflict-added'] as const) {
+    it(`R154 historical stop refuses ${fault} without changing UNKNOWN or protection`, async () => {
+      let duringTree = () => {};
+      const h = await previousOwnerFixture({
+        query: pid => fault === 'owner-alive' && pid === 777001
+          ? { state: 'alive', identity: { pid, startedAt: Date.now() } } : { state: 'exited', pid },
+        tree: () => { duringTree(); return fault === 'tree-failed' ? { state: 'failed', error: 'unavailable' } : { state: 'checked', survivors: [], verifiedHistoricalPids: [] }; },
+      });
+      try {
+        const stop = persistCompletedStop(h);
+        persistDaemonStopRecord(h.db, { pid: 777009, at: h.instance.startedAt - 500, phase: 'closed', stopRequestsSentTo: [] }, h.instance.startedAt - 499);
+        const key = `daemon:stop:history:${stop.pid}:${stop.at}`;
+        const addConflict = () => {
+          const conflict = { ...stop, pid: fault === 'different-stop' ? stop.pid : 777010, at: stop.at + 1 };
+          h.db.prepare('INSERT INTO daemon_state(key,value,updated_at) VALUES(?,?,?)').run(`daemon:stop:history:${conflict.pid}:${conflict.at}`, JSON.stringify(conflict), h.instance.startedAt - 998);
+        };
+        if (fault === 'different-owner' || fault === 'different-stop') addConflict();
+        if (fault === 'wrong-key') h.db.prepare('UPDATE daemon_state SET key=? WHERE key=?').run('daemon:stop:history:999999:1', key);
+        if (fault === 'malformed-history') h.db.prepare("UPDATE daemon_state SET value='{}' WHERE key=?").run(key);
+        if (fault === 'history-changed') duringTree = () => { h.db.prepare('DELETE FROM daemon_state WHERE key=?').run(key); };
+        if (fault === 'conflict-added') duringTree = addConflict;
+        const budget = h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId);
+        const outbox = h.db.prepare('SELECT * FROM outbox ORDER BY id').all();
+        expect((await h.raw('recovery.releaseProtection', { turnId: h.turnId, note: '历史证据核查', endPreviousExecution: true })).ok).toBe(false);
+        expect(h.db.prepare('SELECT status,protection_state FROM agent_turns WHERE id=?').get(h.turnId)).toEqual({ status: 'UNKNOWN', protection_state: 'retained' });
+        expect(h.db.prepare('SELECT status FROM workspace_leases WHERE lock_domain=?').get(h.leaseDomain)).toEqual({ status: 'active' });
+        expect(h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId)).toEqual(budget);
+        expect(h.db.prepare('SELECT * FROM outbox ORDER BY id').all()).toEqual(outbox);
+        expect(h.releasedTurns).toEqual([]);
+      } finally { h.db.close(); }
+    });
+  }
+
+  for (const fault of [
+    'missing-stop', 'malformed-stop', 'null-stop', 'wrong-turn', 'turn-prefix', 'missing-turns', 'invalid-turns',
+    'incomplete', 'forced-incomplete', 'ack-only', 'missing-pid', 'invalid-pid', 'current-owner-pid', 'root-owner-pid',
+    'before-registration', 'equal-current-start', 'after-current-start', 'future-stop', 'missing-at',
+    'persisted-before-stop', 'persisted-by-current', 'old-owner-alive', 'old-owner-reused', 'old-owner-unknown',
+    'root-alive', 'root-unknown', 'child-alive', 'tree-failed', 'tree-live', 'lock-changed', 'stop-changed',
+    'missing-job', 'wrong-job-note', 'current-not-newer', 'ambiguous-archive', 'malformed-archive', 'invalid-archive',
+  ] as const) {
+    it(`R154 completed stop refuses ${fault}; no release, replay, refund or success fabrication`, async () => {
+      let duringTree = () => {};
+      const h = await previousOwnerFixture({
+        query: pid => {
+          if (pid === 777001 && (fault === 'old-owner-alive' || fault === 'old-owner-reused')) return { state: 'alive', identity: { pid, startedAt: fault === 'old-owner-reused' ? Date.now() : Date.now() - 50_000 } };
+          if ((pid === 777001 && fault === 'old-owner-unknown') || (pid === 777002 && fault === 'root-unknown')) return { state: 'unknown', pid, error: 'unavailable' };
+          if ((pid === 777002 && fault === 'root-alive') || (pid === 777003 && fault === 'child-alive')) return { state: 'alive', identity: { pid, startedAt: Date.now() - 30_000 } };
+          return { state: 'exited', pid };
+        },
+        tree: () => {
+          duringTree();
+          if (fault === 'tree-failed') return { state: 'failed', error: 'tree unavailable' };
+          if (fault === 'tree-live') return { state: 'live', survivors: [{ pid: 777004, ppid: 777002, startedAt: null }], via: 'live-tree' };
+          return { state: 'checked', survivors: [], verifiedHistoricalPids: [] };
+        },
+      });
+      try {
+        const overrides: Record<string, unknown> = {};
+        if (fault === 'wrong-turn') overrides.stopRequestsSentTo = ['another-turn'];
+        if (fault === 'turn-prefix') overrides.stopRequestsSentTo = [h.turnId + '-other'];
+        if (fault === 'missing-turns') overrides.stopRequestsSentTo = undefined;
+        if (fault === 'invalid-turns') overrides.stopRequestsSentTo = h.turnId;
+        if (fault === 'incomplete' || fault === 'forced-incomplete') overrides.phase = fault;
+        if (fault === 'ack-only') overrides.phase = 'accepted';
+        if (fault === 'missing-pid') overrides.pid = undefined;
+        if (fault === 'invalid-pid') overrides.pid = '777001';
+        if (fault === 'current-owner-pid') overrides.pid = h.instance.pid;
+        if (fault === 'root-owner-pid') overrides.pid = h.rootPid;
+        if (fault === 'before-registration') overrides.at = h.instance.startedAt - 10_001;
+        if (fault === 'equal-current-start') overrides.at = h.instance.startedAt;
+        if (fault === 'after-current-start') overrides.at = h.instance.startedAt + 1;
+        if (fault === 'future-stop') overrides.at = Date.now() + 60_000;
+        if (fault === 'missing-at') overrides.at = undefined;
+        persistCompletedStop(h, overrides, !['ambiguous-archive', 'malformed-archive', 'invalid-archive'].includes(fault));
+        if (fault === 'missing-stop') h.db.prepare("DELETE FROM daemon_state WHERE key='daemon:stop:last'").run();
+        if (fault === 'malformed-stop' || fault === 'null-stop') h.db.prepare("UPDATE daemon_state SET value=? WHERE key='daemon:stop:last'").run(fault === 'malformed-stop' ? '{' : 'null');
+        if (fault === 'persisted-before-stop') h.db.prepare("UPDATE daemon_state SET updated_at=? WHERE key='daemon:stop:last'").run(h.instance.startedAt - 1001);
+        if (fault === 'persisted-by-current') h.db.prepare("UPDATE daemon_state SET updated_at=? WHERE key='daemon:stop:last'").run(h.instance.startedAt);
+        if (fault === 'child-alive') recordProcessTreeObservation(h.db, h.turnId, h.rootPid, [{ pid: 777003, ppid: h.rootPid, startedAt: h.instance.startedAt - 15_000 }]);
+        if (fault === 'missing-job') h.db.prepare('UPDATE runtime_process_registry SET managed_job_id=NULL WHERE turn_id=?').run(h.turnId);
+        if (fault === 'wrong-job-note') h.db.prepare("UPDATE runtime_process_registry SET note='ack' WHERE turn_id=?").run(h.turnId);
+        if (fault === 'current-not-newer') h.db.prepare('UPDATE runtime_process_registry SET registered_at=? WHERE turn_id=?').run(h.instance.startedAt, h.turnId);
+        if (fault === 'lock-changed') duringTree = () => writeFileSync(join(h.current, 'owner.json'), JSON.stringify({ ...h.instance, startedAt: h.instance.startedAt + 1 }));
+        if (fault === 'stop-changed') duringTree = () => { h.db.prepare("UPDATE daemon_state SET value='{}' WHERE key='daemon:stop:last'").run(); };
+        if (fault === 'ambiguous-archive') {
+          const second = join(h.dir, 'locks', `daemon.lock.d.stale-${h.instance.startedAt + 1}-${h.instance.pid}`);
+          mkdirSync(second); writeFileSync(join(second, 'owner.json'), JSON.stringify(h.owner));
+        }
+        if (fault === 'malformed-archive') writeFileSync(join(h.archive, 'owner.json'), '{}');
+        if (fault === 'invalid-archive') writeFileSync(join(h.archive, 'owner.json'), JSON.stringify({ ...h.owner, pid: h.instance.pid }));
+        const budget = h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId);
+        const outbox = h.db.prepare('SELECT * FROM outbox ORDER BY id').all();
+        const result = await h.raw('recovery.releaseProtection', { turnId: h.turnId, note: '结束上次执行检查', endPreviousExecution: true });
+        expect(result.ok).toBe(false);
+        expect(h.db.prepare('SELECT status FROM workspace_leases WHERE lock_domain=?').get(h.leaseDomain)).toEqual({ status: 'active' });
+        expect(h.db.prepare('SELECT status,budget_mark,protection_state FROM agent_turns WHERE id=?').get(h.turnId)).toEqual({ status: 'UNKNOWN', budget_mark: 'settled', protection_state: 'retained' });
+        expect(h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(h.runId)).toEqual(budget);
+        expect(h.db.prepare('SELECT * FROM outbox ORDER BY id').all()).toEqual(outbox);
+        expect(h.releasedTurns).toEqual([]);
+        expect(h.db.prepare("SELECT count(*) n FROM domain_events WHERE kind='recovery.protectionReleased' AND turn_id=?").get(h.turnId)).toEqual({ n: 0 });
+      } finally { h.db.close(); }
+    });
   }
 
   it('formal release frees the actual live worker admission and starts a blocked new request exactly once', async () => {

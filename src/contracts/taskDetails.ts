@@ -135,6 +135,12 @@ export interface TaskDetailsResult {
   runs: TaskDetailRun[];
   /** Present only for a coordination parent; ordinary runs keep their original projection. */
   memberRuns?: TaskDetailMemberRun[];
+  /** A member dispatch can fail before a workflow run exists. Never invent one. */
+  memberFailures?: Array<{
+    coordinationRunId: string; coordinationStepKey: string; taskId: string;
+    memberId: string | null; memberName: string | null; runId: null; notStarted: true;
+    failure: TaskDetailFailure & { eventSeq: number };
+  }>;
   memberRunsTruncated?: boolean;
   events: TaskDetailEvent[];
   deliveries: Array<{ id: string; revision: number; manifestHash: string; runId: string | null; reviewStatus: string; reviewedAt: number | null; reviewNote: string | null; artifactRefs: string[]; changeSetRefs: string[]; verificationRefs: string[]; locate: string }>;

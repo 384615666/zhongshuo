@@ -14,7 +14,8 @@ import { snapshotConversationWriteAccess } from './projectWriteAccess.ts';
 import { resolveMemberRuntime } from './memberRuntime.ts';
 import { memberExecutableStatus } from './memberManagement.ts';
 import {readThreadMembers} from './threadMembers.ts';
-import {changeSetFilesForDelivery} from './clarificationWork.ts';
+import {correctedSharedHandoffFiles,deliveryFilesForHandoff} from './handoffManifest.ts';
+import {comparisonKey} from './directoryIdentity.ts';
 
 type ScopeMember = { memberId: string; displayName: string; description: string | null; writeScope: string | null; unavailableReason?: string };
 type Parent = { id: string; project_id: string; conversation_id: string; room_id: string; conversation_thread_id: string; root_message_id: string; owner_member_id: string; title: string; stop_generation: number; status: string; source_connection_id:string|null };
@@ -221,15 +222,18 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const request=requestRow('q.dispatch_key',dispatchKey);
   const child = childCoordination(db,taskId);
   if (child) {
+    let versionsNote='';
+    try{versionsNote=`\n以下是已有正式交付及明确依赖来源的工作区版本；历史交接保留，旧评审不代表已复核后继修订。\nworkspaceVersions=${JSON.stringify(workspaceVersionsForChild(db,child.run_id,child.step_key))}`;}
+    catch{/* assertCoordinationDispatch reports invalid provenance before launch. */}
     if(child.handoff_json==null&&/^r\d+$/.test(child.step_key))child.handoff_json=freezeRecipientRequests(db,child.run_id,taskId);
     if(isBroadcastRun(db,child.run_id))return{kind:'child' as const,run:child,request,
       note:'本条由用户 @全体 分别发送给各位成员。独立回应本次用户要求，不替其他成员发言，不重复派发给已收件的成员；本轮不自动互评或汇总。需要执行工作时遵循用户要求及本轮实际权限；普通交流可用 responseKind=conversation，实际工作成果用 responseKind=work。'};
     const coordinator=db.prepare(`SELECT pm.display_name FROM tasks parent JOIN project_members pm ON pm.id=parent.owner_member_id
       WHERE parent.id=?`).get(child.task_id) as {display_name:string};
     if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request,
-      note:`用户明确选择了你本人。协调成员是「${coordinator.display_name}」。本步骤 ${child.step_key}，角色 ${child.role}。统一文档默认由协调成员负责整合和写入；其他成员独立核算、检查并回传实质纠正，不分别覆盖同一份统一文档。用户指定作者、独立文件或多个版本时遵从原文；需要后继修订时走明确依赖的正式分工或交接，当前步骤已明确分派实施或修订的按该步骤和冻结上游完成。任务分工不改变实际工具权限，仍以本轮输入头为准。普通问候或提问使用 responseKind=conversation，确有实际工作结果时使用 responseKind=work。复核全部一致时，answer 简短确认无差异并指出需更新的位置；完整复算留在 executedVerifications 或已有文档。handoff 只交新增纠正或具体收口动作，不复制可见 answer。明确名单中已安排的成员无需为同一原任务重复发送 ask/review 邀请，新增工作才交接。不要替其他成员代答或修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}`};
+      note:`用户明确选择了你本人。协调成员是「${coordinator.display_name}」。本步骤 ${child.step_key}，角色 ${child.role}。统一文档默认由协调成员负责整合和写入；其他成员独立核算、检查并回传实质纠正，不分别覆盖同一份统一文档。用户指定作者、独立文件或多个版本时遵从原文；需要后继修订时走明确依赖的正式分工或交接，当前步骤已明确分派实施或修订的按该步骤和冻结上游完成。任务分工不改变实际工具权限，仍以本轮输入头为准。普通问候或提问使用 responseKind=conversation，确有实际工作结果时使用 responseKind=work。复核全部一致时，answer 简短确认无差异并指出需更新的位置；完整复算留在 executedVerifications 或已有文档。handoff 只交新增纠正或具体收口动作，不复制可见 answer。明确名单中已安排的成员无需为同一原任务重复发送 ask/review 邀请，新增工作才交接。不要替其他成员代答或修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}${versionsNote}`};
     return { kind:'child' as const, run:child, request,
-      note:`协调成员是「${coordinator.display_name}」。你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。完成本步骤需要的查证、命令、修改和验证；实际 runtime 权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要同伴继续核对时使用本轮已开放的 handoffs，不扩大目标。结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
+      note:`协调成员是「${coordinator.display_name}」。你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。完成本步骤需要的查证、命令、修改和验证；实际 runtime 权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要同伴继续核对时使用本轮已开放的 handoffs，不扩大目标。结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}${versionsNote}` };
   }
   const repair=db.prepare(`SELECT c.* FROM format_repair_workitems f JOIN agent_turns a ON a.id=f.source_turn_id
     JOIN coordination_integration_attempts i ON i.execution_run_id=a.run_id JOIN coordination_runs c ON c.run_id=i.coordination_run_id
@@ -296,8 +300,16 @@ export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string
   const member=context.request?.memberId??target.owner_member_id;
   if(!readThreadMembers(db,target.conversation_thread_id).eligibleMemberIds.includes(member))throw Error('接手的 AI 已移出本串或停用；未派发，已保存的历史保留');
   const root=(db.prepare('SELECT p.canonical_path FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=?').get(taskId) as {canonical_path:string}).canonical_path;
-  const keys=context.kind==='child'?dependencyKeys(JSON.parse(context.run.plan_json!) as CoordinationPlan,context.run.step_key):undefined;
-  verifyHandoffFiles({files:managedHandoffFiles(db,context.run.run_id,keys)},root);
+  const versions=context.kind==='child'?workspaceVersionsForChild(db,context.run.run_id,context.run.step_key):null;
+  verifyHandoffFiles({files:versions??managedHandoffFiles(db,context.run.run_id)},root);
+  if(versions?.length&&reservedTurnId){
+    const bundle=db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(reservedTurnId) as {included_refs_json:string}|undefined;
+    if(bundle){
+      const notes=(JSON.parse(bundle.included_refs_json) as {notes?:string[]}).notes??[];
+      const expected=`workspaceVersions=${JSON.stringify(versions)}`;
+      if(!notes.some(note=>note.split(/\r?\n/).includes(expected)))throw Error('交接版本在启动等待期间已变化；未继续派发');
+    }
+  }
   const ownReservation=reservedTurnId&&db.prepare('SELECT 1 FROM agent_turns WHERE id=?').get(reservedTurnId)?1:0;
   const used=coordinationCallsUsed(db,context.run.run_id)-ownReservation;
   const reserve=context.kind==='integration'||isBroadcastRun(db,context.run.run_id)?0:2;
@@ -367,24 +379,46 @@ function dependencyKeys(plan:CoordinationPlan,key:string):Set<string> {
   const visit=(current:string)=>{for(const dependency of plan.steps.find(s=>s.key===current)?.dependsOn??[]){if(keys.has(dependency))continue;keys.add(dependency);visit(dependency);}};
   visit(key);return keys;
 }
-function managedHandoffFiles(db:ZhongshuoDatabase,runId:string,keys?:Set<string>):FrozenFile[] {
+type WorkspaceVersion=FrozenFile&{producer:string;deliveryId:string;revision:number;manifestHash:string};
+function managedHandoffVersions(db:ZhongshuoDatabase,runId:string,keys?:Set<string>):WorkspaceVersion[] {
   const run=db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(runId) as {plan_json:string};
   const plan=JSON.parse(run.plan_json) as CoordinationPlan;
-  const steps=db.prepare('SELECT step_key,handoff_json FROM coordination_steps WHERE run_id=? ORDER BY rowid').all(runId) as {step_key:string;handoff_json:string|null}[];
-  const latest=new Map<string,{file:FrozenFile;producer:string}>();
+  const steps=db.prepare(`SELECT s.step_key,s.child_task_id,s.handoff_json,t.status FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(runId) as {step_key:string;child_task_id:string;handoff_json:string|null;status:string}[];
+  const root=(db.prepare('SELECT p.canonical_path FROM coordination_runs c JOIN tasks t ON t.id=c.task_id JOIN projects p ON p.id=t.project_id WHERE c.run_id=?').get(runId) as {canonical_path:string}).canonical_path;
+  const latest=new Map<string,WorkspaceVersion>();
   for(const ordered of coordinationTopologicalSteps(plan)){
     const step=steps.find(s=>s.step_key===ordered.key);if(!step)throw Error('分工步骤身份缺失');
     if(keys&&!keys.has(step.step_key))continue;
-    const data=JSON.parse(step.handoff_json??'{}') as {output?:{files:FrozenFile[]}};
+    const data=JSON.parse(step.handoff_json??'{}') as {output?:{id:string;revision:number;manifest_hash:string;files:FrozenFile[]}};
+    if(!data.output)continue; // Cached output is an already completed delivery, even if its task later continues.
+    const files=correctedSharedHandoffFiles(db,step.child_task_id,data.output.id)??data.output.files;
     const dependencies=dependencyKeys(plan,step.step_key);
-    for(const file of data.output?.files??[]){
-      const previous=latest.get(file.path);
-      const changed=previous&&(previous.file.state!==file.state||previous.file.sha256!==file.sha256);
-      if(changed&&!dependencies.has(previous.producer))throw Error('多个实施步骤改动同一路径但没有显式依赖交接；不能覆盖先前成果');
-      if(!previous||changed)latest.set(file.path,{file,producer:step.step_key});
+    for(const file of files){
+      const key=comparisonKey(resolve(root,file.path));
+      const previous=latest.get(key);
+      const changed=previous&&(previous.state!==file.state||previous.sha256!==file.sha256);
+      // A shared directory after-image may already contain the peer's last
+      // write. Equal observed hashes cannot prove two independent writers did
+      // not overwrite each other. Read-only reviews may still reference it.
+      const independentWriters=previous&&ordered.role==='implementation'
+        &&plan.steps.find(s=>s.key===previous.producer)?.role==='implementation';
+      if(previous&&(changed||independentWriters)&&!dependencies.has(previous.producer))throw Error('多个实施步骤改动同一路径但没有显式依赖交接；不能覆盖先前成果');
+      if(!previous||changed)latest.set(key,{...file,producer:step.step_key,deliveryId:data.output.id,revision:data.output.revision,manifestHash:data.output.manifest_hash});
     }
   }
-  return [...latest.values()].map(x=>x.file);
+  return [...latest.values()];
+}
+function managedHandoffFiles(db:ZhongshuoDatabase,runId:string,keys?:Set<string>):FrozenFile[]{
+  return managedHandoffVersions(db,runId,keys).map(({path,sha256,state})=>({path,sha256,state}));
+}
+function workspaceVersionsForChild(db:ZhongshuoDatabase,runId:string,stepKey:string):WorkspaceVersion[]{
+  const plan=JSON.parse((db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(runId) as {plan_json:string}).plan_json) as CoordinationPlan;
+  const inherited=managedHandoffVersions(db,runId,dependencyKeys(plan,stepKey));
+  if(!inherited.length)return[];
+  // An independent overwrite still throws when merging the original DAG;
+  // only a causal completed revision can replace an inherited old version.
+  const latest=managedHandoffVersions(db,runId);
+  return inherited.map(file=>latest.find(current=>comparisonKey(current.path)===comparisonKey(file.path))??file);
 }
 
 export function beginCoordination(db: ZhongshuoDatabase, taskId: string, runId: string, kind: 'planning'|'integration',coordinationRunId?:string) {
@@ -438,7 +472,7 @@ function finalHandoff(db: ZhongshuoDatabase, taskId: string) {
   if(!row) return null;
   const final=db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq DESC LIMIT 1").get(taskId) as {body_json:string}|undefined;
   const root=(db.prepare('SELECT p.canonical_path FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=?').get(taskId) as {canonical_path:string}).canonical_path;
-  const changes=changeSetFilesForDelivery(db,taskId,JSON.parse(row.change_set_refs_json) as string[]);
+  const changes=deliveryFilesForHandoff(db,taskId,row.run_id,JSON.parse(row.change_set_refs_json) as string[]);
   verifyHandoffFiles({files:changes},root);
   return {...row,files:changes,final:final ? JSON.parse(final.body_json) as unknown : null};
 }
@@ -635,10 +669,20 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     if(ready.length) {
       if(parent.status==='WAITING_USER')db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=?").run(parent.id);
       for(const next of ready) {
+      // A later repair reads the same inherited filesystem versions. Let an
+      // already queued sibling implementation settle its causal revision first;
+      // initial independent generators have no inherited files and still queue
+      // together. This changes scheduling, never the declared dependency DAG.
+      const inherited=managedHandoffFiles(db,run.run_id,dependencyKeys(plan,next.key));
+      const inheritedPaths=new Set(inherited.map(file=>comparisonKey(file.path)));
+      if(inheritedPaths.size&&steps.some(other=>other.step_key!==next.key&&other.handoff_json!=null
+        &&!['DONE','WAITING_USER'].includes(other.status)&&plan.steps.find(p=>p.key===other.step_key)?.role==='implementation'
+        &&managedHandoffFiles(db,run.run_id,dependencyKeys(plan,other.step_key)).some(file=>inheritedPaths.has(comparisonKey(file.path)))))continue;
       const step=steps.find(s=>s.step_key===next.key)!;
       const upstream=next.dependsOn.map(key=>(JSON.parse(steps.find(s=>s.step_key===key)!.handoff_json!) as {output:unknown}).output);
       if(upstream.some(h=>h==null)) throw Error('上游没有可交接的正式版本');
-      db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify({upstream}),run.run_id,next.key);
+      step.handoff_json=JSON.stringify({upstream});
+      db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(step.handoff_json,run.run_id,next.key);
       enqueueOutbox(db,{dispatchKey:`task:${step.child_task_id}:initial`,stopGenerationAtEnqueue:0});
       db.prepare("UPDATE coordination_messages SET status='queued',updated_at=? WHERE child_task_id=? AND status='accepted'").run(Date.now(),step.child_task_id);
       event(db,parent,run.run_id,'coordination.stepQueued',{stepKey:next.key,childTaskId:step.child_task_id,upstream});

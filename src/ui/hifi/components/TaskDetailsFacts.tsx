@@ -331,10 +331,30 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
   </div>;
 }
 
+function MemberDispatchFailures({ detail }: { detail: TaskDetailsResult }) {
+  const failures = detail.memberFailures?.filter(item => item.runId === null && item.notStarted
+    && item.coordinationRunId === detail.coordination?.runId) ?? [];
+  if (!failures.length) return null;
+  return <div className="card tight" data-zs-member-dispatch-failures="1">
+    <div className="section-title">未能开始的成员任务</div>
+    {failures.map(item => <section key={`${item.taskId}:${item.failure.eventSeq}`} className="panel warning" data-zs-member-dispatch-failure={item.taskId}>
+      <div className="row tight wrap"><strong>{item.memberName ?? '成员'}</strong><span>尚未启动</span></div>
+      <div className="small">{detail.coordination?.steps.find(step => step.taskId === item.taskId)?.title
+        ?? detail.children.find(child => child.id === item.taskId)?.title ?? '分工任务'}</div>
+      <div className="small">原因：{userFacingSystemText(item.failure.message?.trim() || '未提供具体原因，请查看任务详情。')}</div>
+      <a href={`#task=${encodeURIComponent(item.taskId)}`} className="small">查看任务</a>
+      <details className="small faint"><summary>诊断详情</summary>
+        <div>{fullTime(item.failure.at)} · {item.failure.eventKind} · 事件 #{item.failure.eventSeq}</div>
+      </details>
+    </section>)}
+  </div>;
+}
+
 export function ActualMembers({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight">
     <div className="section-title">{detail.coordination?'协调任务的直接运行成员':'实际执行成员'}</div>
     {detail.coordination?<div className="faint small">分工成员与对应模型见协作面板；子任务的工具、用量和运行可逐项打开。</div>:null}
+    <MemberDispatchFailures detail={detail}/>
     {detail.runs.length === 0 ? <div className="faint small">尚无运行与执行轮次。</div> : detail.runs.map((r) => <div key={r.id} style={{ marginBottom: 8 }}>
       <div className="small strong">{userFacingSystemText(r.mode)} · <RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></div>
       {r.detailLoaded === false ? <div className="faint small">在运行详情中选择本次运行后读取执行成员。</div> : null}
@@ -352,6 +372,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
   const ordered = selected != null && selected.id !== detail.latestRunId
     ? [selected, ...detail.runs.filter((r) => r.id !== selected.id)] : detail.runs;
   return <div className="msg-list">
+    <MemberDispatchFailures detail={detail}/>
     <ExecutionBlockerFacts detail={detail}/>
     <div className="panel info">{taskRunGuidance(detail)}</div>
     {detail.failedRetry.formatRepair&&detail.failedRetry.available?<p className="small faint">本次只补交已保存的结果和文件变化，再继续未完成的审查。</p>:null}

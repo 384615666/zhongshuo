@@ -19,6 +19,7 @@ import { openDatabase } from '../persistence/db.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { acquireSingletonLock, readSingletonLock } from './singletonLock.ts';
 import { applyRecovery } from './stopFlow.ts';
+import { persistDaemonStopRecord } from './stopHistory.ts';
 import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { createCodexConfigurationPreparation } from './prepareCodexConfiguration.ts';
@@ -477,10 +478,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         // 不确定/收尾记录持久化（stderr ≠ 持久化——重启恢复从 daemon_state 读取）。
         const persistStopRecord = (record: Record<string, unknown>): void => {
           try {
-            db!.prepare(
-              `INSERT INTO daemon_state (key, value, updated_at) VALUES ('daemon:stop:last', ?, ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-            ).run(JSON.stringify({ pid: process.pid, ...record }), Date.now());
+            persistDaemonStopRecord(db!, { ...record, pid: process.pid });
           } catch (error) {
             process.stderr.write(`[zhongshuo-daemon] stop 记录持久化失败（恢复依据退回 WAL/崩溃语义）：${error instanceof Error ? error.message : String(error)}\n`);
           }

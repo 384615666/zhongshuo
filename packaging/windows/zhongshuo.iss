@@ -61,7 +61,8 @@ SetupMutex=com.zhongshuo.desktop.setup
 #ifdef NativeAppMutex
 AppMutex={#NativeAppMutex}
 #endif
-; Neither silent installation nor uninstall should force-close user work.
+; Custom ownership checks and explicit interactive consent govern installation.
+; Inno automatic close/restart stays disabled, including silent mode/uninstall.
 CloseApplications=no
 RestartApplications=no
 AllowCancelDuringInstall=yes
@@ -87,6 +88,7 @@ Name: "desktopicon"; Description: "在桌面创建众说快捷方式"; GroupDesc
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "installer-processes.ps1"; Flags: dontcopy
 
 [Icons]
 Name: "{group}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop.app"
@@ -145,11 +147,50 @@ begin
     FileIsLocked(ExpandConstant('{app}\resources\app\daemon\node\node.exe'));
 end;
 
+function CheckInstallationProcesses(const Mode: String; ForceConsent: Boolean): Integer;
+var
+  Helper, Ticket, PowerShell, Arguments: String;
+begin
+    Helper := ExpandConstant('{tmp}\installer-processes.ps1');
+    Ticket := ExpandConstant('{tmp}\zhongshuo-process-ownership.json');
+    PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+    Arguments := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Helper +
+      '" -InstallDir "' + RemoveBackslashUnlessRoot(ExpandConstant('{app}')) +
+      '" -Mode ' + Mode + ' -TicketFile "' + Ticket + '" -TimeoutSeconds 20';
+    if ForceConsent then Arguments := Arguments + ' -Consent';
+    Result := 20;
+    if not Exec(PowerShell, Arguments, '', SW_HIDE, ewWaitUntilTerminated, Result) then
+      Result := 20;
+    Log('Installation process check ' + Mode + ': ' + IntToStr(Result));
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
 begin
   Result := '';
-  if InstalledFilesBusy() then
-    Result := '众说或后台进程仍在运行，无法安全更新。请在众说中正常退出，等待后台任务结束后重新安装。本次安装尚未更改程序文件。';
+  ExtractTemporaryFile('installer-processes.ps1');
+  Code := CheckInstallationProcesses('Probe', False);
+  if (Code = 0) and not InstalledFilesBusy() then exit;
+  Result := '无法确认众说已完全关闭，本次安装尚未更改程序文件。请从托盘正常退出众说，等待后台任务结束后重试。';
+  if (Code <> 10) or WizardSilent() then exit;
+  if TaskDialogMsgBox('众说正在运行',
+    '继续安装需要先关闭此安装目录中的众说。正在执行的任务会停止，请先保存需要的内容。' + #13#10 +
+    '是否先尝试正常关闭并继续安装？如果仍无法关闭，会另行询问是否强制关闭。',
+    mbConfirmation, MB_YESNO or MB_DEFBUTTON2, ['正常关闭并继续', '取消安装'], 0) <> IDYES then exit;
+  Code := CheckInstallationProcesses('Graceful', False);
+  if (Code = 0) and not InstalledFilesBusy() then begin Result := ''; exit; end;
+  if Code <> 10 then exit;
+  if TaskDialogMsgBox('众说仍未完全关闭',
+    '是否强制关闭此安装目录中已核实归属的众说及其后台进程，再继续安装？' + #13#10 +
+    '强制关闭可能中断正在执行的任务、丢失未保存的内容；任务可能需要下次打开后恢复。',
+    mbConfirmation, MB_YESNO or MB_DEFBUTTON2, ['强制关闭并继续安装', '取消安装'], 0) <> IDYES then exit;
+  Code := CheckInstallationProcesses('Force', True);
+  if Code <> 0 then exit;
+  { Re-enumerate after shutdown and recheck both executable locks before Inno
+    can write any installed files. A new instance or unknown owner blocks it. }
+  if (CheckInstallationProcesses('Probe', False) = 0) and not InstalledFilesBusy() then
+    Result := '';
 end;
 
 function InitializeUninstall(): Boolean;

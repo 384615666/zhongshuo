@@ -54,7 +54,10 @@ export function pendingClarificationChangeSets(db: ZhongshuoDatabase, taskId: st
 
 /** Fold only the supplied delivery chain, in execution order. Later legitimate
  * edits replace the same path; an intervening version change is never adopted. */
-export function changeSetFilesForDelivery(db: ZhongshuoDatabase, taskId: string, refs: readonly string[]): FileVersion[] {
+export function changeSetFilesForDelivery(db: ZhongshuoDatabase, taskId: string, refs: readonly string[], selection?: {
+  include(changeSetId:string,path:string):boolean;
+  includeUnchanged(changeSetId:string,path:string):boolean;
+}): FileVersion[] {
   const latest = new Map<string, FileVersion>();
   for (const ref of new Set(refs)) {
     // Parent deliveries may also reference their child deliveries. Those files
@@ -65,11 +68,12 @@ export function changeSetFilesForDelivery(db: ZhongshuoDatabase, taskId: string,
         ON b.change_set_id=f.change_set_id AND b.path=f.path AND b.role='before'
       WHERE f.change_set_id=? AND f.role='after' ORDER BY f.id`).all(ref) as Array<FileVersion & {before_state:string|null;before_sha256:string|null}>;
     for (const file of rows) {
+      if(selection&&!selection.include(ref,file.path))continue;
       const prior = latest.get(file.path);
       if (prior && (file.before_state !== prior.state || file.before_sha256 !== prior.sha256)) {
         throw Error(`待确认成果的文件版本已变化：${file.path}；未覆盖原交付依据`);
       }
-      if (prior || file.before_state !== file.state || file.before_sha256 !== file.sha256) {
+      if (prior || file.before_state !== file.state || file.before_sha256 !== file.sha256 || selection?.includeUnchanged(ref,file.path)) {
         latest.set(file.path, {path:file.path,state:file.state,sha256:file.sha256});
       }
     }
