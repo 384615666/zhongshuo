@@ -23,6 +23,7 @@ import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
 import { installedDaemonPipe, installedDesktopConfiguration } from './installedDesktop.ts';
 import { WindowsTrayLifecycle } from './windowsTray.ts';
 import { isRuntimeMetadataRead, RUNTIME_METADATA_PIPE_DEADLINE_MS } from '../contracts/runtimeMetadataDeadline.ts';
+import { registerEditContextMenu } from './editContextMenu.ts';
 
 const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
 const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
@@ -697,6 +698,8 @@ let dataOperationStarting = false;
     },
   });
   mainWindow = win;
+  const disposeEditContextMenu = registerEditContextMenu(win, items => Menu.buildFromTemplate(items));
+  win.once('closed', disposeEditContextMenu);
   win.on('closed', () => { mainWindow = null; });
   // The tray is retained by desktopLifecycle while X hides the live renderer.
   // The normal minimize button still calls win.minimize().

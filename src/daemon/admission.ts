@@ -18,6 +18,7 @@
  * 直接启动下一阶段——结构保证）。
  */
 import {lockDomainsOverlap} from './directoryIdentity.ts';
+import { DEFAULT_EXECUTION_CONCURRENCY } from '../contracts/executionConcurrency.ts';
 
 export interface AdmissionDimensions {
   memberId: string;
@@ -49,16 +50,17 @@ export class DispatchAdmission {
   private readonly limits: AdmissionLimits;
   private readonly held = new Map<string, AdmissionDimensions>();
 
-  constructor(limits?: Partial<AdmissionLimits>) {
+  constructor(limits?: Partial<AdmissionLimits>, private readonly currentLimits?: () => AdmissionLimits) {
     this.limits = {
-      globalMaxInFlight: limits?.globalMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_GLOBAL', 4),
-      perProjectMaxInFlight: limits?.perProjectMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_PROJECT', 2),
-      perProviderMaxInFlight: limits?.perProviderMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_PROVIDER', 2),
+      globalMaxInFlight: limits?.globalMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_GLOBAL', DEFAULT_EXECUTION_CONCURRENCY.globalMaxInFlight),
+      perProjectMaxInFlight: limits?.perProjectMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_PROJECT', DEFAULT_EXECUTION_CONCURRENCY.perProjectMaxInFlight),
+      perProviderMaxInFlight: limits?.perProviderMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_PROVIDER', DEFAULT_EXECUTION_CONCURRENCY.perProviderMaxInFlight),
     };
   }
 
   /** 判定并占位（原子）：任一维度满即拒绝且不占位。 */
   tryAcquire(turnId: string, dims: AdmissionDimensions): AdmissionDecision {
+    const limits = this.currentLimits?.() ?? this.limits;
     // 同 turnId 不得用另一 scope 覆盖既有占位（尤其是 UNKNOWN 恢复事实）。
     if (this.held.has(turnId) || this.count((d) => d.memberId === dims.memberId && (
       d.executionScopeKey == null || dims.executionScopeKey == null || d.executionScopeKey === dims.executionScopeKey
@@ -71,13 +73,13 @@ export class DispatchAdmission {
     )) >= 1) {
       return { granted: false, reason: 'write-root' };
     }
-    if (this.count((d) => d.projectId === dims.projectId) >= this.limits.perProjectMaxInFlight) {
+    if (this.count((d) => d.projectId === dims.projectId) >= limits.perProjectMaxInFlight) {
       return { granted: false, reason: 'project' };
     }
-    if (this.count((d) => d.providerKey === dims.providerKey) >= this.limits.perProviderMaxInFlight) {
+    if (this.count((d) => d.providerKey === dims.providerKey) >= limits.perProviderMaxInFlight) {
       return { granted: false, reason: 'provider' };
     }
-    if (this.held.size >= this.limits.globalMaxInFlight) return { granted: false, reason: 'global' };
+    if (this.held.size >= limits.globalMaxInFlight) return { granted: false, reason: 'global' };
     this.held.set(turnId, dims);
     return { granted: true };
   }

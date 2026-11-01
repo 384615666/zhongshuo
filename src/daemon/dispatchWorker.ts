@@ -54,6 +54,7 @@ import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurnWithAttachmentCache } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
+import { readExecutionConcurrency } from './executionConcurrency.ts';
 import { resolveWriteConcurrency } from './writeConcurrency.ts';
 import {agentReplyText,chatAnswer,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
@@ -185,6 +186,7 @@ export class DispatchWorker {
   /** E4 解耦：detached 模式的在途 turn 消费器（成员级互斥+stop 收敛依据）。 */
   private readonly detached: boolean;
   private readonly admission: DispatchAdmission;
+  private admissionSettingsIdentity: string | null = null;
   private readonly defaultProviderKey: string;
   private accepting = true;
   /** 强制退出路径：消费器循环检测后按 UNKNOWN 收尾退出（保证关库后零回调写库）。 */
@@ -213,7 +215,7 @@ export class DispatchWorker {
     this.adapter = options.adapter;
     this.adapterForMember = options.adapterFor;
     this.detached = options.detachedTurnConsumption === true;
-    this.admission = options.admission ?? new DispatchAdmission();
+    this.admission = options.admission ?? new DispatchAdmission(undefined, () => readExecutionConcurrency(this.db).limits);
     this.defaultProviderKey = options.defaultProviderKey ?? 'default-runtime';
     this.leaseOwner = options.leaseOwner;
     this.leaseMs = options.leaseMs ?? 60_000;
@@ -342,6 +344,13 @@ export class DispatchWorker {
   async runOnce(now?: number): Promise<boolean> {
     if (this.accepting === false) return false; // 退出安全边界：拒新领取（在执行的当前项继续）
     if (isDispatchGateHeld(this.db)) return false;
+    const settingsIdentity = JSON.stringify(readExecutionConcurrency(this.db));
+    if (this.admissionSettingsIdentity !== settingsIdentity) {
+      this.admissionSettingsIdentity = settingsIdentity;
+      // Retry queued admissions after a limit change; existing holders and
+      // UNKNOWN protections remain in the same ledger and are never released.
+      for (const [id, reason] of this.blockedOutbox) if (reason.startsWith('admission:')) this.blockedOutbox.delete(id);
+    }
     // 时钟：在判定时点读取（可注入）；drain 循环每轮取新值，不复用进入时的 now。
     const at = now ?? this.clock();
     this.settleRoleMemoryProposals();

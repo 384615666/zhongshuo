@@ -11,7 +11,7 @@ node scripts/make-windows-installer.mjs --skip-build
 
 # 可选指定冻结镜像；也支持 beta.N 作为当前稳定核心版本（release.json）的 beta 简写
 node scripts/make-windows-installer.mjs --skip-build --version beta.0
-node scripts/make-windows-installer.mjs --source-image D:/absolute/clean-image --version 0.1.3-beta.1
+node scripts/make-windows-installer.mjs --source-image D:/absolute/clean-image --version 0.1.3-beta.2
 
 # 小夹具实际编译模板；不构建完整镜像，不安装或启动
 node scripts/make-windows-installer.mjs --validate-template
@@ -24,7 +24,7 @@ node scripts/make-windows-installer.mjs --skip-build --stage-only
 
 `--output-dir DIR` 覆盖最终 EXE 目录；`--iscc FILE` 覆盖 Inno 编译器（也可用 `ISCC_EXE`）。默认发现当前用户的 Inno Setup 6 或 Program Files 安装。无需全局 npm/pnpm install。
 
-最终文件为 `dist/installers/Zhongshuo-Setup-0.1.3-beta.1-x64.exe`，附 SHA256 和 `.release.json`。稳定版 `X.Y.Z` 映射 Windows 数字版本 `X.Y.Z.65535`，同核心版本的 beta.N 映射 `X.Y.Z.N`（N < 65535），确保正式版高于已安装 beta.3。所有版本保留相同 AppId `com.zhongshuo.desktop`，写 HKCU 的应用卸载登记；版本不加入 AppId 或安装目录。默认目录 `%LOCALAPPDATA%/Programs/Zhongshuo`，开始菜单快捷方式始终创建，桌面快捷方式可选。安装完成的“打开众说”默认为未勾选，静默安装永不启动应用。
+最终文件为 `dist/installers/Zhongshuo-Setup-0.1.3-beta.2-x64.exe`，附 SHA256 和 `.release.json`。稳定版 `X.Y.Z` 映射 Windows 数字版本 `X.Y.Z.65535`，同核心版本的 beta.N 映射 `X.Y.Z.N`（N < 65535），确保正式版高于已安装 beta.3。所有版本保留相同 AppId `com.zhongshuo.desktop`，写 HKCU 的应用卸载登记；版本不加入 AppId 或安装目录。默认目录 `%LOCALAPPDATA%/Programs/Zhongshuo`，开始菜单快捷方式始终创建，桌面快捷方式可选。安装完成的“打开众说”默认为未勾选，静默安装永不启动应用。
 
 安装向导外观：`branding/wizard-large-*.png`（164:314，多档 DPI）与 `branding/wizard-small-*.png`（方形多档）由 `scripts/lib/wizard-images.ps1` 从根 `logo.png` 生成，`WizardImageFile`/`WizardSmallImageFile` 按当前 DPI 自动选最近档；`[Messages]` 覆盖欢迎/准备/完成页文案，去掉默认 Inno 许可与纯文本说明页（MIT 许可证与安装说明仍随包安装），完成页同时提供“打开众说/打开操作手册”。安装器开始菜单与桌面快捷方式写 `AppUserModelID=com.zhongshuo.desktop.app`；主程序安装形态也用同一 AUMID，便携/开发形态用 `com.zhongshuo.desktop.portable`，避免与旧 Electron/便携包合并任务栏按钮。卸载登记 AppId 仍为 `com.zhongshuo.desktop`，升级路径不变。
 

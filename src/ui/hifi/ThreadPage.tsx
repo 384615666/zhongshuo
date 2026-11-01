@@ -1,8 +1,7 @@
 import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 线程视图（第五十一轮 H2 首版；r55 增「成果与附件」真实标签页）：主池线程卡 → 回复串页面
- * ——回复 / 详情（任务概况/交付验收）/ 成果与附件 三个可达视图；活动/成员/运行/研讨未换装，
- * 经「原界面」定向并如实标注。
+ * ——回复 / 详情（任务概况/交付验收）/ 成果与附件；更多详情使用当前房间页的正式分组。
  *
  * 正式链（review-r50 §4 修正后的 DTO 适配）：thread.get（实体+根消息+水位）→
  * thread.history（items+rootAttachments）→ task.get（pendingDelivery 只有 id/revision/
@@ -40,13 +39,12 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: '已取消', FAILED: '失败', RUNNING: '运行中', WAITING: '排队中', STOPPING: '停止中',
 };
 
-/** 详情里未换装的分组——定向原界面（同房间），如实标注而非隐藏（r55：成果与附件已换装
- *  为本页真实标签，从本列表移除；文案不再写「R52 后接入」这类过期承诺）。 */
-const LEGACY_SECTIONS: Array<{ key: string; label: string; note: string }> = [
-  { key: 'activity', label: '活动与进展', note: '过程说明/程序校验记录在原界面（聚合活动流在新界面「活动流」页）' },
-  { key: 'members', label: '参与成员', note: '参与者名单与关注状态在原界面（成员管理在新界面侧栏）' },
-  { key: 'run', label: '运行详情', note: '运行/轮次明细在原界面' },
-  { key: 'deliberation', label: '研讨详情', note: '研讨进度在原界面' },
+/** These existing tab links open the same thread in the current room page. */
+const DETAIL_SECTIONS = [
+  { key: 'activity', label: '活动与进展' },
+  { key: 'members', label: '参与成员' },
+  { key: 'run', label: '运行详情' },
+  { key: 'deliberation', label: '研讨详情' },
 ];
 
 /** 成果标签页的数据形态（attachment.listByConversation / files.view.deliveries）。 */
@@ -606,8 +604,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           <details className="panel info">
             <summary style={{ cursor: 'pointer', fontWeight: 600 }}>更多任务信息</summary>
             <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
-              {LEGACY_SECTIONS.map((sec) => (
-                <button key={sec.key} className="btn ghost sm" style={{ justifyContent: 'space-between' }} onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>
+              {DETAIL_SECTIONS.map((sec) => (
+                <button key={sec.key} className="btn ghost sm" style={{ justifyContent: 'space-between' }} onClick={() => navigate(`/thread/${encodeURIComponent(threadId)}?tab=${sec.key}`)}>
                   <span>{sec.label}</span>
                   <span className="faint small">打开</span>
                 </button>

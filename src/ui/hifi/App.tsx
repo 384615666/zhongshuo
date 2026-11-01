@@ -2,9 +2,8 @@ import { userFacingSystemText } from '../../contracts/userFacingText';
 import {TaskNotificationController} from './components/TaskNotificationController';
 /**
  * 正式外壳（H1 首包，第四十七轮修订）：原型侧栏三段式（§17.1/第十五批）+ 主区路由 房间/私信。
- * 未换装入口经「原界面」**定向接管**（takeLegacy(target) 按 legacy 既有面板/开关定位到对应
- * 页面——不要求用户在旧界面再找一次）；接管期间卸载 hifi 样式（原型全局选择器不污染旧界面），
- * 返回时恢复样式与数据刷新；启动/渲染失败由 ErrorBoundary 与页面看门狗兜底回退。
+ * 房间、私信及任务详情由正式路由打开；启动/渲染失败由 ErrorBoundary 与页面看门狗兜底回退。
+ * 内部回退接管期间隔离样式，返回时恢复样式与刷新数据。
  */
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components/Icon';

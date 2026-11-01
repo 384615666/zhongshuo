@@ -2296,7 +2296,7 @@ function ThreadDetails({
     groups.push({ key: 'delivery', label: '交付与验收', icon: 'check-circle', hint: '完成摘要、版本、验证与残余问题；验收在这里完成' });
   }
   if (task && formal.data?.runs[0]?.mode === 'DELIBERATE') {
-    groups.push({ key: 'deliberation', label: '研讨详情', icon: 'layers', hint: '初稿、互评、争议、确认矩阵' });
+    groups.push({ key: 'deliberation', label: '研讨记录', icon: 'layers', hint: '查看本串的研讨阶段回复' });
   }
 
   /* 深链指向的分组在当前任务上不存在（例如 ?tab=run 但没有运行）时，
@@ -2343,8 +2343,11 @@ function ThreadDetails({
         {active === 'deliberation' && formal.data?.runs[0]?.mode === 'DELIBERATE' ? (
           <div className="msg-list">
             <div className="panel info">
-              <div className="panel-title"><Icon name="layers" size={13} /> 研讨详情（阶段/初稿/互评/确认矩阵）</div>
-              请通过「⋯ → 原界面」查看完整研讨记录。
+              <div className="panel-title"><Icon name="layers" size={13} /> 研讨记录</div>
+              各阶段的结果保存在本串回复中。
+              <div className="panel-actions">
+                <button className="btn sm" onClick={() => onChangeTab('replies')}>查看研讨回复</button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -3019,7 +3022,6 @@ function RoomFiles({
   onOpenResource?: (resourceId: string, revision?: number, from?: ContextLocation) => void;
 }) {
   const s = useStore((x) => x);
-  const [commentOpen, setCommentOpen] = useState(false);
   const threads = s.threads.filter((t) => t.roomId === roomId).map((t) => t.id);
   const arts = s.artifacts.filter((a) => threads.includes(a.threadId));
   const changes = s.changeSets.filter((c) => s.tasks.some((t) => t.id === c.taskId && t.roomId === roomId));
@@ -3035,7 +3037,7 @@ function RoomFiles({
         这里汇总本房间的附件和已提交成果。工作区文件改动与 Git 状态分别在侧栏对应页面查看。
       </div>
 
-      {/* 附件七类格式与文件选区评论 */}
+      {/* 附件格式与预览入口说明 */}
       <div className="card tight" style={{ marginBottom: 14 }}>
         <div className="row tight wrap" data-batch="M3">
           <Icon name="paperclip" size={13} className="faint" />
@@ -3052,13 +3054,8 @@ function RoomFiles({
             文件可保存和预览；成员能否读取取决于当前 AI 配置。系统不会执行文件内的脚本。
           </div>
         </details>
-        <div className="row tight wrap" style={{ marginTop: 8 }}>
-          <button className="btn sm" onClick={() => setCommentOpen(true)}>
-            <Icon name="message-square" size={12} /> 文件选区评论
-          </button>
-          <span className="small faint">
-            评论会显示在原任务串里；文件更新后，旧评论会标为旧版。
-          </span>
+        <div className="small faint" style={{ marginTop: 8 }}>
+          消息附件可在预览的「⋯ → 评论此文件」中添加评论，评论保存到附件的来源会话。
         </div>
       </div>
 
@@ -3121,15 +3118,6 @@ function RoomFiles({
               </div>
               <div className="row tight wrap" style={{ marginTop: 6 }}>
                 <Tag plain>{a.mimeType === 'text/markdown' ? 'Markdown' : '文本'}</Tag>
-                <button
-                  className="btn ghost sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setCommentOpen(true);
-                  }}
-                >
-                  <Icon name="message-square" size={11} /> 评论
-                </button>
               </div>
             </div>
           ))}
@@ -3162,56 +3150,6 @@ function RoomFiles({
         </div>
       ))}
 
-      {/* 文件选区评论：评论位置与"旧版不漂移"说明 */}
-      {commentOpen ? (
-        <Modal
-          size="md"
-          title="文件选区评论"
-          onClose={() => setCommentOpen(false)}
-          footer={
-            <>
-              <span className="small faint">评论会保存为文件回复</span>
-              <div className="spacer" />
-              <button className="btn" onClick={() => setCommentOpen(false)}>关闭</button>
-            </>
-          }
-        >
-          <div className="panel info" style={{ marginBottom: 12 }}>
-            PDF 和图片暂不支持定位评论。
-          </div>
-          <div className="field">
-            <label className="field-label">支持的评论位置</label>
-            <div className="col" style={{ gap: 6 }}>
-              {[
-                ['Markdown 段落 / 章节', '按标题与段落'],
-                ['文本与代码单/多行', '按行号范围'],
-                ['CSV 单/多行', '按行'],
-                ['HTML 渲染区域', '按元素'],
-                ['视频时间点', '按时间戳'],
-              ].map(([t, d]) => (
-                <div key={t} className="row tight">
-                  <Icon name="check" size={12} style={{ color: 'var(--success)', marginTop: 4 }} />
-                  <span className="small">
-                    <span className="strong">{t}</span>
-                    <span className="faint"> · {d}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="field">
-            <label className="field-label">评论内容</label>
-            <textarea
-              className="textarea"
-              rows={3}
-              defaultValue="这里的两处 import 应该走 contracts，不要直接引 persistence。"
-            />
-            <div className="field-hint">
-              文件更新后，旧评论会标记为旧版。
-            </div>
-          </div>
-        </Modal>
-      ) : null}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {TaskNotificationError,pollTaskNotifications,claimTaskNotification,ackTas
  * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
 import {runtimeCatalog} from './runtimeCatalog.ts';
+import { executionConcurrencyCommand } from './executionConcurrency.ts';
 import type {PreparedRuntimeConfiguration} from './prepareCodexConfiguration.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
@@ -1020,6 +1021,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     const management = memberManagementCommand(deps.db, env.method, env.params, run, (code,message) => { throw new DaemonCommandError(code,message); }, deps.remoteAudit != null);
     if (management != null) return withCommandId({ok:true,...management});
     switch (env.method) {
+      case 'app.executionConcurrency.get':
+      case 'app.executionConcurrency.set': {
+        const result = executionConcurrencyCommand(deps.db, env.method, env.params, run, (code, message) => { throw new DaemonCommandError(code, message); }, deps.remoteAudit != null);
+        return withCommandId({ ok: true, ...result });
+      }
       case 'project.writeConcurrency.get':
       case 'project.writeConcurrency.set': {
         const result=projectWriteConcurrencyCommand(deps.db,env.method,env.params,run,(code,message)=>{throw new DaemonCommandError(code,message);},deps.remoteAudit!=null);

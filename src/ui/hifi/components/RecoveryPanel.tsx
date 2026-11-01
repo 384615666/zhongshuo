@@ -48,6 +48,8 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
   const [showDetails, setShowDetails] = useState(false);
   const genRef = useRef(0);
   const checkBusy = useRef(false);
+  const undoBusy = useRef(false);
+  const [undoResult, setUndoResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [checkResult, setCheckResult] = useState<Record<string, {ok: boolean; detail?: string}>>({});
   const [taskTitles, setTaskTitles] = useState<Record<string, string>>({});
 
@@ -69,6 +71,27 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
     }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
+
+  const continueUndo = async (undo: RecoveryStatus['activeUndos'][number]) => {
+    if (undoBusy.current || busy != null || !data?.activeUndos.some(item => item.id === undo.id && item.changeSetId === undo.changeSetId)) return;
+    undoBusy.current = true;
+    setBusy(`undo:${undo.id}`);
+    setUndoResult(null);
+    try {
+      const result = await command<{ status: 'succeeded' | 'failed' | 'conflict'; manualPaths: string[] }>('changeset.undo', { changeSetId: undo.changeSetId });
+      recordWrite('changeset.undo', `继续撤销：${result.status}`);
+      const paths = result.manualPaths.length ? ` 待处理文件：${result.manualPaths.join('、')}` : '';
+      setUndoResult(result.status === 'succeeded'
+        ? { ok: true, message: '撤销已完成。文件状态已重新检查，不会自动重发原任务。' }
+        : { ok: false, message: `${result.status === 'conflict' ? '撤销遇到冲突，冲突文件未被覆盖。请先核对文件版本。' : '撤销尚未完成，已完成的步骤保留。请核对文件版本后重试。'}${paths}` });
+    } catch (error) {
+      setUndoResult({ ok: false, message: `撤销未完成：${userFacingSystemText(error instanceof Error ? error.message : String(error))}。可重新检查状态后重试。` });
+    } finally {
+      await reload();
+      undoBusy.current = false;
+      setBusy(null);
+    }
+  };
 
   const checkAndContinue = async (turnId: string) => {
     if (checkBusy.current || busy != null) return;
@@ -165,6 +188,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
         </div>
         <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
           {locateError != null ? <div className="panel warning" role="alert">{locateError}</div> : null}
+          {undoResult != null ? <div className={`panel ${undoResult.ok ? 'info' : 'warning'}`} role={undoResult.ok ? 'status' : 'alert'} data-zs-undo-result="1">{undoResult.message}</div> : null}
           {err != null ? <div className="panel warning">恢复状态读取失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
           {data == null && err == null ? <div className="panel info">正在检查上次回复状态…</div> : null}
           {data != null && !attention ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}
@@ -176,7 +200,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                 {data.unknownTurns.length > 0 ? <div>{previousReplySummary(data)}</div> : null}
                 {data.interruptedRuns.length > 0 ? <div>有 {data.interruptedRuns.length} 个任务上次中断了。任务和文件都还在，可打开原任务继续处理。</div> : null}
                 {data.pendingRelease.length > 0 ? <div>上次文件操作还未确认结束，相关请求会继续等待。检查后仍在等待时，可打开诊断详情核对。</div> : null}
-                {data.activeUndos.length > 0 ? <div>还有未完成的撤销操作，请回到原任务查看。</div> : null}
+                {data.activeUndos.length > 0 ? <div>还有未完成的撤销操作。可在详情中检查并继续撤销；遇到文件冲突会停止。</div> : null}
               </div>
               <div className="row tight wrap" style={{ marginTop: 8 }}>
                 {data.gateHeld ? <button className="btn sm" disabled={busy != null} onClick={() => void resumeGate()}>{busy === 'gate' ? '正在继续…' : '继续处理已排队的消息'}</button> : null}
@@ -303,7 +327,13 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               <div className="row tight"><strong>其它恢复记录</strong></div>
               <div className="small" style={{ marginTop: 4, lineHeight: 1.8 }}>
                 {data.stopRecord != null ? <div>上次退出：{fmtAt(data.stopRecord.at)} · 阶段 {data.stopRecord.phase ?? '?'}{data.stopRecord.reason != null ? ` · ${userFacingSystemText(data.stopRecord.reason ?? '')}` : ''}{data.stopRecord.drainPending === true ? ' · 停止时仍有执行未确认结束' : ''}</div> : null}
-                {data.activeUndos.length > 0 ? <div>未完成的撤销 {data.activeUndos.length} 项——请到原界面继续撤销；检查文件版本后才能继续修改</div> : null}
+                {data.activeUndos.length > 0 ? <div data-zs-undo-records="1">
+                  <div>未完成的撤销 {data.activeUndos.length} 项。继续撤销会恢复这些操作的文件；执行前逐个检查当前版本，冲突文件保留。</div>
+                  {data.activeUndos.map((undo, index) => <div key={undo.id} className="row tight wrap" style={{ marginTop: 6 }}>
+                    <span>撤销记录 {index + 1} · {undo.status === 'failed' ? '上次未完成' : '尚未完成'}</span>
+                    <button className="btn sm" disabled={busy != null} data-zs-continue-undo={undo.id} onClick={() => void continueUndo(undo)}>{busy === `undo:${undo.id}` ? '正在撤销…' : '继续撤销'}</button>
+                  </div>)}
+                </div> : null}
                 {data.heldLeases.length > 0 ? <div>仍有 {data.heldLeases.length} 项文件保护未解除（确认执行结束后才能解除）</div> : null}
               </div>
             </div>

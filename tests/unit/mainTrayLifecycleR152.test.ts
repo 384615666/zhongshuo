@@ -8,6 +8,7 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WindowsTrayLifecycle } from '../../src/ui/windowsTray.ts';
 import * as runtimeMetadataDeadline from '../../src/contracts/runtimeMetadataDeadline.ts';
+import * as editContextMenu from '../../src/ui/editContextMenu.ts';
 
 // Exercise the actual main module with native process/OS boundaries replaced.
 // Transpilation stays in memory: no app bundle, native process or data is created.
@@ -97,6 +98,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
     powerMonitor: new EventEmitter(), screen: { getAllDisplays: () => [], getPrimaryDisplay: () => ({ id: 1 }) },
   };
   const mocks: Record<string, unknown> = {
+    './editContextMenu.ts': editContextMenu,
     '../contracts/runtimeMetadataDeadline.ts': runtimeMetadataDeadline,
     electron, 'node:path': path, 'node:crypto': crypto, 'node:url': url,
     'node:fs': {

@@ -10,7 +10,7 @@ import {TaskExecutionStatusView} from './components/TaskExecutionStatusView';
  * 单区域（对话/文件二选一——隐藏区域保留草稿与阅读位置）。预览由本页自渲染（dm audience
  * 隔离；此前 App 相邻拼一个无宽度规则的 PreviewPane=反例 C 的 341px 挤压来源）。
  *
- * 头部信息层级（R66 P5）：标题+执行态常驻；重命名/归档/导出会话记录/原界面收进 ⋯ 菜单
+ * 头部信息层级：标题+执行态常驻；重命名/归档/导出会话记录/任务记录收进 ⋯ 菜单
  * ——「导出会话记录…」明确命名导出对象（此前三个平铺「导出 MD/HTML/DOCX」被混淆为
  * 保存当前预览文件）；待验收/返工/中断/停止等**状态动作**保持在正文上方原位（就地反馈）。
  */
@@ -503,7 +503,7 @@ export function DmPage() {
                     ) : null}
                     <button
                       className="icon-btn sm"
-                      title="会话操作（重命名 / 归档 / 导出会话记录 / 原界面）"
+                      title="会话操作（重命名 / 归档 / 导出会话记录 / 任务记录）"
                       aria-haspopup="menu"
                       data-zs-dm-ops="hifi"
                       onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setOpsAt({ x: r.right - 260, y: r.bottom + 4 }); }}
@@ -730,7 +730,7 @@ export function DmPage() {
         ) : null}
       </div>
 
-      {/* ⋯ 会话操作菜单（R66 P5：重命名/归档/导出会话记录/原界面——头部不铺满按钮）。 */}
+      {/* 会话操作与任务记录。 */}
       {opsAt != null ? (
         <Menu anchor={opsAt} onClose={() => setOpsAt(null)}>
           <div className="menu-label">{dmTitle} · 会话操作</div>
@@ -746,7 +746,6 @@ export function DmPage() {
           <MenuItem icon="download" title="导出这条会话的 DOCX 记录" onClick={() => { setOpsAt(null); void doExport('docx'); }}>导出会话记录（DOCX）…</MenuItem>
           <div className="menu-sep" />
           <MenuItem icon="terminal" onClick={()=>{setOpsAt(null);setRecordsFor(activeId);}}>任务记录…</MenuItem>
-          <MenuItem icon="external-link" title="在原界面打开本会话的更多操作" onClick={() => { setOpsAt(null); void import('./App').then((m) => m.takeLegacy('current-dm')); }}>在原界面打开</MenuItem>
         </Menu>
       ) : null}
 

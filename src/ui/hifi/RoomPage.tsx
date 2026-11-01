@@ -59,12 +59,12 @@ export function RoomPage({ roomId }: { roomId: string }) {
     <div className="page-stack" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
       <div className="row tight wrap" style={{ padding: '10px 14px 0' }}>
         <span className="section-title">#{room.name}</span>
-        <span className="faint small">{roomMembers.length > 0 ? `成员：${roomMembers.map((m) => m.displayName).join('、')}` : rosterError != null ? '成员名单读取失败（保留上次名单；重试=切换视图）' : '暂无启用成员（仍可仅记录）'}</span>
-        <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在原界面打开本房间，管理附件、任务与成果" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面打开本房间</button>
+        <span className="faint small">{roomMembers.length > 0 ? `成员：${roomMembers.map((m) => m.displayName).join('、')}` : rosterError != null ? '成员名单读取失败，可刷新重试' : '暂无可用 AI，请先配置成员'}</span>
+        <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="打开本房间的消息、任务与成果" onClick={() => navigate(`/project/${room.projectId}/room/${room.id}`)}>打开房间</button>
       </div>
       <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
         {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——重试=切换视图或等待自动刷新）</div> : null}
-        {cards.length === 0 && readError == null ? <div className="panel info">主池暂无线程——发送第一条（或仅记录）。</div> : null}
+        {cards.length === 0 && readError == null ? <div className="panel info">还没有消息，发送第一条开始交流。</div> : null}
         {cards.map((c) => (
           <div
             key={c.threadId}

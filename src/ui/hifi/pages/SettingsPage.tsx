@@ -20,6 +20,7 @@ import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
 import { isExternalDeepLink } from '../lib/deepLink';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
+import { ExecutionConcurrencyPanel } from '../components/ExecutionConcurrencyPanel';
 import { runtimeModelDisplayName } from '../lib/format';
 import {
   CALL_BUDGET_ENABLED_SETTING_KEY,
@@ -54,7 +55,7 @@ const NAV: NavItem[] = [
   { key: 'general', label: '通用', icon: 'settings', hint: '启动与打开位置' },
   { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
   { key: 'notifications', label: '通知', icon: 'bell', hint: '管理桌面通知静音' },
-  { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: '调用预算、AI 成员的模型与权限' },
+  { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: '同时运行的 AI、调用预算、模型与权限' },
   { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
   { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
   { key: 'guide', label: '操作手册', icon: 'file-text', hint: '完整使用说明' },
@@ -70,6 +71,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'appearance', label: '设置个人与 AI 头像', keywords: '我的头像 个人头像 AI头像 上传 更换 恢复默认 图片', match: 'appearance-avatar-images' },
   { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用预算 调用次数 次数预算 启用 开启 关闭 上限 callBudget budget DIRECT AUTO DELIBERATE', match: 'call-budget' },
+  { section: 'runtime', label: '同时运行的 AI', keywords: '并发 并行 同时 运行 全局 每项目 同渠道 上限 concurrency', match: 'execution-concurrency' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
   { section: 'connections', label: '远程访问状态', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
   { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
@@ -721,8 +723,9 @@ function SectionRuntime() {
   const projectId = useStore((s) => s.activeProjectId);
   return (
     <div>
-      <SectionHead title="AI 设置" sub={<>管理调用预算，以及每位 AI 成员使用的程序、模型和权限。</>} />
+      <SectionHead title="AI 设置" sub={<>管理同时运行的 AI、调用预算，以及成员使用的程序、模型和权限。</>} />
       <CallBudgetSettingsRow />
+      <ExecutionConcurrencyPanel />
       {members.map((m) => {
         const rt = runtimes[m.id];
         return (
