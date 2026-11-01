@@ -48,9 +48,11 @@ export type AdmissionDecision = { granted: true } | { granted: false; reason: Ad
 
 export class DispatchAdmission {
   private readonly limits: AdmissionLimits;
+  private readonly currentLimits?: () => AdmissionLimits;
   private readonly held = new Map<string, AdmissionDimensions>();
 
-  constructor(limits?: Partial<AdmissionLimits>, private readonly currentLimits?: () => AdmissionLimits) {
+  constructor(limits?: Partial<AdmissionLimits>, currentLimits?: () => AdmissionLimits) {
+    this.currentLimits = currentLimits;
     this.limits = {
       globalMaxInFlight: limits?.globalMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_GLOBAL', DEFAULT_EXECUTION_CONCURRENCY.globalMaxInFlight),
       perProjectMaxInFlight: limits?.perProjectMaxInFlight ?? envInt('ZS_MAX_INFLIGHT_PROJECT', DEFAULT_EXECUTION_CONCURRENCY.perProjectMaxInFlight),

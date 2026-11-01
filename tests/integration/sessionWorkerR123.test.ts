@@ -129,7 +129,7 @@ describe('R123 production worker session scope isolation with no real models',()
     }finally{await nextAdapter.closeAllSessions();await restarted?.awaitInFlightTurns(3000);await f.close();}
   },15000);
 
-  it('parallel admission preserves frozen task scopes, real member identity and read-only adapter permissions',async()=>{
+  it('default peak-four parallel admission preserves frozen task scopes, real member identity and read-only adapter permissions',async()=>{
     const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('只读完成',120)});
     const f=await collisionFixture('r123-scope-immutable',{members:1,adapter});
     try{
@@ -139,7 +139,7 @@ describe('R123 production worker session scope isolation with no real models',()
       expect(f.count("SELECT count(*) n FROM thread_reply_requests WHERE write_scope_json!='{}'")).toBe(6);
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE')&&f.count("SELECT count(*) n FROM thread_reply_requests WHERE status='succeeded'")===6);
       expect(roots.map(r=>scope(f,r.taskId))).toEqual(before);
-      expect(adapter.peakMember).toBe(2);
+      expect(adapter.peakMember).toBe(4);
       for(const input of adapter.sessionsSeen.values()){
         expect(input.memberId).toBe(f.projects[0]!.members[0]);
         expect(input.policyId).toBe('policy-analyze');

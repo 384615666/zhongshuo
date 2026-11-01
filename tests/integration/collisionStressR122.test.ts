@@ -36,12 +36,12 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       expect(f.adapter.turns).toHaveLength(10);f.save({ok:true,requests:10,independentTasks:10,executions:10});
     }finally{await f.close();}
   });
-  it('36 simultaneous requests across three rooms run the same role at peak two and keep every reply in its original thread',async()=>{
+  it('36 simultaneous requests across three rooms reach the default peak four for the same role and keep every reply in its original thread',async()=>{
     simulation();const f=await collisionFixture('same-role-burst',{members:1});
     try{
       const roots=await Promise.all(Array.from({length:36},(_,i)=>f.send(0,i%3,[0],`TOKEN_A_${i} 独立处理这件事`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
-      expect(f.adapter.turns).toHaveLength(36);expect(f.adapter.peakMember).toBe(2);
+      expect(f.adapter.turns).toHaveLength(36);expect(f.adapter.peakMember).toBe(4);
       expect(new Set(f.adapter.turns.map(t=>t.sessionId)).size).toBe(36);
       for(let i=0;i<roots.length;i++){
         const root=roots[i]!,turn=f.adapter.turns.find(t=>t.taskId===root.taskId)!;
@@ -55,7 +55,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     }finally{await f.close();}
   },30000);
 
-  it('12 roots each address three roles while two other projects compete; every selected recipient replies once',async()=>{
+  it('12 roots each address three roles while two other projects compete at the default peak four; every selected recipient replies once',async()=>{
     simulation();let script:FakeTurnScript=finish('ready');const adapter=new ObservedAdapter({turnScriptSequencer:()=>script});
     const f=await collisionFixture('many-roles-projects',{projects:3,adapter});
     adapter.onStart=(_session,input,scope)=>{
@@ -71,13 +71,13 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     try{
       const roots=await Promise.all(Array.from({length:12},(_,i)=>f.send(i%3,Math.floor(i/3)%3,[0,1,2],`TOKEN_MULTI_${i} 请分别完成独立工作`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'),20000);
-      expect(f.adapter.turns).toHaveLength(60);expect(f.adapter.peak).toBeGreaterThan(1);expect(f.adapter.peak).toBeLessThanOrEqual(2);
+      expect(f.adapter.turns).toHaveLength(60);expect(f.adapter.peak).toBe(4);
       for(const root of roots){
         const children=f.db.prepare('SELECT id,owner_member_id,status FROM tasks WHERE parent_task_id=?').all(root.taskId) as Array<{id:string;owner_member_id:string;status:string}>;
         expect(children).toHaveLength(3);expect(new Set(children.map(t=>t.owner_member_id)).size).toBe(3);expect(children.every(t=>t.status==='DONE')).toBe(true);
         for(const child of children)expect(f.adapter.turns.filter(t=>t.taskId===child.id)).toHaveLength(1);
       }
-      f.save({ok:true,roots:12,childExecutions:36,totalExecutions:60,peak:f.adapter.peak,peakMember:f.adapter.peakMember,providerLimit:2});
+      f.save({ok:true,roots:12,childExecutions:36,totalExecutions:60,peak:f.adapter.peak,peakMember:f.adapter.peakMember,providerLimit:4});
     }finally{await f.close();}
   },30000);
 
@@ -141,25 +141,25 @@ describe('R122 disruptive overlapping user requests through formal commands and 
     }finally{await f.close();}
   },30000);
 
-  it('production session-scoped role slots allow two same-role read-only threads to run concurrently without mixing context',async()=>{
+  it('production session-scoped role slots reach the default four same-role read-only threads without mixing context',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:({text})=>finish(/TOKEN_[A-Za-z0-9_]+/.exec(text)?.[0]??'done',120)});
     const f=await collisionFixture('session-parallel-production',{members:1,adapter});
     try{
       const roots=await Promise.all(Array.from({length:12},(_,i)=>f.send(0,i%3,[0],`TOKEN_SESSION_${i} 独立分析`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
-      expect(adapter.peakMember).toBe(2);expect(new Set(adapter.turns.map(t=>t.sessionId)).size).toBe(12);
+      expect(adapter.peakMember).toBe(4);expect(new Set(adapter.turns.map(t=>t.sessionId)).size).toBe(12);
       for(let i=0;i<roots.length;i++)expect(new Set([...adapter.turns.find(t=>t.taskId===roots[i]!.taskId)!.text.matchAll(/TOKEN_SESSION_(\d+)\b/g)].map(m=>Number(m[1])))).toEqual(new Set([i]));
       f.save({ok:true,productionAdmission:true,requests:12,peakSameRole:adapter.peakMember,threadLeaks:0});
     }finally{await f.close();}
   },30000);
 
-  it('production session-scoped role slots run full-access writes concurrently within the provider limit',async()=>{
+  it('production session-scoped role slots run full-access writes at the default provider limit four',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('已更新',50)});
     const f=await collisionFixture('session-write-production',{members:1,writable:true,adapter});
     try{
       const roots=await Promise.all(Array.from({length:8},(_,i)=>f.send(0,i%3,[0],`TOKEN_SERIAL_${i} 修改文件`)));
       await f.pumpUntil(()=>roots.every(r=>f.taskStatus(r.taskId)==='DONE'));
-      expect(adapter.peakMember).toBe(2);expect(adapter.peakWritableRoot).toBe(2);
+      expect(adapter.peakMember).toBe(4);expect(adapter.peakWritableRoot).toBe(4);
       expect(new Set(adapter.turns.map(t=>t.sessionId)).size).toBe(8);
       f.save({ok:true,productionAdmission:true,requests:8,peakSameRole:adapter.peakMember,peakWritableRoot:adapter.peakWritableRoot});
     }finally{await f.close();}
