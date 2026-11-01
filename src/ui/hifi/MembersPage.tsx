@@ -75,6 +75,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const [roomMemberErrs, setRoomMemberErrs] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{projectId: string; summary: string; notes: string[]} | null>(null);
   const genRef = useRef(0);
   const [query,setQuery]=useState('');
   const [statusFilter,setStatusFilter]=useState('all');
@@ -234,6 +236,19 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             {membersInScope?.length ?? '…'} 名成员
           </span>
           <div className="spacer" />
+          {!projArchived && !projRemoved ? <button className="btn sm" disabled={scanning || !projectId} onClick={async () => {
+            if (!projectId || scanning) return;
+            const targetProjectId = projectId;
+            setScanning(true);
+            try {
+              const result = await command<{created: unknown[]; existing: unknown[]; notes: string[]; skipped: Array<{reason: string}>}>('member.discoverDefaults', {projectId: targetProjectId});
+              setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: [...result.notes, ...result.skipped.map(item => item.reason)]});
+              await Promise.all([refreshMembers(targetProjectId), refreshRooms(targetProjectId)]);
+              if (getState().activeProjectId === targetProjectId) await reload();
+            } catch (error) {
+              setScanResult({projectId: targetProjectId, summary: '扫描未完成', notes: [userFacingSystemText((error as Error).message)]});
+            } finally { setScanning(false); }
+          }}>{scanning ? '扫描中…' : '扫描本机 AI'}</button> : null}
           <button
             className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="重新装载成员/工作量/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
           {projArchived ? (
@@ -246,6 +261,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             </button>
           )}
         </div>
+
+        {scanResult?.projectId === projectId ? <div className="panel info" role="status">
+          <div>{scanResult.summary}</div>
+          {scanResult.notes.map((note, index) => <div className="small" key={index}>{note}</div>)}
+        </div> : null}
 
         {projectId == null || projectId === '' ? (
           <div className="panel info">尚未打开项目——从侧栏项目菜单或顶栏「项目管理」进入（成员按项目分列）。</div>

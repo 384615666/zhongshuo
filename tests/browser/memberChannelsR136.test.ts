@@ -61,6 +61,7 @@ window.zs={command:async envelope=>{
   let data;
   switch(method){
     case 'member.list': data={items:[member]};break;
+    case 'member.discoverDefaults':data={created:[],existing:[{displayName:channel.label}],skipped:[],notes:['fixture: 未找到其他 CLI']};break;
     case 'member.runtime':data=info;break;
     case 'member.runtimes':data={projectId:'p',items:[{memberId:'m1',info}]};break;
     case 'runtime.status':data={memberBindings:[{memberId:'m1',kind:channel.kind,model:channel.model}],dispatchGuard:{fakeAllowed:false,realDispatchGuard:false}};break;
@@ -80,6 +81,10 @@ window.run=async()=>{
   store.setState(s=>({...s,activeProjectId:'p',boot:'ready',projects:[{id:'p',displayName:'隔离项目',revision:0}],rooms:[],members:[],dispatchGuard:{fakeAllowed:false,realDispatchGuard:false},readErrors:{}}));
   store.initDraftPersistence('r136-isolated-ui');
   await mount(MembersPage,{projectId:'p'});
+  await until(()=>document.querySelector('[data-zs-member-bind="m1"]'));
+  button('扫描本机 AI').click();
+  await until(()=>text().includes('扫描完成：新增 0 位 AI，已有 1 位。'));
+  check('scan reports missing CLI without a model call',text().includes('fixture: 未找到其他 CLI')&&last('member.discoverDefaults').projectId==='p');
   await until(()=>document.querySelector('[data-zs-member-bind="m1"]'));
   document.querySelector('[data-zs-member-bind="m1"]').click();
   await until(()=>document.querySelector('[aria-label="runtime 渠道"]'));
@@ -154,7 +159,7 @@ window.run=async()=>{
   check('template creation describes actual program and limitations',text().includes('程序：'+channel.executable)&&text().includes('项目受限和只读模式尚未认证'));
   document.querySelector('[data-zs-template-create-save]').click();await until(()=>saved===4);
   check('template creates independent member from authoritative snapshot',last('memberTemplate.createMember').templateId==='t1'&&last('memberTemplate.createMember').expectedRevision===7);
-  const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|setRuntime)|memberTemplate\.(list|update|saveFromMember|createMember)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;
+  const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|setRuntime|discoverDefaults)|memberTemplate\.(list|update|saveFromMember|createMember)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;
   check('only metadata reads and member configuration writes: '+calls.filter(c=>!allowed.test(c.method)).map(c=>c.method).join(','),calls.every(c=>allowed.test(c.method)));
   return{ok:checks.every(c=>c.ok),checks};
 };
@@ -184,6 +189,6 @@ setTimeout(()=>app.exit(3),40000);
     const line = output.split(/\r?\n/).find(line=>line.startsWith('R136_RESULT '));
     const report = line == null ? {ok:false,error:output.slice(-5000)} : JSON.parse(line.slice('R136_RESULT '.length)) as {ok:boolean;checks?:Array<{name:string;ok:boolean}>;error?:string};
     expect(report,JSON.stringify(report)).toMatchObject({ok:true});
-    expect(report.checks).toHaveLength(34);
+    expect(report.checks).toHaveLength(35);
   }, 55000);
 });

@@ -19,6 +19,8 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { buildDshRuntime } from './build-dsh-runtime.mjs';
+import { brandIco, brandIconName } from './lib/brand-icon.mjs';
+import { brandWindowsExecutable } from './lib/brand-executable.mjs';
 
 const repo = resolve(import.meta.dirname, '..');
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
@@ -42,6 +44,11 @@ cpSync(electronDist, staging, { recursive: true, dereference: true });
 // ② 应用目录：resources/app（存在时 Electron 优先于 default_app）。
 const appDir = join(staging, 'resources', 'app');
 mkdirSync(appDir, { recursive: true });
+cpSync(join(repo, 'logo.png'), join(appDir, 'logo.png'));
+const iconBytes=brandIco(), iconName=brandIconName(iconBytes);
+writeFileSync(join(appDir, iconName), iconBytes);
+writeFileSync(join(appDir, 'desktop-brand.json'),JSON.stringify({icon:iconName}));
+brandWindowsExecutable(join(staging,'electron.exe'),join(appDir,iconName));
 writeFileSync(join(appDir, 'package.json'), JSON.stringify({
   name: 'zhongshuo',
   productName: '众说',

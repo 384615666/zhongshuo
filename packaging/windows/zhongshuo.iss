@@ -33,7 +33,7 @@ LicenseFile={#PayloadDir}\LICENSE
 InfoBeforeFile={#PayloadDir}\安装说明.txt
 SetupIconFile={#BrandIcon}
 UninstallDisplayName=众说
-UninstallDisplayIcon={app}\resources\app\Zhongshuo.ico
+UninstallDisplayIcon={app}\resources\app\{#BrandIconName}
 Uninstallable=yes
 UninstallLogMode=append
 UninstallLogging=yes
@@ -71,10 +71,10 @@ Name: "desktopicon"; Description: "在桌面创建众说快捷方式"; GroupDesc
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\Zhongshuo.ico"; AppUserModelID: "com.zhongshuo.desktop"
+Name: "{group}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop"
 Name: "{group}\众说操作手册"; Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"
 Name: "{group}\卸载众说"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\Zhongshuo.ico"; AppUserModelID: "com.zhongshuo.desktop"; Tasks: desktopicon
+Name: "{userdesktop}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop"; Check: RefreshDesktopIcon
 
 [Run]
 Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; Description: "打开众说"; Flags: nowait postinstall skipifsilent unchecked
@@ -83,6 +83,24 @@ Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; Description: "打开众说
 ; Inno removes only recorded installed files/shortcuts/its uninstall registration.
 
 [Code]
+procedure RefreshShellItem(EventId, Flags: LongWord; ItemPath: String; Reserved: LongWord);
+  external 'SHChangeNotify@shell32.dll stdcall';
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then begin
+    if FileExists(ExpandConstant('{userdesktop}\众说.lnk')) then
+      RefreshShellItem($2000, $1005, ExpandConstant('{userdesktop}\众说.lnk'), 0);
+    if FileExists(ExpandConstant('{group}\众说.lnk')) then
+      RefreshShellItem($2000, $1005, ExpandConstant('{group}\众说.lnk'), 0);
+  end;
+end;
+
+function RefreshDesktopIcon(): Boolean;
+begin
+  Result := WizardIsTaskSelected('desktopicon') or FileExists(ExpandConstant('{userdesktop}\众说.lnk'));
+end;
+
 function ProbeCreateFile(FileName: String; DesiredAccess, ShareMode: LongWord;
   SecurityAttributes: LongWord; CreationDisposition, Flags: LongWord;
   TemplateFile: THandle): THandle;

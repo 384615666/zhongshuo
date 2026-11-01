@@ -250,6 +250,8 @@ export interface ProjectMember {
   /** 同一 runtime 的第二成员实例用序号消歧（§3.2） */
   ordinal?: number;
   enabled: boolean;
+  /** Current program lookup, independent of the user's saved enable preference. */
+  runtimeAvailable?: boolean;
   workState: MemberWorkState;
   workStateReason?: string;
   /** 决策 38：成员级模型与思考强度 */
