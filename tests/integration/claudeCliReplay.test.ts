@@ -467,6 +467,18 @@ describe('中断/退出确认/收拢（本地真实进程 fixture，零额度）
 });
 
 describe('R87 standing instructions use the native system channel', () => {
+  it('R152 planning keeps a fully authorized member in native read-only tools before dispatching implementation',async()=>{
+    let args:string[]=[];
+    const proc=makeProc([{lines:[j({type:'result',subtype:'success',session_id:'r152_planning',result:'done'})],exit:0}]);
+    const adapter=new ClaudeCliAdapter({model:'test-model'},a=>{args=[...a];return proc;});
+    const session=await adapter.openSession({...openInput(),writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey:'test'}});
+    await adapter.startTurn(session,{...turnInput('r152-plan'),stage:'coordination.planning'});
+    expect(args[args.indexOf('--permission-mode')+1]).toBe('plan');
+    expect(args[args.indexOf('--tools')+1]).toBe('Read,Glob,Grep');
+    expect(args[args.indexOf('--disallowedTools')+1]).toContain('Write,Edit');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    await collect(adapter,session,'completed');await adapter.close(session);
+  });
   for (const permission of ['readonly','full','project'] as const) for (const image of [false, true]) for (const resume of [false, true]) {
     it(`${permission} / ${image ? 'image' : 'text'} / ${resume ? 'resume' : 'first'}`, async () => {
       const fullAccess = permission === 'full';

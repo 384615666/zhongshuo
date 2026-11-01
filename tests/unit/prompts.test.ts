@@ -334,7 +334,7 @@ describe('敏感模式扫描（PP-03：渲染全文零命中）', () => {
 
 describe('R87 actual collaboration role instructions',()=>{
   it.each([
-    ['AUTO','coordinator','coordination.planning','规划/审核职责不改变'],
+    ['AUTO','coordinator','coordination.planning','先分工，再开展自己的工作'],
     ['DIRECT','executor','coordination.child','接手同伴的具体请求'],
     ['AUTO','coordinator','coordination.integration','不再生成新计划'],
   ] as const)('%s/%s/%s selects the real role, without a conflicting sole executor instruction',(mode,role,stage,expected)=>{
@@ -350,7 +350,7 @@ describe('信封 hash（PP-04 一致性基础）', () => {
     const a = { b: 1, a: { d: 2, c: [3, 4] } };
     const b = { a: { c: [3, 4], d: 2 }, b: 1 };
     expect(canonicalJson(a)).toBe(canonicalJson(b));
-    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.7');
+    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.8');
     expect(computeTurnBundleHash.name).toBe('computeTurnBundleHash');
   });
 });

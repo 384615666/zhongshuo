@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { chatAnswer } from '../contracts/chatAnswer.ts';
 import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
 import { validateExtractCacheForInput, extractCacheIsTruncated, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
+import { regenerateDocumentCache } from './documentCache.ts';
 
 /** 组装行 → 信封附件条目（第二十九轮二/三/四）。图片=持久发送选择：include 经成员认证与原件核验后提供字节输入；
  * omit/local-only/旧记录注入**未发送说明**，不宣称已读；文档类=原件实根+实身份+sha256 核对 +
@@ -21,6 +22,7 @@ function documentAttachmentForInput(
   row: DocAttachmentRow,
   blobRoot: string | undefined,
   allowImages = false,
+  missingCaches?: DocAttachmentRow[],
 ): { entry: { ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }; image?: NonNullable<TurnRequest['images']>[number] } | { error: string } {
   const label = row.source_name ?? row.id;
   const NL = String.fromCharCode(10);
@@ -40,9 +42,12 @@ function documentAttachmentForInput(
   const mapping = ARTIFACT_PARSE_KINDS[row.kind];
   if (mapping == null) return { error: `附件类型（${row.kind}）不在注入范围——拒绝组装` };
   const verified = readVerifiedBlob(row.blob_path, row.hash, blobRoot); // 原件缺失/改写/越界=拒绝
-  if (!verified.ok) return { error: verified.error.message };
+  if (!verified.ok) return { error: `无法读取附件「${label}」：${verified.error.message}。请恢复或重新导出原件后重试。` };
   const cache = validateExtractCacheForInput(row.extracted_text_json, row.hash, mapping.cache);
-  if (cache == null || cache.kind !== mapping.cache) return { error: `提取缓存缺失/无效（${label}）——重新预览生成缓存后重试（fail-closed，不以路径冒充已读）` };
+  if (cache == null || cache.kind !== mapping.cache) {
+    missingCaches?.push(row);
+    return { error: `提取缓存缺失/无效（${label}）——需要从保存的原件重新提取后重试` };
+  }
   const cacheTruncated = extractCacheIsTruncated(cache);
   let windowTruncated = false;
   let joined = '';
@@ -225,9 +230,60 @@ export interface AssembledTurn {
   resultKey: string;
 }
 
+/** Synchronous validation/rendering remains available to callers with prepared caches. */
 export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> {
+  return assembleTurn(input);
+}
+
+/**
+ * Generated deliveries do not require opening a preview before a peer can read
+ * them. Discover missing caches through the actual assembler (same room/DM
+ * boundaries and detail selection), rebuild from stored bytes, then assemble
+ * again. No failed/placeholder extraction ever enters a turn bundle.
+ */
+export function assembleDirectTurnWithAttachmentCache(input: AssembledTurnInput): DomainResult<AssembledTurn> | Promise<DomainResult<AssembledTurn>> {
+  const missing: DocAttachmentRow[] = [];
+  const assembled = assembleTurn(input, missing);
+  // Preserve the worker's synchronous preparation/start ordering for ready
+  // materials. Only actual extraction introduces an async boundary.
+  if (assembled.ok || missing.length === 0) return assembled;
+  return assembleWithMissingCaches(input);
+}
+
+async function assembleWithMissingCaches(input: AssembledTurnInput): Promise<DomainResult<AssembledTurn>> {
+  const attempted = new Set<string>();
+  for (;;) {
+    const missing: DocAttachmentRow[] = [];
+    const assembled = assembleTurn(input, missing);
+    const row = missing[0];
+    if (assembled.ok || row == null) return assembled;
+    if (attempted.has(row.id)) return assemblyFailure('attachment-changed', `附件在提取期间发生变化（${row.source_name ?? row.id}），请重试`);
+    attempted.add(row.id);
+    const inScope = (): boolean => input.db.prepare('SELECT 1 FROM artifacts WHERE id=? AND project_id=? AND conversation_id=?')
+      .get(row.id, input.task.projectId, input.task.conversationId) != null;
+    if (!inScope()) return assemblyFailure('attachment-scope-mismatch', '附件不属于本任务的项目/会话');
+    const parsed = await regenerateDocumentCache(row, input.blobRoot);
+    if (!parsed.ok) return assemblyFailure('attachment-extraction-failed', `无法提取附件「${row.source_name ?? row.id}」：[${parsed.error.code}] ${parsed.error.message}。原件保留；请修复或重新导出文件后重试，临时解析故障可稍后重试。`);
+    // Parsing yielded: use the assembler again before writing. Detached, revised,
+    // out-of-bound or now-unreadable attachments cannot receive a stale cache.
+    const currentMissing: DocAttachmentRow[] = [];
+    const current = assembleTurn(input, currentMissing);
+    if (current.ok || currentMissing.length === 0) return current;
+    const selected = currentMissing[0]!;
+    if (selected.id !== row.id || selected.hash !== row.hash || selected.revision !== row.revision
+      || selected.kind !== row.kind || selected.blob_path !== row.blob_path || selected.source_name !== row.source_name || !inScope()) {
+      return assemblyFailure('attachment-changed', `附件或输入范围在提取期间发生变化（${row.source_name ?? row.id}），请重试`);
+    }
+    const saved = input.db.prepare(`UPDATE artifacts SET extracted_text_json=?
+      WHERE id=? AND project_id=? AND conversation_id=? AND hash=? AND revision=? AND kind=? AND blob_path=? AND source_name IS ? AND extracted_text_json IS ?`)
+      .run(JSON.stringify(parsed.cache), row.id, input.task.projectId, input.task.conversationId, row.hash, row.revision, row.kind, row.blob_path, row.source_name, row.extracted_text_json);
+    if (saved.changes !== 1) return assemblyFailure('attachment-changed', `附件版本或缓存在提取期间发生变化（${row.source_name ?? row.id}），请重试`);
+  }
+}
+
+function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRow[]): DomainResult<AssembledTurn> {
   const { db, task } = input;
-  if (task.conversationKind === 'dm') return assembleDmTurn(input);
+  if (task.conversationKind === 'dm') return assembleDmTurn(input, missingCaches);
   if (task.threadId == null) {
     return assemblyFailure('missing-thread', '房间任务缺少线程引用');
   }
@@ -276,7 +332,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       continue;
     }
     // 文档类（PDF/DOCX/表格/幻灯片=严格缓存+原件核对；图片=未发送说明）——第二十九轮二/三/四。
-    const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages);
+    const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages, missingCaches);
     if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
     rootAttachments.push(doc.entry);
     if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);
@@ -474,7 +530,7 @@ function isAcceptableRootAuthor(authorType: string, authorId?: string): boolean 
  * 四重校验（不是 messageId 存在即接受）；无线程/房间/名单——roster 只含对端；
  * promptVersion=私信模板；task.threadId=NULL。
  */
-function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> {
+function assembleDmTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRow[]): DomainResult<AssembledTurn> {
   const { db, task } = input;
   if (task.rootMessageId == null) return assemblyFailure('missing-root-message', 'dm_turn 缺少根消息引用（本次用户消息）');
   const root = db
@@ -555,7 +611,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
         continue;
       }
       // 文档类（同房间装配——严格缓存+原件核对；图片=未发送说明）。
-      const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages);
+      const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages, missingCaches);
       if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
       rootAttachments.push(doc.entry);
     if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);

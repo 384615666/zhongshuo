@@ -8,7 +8,11 @@
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
-import { lockDomainsOverlap } from './directoryIdentity.ts';
+import { comparisonKey, lockDomainsOverlap } from './directoryIdentity.ts';
+import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
+import { resolveWriteConcurrency } from './writeConcurrency.ts';
+import { coordinationRoster } from './coordination.ts';
+import type { EffectiveWriteConcurrency } from '../contracts/writeConcurrency.ts';
 
 export interface LeaseRow {
   lock_domain: string;
@@ -42,7 +46,7 @@ export interface AcquireLeaseOk {
  * - 冲突时返回 WORKSPACE_BUSY 并列出全部重叠持有者（排队可见）。
  * - RT-07：`active` 与 `expired`（心跳超时但持有者未确认终止）都阻塞新写者；
  *   只有 `released`（正常释放或确认终止）才放行。
- * - 旧 parallel_writers 仍拒绝；session_scope 逐持有者核对身份与保护状态。
+ * - 共享写入逐持有者核对本次执行的完整权限、实际策略及保护状态。
  */
 export function acquireLease(
   db: ZhongshuoDatabase,
@@ -52,10 +56,10 @@ export function acquireLease(
 }
 
 function acquireLeaseInTransaction(db:ZhongshuoDatabase,input:AcquireLeaseInput):DomainResult<AcquireLeaseOk> {
-  if (input.policy !== 'single_writer' && input.policy !== 'session_scope') {
+  if (!['single_writer', 'session_scope', 'parallel_writers'].includes(input.policy)) {
     return domainErr(
       'CAPABILITY_UNSUPPORTED',
-      '当前按项目依次修改文件，不支持同时写入同一项目',
+      '文件修改并发策略无法识别',
     );
   }
   // 未确认释放的租约（active 或 expired）都是潜在持有者。
@@ -64,14 +68,15 @@ function acquireLeaseInTransaction(db:ZhongshuoDatabase,input:AcquireLeaseInput)
     .all() as LeaseRow[];
   const overlapping = rows.filter((row) => lockDomainsOverlap(row.lock_domain, input.lockDomain));
   const scope=writeSessionScope(db,input.ownerTurnId);
+  const fact=input.policy==='single_writer'?null:incomingWriteFact(db,input,scope);
   // Protected executions block new writers even if a legacy record lacks a lease.
   const protectedRoots=db.prepare(`SELECT p.canonical_path FROM agent_turns t
     JOIN workflow_runs r ON r.id=t.run_id JOIN tasks tk ON tk.id=r.task_id
     JOIN projects p ON p.id=tk.project_id
     WHERE (t.status='UNKNOWN' AND t.protection_state IS NOT 'released') OR t.protection_state='retained'`).all() as Array<{canonical_path:string}>;
   if(protectedRoots.some(p=>lockDomainsOverlap(p.canonical_path,input.lockDomain)))return domainErr('WORKSPACE_BUSY','此目录有未确认结束的执行，解除保护前不启动新的写入');
-  if(input.policy==='session_scope' && !scope)return domainErr('WORKSPACE_BUSY','共享写入会话身份无法核实');
-  if (overlapping.some(row=>input.policy!=='session_scope'||row.status!=='active'||row.lock_domain!==input.lockDomain||!canShareWriteLease(db,row.owner_turn_id,scope!))) {
+  if(input.policy!=='single_writer' && !fact)return domainErr('WORKSPACE_BUSY','共享写入的完整权限、项目目录或并发策略无法核实');
+  if (overlapping.some(row=>!fact||row.status!=='active'||row.lock_domain!==input.lockDomain||!canShareWriteLease(db,row.owner_turn_id,fact))) {
     return busy(overlapping);
   }
 
@@ -85,7 +90,8 @@ function acquireLeaseInTransaction(db:ZhongshuoDatabase,input:AcquireLeaseInput)
      ON CONFLICT (lock_domain, owner_turn_id) DO UPDATE SET
        epoch = excluded.epoch, heartbeat_at = excluded.heartbeat_at, status = 'active'`,
   ).run(input.lockDomain, input.ownerTurnId, epoch, input.now);
-  if(input.policy==='session_scope'){
+  db.prepare('INSERT OR REPLACE INTO daemon_state(key,value,updated_at) VALUES(?,?,?)').run(`write-lease-fact:${input.ownerTurnId}`,JSON.stringify(fact??{policy:'single_writer',lockDomain:input.lockDomain}),input.now);
+  if(fact){
     db.prepare('INSERT OR REPLACE INTO daemon_state(key,value,updated_at) VALUES(?,?,?)').run(`write-session-scope:${input.ownerTurnId}`,scope,input.now);
     // Keep durable evidence on both sides. A directory snapshot spanning another
     // writer cannot establish exclusive authorship, even when the bytes match.
@@ -109,10 +115,57 @@ export function writeSessionScope(db:ZhongshuoDatabase,turnId:string):string|nul
   return JSON.stringify([row.project_id,row.conversation_id,row.thread_id]);
 }
 
-function canShareWriteLease(db:ZhongshuoDatabase,turnId:string,incoming:string):boolean {
-  const actual=writeSessionScope(db,turnId);
-  const saved=db.prepare('SELECT value FROM daemon_state WHERE key=?').get(`write-session-scope:${turnId}`) as {value:string}|undefined;
-  return actual!=null&&saved?.value===actual&&actual!==incoming&&JSON.parse(actual)[0]===JSON.parse(incoming)[0];
+interface SharedWriteFact {
+  policy: 'session_scope' | 'parallel_writers';
+  fullAccess: true;
+  projectId: string;
+  memberId: string;
+  scope: string;
+  lockDomain: string;
+}
+
+function incomingWriteFact(db: ZhongshuoDatabase, input: AcquireLeaseInput, scope: string | null): SharedWriteFact | null {
+  if (!scope) return null;
+  const row=db.prepare(`SELECT tk.id taskId,tk.project_id projectId,tk.kind,tk.write_scope_json,t.member_id memberId,t.run_id runId,t.turn_purpose purpose,t.stage_key stageKey
+    FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id JOIN tasks tk ON tk.id=r.task_id WHERE t.id=?`).get(input.ownerTurnId) as {taskId:string;projectId:string;kind:string;write_scope_json:string;memberId:string;runId:string;purpose:string;stageKey:string}|undefined;
+  if (!row || row.kind==='dm_turn' || row.purpose==='format_repair') return null;
+  try {
+    const execution=db.prepare('SELECT value FROM daemon_state WHERE key=?').get(`execution-context:${input.ownerTurnId}`) as {value:string}|undefined;
+    const rosterScope=row.stageKey.startsWith('delib.')?coordinationRoster(db,row.taskId,row.runId).find(m=>m.memberId===row.memberId)?.writeScope:null;
+    const snapshot=execution?(JSON.parse(execution.value) as {writeScope:string}).writeScope:rosterScope??row.write_scope_json;
+    const frozen=JSON.parse(snapshot) as {runtime?:{kind?:string}};
+    const access=effectiveTaskWriteAccess(db,row.taskId,row.memberId,frozen.runtime?.kind??null,snapshot);
+    const resolved=resolveWriteConcurrency(db,{projectId:row.projectId,fullAccess:access.fullAccess,eligible:true,sessionScopeKey:scope});
+    if (!access.fullAccess || !access.modificationAuthorized || comparisonKey(access.root)!==input.lockDomain || resolved.writePolicy!==input.policy || input.policy==='single_writer') return null;
+    return {policy:input.policy,fullAccess:true,projectId:row.projectId,memberId:row.memberId,scope,lockDomain:input.lockDomain};
+  } catch { return null; }
+}
+
+function storedWriteFact(db:ZhongshuoDatabase,turnId:string,lockDomain:string):SharedWriteFact|null {
+  const saved=db.prepare('SELECT value FROM daemon_state WHERE key=?').get(`write-lease-fact:${turnId}`) as {value:string}|undefined;
+  if (!saved) return null;
+  try {
+    const fact=JSON.parse(saved.value) as SharedWriteFact;
+    const actual=writeSessionScope(db,turnId);
+    const turn=db.prepare(`SELECT t.member_id,tk.project_id,p.canonical_path FROM agent_turns t
+      JOIN workflow_runs r ON r.id=t.run_id JOIN tasks tk ON tk.id=r.task_id JOIN projects p ON p.id=tk.project_id WHERE t.id=?`).get(turnId) as {member_id:string;project_id:string;canonical_path:string}|undefined;
+    if (!turn || !actual || fact.scope!==actual || fact.fullAccess!==true || fact.memberId!==turn.member_id || fact.projectId!==turn.project_id || fact.lockDomain!==lockDomain || comparisonKey(turn.canonical_path)!==lockDomain || !['session_scope','parallel_writers'].includes(fact.policy)) return null;
+    return fact;
+  } catch { return null; }
+}
+
+function canShareWriteLease(db:ZhongshuoDatabase,turnId:string,incoming:SharedWriteFact):boolean {
+  const held=storedWriteFact(db,turnId,incoming.lockDomain);
+  return held!=null && held.projectId===incoming.projectId && held.policy===incoming.policy
+    && (incoming.policy==='parallel_writers'?held.memberId!==incoming.memberId:held.scope!==incoming.scope);
+}
+
+/** Restore the policy actually acquired, never today's project setting. Unknown,
+ * retained, expired and legacy leases always restore exclusive protection. */
+export function recordedWriteConcurrency(db:ZhongshuoDatabase,turnId:string,lockDomain:string):{writePolicy:EffectiveWriteConcurrency;writeSessionScopeKey?:string;writeFullAccess?:true} {
+  const lease=db.prepare("SELECT status FROM workspace_leases WHERE owner_turn_id=? AND lock_domain=? AND status!='released'").get(turnId,lockDomain) as {status:string}|undefined;
+  const fact=lease?.status==='active'?storedWriteFact(db,turnId,lockDomain):null;
+  return fact?{writePolicy:fact.policy,writeSessionScopeKey:fact.scope,writeFullAccess:true}:{writePolicy:'single_writer'};
 }
 
 /** Preserve the original bytes/hash, but prohibit automatic rollback of a

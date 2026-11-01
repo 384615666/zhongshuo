@@ -224,9 +224,9 @@ seedTurn('turn_p');
     releaseLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_new' });
   });
 
-  it('parallel_writers 已延期：入口拒绝，调用方无法绕过开启（§14.7/ADR-I19）', () => {
+  it('未核实完整权限、会话和显式策略的 parallel_writers 请求仍保守拒绝', () => {
     const r = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw1', policy: 'parallel_writers', now: 500 });
-    expect(r).toMatchObject({ ok: false, error: { code: 'CAPABILITY_UNSUPPORTED' } });
+    expect(r).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
     // 未产生任何租约行
     expect(db.prepare("SELECT count(*) c FROM workspace_leases WHERE owner_turn_id = 'pw1'").get()).toMatchObject({ c: 0 });
   });

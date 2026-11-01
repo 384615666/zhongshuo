@@ -70,7 +70,7 @@ export interface PipeClientOptions {
 }
 
 export interface PipeClient {
-  send<T = unknown>(envelope: unknown): Promise<T>;
+  send<T = unknown>(envelope: unknown, options?: { timeoutMs: number }): Promise<T>;
   close(): void;
   readonly closed: boolean;
 }
@@ -137,20 +137,22 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
           get closed() {
             return closed;
           },
-          send<T = unknown>(envelope: unknown): Promise<T> {
+          send<T = unknown>(envelope: unknown, sendOptions?: { timeoutMs: number }): Promise<T> {
             if (closed) return Promise.reject(new Error('管道连接已关闭'));
             const commandId = (envelope as { commandId?: string })?.commandId;
             if (typeof commandId !== 'string' || commandId.length === 0) {
               return Promise.reject(new Error('信封缺少 commandId，无法关联响应'));
             }
+            const timeoutMs = sendOptions?.timeoutMs ?? requestTimeoutMs;
+            if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) return Promise.reject(new Error('请求超时参数无效'));
             return new Promise<T>((resolve, reject) => {
               const pending: Pending = { commandId, resolve: resolve as (v: unknown) => void, reject, timer: null as unknown as NodeJS.Timeout };
               pending.timer = setTimeout(() => {
                 // 超时：从关联表移除；服务端稍后的迟到响应因无等待者被丢弃（见 data 处理），
                 // 不会错配给下一个请求。连接保持（FIFO 语义仍按 commandId 精确配对）。
                 pendingByCommandId.delete(commandId);
-                reject(new Error(`请求超时（${requestTimeoutMs}ms）：${(envelope as { method?: string }).method ?? commandId}`));
-              }, requestTimeoutMs);
+                reject(new Error(`请求超时（${timeoutMs}ms）：${(envelope as { method?: string }).method ?? commandId}`));
+              }, timeoutMs);
               pending.timer.unref?.();
               pendingByCommandId.set(commandId, pending);
               socket.write(`${JSON.stringify(envelope)}\n`);

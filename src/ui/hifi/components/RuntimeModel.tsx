@@ -21,7 +21,7 @@ export function RuntimeModel({projectId,kind,executable,value,onChange,disabled}
   const savedOutsideCatalog=catalog!=null&&value!==''&&!models.some(model=>model.id===value);
   return <div className="field"><span className="field-label">模型</span>
     <Select ariaLabel="模型" searchable disabled={disabled} value={value} onChange={onChange} title={value!==''?`完整模型 ID：${value}`:'选择模型'} options={[
-      {value:'',label:catalog?'选择模型':'正在读取模型清单…'},
+      {value:'',label:catalog?'选择模型':error?'暂无法读取模型清单':'正在读取模型清单…'},
       ...options,
     ]}/>
     <div className="field-hint">{error?`模型清单读取失败：${userFacingSystemText(error ?? '')}；保存值保留。`:catalog?.warning??(catalog?(catalog.truncated?'列表较长，仅显示部分。':null):'正在读取模型清单…')}{savedOutsideCatalog?' 当前保存的模型不在清单中，已原样保留。':null}

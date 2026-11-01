@@ -52,6 +52,13 @@ afterAll(async () => {
 });
 
 describe('pipeClient 超时后迟到响应按 commandId 丢弃', () => {
+  it('permits a longer explicit metadata window without extending the connection default',async()=>{
+    const client=await connectPipe(socketPath,{token:'test',requestTimeoutMs:50});
+    try{
+      await expect(client.send({protocolVersion:1,commandId:'cmd-A',method:'member.runtimeCatalog',params:{}},{timeoutMs:600})).resolves.toMatchObject({commandId:'cmd-A',ok:true,data:'A-late-result'});
+      await expect(client.send({protocolVersion:1,commandId:'invalid',method:'m',params:{}},{timeoutMs:0})).rejects.toThrow('超时参数');
+    }finally{client.close();}
+  });
   it('A 超时 → B 正常 → A 迟到响应被丢弃，B 不拿 A 的结果', async () => {
     const client = await connectPipe(socketPath, { token: 'test', requestTimeoutMs: 50 });
     const a = client.send({ protocolVersion: 1, commandId: 'cmd-A', method: 'm', params: {} });

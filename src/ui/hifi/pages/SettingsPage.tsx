@@ -963,7 +963,7 @@ function SectionData() {
           </button>
         } />
         <SettingsRow label="最近一次数据操作" hint="结果会在这里重新读取；失败或中断不会自动重试" control={
-          <div className="col" style={{alignItems:'flex-end',gap:5,minWidth:230}}>
+          <div className="col settings-data-operation" style={{alignItems:'flex-end',gap:5,width:230,minWidth:0,maxWidth:'100%'}}>
             {dataOpError != null ? <Tag tone="danger" icon="alert-triangle">无法读取：{userFacingSystemText(dataOpError ?? '')}</Tag> : dataOp?.latest == null ? <span className="small faint">还没有数据操作记录</span> : (
               <Tag tone={dataOp.latest.state === 'succeeded' ? 'success' : dataOp.latest.state === 'failed' || dataOp.latest.state === 'unknown' ? 'warning' : 'info'} icon={dataOp.latest.state === 'succeeded' ? 'check-circle' : dataOp.latest.state === 'copying' || dataOp.latest.state === 'waiting-close' ? 'clock' : 'alert-triangle'}>
                 {dataOp.latest.state === 'succeeded' ? (dataOp.latest.action === 'import' ? '已使用新的数据副本' : '完整备份已完成') : dataOp.latest.state === 'copying' ? '正在复制' : dataOp.latest.state === 'waiting-close' ? '等待关闭' : dataOp.latest.state === 'failed' ? '未完成，原件保留' : '上次操作中断，未切换'}
@@ -997,7 +997,7 @@ function SectionData() {
         label="从旧版本导入草稿"
         hint="首次从旧版本升级或复制数据目录后，可在这里导入旧的草稿和未确认发送记录。"
       >
-        <div className="small" style={{ lineHeight: 1.7, minWidth: 320 }}>
+        <div className="small" style={{ lineHeight: 1.7, minWidth: 0, width: 'min(320px, 100%)' }}>
           <div className="row tight">
             <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重新扫描旧目录，结果见下方', 'info')); }}>重扫旧目录</button>
           </div>

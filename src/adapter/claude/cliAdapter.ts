@@ -380,6 +380,8 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
+    const planningOnly = input.stage === 'coordination.planning';
+    if (planningOnly && this.options.extraArgs?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','分工规划不接受覆盖工具权限的额外启动参数');
     const analysisOnly = state.writeAccess?.analysisOnly === true;
     if (analysisOnly && state.writeAccess != null && (state.writeAccess.fullAccess === true || state.writeAccess.modificationAuthorized)) {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED','analysisOnly请求与可写权限不一致，未启动模型');
@@ -396,11 +398,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,
           ...CLAUDE_ANALYSIS_TOOL_ARGS);
       }
-    } else if (state.writeAccess?.fullAccess && input.repairOnly !== true) {
+    } else if (state.writeAccess?.fullAccess && input.repairOnly !== true && !planningOnly) {
       if (!['bypassPermissions',undefined].includes(this.options.permissionMode)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','完整权限与成员配置不匹配');
       if(state.writeAccess.launchConfigurationKey && claudeLaunchIdentity(this.options,session.cwd).identityKey!==state.writeAccess.launchConfigurationKey) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','启动配置已变化，未启动模型');
       args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,'--permission-mode','bypassPermissions','--dangerously-skip-permissions');
-    } else if (state.writeAccess?.modificationAuthorized && input.repairOnly !== true) {
+    } else if (state.writeAccess?.modificationAuthorized && input.repairOnly !== true && !planningOnly) {
       if(state.writeAccess.allowedWriteRoots.length!==1 || state.writeAccess.allowedWriteRoots[0]!==session.cwd || !['acceptEdits','dontAsk'].includes(this.options.permissionMode??'') || this.options.extraArgs?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','写入范围或成员权限不匹配，未启动');
       const context=resolveClaudeConfiguration(session.cwd);
       if(context.reason) throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`不能核实受限执行的实际渠道：${context.reason}`);

@@ -5,14 +5,24 @@ import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
 import { RuntimeProtocol, RuntimeError, createWriter, bindInput, splitModelSelection, identity } from '../protocol.mjs';
 
-test('0.1.2 probe and ready advertise schema instructions and enforced format repair without readonly expansion', () => {
+test('0.1.3 probe and ready advertise separate planning and format repair without readonly expansion', () => {
   for (const type of ['probe', 'ready']) {
     const frame = identity(type);
-    assert.equal(frame.pluginVersion, '0.1.2');
+    assert.equal(frame.pluginVersion, '0.1.3');
     assert.equal(frame.capabilities.outputSchema, true);
     assert.equal(frame.capabilities.formatRepair, true);
+    assert.equal(frame.capabilities.planningOnly, true);
     assert.equal(frame.capabilities.readOnly, false);
   }
+});
+
+test('planning is a distinct fresh schema-bound text-only mode', async () => {
+  for (const extra of [{}, {outputSchema: {}, sessionId: 'old'}, {outputSchema: {}, images: [{}]}]) {
+    const f=fixture();await f.protocol.receive(command({mode:'planning',...extra}));
+    assert.ok(!f.calls.includes('prepare'));assert.equal(f.records.at(-1).error.code,'INVALID_REQUEST');
+  }
+  const f=fixture();await f.protocol.receive(command({mode:'planning',outputSchema:{type:'object'}}));
+  assert.equal(f.records.at(-1).status,'completed');
 });
 
 test('model selection retains nested provider and model ids',()=>{

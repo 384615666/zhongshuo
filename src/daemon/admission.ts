@@ -28,7 +28,9 @@ export interface AdmissionDimensions {
   /** 写类任务的物理目录（canonical_path）；只读为 null（不占写槽）。 */
   writeRootKey: string | null;
   /** Only independently bound full-access threads opt into shared writers. */
-  writePolicy?: 'single_writer' | 'session_scope';
+  writePolicy?: 'single_writer' | 'session_scope' | 'parallel_writers';
+  /** Explicit parallel sharing is only supplied by verified full-access worker paths. */
+  writeFullAccess?: boolean;
   writeSessionScopeKey?: string;
 }
 
@@ -62,10 +64,10 @@ export class DispatchAdmission {
       d.executionScopeKey == null || dims.executionScopeKey == null || d.executionScopeKey === dims.executionScopeKey
     )) >= 1) return { granted: false, reason: 'member' };
     if (dims.writeRootKey != null && this.count((d) => d.writeRootKey != null && lockDomainsOverlap(d.writeRootKey,dims.writeRootKey!) && !(
-      d.writePolicy==='session_scope' && dims.writePolicy==='session_scope'
-      && d.projectId===dims.projectId && d.writeRootKey===dims.writeRootKey
+      d.projectId===dims.projectId && d.writeRootKey===dims.writeRootKey
       && d.writeSessionScopeKey!=null && dims.writeSessionScopeKey!=null
-      && d.writeSessionScopeKey!==dims.writeSessionScopeKey
+      && ((d.writePolicy==='session_scope' && dims.writePolicy==='session_scope' && d.writeSessionScopeKey!==dims.writeSessionScopeKey)
+        || (d.writePolicy==='parallel_writers' && dims.writePolicy==='parallel_writers' && d.writeFullAccess===true && dims.writeFullAccess===true && d.memberId!==dims.memberId))
     )) >= 1) {
       return { granted: false, reason: 'write-root' };
     }

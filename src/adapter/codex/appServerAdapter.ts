@@ -809,7 +809,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         threadId: state.providerThreadId,
         input: providerInput,
         clientUserMessageId: input.dispatchKey,
-        sandboxPolicy:input.repairOnly===true ? {type:'readOnly',networkAccess:false} : state.writeAccess?.fullAccess ? {type:'dangerFullAccess'} : state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
+        sandboxPolicy:input.repairOnly===true || input.stage==='coordination.planning' ? {type:'readOnly',networkAccess:false} : state.writeAccess?.fullAccess ? {type:'dangerFullAccess'} : state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
         approvalPolicy:'never',
         ...(this.options.effort?{effort:this.options.effort}:{}),
         ...(input.outputSchema?{outputSchema:input.outputSchema}:{}),

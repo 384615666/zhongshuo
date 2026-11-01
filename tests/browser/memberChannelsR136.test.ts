@@ -23,7 +23,7 @@ describe('R136 member channel UI', () => {
   });
 
   it.each([
-    {kind:'deepseek-harness',label:'DeepSeek Harness',executable:'dsh',model:'harness-model',help:['安装官方 DeepSeek Harness','运行随包的 Harness 连接组件安装入口','dsh web 配置模型','密钥由 DSH 管理']},
+    {kind:'deepseek-harness',label:'DeepSeek Harness',executable:'dsh',model:'harness-model',help:['安装官方 DeepSeek Harness','随包连接组件','DSH 的 zhongshuo 配置中设置模型','dsh web 使用另一份配置','不会自动同步','密钥由 DSH 管理']},
     {kind:'pi',label:'Pi',executable:'pi',model:'pi-model',help:['安装官方 Pi CLI','在 Pi 中配置 provider 和模型','众说沿用本机 Pi 配置','密钥由 Pi 管理']},
   ])('creates, binds, reloads and templates $label through rendered forms without model calls', async channel => {
     const fixture = mkdtempSync(join(root, '.r136-member-channels-'));
@@ -156,7 +156,7 @@ window.run=async()=>{
   document.querySelector('[data-zs-template-save]').click();await until(()=>saved===3);
   check('save member template reads authoritative binding',last('memberTemplate.saveFromMember').memberId==='m1'&&last('memberTemplate.saveFromMember').expectedRevision===4);
   await mount(CreateFromTemplateModal,{projectId:'p',template:{...template,config:edited.config},onClose:()=>{},onSaved:()=>{saved++;}});
-  check('template creation describes actual program and limitations',text().includes('程序：'+channel.executable)&&text().includes('项目受限和只读模式尚未认证'));
+  check('template creation describes actual program and channel setup',text().includes('程序：'+channel.executable)&&channel.help.every(copy=>text().includes(copy)));
   document.querySelector('[data-zs-template-create-save]').click();await until(()=>saved===4);
   check('template creates independent member from authoritative snapshot',last('memberTemplate.createMember').templateId==='t1'&&last('memberTemplate.createMember').expectedRevision===7);
   const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|setRuntime|discoverDefaults)|memberTemplate\.(list|update|saveFromMember|createMember)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;

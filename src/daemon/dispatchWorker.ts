@@ -19,7 +19,7 @@ import { capturedFileChanges, recordMessageFileChanges } from './messageFileChan
 import { humanFacingFile } from '../contracts/messageFileChanges.ts';
 import {mergeRoleMemory,RoleMemoryError} from '../persistence/stores/roleMemory.ts';
 import {memoryUpdateSchema,roleMemorySnapshotSchema,mergeRoleMemoryInputSchema,type MergeRoleMemoryInput} from '../contracts/roleMemory.ts';
-import { acquireLease, protectSharedWriteSnapshot, writeSessionScope } from './workspaceLocks.ts';
+import { acquireLease, protectSharedWriteSnapshot, writeSessionScope, recordedWriteConcurrency } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
 
 /**
@@ -51,9 +51,10 @@ import type { RuntimeAdapter, NormalizedRuntimeEvent, SessionRef } from '../cont
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
-import { assembleDirectTurn } from './turnInput.ts';
+import { assembleDirectTurnWithAttachmentCache } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
+import { resolveWriteConcurrency } from './writeConcurrency.ts';
 import {agentReplyText,chatAnswer,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
 import {
@@ -277,7 +278,7 @@ export class DispatchWorker {
           providerKey: this.providerKeyOf(row.memberId),
           writeRootKey: row.writeRootKey,
           ...(row.frozenScope!=null&&row.writeRootKey!=null&&writeSessionScope(this.db,row.turnId)!=null&&writeSessionScope(this.db,row.turnId)===this.kvGet(`write-session-scope:${row.turnId}`)
-            ?{writePolicy:'session_scope' as const,writeSessionScopeKey:writeSessionScope(this.db,row.turnId)!}:{}),
+            ?recordedWriteConcurrency(this.db,row.turnId,row.writeRootKey):{}),
         });
       }
     } catch (err) {
@@ -822,13 +823,14 @@ export class DispatchWorker {
     }
     // 统一派发准入（global/project/provider/member/write-root；启动窗口前占位——覆盖
     // openSession/startTurn；拒绝方放回 pending 并 skip，其他成员/项目的项照常领取）。
+    const writeConcurrency=resolveWriteConcurrency(this.db,{projectId:task.project_id,fullAccess:writeAccess.fullAccess===true,eligible:task.kind!=='dm_turn'&&!isRepairDispatch,sessionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id])});
     const admission = this.admission.tryAcquire(turnId, {
       memberId: member.id,
       executionScopeKey: JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id,member.id]),
       projectId: task.project_id,
       providerKey: this.providerKeyOf(member.id),
       writeRootKey: writeAccess.modificationAuthorized ? comparisonKey(writeAccess.root) : null,
-      ...(writeAccess.fullAccess&&task.kind!=='dm_turn'&&!isRepairDispatch?{writePolicy:'session_scope' as const,writeSessionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id])}:{}),
+      ...writeConcurrency,
     });
     if (!admission.granted) {
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -878,7 +880,7 @@ export class DispatchWorker {
           if(repairSourceShared)this.kvSet(`write-overlap:${turnId}`,'true');
         }
         if(writeAccess.modificationAuthorized) {
-          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:writeAccess.fullAccess&&task.kind!=='dm_turn'&&!isRepairDispatch?'session_scope':'single_writer',now:Date.now()});
+          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:writeConcurrency.writePolicy,now:Date.now()});
           if(!lease.ok) throw Object.assign(new Error('写入目录已有持有者'),{name:'WriteLeaseHeld'});
           this.kvSet(`write-lease:${turnId}`,comparisonKey(writeAccess.root));
         }
@@ -954,7 +956,7 @@ export class DispatchWorker {
       const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
       const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
       const executionBasis=generalRequest||coordination?.request?this.db.prepare(`SELECT t.current_delivery_id deliveryId,d.revision,d.manifest_hash manifestHash FROM tasks t LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?`).get(task.id) as {deliveryId:string|null;revision:number|null;manifestHash:string|null}:null;
-      const assembled = assembleDirectTurn({
+      const preparation = assembleDirectTurnWithAttachmentCache({
         db: this.db,
         writeAccess,
         allowImages: imageCapabilityAtAssembly.status === 'supported',
@@ -987,6 +989,7 @@ export class DispatchWorker {
         turnId,
         budget,
       });
+      const assembled = preparation instanceof Promise ? await preparation : preparation;
       if (!assembled.ok) {
         if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',assembled.error.message);
         if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,assembled.error.message);
@@ -1713,16 +1716,17 @@ export class DispatchWorker {
     const frozen=coordinationRoster(this.db,task.id,run.id);
     const memberScope=frozen.find(m=>m.memberId===step.memberId);
     let writeAccess:ReturnType<typeof effectiveTaskWriteAccess>;
-    let materials:ReturnType<typeof assembleDirectTurn>;
+    let materials:Awaited<ReturnType<typeof assembleDirectTurnWithAttachmentCache>>;
     const imageBinding=JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()));
     const imageCapability=memberImageCapability(this.db,step.memberId);
     try{
       if(frozen.length && !memberScope?.writeScope)throw Error(memberScope?.unavailableReason??'成员未包含在发送时的配置快照内');
       writeAccess=effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined);
-      materials=assembleDirectTurn({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess,skipFileDiscovery:true,
+      const preparation=assembleDirectTurnWithAttachmentCache({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess,skipFileDiscovery:true,
         task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq},
         identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
         budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns,...(budget.callBudget?{callBudget:budget.callBudget}:{})}});
+      materials=preparation instanceof Promise?await preparation:preparation;
       if(!materials.ok)throw Error(materials.error.message);
       // App-managed R93 details are derived from earlier visible answers, not
       // canonical stage material for any DELIB step; user uploads remain.
@@ -1738,13 +1742,14 @@ export class DispatchWorker {
       this.audit(task,run.id,null,'run.stepFailed',{stage:step.stage,memberId:step.memberId,message:String(error),failurePhase:'before-model',callStarted:false});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);pumpDeliberation(this.db,task.id,this.deliberationOptions(task.project_id));return;
     }
     // 统一派发准入（与 DIRECT 同一账本/语义；预算在上方已核对——预算限总量、准入限并发，不混用）。
+    const writeConcurrency=resolveWriteConcurrency(this.db,{projectId:task.project_id,fullAccess:writeAccess.fullAccess===true,eligible:!isRepair,sessionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id])});
     const admission = this.admission.tryAcquire(turnId, {
       memberId: step.memberId,
       executionScopeKey: JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id,step.memberId]),
       projectId: task.project_id,
       providerKey: this.providerKeyOf(step.memberId),
       writeRootKey: writeAccess.modificationAuthorized ? comparisonKey(writeAccess.root) : null,
-      ...(writeAccess.fullAccess&&!isRepair?{writePolicy:'session_scope' as const,writeSessionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id])}:{}),
+      ...writeConcurrency,
     });
     if (!admission.granted) {
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -1776,7 +1781,7 @@ export class DispatchWorker {
         // 全文入 bundle（PP-04：真实输入可核对——审计用 sha256(text) 复核）。
         ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, text: assembly.value.text,executionScopeKey:JSON.stringify([task.project_id,task.conversation_id,task.conversation_thread_id,step.memberId]),...(roleMemory?{roleMemory}:{}) }), textHash);
         if(writeAccess.modificationAuthorized){
-          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:writeAccess.fullAccess&&!isRepair?'session_scope':'single_writer',now:Date.now()});
+          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:writeConcurrency.writePolicy,now:Date.now()});
           if(!lease.ok)throw Object.assign(new Error('研讨写入目录已有持有者'),{name:'WriteLeaseHeld'});
           this.kvSet(`write-lease:${turnId}`,comparisonKey(writeAccess.root));
         }

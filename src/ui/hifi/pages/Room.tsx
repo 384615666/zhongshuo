@@ -747,6 +747,16 @@ export function RoomPage({
    对话池
    ============================================================ */
 
+/** Describe occupancy only. A lease may be retained after a turn stops, and
+ * neither the old project policy nor a writer count establishes its live mode. */
+export function WriteOccupancyLine({ lease }: { lease: NonNullable<AppState['writeLocks'][string]> }) {
+  const holders = [...new Set(lease.parallelHolders ?? [lease.ownerTaskId])];
+  return <div className="write-line" title="写入占用保留到执行确认结束；文件修改并发策略可在项目设置查看">
+    <Icon name="lock" size={11} />
+    <span className="truncate">{holders.length > 1 ? `写入占用：已登记 ${holders.length} 个任务` : `写入占用：${lease.ownerTaskLabel}`}</span>
+  </div>;
+}
+
 function RoomPool({
   roomId, threadId, onOpenSettings, onOpenResource,
 }: {
@@ -780,43 +790,13 @@ function RoomPool({
     return member?.principalType === 'agent' && member.enabled && member.runtimeAvailable !== false;
   }) ?? [];
   const lease = project ? lockOfProject(s, project.id) : null;
-  const parallel = project?.writeConcurrencyPolicy === 'parallel_writers';
-  const holders = lease ? (lease.parallelHolders ?? [lease.ownerTaskId]) : [];
-  const maxWriters = project?.maxParallelWriters;
 
   /* 只读场景也要保留"这是哪个目标"（减负 §2.1）：
      输入框被隐藏不等于身份消失，这里用同一套目标摘要元素（静态态）表达。 */
   return (
     <>
       <div className="pool" ref={listRef}>
-        {/**
-         * 写入占用：**一行**（减负 §3）。
-         *
-         * 历史：这里曾有一条常驻横幅，按用户要求整块删掉了（会被误读成
-         * "整个项目出问题了"）。现在按"正常缩成一行、异常给出原因和动作"处理：
-         *  · 无租约 → 不渲染（不需要占位说"没人写入"）；
-         *  · 单写者持锁或并行未满 → 一行 muted 文字，说明谁在写；
-         *  · 并发上限已满 → 警告行，写明策略、上限与动作。
-         * 策略解释（"同一物理目录最多 1 个受管理写入者"）进 title，不占常驻文案。
-         */}
-        {lease ? (
-          <div
-            className={`write-line${parallel && maxWriters && holders.length >= maxWriters ? ' warn' : ''}`}
-            title={parallel
-              ? `并行写入策略：同物理目录最多 ${maxWriters ?? '—'} 个任务同时修改文件；其他任务排队`
-              : '同一目录中的文件修改依次执行，其他任务排队'}
-          >
-            <Icon name={parallel && maxWriters && holders.length >= maxWriters ? 'alert-triangle' : 'lock'} size={11} />
-            <span className="truncate">
-              {parallel
-                ? `写入占用：${holders.length}${maxWriters ? `/${maxWriters}` : ''} 个任务正在改文件`
-                : `写入占用：${lease.ownerTaskLabel} 正在写入`}
-            </span>
-            {parallel && maxWriters && holders.length >= maxWriters ? (
-              <span className="faint">已达上限，新任务会排队；可在项目设置调整上限</span>
-            ) : null}
-          </div>
-        ) : null}
+        {lease ? <WriteOccupancyLine lease={lease} /> : null}
 
         {room && enabledRoomAgentIds.length === 0 ? (
           <div className="panel warning" style={{ marginBottom: 10 }}>

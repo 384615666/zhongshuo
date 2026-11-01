@@ -89,6 +89,7 @@ import { getReceipt } from '../persistence/commandGateway.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
+import { projectWriteConcurrencyCommand } from './writeConcurrency.ts';
 
 function assertPreparedRuntimeConfigurations(receipts:readonly PreparedRuntimeConfiguration[]):void {
   try{for(const receipt of receipts)receipt.assertCurrent();}
@@ -1019,6 +1020,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     const management = memberManagementCommand(deps.db, env.method, env.params, run, (code,message) => { throw new DaemonCommandError(code,message); }, deps.remoteAudit != null);
     if (management != null) return withCommandId({ok:true,...management});
     switch (env.method) {
+      case 'project.writeConcurrency.get':
+      case 'project.writeConcurrency.set': {
+        const result=projectWriteConcurrencyCommand(deps.db,env.method,env.params,run,(code,message)=>{throw new DaemonCommandError(code,message);},deps.remoteAudit!=null);
+        return withCommandId({ok:true,...result});
+      }
       case 'project.writeAccess.get': {
         if(deps.remoteAudit) throw new DaemonCommandError('FORBIDDEN','项目写入授权仅限本机');
         const p=z.strictObject({projectId:z.string().min(1)}).parse(env.params);

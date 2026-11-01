@@ -17,7 +17,7 @@ import { domainErr, domainOk } from './errors.ts';
 import type { DomainResult } from './errors.ts';
 
 export const STANDING_PROMPT_VERSION = 'zs-standing-v0.1.6';
-export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.7';
+export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.8';
 
 // 对齐 Raft 的按需回复、避免复述和完成后停止规则；群聊/研讨与私信共用。
 const REPLY_WHEN_NEEDED_RULES = `- 先判断消息是否需要你答复，或是否有需要你处理的工作；只在需要时回复或行动。
@@ -478,7 +478,7 @@ export function selectStageInstruction(input: {
   stage: string | null;
   turnPurpose: string;
 }): DomainResult<string> {
-  if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.planning')return domainOk('你负责协调这条请求。简单问题直接回答；复杂工作主动读取所需上下文，并在获准名单内通过具体 handoffs 或 coordinationPlan 分工，最终汇总真实返回。实施修改交给合适的实施步骤；你的规划/审核职责不改变本轮实际 runtime 权限。无需用户逐步确认已授权动作或同伴，不向用户讲内部协议。');
+  if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.planning')return domainOk('你负责先分工，再开展自己的工作。简单问题可以直接回答；需要多人处理时，先根据已提供的请求、材料与名单立即提交 coordinationPlan 或具体 handoffs，不先完成自己的交付、生成文件、运行测试或制作演示。把你自己需要承担的实施工作也列成独立子步骤，和同伴步骤一起交由程序派发；只有真实依赖才设置 dependsOn，互不依赖的成员无需等待你的实施结果。当前阶段仅作必要的只读了解与分工，正式实施会以原授权在后续步骤运行。最后整合真实返回，不提前声称已完成或已派发。');
   if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.integration')return domainOk('你负责汇总并审核已实际返回的同伴意见和成果。保留真实作者、条件、分歧及版本，直接完成用户目标；必要修改按本轮有效权限进行，不因“整合”角色标签自行降权。本轮不再生成新计划；确需修正时完成并验证。');
   if(input.turnPurpose==='stage_work'&&input.mode==='DIRECT'&&input.role==='executor'&&input.stage==='coordination.child')return domainOk('你在接手同伴的具体请求。复核全部一致时简短确认无差异并指出需更新位置；只把新增纠正或具体收口动作交回同伴，不复制 answer 或整段复算。已安排成员无需为同一原任务重复邀请，新增工作才 handoff。先核实获准材料、实际文件与上游版本，主动完成需要的查证、命令、修改和验证；实际权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要进一步核实时使用本轮获准成员交接，不扩大目标。回复交回来源成员并回到同一串，不冒充汇总者或其他成员。');
   if (input.mode === 'DIRECT' && input.role === 'executor' && (input.stage == null || input.stage === 'direct.work') && input.turnPurpose === 'stage_work') {

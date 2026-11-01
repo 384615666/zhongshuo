@@ -10,6 +10,16 @@ const turn:TurnRequest={turnId:'t',dispatchKey:'d',inputBundleId:'b',text:'synth
 // Parameter-only interceptors explicitly model an already-live transport.
 // They spawn nothing; actual lifecycle behavior is covered by the local R126 protocol tests.
 describe('R82 actual adapter permission inputs; intercepted before CLI/model execution',()=>{
+  it('R152 Codex planning narrows a full-access turn to a read-only sandbox',async()=>{
+    const calls:Array<{method:string;params:Record<string,unknown>}>=[];
+    const adapter=new CodexAppServerAdapter({sandboxMode:'danger-full-access',model:'gpt-6-luna'});
+    const wire=adapter as unknown as {child:{exitCode:null;signalCode:null};ensureProcess:()=>unknown;writeLine:()=>void;request:(method:string,params:Record<string,unknown>,onReply?:(value:unknown)=>void)=>Promise<unknown>};
+    wire.child={exitCode:null,signalCode:null};wire.ensureProcess=()=>wire.child;wire.writeLine=()=>{};
+    wire.request=async(method,params,cb)=>{calls.push({method,params});const value=method==='turn/start'?{turn:{id:'provider-turn'}}:{thread:{id:'provider-thread'}};cb?.(value);return value;};
+    const input:OpenSessionInput={projectId:'p',memberId:'m',taskId:'t',threadId:'th',sessionGeneration:0,cwd:'D:/planning',policyId:'full',writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey:'frozen'}};
+    const session=await adapter.openSession(input);await adapter.startTurn(session,{...turn,stage:'coordination.planning'});
+    expect(calls.find(c=>c.method==='turn/start')!.params).toMatchObject({sandboxPolicy:{type:'readOnly',networkAccess:false},approvalPolicy:'never'});
+  });
   it.each([false,true])('Codex explicit thread and turn sandbox writable=%s',async writable=>{
     const calls:Array<{method:string;params:Record<string,unknown>}>=[];
     const adapter=new CodexAppServerAdapter({sandboxMode:'workspace-write',model:'gpt-6-luna'});

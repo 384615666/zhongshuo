@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { ProbeResult, RuntimeCapabilities, TurnRequest } from '../../contracts/runtime.ts';
 import { externalRuntimeLaunchIdentity } from '../cli/configuration.ts';
@@ -21,14 +22,17 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
   capabilities(): RuntimeCapabilities { return deepseekHarnessCapabilities(); }
   protected arguments(): string[] { return [...PROFILE_ARGS, '--zs-stdio']; }
   protected validate(session: CliSession, input: TurnRequest): void {
+    const planning = input.stage === 'coordination.planning';
     if (input.images?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 图片输入尚未认证，请换用已支持图片的成员', true);
-    if (!input.repairOnly && (!session.input.writeAccess?.fullAccess || session.input.writeAccess.analysisOnly ||
+    if (!input.repairOnly && !planning && (!session.input.writeAccess?.fullAccess || session.input.writeAccess.analysisOnly ||
       ![undefined, 'bypassPermissions'].includes(this.options.permissionMode)))
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 当前支持原生完整权限；只读分析和项目受限编辑尚未认证', true);
     if (input.repairOnly && !isRecord(input.outputSchema))
       throw new AdapterCallError('VALIDATION_INVALID', 'Harness 格式补交缺少结果结构，未启动执行', true);
     if (input.repairOnly && session.requestedSessionId)
       throw new AdapterCallError('VALIDATION_INVALID', 'Harness 格式补交需要独立的新会话，不能续接原执行', true);
+    if (planning && (input.repairOnly || !isRecord(input.outputSchema) || session.requestedSessionId))
+      throw new AdapterCallError('VALIDATION_INVALID', 'Harness 协作规划需要独立的新会话与成果结构', true);
     if (this.options.model && !/^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,199}$/.test(this.options.model))
       throw new AdapterCallError('VALIDATION_INVALID', 'DeepSeek Harness 模型编号无效', true);
     const expected = session.input.writeAccess?.launchConfigurationKey;
@@ -48,12 +52,13 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
       turn.ready = true;
       if (turn.stopRequested) { this.cancel(session, turn); return; }
       if ((turn.input.outputSchema && frame.capabilities.outputSchema !== true) ||
-        (turn.input.repairOnly && frame.capabilities.formatRepair !== true)) {
+        (turn.input.repairOnly && frame.capabilities.formatRepair !== true) ||
+        (turn.input.stage === 'coordination.planning' && frame.capabilities.planningOnly !== true)) {
         this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 连接组件需要升级；请运行新版便携包中的 DeepSeek Harness 连接组件安装入口后再继续任务', true);
         return;
       }
       this.send(turn, { v: 1, type: 'execute', requestId: turn.requestId, cwd: session.ref.cwd, prompt: turn.input.text,
-        mode: turn.input.repairOnly ? 'format-repair' : 'full', ...(session.requestedSessionId ? { sessionId: session.requestedSessionId } : {}),
+        mode: turn.input.stage === 'coordination.planning' ? 'planning' : turn.input.repairOnly ? 'format-repair' : 'full', ...(session.requestedSessionId ? { sessionId: session.requestedSessionId } : {}),
         ...(this.options.model ? { model: this.options.model } : {}), ...(this.options.effort ? { effort: this.options.effort } : {}),
         ...(session.input.developerInstructions ? { developerInstructions: session.input.developerInstructions } : {}),
         ...(turn.input.outputSchema ? { outputSchema: turn.input.outputSchema } : {}) });
@@ -71,10 +76,10 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
         case 'text': this.text(session, turn, event.text); break;
         case 'thinking': this.text(session, turn, event.text, true); break;
         case 'tool-start':
-          if (turn.input.repairOnly) throw Error('Harness 格式补交不允许执行工具');
+          if (turn.input.repairOnly || turn.input.stage === 'coordination.planning') throw Error('Harness 当前阶段不允许执行工具');
           this.toolStart(session, turn, event.id, event.name, event.input); break;
         case 'tool-end':
-          if (turn.input.repairOnly) throw Error('Harness 格式补交不允许执行工具');
+          if (turn.input.repairOnly || turn.input.stage === 'coordination.planning') throw Error('Harness 当前阶段不允许执行工具');
           this.toolEnd(session, turn, event.id, event.isError, event.output); break;
         case 'usage': this.usage(session, turn, event); break;
         default: throw Error('Harness 返回了未知事件类型');
@@ -96,10 +101,24 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
     throw Error('Harness 返回了未知消息类型');
   }
   private async query(flag: '--zs-probe' | '--zs-models'): Promise<Record<string, unknown>> {
+    if (this.options.cwd) {
+      let available = false;
+      try { available = statSync(this.options.cwd).isDirectory(); } catch { /* A missing project is not a missing connector. */ }
+      if (!available) throw new AdapterCallError('RESOURCE_NOT_FOUND', '当前项目目录不存在或不可访问，无法读取该目录下的 Harness 配置；请先选择有效项目目录', true);
+    }
     const entry = resolveAgentExecutable('deepseek-harness', this.options.executable);
     const output = await new Promise<string>((resolve, reject) => execFile(entry.command, [...entry.prefixArgs, ...PROFILE_ARGS, flag],
-      { cwd: this.options.cwd, env: entry.env ? { ...process.env, ...entry.env } : undefined, windowsHide: true, timeout: this.options.requestTimeoutMs ?? 10000, maxBuffer: 1024 * 1024 },
-      (error, stdout) => error ? reject(new AdapterCallError('CAPABILITY_UNSUPPORTED', '无法读取 Harness 连接组件，请先安装官方 dsh 并运行众说连接组件安装入口', true)) : resolve(stdout)));
+      // Provider catalogs can refresh at startup. A metadata timeout must not
+      // misdiagnose a healthy connector as missing or erase configured providers.
+      { cwd: this.options.cwd, env: entry.env ? { ...process.env, ...entry.env } : undefined, windowsHide: true, timeout: this.options.requestTimeoutMs ?? 30000, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (!error) { resolve(stdout); return; }
+        const issue = error as Error & { killed?: boolean; code?: string | number };
+        const message = issue.killed ? 'Harness 模型配置读取超时，请检查当前渠道的连接后重试；没有修改配置或发起模型推理'
+          : issue.code === 'ENOENT' ? 'Harness 程序或项目目录不可访问，请重新选择已安装的官方 dsh 并检查项目目录'
+          : 'Harness 配置或众说连接组件启动失败；请先检查官方 dsh 能否正常启动，组件需要修复时运行当前安装包 runtime-tools/deepseek-harness/setup.cmd（保留已有渠道和 MCP 配置）';
+        reject(new AdapterCallError('CAPABILITY_UNSUPPORTED', message, true));
+      }));
     let result: unknown;
     try { result = JSON.parse(output.trim()); } catch { throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Harness 连接组件返回了无效信息，请重新安装连接组件', true); }
     if (!isRecord(result) || result.v !== 1 || result.runtime !== 'zhongshuo-dsh') throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Harness 连接组件版本不兼容', true);

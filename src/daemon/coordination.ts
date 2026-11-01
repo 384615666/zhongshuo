@@ -252,7 +252,7 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const roomDirect=routeJson&&JSON.parse(routeJson).mode==='DIRECT'&&task.kind==='room_task'&&task.parent_task_id==null&&task.source_connection_id==null
     &&(queued?JSON.parse(queued.roster_json).length:coordinationRoster(db,taskId).length)>0;
   if(routeJson && (JSON.parse(routeJson).mode==='AUTO'||roomDirect) && !dispatchKey.includes(':conversation:')) {
-    return {kind:'planning' as const,run:null,request,note:`按【本轮指令】自然理解谁来做、先后顺序和是否需要同伴核对；直接点名接单也可以按用户要求使用这里已有的正式交接。正文中的成员姓名与中文相邻提及同样是用户要求，不以输入框解析出的名单代替语义判断。明确要求先处理再由同伴核对时，用 coordinationPlan 的 dependsOn 或完成前一步后提交 handoffs，后一步读取本次成果；同伴尚未执行时不能宣称整件事完成。普通单人可完成的工作直接完成，不因可用成员多就派工，也不要让用户选择模式、调整设置或重新发送相同要求。coordinationPlan=null 表示不创建计划；handoffs 和 coordinationPlan 二选一，无交接时 handoffs=[]。提交计划的回合只做必要调查与分工，不先实施同一工作再让子步骤重复实施；若已完成修改，交付实际结果即可。所有步骤共用信封预算，预留2次整合，不扩充总预算。计划字段：summary、steps；每步 key/memberId/title/objective/role/dependsOn，role=analysis/implementation/review，依赖只能引用本计划key且无环；评审依赖实施并读取冻结的实际版本。权限以本轮输入头为准，不由角色降级。已授权成员无需逐个确认，不使用 request_participant，不派发名单外成员；只有程序接受才算已排队。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
+    return {kind:'planning' as const,run:null,request,note:`按【本轮指令】自然理解谁来做、先后顺序和是否需要同伴核对；直接点名接单也可以按用户要求使用这里已有的正式交接。正文中的成员姓名与中文相邻提及同样是用户要求，不以输入框解析出的名单代替语义判断。明确要求先处理再由同伴核对时，用 coordinationPlan 的 dependsOn 或完成前一步后提交 handoffs，后一步读取本次成果；同伴尚未执行时不能宣称整件事完成。纯问答或问候直接回答，不因名单里人多就造交接；需要实际执行、修改或验证时，本轮先提交工作步骤，一人承担也把自己列为实施子步骤，不要让用户选择模式、调整设置或重发。coordinationPlan=null 表示不创建计划；handoffs 和 coordinationPlan 二选一，无交接时 handoffs=[]。提交计划的回合只做必要的只读了解与分工；你自己的实施和验证也放到后续子步骤。先提交所有独立同伴工作，再开始自己的工作，不为交接串起不存在的依赖。所有步骤共用信封预算，预留2次整合，不扩充总预算。计划字段：summary、steps；每步 key/memberId/title/objective/role/dependsOn，role=analysis/implementation/review，依赖只能引用本计划key且无环；评审依赖实施并读取冻结的实际版本。实施子步骤使用原有授权；本轮规划工具限制不改变后续实施权限。已授权成员无需逐个确认，不使用 request_participant，不派发名单外成员；只有程序接受才算已排队。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
   }
   return null;
 }
@@ -476,7 +476,7 @@ function freezeRecipientRequests(db:ZhongshuoDatabase,runId:string,taskId:string
   })();
 }
 
-/** Bounded pump; serialized steps prevent concurrent full-access writers and stale read/write overlap. */
+/** Bounded pump; ready steps enter admission together, with leases enforcing the selected write policy. */
 export function pumpCoordinations(db: ZhongshuoDatabase) {
   const page=(key:string,predicate:string,limit:number)=>{
     const cursor=Number((db.prepare('SELECT value FROM daemon_state WHERE key=?').get(key) as {value:string}|undefined)?.value??0);
@@ -628,18 +628,24 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     const waitingSteps=steps.filter(s=>s.status==='WAITING_USER'&&!db.prepare(`SELECT 1 FROM workflow_runs r
       LEFT JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=? AND
       (r.status IN ('RUNNING','WAITING','QUEUED','STOPPING') OR a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING','UNKNOWN')) LIMIT 1`).get(s.child_task_id));
-    if(steps.some(s=>s.handoff_json!=null && s.status!=='DONE'&&!waitingSteps.includes(s))) return;
-    const next=plan.steps.find(p=>steps.find(s=>s.step_key===p.key)!.handoff_json==null && p.dependsOn.every(key=>steps.find(s=>s.step_key===key)!.status==='DONE'));
-    if(next) {
+    // Submit every independent assignment before the coordinator starts its own
+    // implementation. Actual execution still goes through admission and leases.
+    const ready=plan.steps.filter(p=>steps.find(s=>s.step_key===p.key)!.handoff_json==null && p.dependsOn.every(key=>steps.find(s=>s.step_key===key)!.status==='DONE'))
+      .sort((a,b)=>Number(a.memberId===parent.owner_member_id&&a.role==='implementation')-Number(b.memberId===parent.owner_member_id&&b.role==='implementation'));
+    if(ready.length) {
       if(parent.status==='WAITING_USER')db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=?").run(parent.id);
+      for(const next of ready) {
       const step=steps.find(s=>s.step_key===next.key)!;
       const upstream=next.dependsOn.map(key=>(JSON.parse(steps.find(s=>s.step_key===key)!.handoff_json!) as {output:unknown}).output);
       if(upstream.some(h=>h==null)) throw Error('上游没有可交接的正式版本');
       db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify({upstream}),run.run_id,next.key);
       enqueueOutbox(db,{dispatchKey:`task:${step.child_task_id}:initial`,stopGenerationAtEnqueue:0});
       db.prepare("UPDATE coordination_messages SET status='queued',updated_at=? WHERE child_task_id=? AND status='accepted'").run(Date.now(),step.child_task_id);
-      event(db,parent,run.run_id,'coordination.stepQueued',{stepKey:next.key,childTaskId:step.child_task_id,upstream});return;
+      event(db,parent,run.run_id,'coordination.stepQueued',{stepKey:next.key,childTaskId:step.child_task_id,upstream});
+      }
+      return;
     }
+    if(steps.some(s=>s.handoff_json!=null && s.status!=='DONE'&&!waitingSteps.includes(s))) return;
     if(waitingSteps.length){
       if(parent.status!=='WAITING_USER'){
         db.prepare("UPDATE tasks SET status='WAITING_USER',revision=revision+1 WHERE id=?").run(parent.id);

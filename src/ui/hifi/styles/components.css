@@ -1760,6 +1760,12 @@ button.composer-file-token-open:hover {
   overflow-x: auto;
 }
 
+.settings-data-operation .tag {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* 分区标题：一句话说明这一节是干什么的 */
 .settings-section-head {
   margin-bottom: 14px;
@@ -1845,9 +1851,16 @@ button.composer-file-token-open:hover {
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
+    width: 100%;
+    min-width: 0;
   }
   .settings-nav-label {
-    padding: 0 4px 0 0;
+    display: none;
+  }
+  .settings-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
   }
   .settings-nav-project {
     padding: 0;
@@ -1873,15 +1886,13 @@ button.composer-file-token-open:hover {
   display: flex;
   padding-bottom: 0;
   overflow: hidden;
-  scrollbar-gutter: auto;
 }
 .settings-layout.settings-guide-layout {
   flex: 1;
   width: 100%;
-  max-width: none;
   min-height: 0;
   min-width: 0;
-  margin: 0;
+  margin-block: 0;
   padding-top: var(--page-top-gap);
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
@@ -1896,7 +1907,6 @@ button.composer-file-token-open:hover {
 .settings-guide-layout > .settings-body {
   display: flex;
   min-height: 0;
-  max-width: none;
   overflow: hidden;
 }
 .settings-guide {
@@ -1917,25 +1927,11 @@ button.composer-file-token-open:hover {
   .settings-layout.settings-guide-layout {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
-    gap: var(--sp-3);
+    gap: 14px;
   }
   .settings-guide-layout > .settings-nav {
-    gap: var(--sp-2);
     overflow: visible;
-    flex-direction: column;
-    flex-wrap: nowrap;
   }
-  .settings-guide-layout .settings-search { flex: none; }
-  .settings-guide-layout .settings-nav-group {
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    width: 100%;
-    min-width: 0;
-    padding-bottom: var(--sp-1);
-  }
-  .settings-guide-layout .settings-nav-item { flex: 0 0 auto; width: auto; white-space: nowrap; }
-  .settings-guide-layout .settings-nav-label { display: none; }
 }
 
 .method-chip {

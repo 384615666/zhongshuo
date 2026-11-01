@@ -6,7 +6,7 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Notification as ElectronNotification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, shell, Notification as ElectronNotification } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +21,8 @@ import {findLocalDataRoot} from '../contracts/localDataCopy.ts';
 import { resolveDisplayPlacement } from './testDisplay.ts';
 import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
 import { installedDaemonPipe, installedDesktopConfiguration } from './installedDesktop.ts';
+import { WindowsTrayLifecycle } from './windowsTray.ts';
+import { isRuntimeMetadataRead, RUNTIME_METADATA_PIPE_DEADLINE_MS } from '../contracts/runtimeMetadataDeadline.ts';
 
 const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
 const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
@@ -41,6 +43,9 @@ const rendererRoot = resolve(__dirname, 'renderer');
 let daemonProcess: ChildProcess | null = null;
 let pipe: PipeClient | null = null;
 let daemonShuttingDown = false;
+let daemonClosed = false;
+let daemonShutdownRequest: Promise<unknown> | null = null;
+let mainWindow: BrowserWindow | null = null;
 
 /**
  * 打包形态（DEV-15）：resources/app 下自带 daemon.cjs+随包 Node（daemon/node/node.exe）
@@ -97,12 +102,7 @@ async function failDesktopStartup(error: unknown): Promise<void> {
   const detail = error instanceof Error ? error.message : String(error);
   process.stderr.write(`[zhongshuo-ui] 启动失败：${detail}\n`);
   if (installedDesktop) await dialog.showMessageBox({ type: 'error', title: '众说无法启动', message: '没有打开众说。', detail: `${detail}\n\n诊断日志：${startupLog ?? '日志目录不可写'}`, buttons: ['关闭'], noLink: true });
-  let ownsDaemon = false;
-  try {
-    const owner = JSON.parse(readFileSync(join(appDataDir, 'locks', 'daemon.lock.d', 'owner.json'), 'utf8')) as { pid?: number };
-    ownsDaemon = daemonProcess?.pid != null && owner.pid === daemonProcess.pid;
-  } catch { /* Never stop an unconfirmed or other instance's daemon. */ }
-  if (daemonAuthed && ownsDaemon) await shutdownDaemon();
+  if (daemonAuthed && ownsRunningDaemon()) await shutdownDaemon();
   else if (daemonProcess != null && daemonProcess.exitCode == null) daemonProcess.kill();
   app.exit(1);
 }
@@ -180,6 +180,7 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
       void failDesktopStartup(Error(`后台服务异常退出（${code}）。请查看诊断日志中的具体原因。`));
     }
   });
+  daemonProcess.once('close', () => { daemonClosed = true; });
 }
 
 /** daemon 停机结构化事实（第十四轮三：正常优雅/明确失败/超时未确认分开呈现，不隐藏失败）。 */
@@ -203,6 +204,32 @@ function readDaemonExitFacts(): { code: number | null; signal: NodeJS.Signals | 
 }
 let daemonStopResult: DaemonShutdownFacts['daemonStopResult'] | null = null;
 
+function readDaemonOwnerPid(): number | null {
+  try {
+    const owner = JSON.parse(readFileSync(join(appDataDir, 'locks', 'daemon.lock.d', 'owner.json'), 'utf8')) as { pid?: number };
+    return typeof owner.pid === 'number' ? owner.pid : null;
+  } catch { return null; }
+}
+
+function ownsRunningDaemon(): boolean {
+  return daemonProcess?.pid != null && daemonExitFacts == null && readDaemonOwnerPid() === daemonProcess.pid;
+}
+
+/** Reuse the existing authenticated shutdown command for QA and native quit.
+ * A successful explicit IPC shutdown changes subsequent close into an exit;
+ * no additional renderer action or quit privilege is exposed. */
+function sendDaemonShutdown(envelope: unknown): Promise<unknown> {
+  daemonShutdownRequest ??= pipe!.send(envelope).then(result => {
+    if ((result as { ok?: boolean })?.ok === true) {
+      daemonShuttingDown = true;
+      readyAbort.abort();
+      connectionMonitor.dispose();
+    } else daemonShutdownRequest = null;
+    return result;
+  });
+  return daemonShutdownRequest;
+}
+
 /**
  * 正式停机（DEV-15 第十四轮三/四）：daemon.shutdown IPC（优雅：拒新命令→收拢→关库→退出
  * 0）+ 有界等待；超时 kill 兜底。全部入口（window-all-closed/演示结束/app 菜单）共用；重复
@@ -215,27 +242,39 @@ function shutdownDaemon(): Promise<DaemonShutdownFacts> {
   shutdownOnce = (async (): Promise<DaemonShutdownFacts> => {
     daemonShuttingDown = true;
     readyAbort.abort(); // 收束在途就绪尝试（第二十二轮三）——关停后不再等待/重连。
+    connectionMonitor.dispose();
     const stopRecordPath = join(appDataDir, 'state.sqlite');
     const facts: DaemonShutdownFacts = {
       requestDelivered: false, exited: false, exitCode: null, signal: null,
       timedOut: false, forceKilled: false, alreadyExited: daemonExitFacts != null, stopRecordPath,
     };
     try {
-      if (pipe != null && !pipe.closed) {
-        await pipe.send({ protocolVersion: 1, commandId: `ui-shutdown-${randomUUID()}`, method: 'daemon.shutdown', params: {} });
-        facts.requestDelivered = true;
+      // Never send a shutdown to a pipe belonging to another physical daemon.
+      // Closing during initial authentication may need a bounded final connection.
+      // The tray can appear before the spawned daemon publishes its owner file.
+      const ownerDeadline = Date.now() + 3_000;
+      while (daemonShutdownRequest == null && daemonProcess?.pid != null && readDaemonExitFacts() == null
+        && readDaemonOwnerPid() == null && Date.now() < ownerDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (daemonShutdownRequest == null && ownsRunningDaemon() && (pipe == null || pipe.closed)) {
+        pipe = await connectPipe(daemonPipe, { token: daemonToken, connectTimeoutMs: 3_000 });
+      }
+      if (daemonShutdownRequest != null || (ownsRunningDaemon() && pipe != null && !pipe.closed)) {
+        const result = await sendDaemonShutdown({ protocolVersion: 1, commandId: `ui-shutdown-${randomUUID()}`, method: 'daemon.shutdown', params: {} });
+        facts.requestDelivered = (result as { ok?: boolean })?.ok === true;
+        if (!facts.requestDelivered) facts.requestError = '后台未接受退出请求';
       }
     } catch (error) {
       facts.requestError = error instanceof Error ? error.message : String(error);
     }
     const d = daemonProcess;
     if (d != null) {
-      if (daemonExitFacts != null) {
+      if (daemonClosed) {
         facts.exited = true;
-        facts.exitCode = daemonExitFacts.code;
-        facts.signal = daemonExitFacts.signal;
       } else {
-        const exited = new Promise<boolean>((r) => { d.once('exit', () => r(true)); });
+        // close follows exit AND stdio drain, including the daemon stop-result.
+        const exited = new Promise<boolean>((r) => { d.once('close', () => r(true)); });
         const grace = (ms: number): Promise<boolean> => new Promise((r) => { const t = setTimeout(() => r(false), ms); t.unref?.(); });
         if (!await Promise.race([exited, grace(10_000)])) {
           facts.timedOut = true;
@@ -245,12 +284,12 @@ function shutdownDaemon(): Promise<DaemonShutdownFacts> {
         } else {
           facts.exited = true;
         }
-        // exit 回调（闭包）可能已写入——经函数读取避免控制流收窄。
-        const observed = readDaemonExitFacts();
-        if (observed != null) { facts.exitCode = observed.code; facts.signal = observed.signal; }
       }
+      const observed = readDaemonExitFacts();
+      if (observed != null) { facts.exitCode = observed.code; facts.signal = observed.signal; }
       if (daemonStopResult != null) facts.daemonStopResult = daemonStopResult;
     }
+    pipe?.close();
     try {
       writeFileSync(join(appDataDir, 'desktop-shutdown.json'), JSON.stringify({ at: Date.now(), ...facts }, null, 2), 'utf8');
     } catch { /* 落盘尽力而为——事实已在 stderr */ }
@@ -284,13 +323,15 @@ let dataPickSeq = 0; // R87 data-folder picker test hook (only when ZS_DATA_PICK
 let startupDataLocationError: string | null = null;
 let appDataDir = baseDataRoot;
 let ownsDesktopInstance = true;
-if (installedDesktop) {
+{
   // Lock the stable entry root before reconciling operations or following redirects.
   const profile = progressJobFile == null ? join(baseDataRoot, 'electron-user-data') : join(dataControlPaths(baseDataRoot).root, 'progress-app', 'electron-user-data');
   app.setPath('userData', profile);
   ownsDesktopInstance = app.requestSingleInstanceLock();
   if (!ownsDesktopInstance) app.quit();
   else app.on('second-instance', () => {
+    if (desktopLifecycle.quitting) return;
+    if (mainWindow != null && !mainWindow.isDestroyed()) { desktopLifecycle.show(); return; }
     const win = BrowserWindow.getAllWindows().find(candidate => !candidate.isDestroyed());
     if (win != null) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
   });
@@ -381,6 +422,58 @@ function pipeClosedCheck(): void {
   connectionMonitor.start();
 }
 
+function openTraySection(section: 'general' | 'guide'): void {
+  const win = mainWindow;
+  if (win == null || win.isDestroyed()) return;
+  const navigate = (): void => {
+    if (!win.isDestroyed() && win.webContents.getURL().startsWith('zsres://app/')) {
+      void win.webContents.executeJavaScript(`location.hash = '#/settings?section=${section}'; true`).catch(error => {
+        process.stderr.write(`[zhongshuo-ui] 无法打开设置：${String(error)}\n`);
+      });
+    }
+  };
+  if (win.webContents.isLoadingMainFrame()) win.webContents.once('did-finish-load', navigate);
+  else navigate();
+}
+
+// Register before ready/daemon startup so app.quit during startup also drains.
+// Progress/recovery hosts have no daemon and do not create a tray.
+const desktopLifecycle = new WindowsTrayLifecycle({
+  platform: process.platform,
+  app,
+  shutdown: async () => {
+    if (ownsDesktopInstance && daemonProcess != null) {
+      await shutdownDaemon();
+      if (!daemonClosed) throw Error('后台进程尚未完全关闭，请稍后从托盘重试退出。');
+    }
+  },
+  daemonStopping: () => daemonShuttingDown || readDaemonExitFacts() != null,
+  createTray: iconPath => {
+    const image = nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) throw Error('众说图标无法读取');
+    return new Tray(image.resize({ width: 32 }));
+  },
+  buildMenu: items => Menu.buildFromTemplate(items),
+  openSettings: () => openTraySection('general'),
+  openManual: () => openTraySection('guide'),
+  openDataDirectory: () => {
+    void shell.openPath(appDataDir).then(error => {
+      if (error) return dialog.showMessageBox({ type: 'error', title: '无法打开数据目录', message: error, buttons: ['确定'] });
+      return undefined;
+    });
+  },
+  reportError: error => {
+    process.stderr.write(`[zhongshuo-ui] 托盘或退出操作失败：${String(error)}\n`);
+    // Unparented: the error remains visible even when the window is minimized.
+    void dialog.showMessageBox({
+      type: 'error', title: '众说', message: '托盘或退出操作未完成。',
+      detail: `窗口将保留在任务栏；请重新打开窗口后重试。\n${error instanceof Error ? error.message : String(error)}`,
+      buttons: ['确定'], noLink: true,
+    });
+  },
+});
+app.on('activate', () => desktopLifecycle.show());
+
 function applyRequestedTestDisplay(win: BrowserWindow, useExplicitBounds: boolean): void {
   const placement = resolveDisplayPlacement({
     displays: screen.getAllDisplays(),
@@ -410,7 +503,7 @@ if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI 
 }
 
 app.whenReady().then(async () => {
-  if (!ownsDesktopInstance) return;
+  if (!ownsDesktopInstance || desktopLifecycle.quitting) return;
   if (installedConfigurationError != null) throw Error(installedConfigurationError);
   powerMonitor.on('suspend',()=>connectionMonitor.suspend());
   powerMonitor.on('resume',()=>connectionMonitor.resume());
@@ -520,7 +613,10 @@ let dataOperationStarting = false;
       return new Promise<never>(() => { /* 永不回执 */ });
     }
     await ensureConnection(); // 就绪截止/并发共享/退出即败（见函数头）
-    return pipe!.send(envelope);
+    if ((envelope as { method?: unknown })?.method === 'daemon.shutdown') {
+      return sendDaemonShutdown(envelope);
+    }
+    return pipe!.send(envelope,isRuntimeMetadataRead((envelope as {method?:unknown})?.method)?{timeoutMs:RUNTIME_METADATA_PIPE_DEADLINE_MS}:undefined);
   });
   ipcMain.handle('zs:openPath', async (event, target: unknown) => {
     assertTrustedSender(event);
@@ -560,7 +656,9 @@ let dataOperationStarting = false;
   if (process.env.ZS_UI_DAEMON_DELAY_MS != null) {
     await new Promise((r) => setTimeout(r, Number(process.env.ZS_UI_DAEMON_DELAY_MS) || 0));
   }
+  if (desktopLifecycle.quitting) return;
   await startDaemonProcess(appDataDir, runtime);
+  if (desktopLifecycle.quitting) return;
   connectionMonitor.start();
   // 就绪不再以 spawn 返回为准（第二十一轮一）：认证完成（ensureConnection 内 auth.ok）才可用；
   // 预热连接立即发起——首条命令与预热共享同一过程。
@@ -598,6 +696,12 @@ let dataOperationStarting = false;
       backgroundThrottling: false,
     },
   });
+  mainWindow = win;
+  win.on('closed', () => { mainWindow = null; });
+  // The tray is retained by desktopLifecycle while X hides the live renderer.
+  // The normal minimize button still calls win.minimize().
+  desktopLifecycle.attachWindow(win, windowIcon);
+  win.setMenu(null);
   // Windows 任务栏/通知身份：AppId、正式图标与显示名保持一致（不沿用 Electron 默认描述）。
   if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchDisplayName:'众说'});
   const disposeTaskNotificationIpc = registerTaskNotificationIpc({
@@ -628,10 +732,8 @@ let dataOperationStarting = false;
     try { win.webContents.reload(); } catch { /* 窗口已销毁——交由既有退出链 */ }
   });
   // 窗口控制窄 IPC（第五十四轮 §3）：只接受枚举动作、只作用于本主窗口、与既有命令桥同判
-  // senderFrame 来源（zsres://app/ 以外一律拒绝——不开放任意系统命令）。close 走 win.close()
-  // → window-all-closed → shutdownDaemon() 既有优雅收口链（daemon.shutdown→有界等待→kill
-  // 兜底→desktop-shutdown.json）——不为无边框改用 app.exit/直接销毁。
-  let closePrompt: Promise<{ ok: boolean }> | null = null;
+  // senderFrame 来源（zsres://app/ 以外一律拒绝——不开放任意系统命令）。close 走原生
+  // close 事件；Windows 默认隐藏到托盘。退出只由原生托盘或内部 app.quit 发起。
   ipcMain.handle('zs:window', (event, action: unknown) => {
     assertTrustedSender(event);
     if (action === 'minimize') { win.minimize(); return { ok: true }; }
@@ -640,15 +742,8 @@ let dataOperationStarting = false;
       return { ok: true, maximized: win.isMaximized() };
     }
     if (action === 'close') {
-      closePrompt ??= dialog.showMessageBox(win, {
-        type: 'question', title: '退出众说', message: '要退出众说吗？',
-        detail: '退出后，正在执行的任务会停止。',
-        buttons: ['取消', '退出'], defaultId: 0, cancelId: 0, noLink: true,
-      }).then(({ response }) => {
-        if (response === 1 && !win.isDestroyed()) win.close();
-        return { ok: true };
-      }).finally(() => { closePrompt = null; });
-      return closePrompt;
+      win.close();
+      return { ok: true };
     }
     if (action === 'getState') {
       // Read the native Electron window rectangle; renderer screenX/Y and captured
@@ -679,7 +774,7 @@ let dataOperationStarting = false;
     try {
       const result = await startDataOperationFromUi(action, win);
       if (!result.cancelled) setTimeout(() => {
-        if (!win.isDestroyed()) win.close();
+        app.quit();
       }, 250);
       return result;
     } finally {
@@ -998,7 +1093,8 @@ app.on('window-all-closed', () => {
   // 受控同步点（第二十二轮二）：关闭请求后延迟开始停机——制造"旧实例窗口已关、进程
   // （含 daemon）仍在"的真实共存窗口，供下一实例启动时核对。测试专用，生产不设。
   const shutdownDelay = Number(process.env.ZS_UI_SHUTDOWN_DELAY_MS ?? 0);
-  const beginShutdown = (): void => { void shutdownDaemon().finally(() => app.quit()); };
+  if (desktopLifecycle.quitting) return;
+  const beginShutdown = (): void => { void desktopLifecycle.requestQuit(); };
   if (shutdownDelay > 0) {
     process.stderr.write(`[zhongshuo-ui] shutdown 受控延迟 ${shutdownDelay}ms（ZS_UI_SHUTDOWN_DELAY_MS——窗口已关，进程仍在）\n`);
     setTimeout(beginShutdown, shutdownDelay).unref?.();
@@ -1078,5 +1174,5 @@ async function runDemo(win: BrowserWindow, resultPath: string): Promise<void> {
   }, null, 2));
   // 演示结束：正式停机（daemon.shutdown→优雅收拢→退出 0；超时 kill 兜底）——正常退出
   // 验收走同一路径，不因演示快捷方式绕过。
-  void shutdownDaemon().finally(() => app.quit());
+  void desktopLifecycle.requestQuit();
 }

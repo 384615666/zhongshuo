@@ -106,7 +106,13 @@ describe('R123 production worker session scope isolation with no real models',()
       await f.worker.awaitInFlightTurns(3000);f.worker.stopAccepting();await adapter.closeAllSessions();
       const restored=new RecordedAdmission();
       restarted=new DispatchWorker({db:f.db,adapter:nextAdapter,admission:restored,leaseOwner:randomUUID(),appDataDir:f.dir,detachedTurnConsumption:true,automaticRecovery:false});
-      expect(restored.restored.get(turn.turnId)).toEqual(original);
+      const protectedScope=restored.restored.get(turn.turnId)!;
+      expect(protectedScope).toMatchObject({memberId:original.memberId,executionScopeKey:original.executionScopeKey,projectId:original.projectId,providerKey:original.providerKey,writeRootKey:original.writeRootKey});
+      // UNKNOWN keeps its original member/scope occupancy, while a missing
+      // sharing policy is exclusive protection. Never restore today's setting.
+      expect(protectedScope.writePolicy??'single_writer').toBe('single_writer');
+      expect(protectedScope.writeFullAccess).not.toBe(true);
+      expect(protectedScope.writeSessionScopeKey).toBeUndefined();
       expect(original.executionScopeKey).toBe(JSON.stringify([f.projects[0]!.id,f.projects[0]!.rooms[0]!.conversationId,hung.threadId,f.projects[0]!.members[0]]));
       // Probe the restored production gate without releasing or rewriting its UNKNOWN slot.
       expect(restored.tryAcquire('same-scope-probe',original)).toEqual({granted:false,reason:'member'});

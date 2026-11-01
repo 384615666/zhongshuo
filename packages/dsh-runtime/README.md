@@ -53,6 +53,37 @@ stale names and `run_code` without delegating to execution hooks. Any unsolicite
 model tool call fails and cancels repair before dispatch, with no tool frames sent
 to the host. Repair uses the same durability and cleanup barriers as normal work.
 
+## R152 planning and durable component updates
+
+Version 0.1.3 advertises `planningOnly:true`. The host sends `mode:'planning'`
+only for `stage:'coordination.planning'`, using a fresh text-only session and a
+complete output schema. It is distinct from `format-repair` and does not expand
+ordinary readonly/scoped permissions. It uses the same native zero-tool schema,
+monotonic guard and direct dispatch interception as format repair. Instructions
+require coordinationPlan/handoffs first, with the coordinator's implementation
+assigned as a child step instead of executing work during planning. Unsolicited
+tool calls fail with `PLANNING_TOOL_DENIED` before dispatch; old components are
+rejected before the request is sent. Ordinary work and format repair retain
+their existing modes, instructions and durability barriers.
+
+Run the shipped setup script with `--plan` to verify the archive and inspect the
+proposed location without starting DSH, installing anything or touching a
+profile. Explicit `--install` first pins the verified archive below
+`<DSH_HOME>/connectors/zhongshuo/<version>-<content-hash>/`, then invokes official
+`dsh plugin --profile zhongshuo add --save-exact <persistent archive>`.
+The previous setup stored an absolute file dependency on the portable/source
+package's temporary location; later updates could fail after that folder was
+removed. New installs/repairs no longer depend on retaining a particular
+portable release or source checkout. Existing profile bundles/provider/MCP
+configuration are left to the official targeted add operation; the script does
+not rewrite configuration, credentials, defaults or unrelated profiles.
+
+Catalog enumeration always uses the selected official runtime and its configured
+providers, never a built-in gateway or model list. Adapter metadata distinguishes
+missing/inaccessible cwd, bounded timeout and native startup failure without
+echoing credential-bearing stderr. The default metadata deadline is 30 seconds
+to accommodate native provider-catalog refreshes; this performs no inference.
+
 Launch fingerprints must resolve `DSH_HOME` (nonempty override, tilde expansion,
 otherwise OS homedir + `.dsh`), and include the home `cordis.patch.yml`, legacy
 `settings.yaml` if present, profile `package.json`, `cordis.patch.yml`,

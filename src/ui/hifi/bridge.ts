@@ -1,4 +1,5 @@
 import {userFacingSystemText} from '../../contracts/userFacingText.ts';
+import {isRuntimeMetadataRead,RUNTIME_METADATA_RECEIPT_DEADLINE_MS} from '../../contracts/runtimeMetadataDeadline.ts';
 /**
  * 正式命令桥（H1 首包，第四十七轮修订）：类型化包装 `window.zs.command`（preload
  * contextBridge——与既有 renderer 同一窄接口，不复制绕过规则的实现）。
@@ -77,7 +78,7 @@ async function commandOutcome<T>(commandId: string, method: string, params: Reco
   const finish=(outcome:BridgeOutcome<T>)=>{if(outcome.status!=='ok'){const code=outcome.status==='unknown'?'TRANSPORT_RESULT_UNKNOWN':/^[A-Z_][A-Z0-9_]{0,63}$/.test(outcome.code)?outcome.code:'SERVICE_REJECTED';recentErrors.push({at:Date.now(),method:/^[a-zA-Z]+(?:\.[a-zA-Z]+)*$/.test(method)?method:'command',code,status:outcome.status});if(recentErrors.length>20)recentErrors.shift();}return outcome;};
   const zs = bridge();
   let settle: ((v: ZsResult<T> | 'timeout') => void) | null = null;
-  const timer = setTimeout(() => { settle?.('timeout'); }, UNKNOWN_TIMEOUT_MS);
+  const timer = setTimeout(() => { settle?.('timeout'); }, isRuntimeMetadataRead(method)?RUNTIME_METADATA_RECEIPT_DEADLINE_MS:UNKNOWN_TIMEOUT_MS);
   const wrapped = new Promise<ZsResult<T> | 'timeout'>((resolve) => { settle = resolve; });
   try {
     const p = zs.command({ protocolVersion: 1, commandId, method, params } satisfies ZsEnvelope);

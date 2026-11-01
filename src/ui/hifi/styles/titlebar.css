@@ -221,7 +221,10 @@
    同时保留最小壳的拖动区与三枚窗口按钮。
    ============================================================ */
 
-#zs-titlebar.zs-titlebar {
+/* The portal renders inside the minimal shell. Theme both layers, including
+   the degraded React bar, over the permanent fallback's white background. */
+#zs-titlebar.zs-titlebar,
+#zs-titlebar > .zs-titlebar {
   height: var(--titlebar-height);
   gap: var(--sp-2);
   padding: 0 0 0 var(--sp-2);
@@ -231,6 +234,11 @@
   font-family: var(--font);
   font-size: var(--fs-12);
   line-height: 1.5;
+}
+
+/* The legacy host's --bg-base fallback is independent of the hifi theme. */
+body.hifi-on #hifi-root {
+  background: var(--bg-app);
 }
 
 #zs-titlebar .zs-tb-name {

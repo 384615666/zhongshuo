@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase, type ZhongshuoDatabase } from '../../src/persistence/db.ts';
+import { CURRENT_DATA_SCHEMA_VERSION } from '../../src/contracts/dataCopyJob.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
@@ -570,7 +571,7 @@ describe('R108 durable desktop task notifications', () => {
     scratch.push(dir);
     const file = join(dir, 'state.sqlite');
     const first = openDatabase(file);
-    expect(first.pragma('user_version', { simple: true })).toBe(60);
+    expect(first.pragma('user_version', { simple: true })).toBe(CURRENT_DATA_SCHEMA_VERSION);
     seedRoom(first);
     pollTaskNotifications(first, VIEWER, { limit: 10 }, 1_000);
     setTaskStatus(first, 'task1', 'DONE', 1);

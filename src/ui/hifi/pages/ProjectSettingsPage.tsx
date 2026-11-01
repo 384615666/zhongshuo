@@ -4,16 +4,17 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
  * 真实绑定=项目信息（project.update CAS）、任务交付验收（project.reviewPolicy.set CAS）、
  * 协作限制（project.collab.get/set——缺席容忍+单轮时限；原型的「分析/修改分列时限」后端为
  * 单一时限，分列字段标真实能力限制）、归档（project.lifecycle archive——未结束工作守卫）、
- * 项目全停（board.view→逐任务 task.stop 三重绑定）。并行写入策略（§14.7）后端延期——只读呈现。
+ * 项目全停（board.view→逐任务 task.stop 三重绑定），文件修改并发显式设置。
  */
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { SwitchRow } from '../components/SettingsRow';
-import { ErrorState, Modal, Tag } from '../components/ui';
+import { ErrorState, Modal } from '../components/ui';
 import { useStore, toast } from '../shell';
-import { updateProjectReal, projectLifecycleReal, setTaskReviewReal, collabGet, collabSet, stopAllProjectReal } from '../loader';
+import { updateProjectReal, projectLifecycleReal, setTaskReviewReal, collabGet, collabSet, stopAllProjectReal, loadProjectRegistry } from '../loader';
 import { navigate } from '../lib/router';
-import { command } from '../bridge';
+import { command, sendCommand } from '../bridge';
+import type { ProjectWriteConcurrency, WriteConcurrencyOverride } from '../../../contracts/writeConcurrency';
 import { ProjectWriteAccessPanel } from '../components/ProjectWriteAccessPanel';
 import { deadlineSecondsText, parseDeadlineSeconds } from '../lib/deadlineField';
 
@@ -79,7 +80,71 @@ export function TurnDeadlineField({ value, effective, onCommit, disabled = false
   </div>;
 }
 
-export function ProjectSettingsPage({ projectId, query }: { projectId: string; query: Record<string, string> }) {
+export function ProjectWriteConcurrencyPanel({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
+  const [settings, setSettings] = useState<ProjectWriteConcurrency | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [pending, setPending] = useState<{ id: string; override: WriteConcurrencyOverride; expectedRevision: number } | null>(null);
+  const active = useRef(true);
+  const inFlight = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    void command<ProjectWriteConcurrency>('project.writeConcurrency.get', { projectId })
+      .then(value => { if (active.current) setSettings(value); })
+      .catch((e: unknown) => { if (active.current) setError((e as Error).message); });
+    return () => { active.current = false; };
+  }, [projectId]);
+  const read = async () => {
+    try {
+      const value = await command<ProjectWriteConcurrency>('project.writeConcurrency.get', { projectId });
+      if (active.current) { setSettings(value); setError(null); }
+    } catch (e) { if (active.current) setError((e as Error).message); }
+  };
+  const save = async (request: NonNullable<typeof pending>) => {
+    if (inFlight.current || readOnly) return;
+    inFlight.current = true; setSaving(true); setError(null);
+    try {
+      const result = await sendCommand<ProjectWriteConcurrency>(request.id, 'project.writeConcurrency.set', { projectId, expectedRevision: request.expectedRevision, override: request.override });
+      if (!active.current) return;
+      if (result.status === 'ok') {
+        setSettings(result.data); setPending(null);
+        void loadProjectRegistry().catch(() => {});
+        toast('文件修改并发设置已保存', 'success');
+      } else {
+        setError(result.error);
+        if (result.status === 'unknown') setPending(request);
+        else { setPending(null); await read(); setError(result.error); }
+      }
+    } finally {
+      inFlight.current = false;
+      if (active.current) setSaving(false);
+    }
+  };
+  const hint = settings?.override === 'single_writer' ? '同一项目目录同时只执行一个文件修改任务。'
+    : settings?.override === 'parallel_writers' ? '完整权限的不同成员可在同一对话串中同时修改文件；同一成员仍依次执行。'
+    : '完整权限任务可跨对话串同时修改文件；同一对话串中的文件修改依次执行。';
+  return <div className="pset-row">
+    <div className="pset-row-label">
+      <div className="pset-row-name">同时修改文件的任务</div>
+      {settings ? <><div className="pset-row-hint">{hint}</div><div className="pset-row-hint">并行仅适用于完整权限；受限写入仍依次执行。运行中或存在未解除保护的任务时不能更改。</div></> : null}
+      {error ? <div className="pset-row-error" role="alert">{userFacingSystemText(error)}</div> : null}
+    </div>
+    {settings ? <select className="input" style={{ width: 'auto', maxWidth: '100%', flexShrink: 0 }} aria-label="文件修改并发" value={settings.override ?? 'default'} disabled={readOnly || saving || pending != null}
+      onChange={e => {
+        const override = e.target.value === 'default' ? null : e.target.value as WriteConcurrencyOverride;
+        void save({ id: `write-concurrency-${crypto.randomUUID()}`, override, expectedRevision: settings.revision });
+      }}>
+      <option value="default">跨对话串并行（默认）</option>
+      <option value="single_writer">单写者</option>
+      <option value="parallel_writers">允许成员并行</option>
+    </select> : <span className="small faint">{error ? '读取失败' : '读取中…'}</span>}
+    {pending ? <button className="btn sm" disabled={saving || readOnly} onClick={() => { void save(pending); }}>重试保存</button>
+      : error ? <button className="btn sm" disabled={saving} onClick={() => { void read(); }}>重新读取</button> : null}
+    {saving ? <span className="small faint">正在保存…</span> : null}
+  </div>;
+}
+
+export function ProjectSettingsPage({ projectId }: { projectId: string; query: Record<string, string> }) {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === projectId);
   const [nameDraft, setNameDraft] = useState('');
@@ -315,13 +380,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
           <section className="pset-section" id="pset-write">
             <div className="pset-section-title">文件修改</div>
             <div className="card">
-              <div className="pset-row">
-                <div className="pset-row-label">
-                  <div className="pset-row-name">同时修改文件的任务</div>
-                  <div className="pset-row-hint">同一目录中的文件修改依次执行，其他任务排队。</div>
-                </div>
-                <Tag tone="success" icon="check-circle">单写者（当前策略）</Tag>
-              </div>
+              <ProjectWriteConcurrencyPanel key={projectId} projectId={projectId} readOnly={Boolean(project.archivedAt || project.removedAt) || project.status === 'missing'} />
               <ProjectWriteAccessPanel key={projectId} projectId={projectId} name={project.displayName} path={project.rootPath??''}/>
             </div>
           </section>

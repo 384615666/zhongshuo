@@ -52,7 +52,7 @@ const send=value=>process.stdout.write(JSON.stringify(value)+'\n');
 const trace=value=>appendFileSync(__filename+'.trace',JSON.stringify(value)+'\n');
 let active=null;
 reader.on('line',line=>{
-  const request=JSON.parse(line);trace({type:request.type,cwd:process.cwd(),schema:request.outputSchema});
+  const request=JSON.parse(line);trace({type:request.type,cwd:process.cwd(),schema:request.outputSchema,mode:request.mode});
   if(request.type==='cancel'){
     send({v:1,type:'result',requestId:request.requestId,sessionId:active.sessionId,status:'cancelled'});
     reader.close();process.stdin.destroy();return;
@@ -71,10 +71,11 @@ reader.on('line',line=>{
   send({v:1,type:'result',requestId:request.requestId,sessionId:active.sessionId,status:'completed',stopReason:'completed',text:JSON.stringify(result)});
   reader.close();process.stdin.destroy();
 });
-send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true}});
+send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true,planningOnly:true}});
 `;
 
 const localPiProcess=String.raw`
+if(process.argv.includes('--version')){console.log('1.4.0');process.exit(0);}
 const {createInterface}=require('node:readline');
 const {appendFileSync,writeFileSync}=require('node:fs');
 const {join}=require('node:path');
@@ -85,9 +86,13 @@ writeFileSync(sessionFile,JSON.stringify({type:'session',id:sessionId,cwd:proces
 const reader=createInterface({input:process.stdin});
 const send=value=>process.stdout.write(JSON.stringify(value)+'\n');
 reader.on('line',line=>{
-  const request=JSON.parse(line);appendFileSync(__filename+'.trace',JSON.stringify({type:request.type,cwd:process.cwd(),message:request.message})+'\n');
+  const request=JSON.parse(line);appendFileSync(__filename+'.trace',JSON.stringify({type:request.type,cwd:process.cwd(),message:request.message,toolFree:argv.includes('--no-tools')&&argv.includes('--no-mcp')})+'\n');
   const response=data=>send({type:'response',command:request.type,id:request.id,success:true,data});
-  if(request.type==='get_state'){response({sessionId,sessionFile,isStreaming:false,pendingMessageCount:0});return;}
+  if(request.type==='set_auto_retry'||request.type==='set_auto_compaction'){
+    if(request.enabled!==false)throw Error('Planning must disable automatic retry and compaction');
+    response({});return;
+  }
+  if(request.type==='get_state'){response({sessionId,sessionFile,isStreaming:false,pendingMessageCount:0,messageCount:0,isCompacting:false});return;}
   if(request.type==='abort'){
     response({});send({type:'agent_settled',aborted:true});reader.close();process.stdin.destroy();return;
   }
@@ -268,7 +273,7 @@ describe.each(['deepseek-harness','pi'] as const)('R136 %s worker with actual is
       expect(f.db.prepare('SELECT count(*) n FROM real_calls WHERE task_id=?').get(task.taskId)).toEqual({n:1});
       expect(f.db.prepare('SELECT count(*) n FROM agent_turns WHERE run_id=?').get(call.run_id)).toEqual({n:1});
       const trace=readFileSync(f.executable+'.trace','utf8').trim().split('\n').map(line=>JSON.parse(line) as {type:string});
-      expect(trace.map(row=>row.type)).toEqual(kind==='pi'?['get_state','prompt']:['execute']);
+      expect(trace.map(row=>row.type)).toEqual(kind==='pi'?['set_auto_retry','set_auto_compaction','get_state','prompt']:['execute']);
       expect(f.children).toHaveLength(1);expect(f.children[0]!.exitCode).toBe(0);
       expect(f.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(call.turn_id)).toEqual({status:'UNKNOWN'});
       expect(f.db.prepare("SELECT 1 FROM workspace_leases WHERE owner_turn_id=? AND status='active'").get(call.turn_id)).toBeDefined();
@@ -285,10 +290,11 @@ describe.each(['deepseek-harness','pi'] as const)('R136 %s worker with actual is
       expect(f.db.prepare('SELECT adapter_kind,process_model,pid FROM runtime_process_registry WHERE turn_id=?').get(call.turn_id)).toEqual({adapter_kind:kind,process_model:'per-turn',pid:f.children[0]!.pid});
       expect(f.children).toHaveLength(1);expect(f.children[0]!.exitCode).toBe(0);
       expect(f.db.prepare('SELECT 1 FROM task_deliveries WHERE task_id=?').get(task.taskId)).toBeDefined();
-      const trace=readFileSync(f.executable+'.trace','utf8').trim().split('\n').map(line=>JSON.parse(line) as {type:string;cwd:string;message?:string;schema?:{properties:{resultKey:{const:string}}}});
+      const trace=readFileSync(f.executable+'.trace','utf8').trim().split('\n').map(line=>JSON.parse(line) as {type:string;cwd:string;message?:string;mode?:string;toolFree?:boolean;schema?:{properties:{resultKey:{const:string}}}});
       const request=trace.find(row=>row.type===(kind==='pi'?'prompt':'execute'))!;
       expect(request.cwd.toLowerCase()).toBe(f.project.toLowerCase());
-      if(kind==='pi')expect(request.message).toContain('resultKey');else expect(request.schema?.properties.resultKey.const).toBeTruthy();
+      if(kind==='pi'){expect(request.message).toContain('resultKey');expect(request.toolFree).toBe(true);}
+      else {expect(request.schema?.properties.resultKey.const).toBeTruthy();expect(request.mode).toBe('planning');}
       expect(f.db.prepare("SELECT 1 FROM workspace_leases WHERE status!='released'").get()).toBeUndefined();
     }finally{await f.close();}
   },30000);
@@ -314,7 +320,7 @@ describe.each(['deepseek-harness','pi'] as const)('R136 %s worker with actual is
       expect(f.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(call.turn_id)).toEqual({status:'CANCELLED'});
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(task.taskId)).toEqual({status:'CANCELLED'});
       expect(f.db.prepare('SELECT status FROM real_calls WHERE task_id=?').get(task.taskId)).toEqual({status:'interrupted'});
-      const trace=readFileSync(f.executable+'.trace','utf8').trim().split('\n').map(line=>JSON.parse(line) as {type:string});expect(trace.map(row=>row.type)).toEqual(kind==='pi'?['get_state','prompt','abort']:['execute','cancel']);
+      const trace=readFileSync(f.executable+'.trace','utf8').trim().split('\n').map(line=>JSON.parse(line) as {type:string});expect(trace.map(row=>row.type)).toEqual(kind==='pi'?['set_auto_retry','set_auto_compaction','get_state','prompt','abort']:['execute','cancel']);
       expect(f.children[0]!.exitCode).toBe(0);expect(f.db.prepare("SELECT 1 FROM workspace_leases WHERE status!='released'").get()).toBeUndefined();
     }finally{await f.close();await running;}
   },30000);

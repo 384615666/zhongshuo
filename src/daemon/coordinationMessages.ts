@@ -114,7 +114,6 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
     return candidate&&/^r\d+$/.test(candidate.stepKey)?candidate:null;
   });
   const additions=proposedSteps(turnId,effectiveMessages,source.member_id,context.child?[context.child.step_key]:[]).filter((_,index)=>!deferred[index]&&!merged[index]);
-  for(let i=1;i<additions.length;i++)additions[i]!.dependsOn=[additions[i-1]!.key];
   const current=context.phase==='child'?JSON.parse((db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(context.rootRunId) as {plan_json:string}).plan_json) as CoordinationPlan:null;
   const mergedKeys=new Set(merged.filter(item=>item!=null).map(item=>item.stepKey));
   const plan:CoordinationPlan={summary:current?.summary??'成员消息交接',steps:[...(current?.steps??[]).map(step=>mergedKeys.has(step.key)

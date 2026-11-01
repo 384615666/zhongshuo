@@ -1465,7 +1465,10 @@ export function Composer({
         : { kind: target.kind, projectId: imageProjectId, conversationId };
       try {
         const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: effectiveMentionIds.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
-        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.length&&c.members.every(m=>m.status==='supported')?'图片会随消息发送给所选 AI。':'部分 AI 暂不能接收图片，可换成员或移除图片。' : '图片会保存到本机，可点击预览。'});
+        if (!cancelled && draftKeyRef.current === draftKey) {
+          const needsAttention = c.willDispatch && (!c.members.length || c.members.some(m => m.status !== 'supported'));
+          setImageStatus(needsAttention ? {key:imageContext,text:'部分 AI 暂不能接收图片，可换成员或移除图片。'} : null);
+        }
       } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${userFacingSystemText((e as Error).message ?? '')}；仍可本地预览，发送前可重试`}); }
       finally { reading = false; }
     };

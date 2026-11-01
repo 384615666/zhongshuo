@@ -30,13 +30,15 @@ function outputInstructions(schema, repair) {
   ].join('\n');
 }
 
-function installFormatRepair(agentCtx, instructions) {
+function installToolFree(agentCtx, instructions, mode) {
+  const planning = mode === 'planning';
+  const deniedCode = planning ? 'PLANNING_TOOL_DENIED' : 'FORMAT_REPAIR_TOOL_DENIED';
   const tools = required(agentCtx, 'tools');
   if (!['restrict', 'presentAs', 'guard'].every((name) => typeof tools[name] === 'function')) {
-    throw new RuntimeError('FORMAT_REPAIR_UNSUPPORTED', 'Harness cannot enforce tool-free format repair; reinstall the supported official runtime and Zhongshuo component.');
+    throw new RuntimeError(planning ? 'PLANNING_UNSUPPORTED' : 'FORMAT_REPAIR_UNSUPPORTED', 'Harness cannot enforce this tool-free phase; reinstall the supported official runtime and Zhongshuo component.');
   }
-  const message = 'Tools are disabled during format-only repair.';
-  const denied = () => ({ isError: true, error: { message, info: { name: 'FormatRepairToolDenied', code: 'FORMAT_REPAIR_TOOL_DENIED' } }, content: [{ type: 'text', text: message }] });
+  const message = planning ? 'Tools are disabled during coordination planning.' : 'Tools are disabled during format-only repair.';
+  const denied = () => ({ isError: true, error: { message, info: { name: 'ToolFreePhaseDenied', code: deniedCode } }, content: [{ type: 'text', text: message }] });
   // All registrations are owned by the unpublished agent scope. Restrictions
   // alone exempt own-scope registrations and the reserved PTC run_code transport.
   tools.presentAs('native');
@@ -44,9 +46,9 @@ function installFormatRepair(agentCtx, instructions) {
   tools.guard(() => message);
   // Prepend and never delegate: stale/unknown names and extension hooks cannot
   // dispatch work before the normal registry lookup or bypass the deny guard.
-  agentCtx.on('tools/pre-execute', () => ({ kind: 'deny', reason: message, info: { name: 'FormatRepairToolDenied', code: 'FORMAT_REPAIR_TOOL_DENIED' } }), true);
+  agentCtx.on('tools/pre-execute', () => ({ kind: 'deny', reason: message, info: { name: 'ToolFreePhaseDenied', code: deniedCode } }), true);
   agentCtx.on('tools/execute', denied, true);
-  required(agentCtx, 'systemPrompt').section({ name: 'zhongshuo-format-repair', order: 20000, text: instructions, interpolate: false, complete: true });
+  required(agentCtx, 'systemPrompt').section({ name: planning ? 'zhongshuo-coordination-planning' : 'zhongshuo-format-repair', order: 20000, text: instructions, interpolate: false, complete: true });
   agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
     const assembly = await next();
     // Apply after cooperative transforms, including newly registered scoped
@@ -71,8 +73,10 @@ export function createBackend(ctx) {
     },
     async prepare(command, signal, emit) {
       const repair = command.mode === 'format-repair';
+      const planning = command.mode === 'planning';
+      const toolFree = repair || planning;
       // Keep the backend safe even for direct SDK callers outside JSONL.
-      if (repair && (command.sessionId !== undefined || !command.outputSchema || command.images?.length)) throw new RuntimeError('INVALID_REQUEST', 'format-repair requires a schema, text input and a fresh session.');
+      if (toolFree && (command.sessionId !== undefined || !command.outputSchema || command.images?.length)) throw new RuntimeError('INVALID_REQUEST', `${command.mode} requires a schema, text input and a fresh session.`);
       if (!isAbsolute(command.cwd)) throw new RuntimeError('INVALID_CWD', 'cwd must be an absolute existing directory.');
       const cwd = await realpath(command.cwd);
       if (!(await stat(cwd)).isDirectory()) throw new RuntimeError('INVALID_CWD', 'cwd must be a directory.');
@@ -97,8 +101,8 @@ export function createBackend(ctx) {
         installModelSelection(agentCtx, { current: selection, assembled: undefined });
         if (command.developerInstructions) agentCtx.get('systemPrompt').section({ name: 'zhongshuo-developer-instructions', order: 10000, text: command.developerInstructions, interpolate: false });
         if (command.outputSchema !== undefined) {
-          const instructions = outputInstructions(command.outputSchema, repair);
-          if (repair) installFormatRepair(agentCtx, instructions);
+          const instructions = outputInstructions(command.outputSchema, repair) + (planning ? '\n\nCOORDINATION PLANNING ONLY\nUse only the provided roster and materials. Submit coordinationPlan/handoffs first, including your own implementation as a child step assigned to an allowed participant. Do not perform your own task work before delegation. Do not execute tools, read files, invoke shell/network, implement changes or claim completed work. This is planning, not format repair.' : '');
+          if (toolFree) installToolFree(agentCtx, instructions, command.mode);
           else required(agentCtx, 'systemPrompt').section({ name: 'zhongshuo-output-schema', order: 20000, text: instructions, interpolate: false });
         }
       };
@@ -135,7 +139,7 @@ export function createBackend(ctx) {
       disposers.push(ctx.on('session/event', (session, event) => {
         if (session !== agent.session) return;
         const data = event.data;
-        if (event.type === 'turn/end') { reason = data.reason; if (!repair) failure = undefined; }
+        if (event.type === 'turn/end') { reason = data.reason; if (!toolFree) failure = undefined; }
         if (event.type === 'assistant/message') {
           text = data.message.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
           if (data.usage) emit({ kind: 'usage', inputTokens: data.usage.inputTokens,
@@ -143,17 +147,17 @@ export function createBackend(ctx) {
             model: `${selection.provider}/${selection.model}` });
         }
         if (event.type === 'tool/call') {
-          if (repair) {
+          if (toolFree) {
             // One model request only: an unsolicited tool call fails the repair
             // before dispatch, without exposing tool frames or retrying work.
-            failure = new RuntimeError('FORMAT_REPAIR_TOOL_DENIED', 'Format-only repair attempted a tool call; no task work was allowed.');
+            failure = new RuntimeError(planning ? 'PLANNING_TOOL_DENIED' : 'FORMAT_REPAIR_TOOL_DENIED', 'A tool-free phase attempted a tool call; no task work was allowed.');
             cancel();
             return;
           }
           let input; try { input = JSON.parse(data.arguments); } catch { input = data.arguments; }
           emit({ kind: 'tool-start', id: String(data.callId), name: data.name, input });
         }
-        if (event.type === 'tool/result' && !repair) emit({ kind: 'tool-end', id: String(data.message.toolCallId), isError: data.message.isError === true, output: data.message.content });
+        if (event.type === 'tool/result' && !toolFree) emit({ kind: 'tool-end', id: String(data.message.toolCallId), isError: data.message.isError === true, output: data.message.content });
       }));
       return {
         sessionId: String(agent.session.id), cancel, dispose: stop,

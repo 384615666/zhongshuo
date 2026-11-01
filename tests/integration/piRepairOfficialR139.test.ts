@@ -218,6 +218,15 @@ afterEach(async () => {
 });
 
 describe.skipIf(!enabled)('R139 installed official Pi 1.4.0: literal schema and mechanically locked repair', () => {
+  it('R152 planning submits a plan with all native tools and autoload disabled', async () => {
+    const f=await fixture(),a=adapter(f),s=await a.openSession(input(f,true));
+    const turn={...request(true),repairOnly:false,stage:'coordination.planning',text:'先提交同伴分工，并把自己的实施列成子步骤。'};
+    await a.startTurn(s,turn);
+    expect((await terminal(a,s,turn.turnId)).at(-1)).toMatchObject({kind:'turn.completed',finalText});
+    expect(await a.waitForTurnExit(s,turn.turnId,5000)).toMatchObject({exitConfirmed:true,exitCode:0});
+    expect(f.requests).toHaveLength(1);assertLocked(f);
+    expect(JSON.stringify(f.requests[0]!.payload)).toContain('dispatch planning phase');
+  },25000);
   it('reads models and efforts without starting configured MCP servers or loading skills', async () => {
     const f=await fixture(),a=new PiAdapter({executable:f.executable,cwd:f.cwd,model:'r139-local/fixed'});adapters.push(a);
     expect(await a.listModels()).toEqual([{id:'r139-local/fixed',label:'R139 Local',efforts:['none']}]);

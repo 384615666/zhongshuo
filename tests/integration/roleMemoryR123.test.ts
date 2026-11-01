@@ -421,13 +421,17 @@ describe('R123 append-only versioned role memory', () => {
     prepareMerge(legacy, { snapshot: { scope, revision: 0, entries: [] }, status: 'FAILED' });
     const tables = legacy.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' ORDER BY name")
       .all() as Array<{ name: string }>;
+    // Compare every pre-existing column; later additive migrations may append
+    // fields without changing the records this migration promises to preserve.
+    const oldColumns = new Map(tables.map(({name}) => [name, (legacy.prepare(`PRAGMA table_info("${name}")`).all() as Array<{name:string}>).map(c => `"${c.name}"`).join(',')]));
     const oldRows = tables.map(({ name }) => legacy.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all());
     const oldAudit = legacy.prepare('SELECT * FROM schema_migrations ORDER BY id').all();
     legacy.close();
     const upgraded = openDatabase(path);
     databases.push(upgraded);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(60);
-    expect(tables.map(({ name }) => upgraded.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all())).toEqual(oldRows);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(MIGRATIONS.at(-1)!.id);
+    expect(tables.map(({ name }) => upgraded.prepare(`SELECT ${oldColumns.get(name)!} FROM "${name}" ORDER BY rowid`).all())).toEqual(oldRows);
+    expect(upgraded.prepare('SELECT 1 FROM projects WHERE write_concurrency_override IS NOT NULL').get()).toBeUndefined();
     expect(upgraded.prepare('SELECT * FROM schema_migrations WHERE id < 60 ORDER BY id').all()).toEqual(oldAudit);
     expect(memoryRows(upgraded)).toEqual([[], [], []]);
     expect(readRoleMemory(upgraded, scope)).toEqual({ scope, revision: 0, entries: [] });

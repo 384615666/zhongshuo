@@ -19,6 +19,14 @@ function adapter(cwd:string,scenario='success',observe?:(args:string[])=>void){
 async function terminal(a:RuntimeAdapter,s:SessionRef,turnId='turn'){const events:NormalizedRuntimeEvent[]=[];for await(const event of a.events(s)){if(event.turnId!==turnId)continue;events.push(event);if(event.kind==='turn.completed'||event.kind==='turn.failed'||event.kind==='process.exited')return events;}throw Error('no terminal');}
 afterEach(async()=>{for(const a of adapters.splice(0))await a.disposeAll();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 describe('Pi native RPC adapter lifecycle',()=>{
+  it('R152 planning uses a fresh session with every native tool and MCP disabled',async()=>{
+    const cwd=directory();let argv:string[]=[];const a=adapter(cwd,'repair',args=>{argv=args;});const s=await a.openSession(input(cwd));
+    await a.startTurn(s,{...request('先分配同伴和自己的实施步骤'),stage:'coordination.planning',outputSchema:{type:'object'}});
+    const events=await terminal(a,s);
+    expect(argv).toEqual(expect.arrayContaining(['--no-tools','--exclude-tools','*','--no-extensions','--no-mcp','--no-context-files']));
+    expect(events.some(event=>event.kind==='tool.started')).toBe(false);
+    expect(events.at(-1)?.kind).toBe('turn.completed');
+  });
   it('sends the full prompt through stdin and standing instructions through a native system file',async()=>{
     const cwd=directory();let argv:string[]=[];const a=adapter(cwd,'success',args=>{argv=args;});const s=await a.openSession({...input(cwd),developerInstructions:'保持角色\n独立指令'});
     const r=request('中文🙂\n\u2028\u2029 $() & '+ 'x'.repeat(70000));await a.startTurn(s,r);const events=await terminal(a,s);

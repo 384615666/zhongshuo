@@ -10,7 +10,8 @@ import { resolveAgentExecutable } from '../cli/executable.ts';
 import { CliTurnAdapter, isRecord, type CliAdapterOptions, type CliSession, type CliTurn } from '../cli/turnAdapter.ts';
 import type { ExternalModel } from '../deepseekHarness/adapter.ts';
 
-export const PI_ADAPTER_VERSION = 'pi-rpc-adapter-2';
+export const PI_ADAPTER_VERSION = 'pi-rpc-adapter-3';
+const restrictedTurn = (input:TurnRequest) => input.repairOnly === true || input.stage === 'coordination.planning';
 export function piCapabilities(): RuntimeCapabilities {
   return { structuredEvents:'unverified',taskContextIsolation:'unverified',resumeSession:'unverified',steerActiveTurn:'unsupported',
     interrupt:'unverified',interactiveApprovals:'unsupported',structuredFinal:'unverified',restrictWrites:'unsupported',
@@ -36,6 +37,7 @@ function finalInstructions(input:TurnRequest):string{
       'Only format facts already supplied. An acknowledgement such as 收到 is not evidence that work was completed.',
       'If facts are missing, preserve incomplete work and issues; never fabricate a successful result.',
     ]:[]),
+    ...(input.stage === 'coordination.planning' ? ['This is the dispatch planning phase. Submit the delegation plan immediately; include your own work as a child step. Do not execute implementation, create files, or verify deliverables in this phase. Every tool is disabled; use supplied context.'] : []),
     'JSON Schema (literal data):',JSON.stringify(input.outputSchema),
   ].join('\n');
 }
@@ -54,7 +56,7 @@ export class PiAdapter extends CliTurnAdapter {
     this.metadata.set(ref.id,{id,dir:resolve(base),file:null,systemFile:null});return ref;
   }
   override async startTurn(ref:SessionRef,input:TurnRequest):Promise<void>{
-    if(input.repairOnly){
+    if(restrictedTurn(input)){
       this.validate(this.session(ref),input);
       if(this.preparing.has(ref.id))throw new AdapterCallError('WORKSPACE_BUSY','Pi 正在准备上一轮补交',true);
       const preparation={turnId:input.turnId,stopped:false};this.preparing.set(ref.id,preparation);
@@ -75,21 +77,21 @@ export class PiAdapter extends CliTurnAdapter {
       else args.push('--model',this.options.model);
     }
     if(this.options.effort)args.push('--thinking',this.options.effort==='none'?'off':this.options.effort);
-    const instructions=[...(input.repairOnly?[]:[session.input.developerInstructions??'']),finalInstructions(input)].filter(Boolean).join('\n\n');
+    const instructions=[...(restrictedTurn(input)?[]:[session.input.developerInstructions??'']),finalInstructions(input)].filter(Boolean).join('\n\n');
     if(instructions){
       const fresh=meta.systemFile==null;
       if(fresh){const dir=mkdtempSync(join(tmpdir(),'zs-pi-instructions-'));meta.systemFile=join(dir,'instructions.md');}
       writeFileSync(meta.systemFile!,instructions,{encoding:'utf8',mode:0o600,flag:fresh?'wx':'w'});
-      if(input.repairOnly)args.push('--system-prompt',meta.systemFile!,'--append-system-prompt','');
+      if(restrictedTurn(input))args.push('--system-prompt',meta.systemFile!,'--append-system-prompt','');
       else args.push('--append-system-prompt',meta.systemFile!);
     }
-    if(input.repairOnly)args.push('--no-tools','--exclude-tools','*','--no-extensions','--no-mcp','--no-skills','--no-prompt-templates','--no-context-files','--no-themes','--no-approve');
+    if(restrictedTurn(input))args.push('--no-tools','--exclude-tools','*','--no-extensions','--no-mcp','--no-skills','--no-prompt-templates','--no-context-files','--no-themes','--no-approve');
     return args;
   }
   protected validate(session:CliSession,input:TurnRequest):void{
-    if(!input.repairOnly&&(!session.input.writeAccess?.fullAccess||session.input.writeAccess.analysisOnly||![undefined,'bypassPermissions'].includes(this.options.permissionMode)))
+    if(!restrictedTurn(input)&&(!session.input.writeAccess?.fullAccess||session.input.writeAccess.analysisOnly||![undefined,'bypassPermissions'].includes(this.options.permissionMode)))
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED','Pi 当前支持原生完整权限；只读分析和项目受限编辑尚未认证',true);
-    if(input.repairOnly&&(!isRecord(input.outputSchema)||session.requestedSessionId||session.ref.providerSessionId))
+    if(restrictedTurn(input)&&(!isRecord(input.outputSchema)||session.requestedSessionId||session.ref.providerSessionId))
       throw new AdapterCallError('VALIDATION_INVALID','Pi 格式补交需要结果结构和独立的新会话，不能续接原执行',true);
     if(input.images?.length)throw new AdapterCallError('CAPABILITY_UNSUPPORTED','Pi 图片输入尚未认证，请换用已支持图片的成员',true);
     if(this.options.model&&!/^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,199}$/.test(this.options.model))throw new AdapterCallError('VALIDATION_INVALID','Pi 模型编号无效',true);
@@ -108,7 +110,7 @@ export class PiAdapter extends CliTurnAdapter {
     }
   }
   protected begin(session:CliSession,turn:CliTurn):void{
-    if(turn.input.repairOnly){
+    if(restrictedTurn(turn.input)){
       this.send(turn,{id:`${turn.requestId}:retry`,type:'set_auto_retry',enabled:false});
       this.send(turn,{id:`${turn.requestId}:compaction`,type:'set_auto_compaction',enabled:false});
     }else this.send(turn,{id:`${turn.requestId}:state`,type:'get_state'});
@@ -123,7 +125,7 @@ export class PiAdapter extends CliTurnAdapter {
     if(frame.type==='response'){
       if(typeof frame.id!=='string'||!frame.id.startsWith(`${turn.requestId}:`))throw Error('Pi 命令响应不属于当前请求');
       const suffix=frame.id.slice(turn.requestId.length+1);
-      if(!['state','prompt','abort',...(turn.input.repairOnly?['retry','compaction']:[])].includes(suffix)||frame.command!==({state:'get_state',prompt:'prompt',abort:'abort',retry:'set_auto_retry',compaction:'set_auto_compaction'} as Record<string,string>)[suffix])throw Error('Pi 响应命令不匹配');
+      if(!['state','prompt','abort',...(restrictedTurn(turn.input)?['retry','compaction']:[])].includes(suffix)||frame.command!==({state:'get_state',prompt:'prompt',abort:'abort',retry:'set_auto_retry',compaction:'set_auto_compaction'} as Record<string,string>)[suffix])throw Error('Pi 响应命令不匹配');
       if(frame.success!==true){this.fail(session,turn,'PROVIDER_ERROR',typeof frame.error==='string'?frame.error:'Pi 拒绝了本轮请求',true);return;}
       if(suffix==='retry'||suffix==='compaction'){
         if(turn.values.has(suffix))throw Error('Pi 重复确认格式补交设置');
@@ -133,12 +135,12 @@ export class PiAdapter extends CliTurnAdapter {
       }
       if(suffix==='state'){
         if(turn.ready||!isRecord(frame.data))throw Error('Pi 会话信息无效');
-        if(turn.input.repairOnly&&(!turn.values.has('retry')||!turn.values.has('compaction')))throw Error('Pi 格式补交设置尚未确认');
+        if(restrictedTurn(turn.input)&&(!turn.values.has('retry')||!turn.values.has('compaction')))throw Error('Pi 格式补交设置尚未确认');
         const data=frame.data,meta=this.meta(session.ref);
         if(data.sessionId!==meta.id||typeof data.sessionFile!=='string'||!isAbsolute(data.sessionFile)||!samePath(dirname(data.sessionFile),meta.dir)||data.isStreaming===true||data.pendingMessageCount!==0)
           throw Error('Pi 返回了不同或仍在运行的会话');
         if(meta.file&&!samePath(data.sessionFile,meta.file))throw Error('Pi 续接了另一份会话文件');
-        if(turn.input.repairOnly&&(data.messageCount!==0||data.isCompacting===true))throw Error('Pi 格式补交会话中已有待处理内容');
+        if(restrictedTurn(turn.input)&&(data.messageCount!==0||data.isCompacting===true))throw Error('Pi 格式补交会话中已有待处理内容');
         meta.file=data.sessionFile;this.sessionReady(session,turn,data.sessionId);turn.ready=true;
         if(turn.stopRequested){this.fail(session,turn,'INTERRUPTED','Pi 在启动阶段收到停止请求');return;}
         this.send(turn,{id:`${turn.requestId}:prompt`,type:'prompt',message:turn.input.text});return;
@@ -170,17 +172,17 @@ export class PiAdapter extends CliTurnAdapter {
             model:typeof message.provider==='string'&&typeof message.model==='string'?`${message.provider}/${message.model}`:message.model,
             ...(isRecord(usage.cost)?{cost:usage.cost.total,costQuality:'estimated'}:{})});
         }
-        if(turn.input.repairOnly&&(message.stopReason==='toolUse'||(Array.isArray(message.content)&&message.content.some(block=>isRecord(block)&&block.type==='toolCall')))){
+        if(restrictedTurn(turn.input)&&(message.stopReason==='toolUse'||(Array.isArray(message.content)&&message.content.some(block=>isRecord(block)&&block.type==='toolCall')))){
           this.fail(session,turn,'CAPABILITY_UNSUPPORTED','Pi 格式补交尝试调用工具，已停止且未提交结果',true);this.cancel(session,turn);return;
         }
         break;
       }
       case 'tool_execution_start':case 'tool_execution_end':
-        if(turn.input.repairOnly){this.fail(session,turn,'CAPABILITY_UNSUPPORTED','Pi 格式补交不允许执行工具，已停止',true);this.cancel(session,turn);return;}
+        if(restrictedTurn(turn.input)){this.fail(session,turn,'CAPABILITY_UNSUPPORTED','Pi 格式补交不允许执行工具，已停止',true);this.cancel(session,turn);return;}
         if(frame.type==='tool_execution_start')this.toolStart(session,turn,frame.toolCallId,frame.toolName,frame.args);
         else this.toolEnd(session,turn,frame.toolCallId,frame.isError,frame.result);break;
       case 'auto_retry_start':case 'compaction_start':
-        if(turn.input.repairOnly){this.fail(session,turn,'OUTPUT_INVALID','Pi 格式补交意外启动重试或压缩，已停止',true);this.cancel(session,turn);}break;
+        if(restrictedTurn(turn.input)){this.fail(session,turn,'OUTPUT_INVALID','Pi 格式补交意外启动重试或压缩，已停止',true);this.cancel(session,turn);}break;
       case 'extension_error':turn.values.set('failure',typeof frame.error==='string'?frame.error:'Pi 扩展执行失败');break;
       case 'auto_retry_end':if(frame.success===false)turn.values.set('failure',typeof frame.finalError==='string'?frame.finalError:'Pi 重试后仍失败');break;
       case 'agent_settled':{

@@ -2,7 +2,7 @@
  * DEV-24 PDF 附件首包（第二十八轮五）：四能力——保存原件（%PDF- magic+隔离解析验证）/
  * 预览（分页文本层——扫描件空页如实；像素渲染/OCR=未实施明确标注）/提取正文（缓存
  * artifacts.extracted_text_json——同 hash 不重复解析）/受限模型输入（注入提取文本——页码
- * 标注+64KB 预算截断；缓存不符=组装 fail-closed）。加密/损坏/超页数/超大小明确报错；
+ * 标注+64KB 预算截断；缓存不符从核验原件重提，原件不可解析则拒绝启动）。加密/损坏明确报错；
  * 依赖 pdfjs-dist 随 daemon 打包携带（无网络/无系统字体/无 canvas——隔离解析：不执行
  * PDF 脚本）。重启保持=缓存列持久；原件改动副本保持（sha256 核对）。
  */
@@ -10,13 +10,14 @@ import { describe, expect, it, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
+import { validateExtractCache } from '../../src/daemon/parseContracts.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
 delete process.env.ZS_REAL_DISPATCH_GUARD;
@@ -139,7 +140,7 @@ describe('DEV-24 PDF 首包：保存+提取+预览', () => {
 });
 
 describe('DEV-24 PDF 首包：受限模型输入', () => {
-  it('注入=提取文本（页码标注+预算截断）；缓存不符=组装失败（fail-closed）；跨会话拒绝', async () => {
+  it('注入提取文本与页码；坏缓存从核验原件恢复，坏原件不启动；跨会话拒绝', async () => {
     const env = makeEnv();
     const pdf = makePdf([['执行依据 PDF-INPUT-9911', '第一页其余内容'], ['第二页补充说明']]);
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadPdf', { conversationId: 'dm_a', filename: '执行依据.pdf', contentBase64: pdf.toString('base64') });
@@ -150,13 +151,34 @@ describe('DEV-24 PDF 首包：受限模型输入', () => {
     expect(adapter.startTurnLog[0]!.text).toContain('PDF-INPUT-9911'); // 提取文本注入（非路径）
     expect(adapter.startTurnLog[0]!.text).toContain('第 1 页'); // 页码标注
     expect(adapter.startTurnLog[0]!.text).toContain('第 2 页');
-    // 缓存不符（sourceHash 与 artifacts.hash 脱钩）→ 组装 fail-closed（不以旧缓存冒充）。
-    const up2 = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadPdf', { conversationId: 'dm_a', filename: '第二份.pdf', contentBase64: makePdf([['第二份内容']]).toString('base64') });
+    // 缓存 sourceHash 错误：隔离重提真实原件，不以陈旧缓存冒充输入。
+    const up2 = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadPdf', { conversationId: 'dm_a', filename: '第二份.pdf', contentBase64: makePdf([['RECOVERED-PDF-SECOND-2211']]).toString('base64') });
     env.db.prepare("UPDATE artifacts SET extracted_text_json = ? WHERE id = ?").run(JSON.stringify({ sourceHash: 'deadbeef', pages: [{ page: 1, text: '陈旧缓存', truncated: false }] }), up2.attachmentId);
     await env.cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '执行第二份', intent: 'default', mentions: [], attachmentRefs: [up2.attachmentId] });
     const { worker: w2, adapter: a2 } = env.makeWorker();
     await w2.runOnce();
-    expect(a2.startTurnLog.length).toBe(0); // 组装失败=不发给模型
+    expect(a2.startTurnLog.length).toBe(1);
+    expect(a2.startTurnLog[0]!.text).toContain('RECOVERED-PDF-SECOND-2211');
+    expect(a2.startTurnLog[0]!.text).toContain('第 1 页');
+    expect(a2.startTurnLog[0]!.text).not.toContain('陈旧缓存');
+    const repaired = env.db.prepare('SELECT extracted_text_json FROM artifacts WHERE id=?').get(up2.attachmentId) as { extracted_text_json: string };
+    expect(validateExtractCache(repaired.extracted_text_json, up2.hash, 'pdf')).not.toBeNull();
+    // 实际损坏 PDF：保存准确 hash 的托管原件和缺失缓存，模拟历史/生成附件。
+    // 正确 hash 不能将不可解析的原件变成已读文本，接收 worker 必须停在解析阶段。
+    const broken = Buffer.from('%PDF-1.4\nno objects or xref\n%%EOF\n', 'latin1');
+    const brokenHash = createHash('sha256').update(broken).digest('hex');
+    const brokenPath = join(appData, 'blobstore', `${brokenHash}.bin`);
+    writeFileSync(brokenPath, broken);
+    env.db.prepare(`INSERT INTO artifacts(id,project_id,conversation_id,author_id,kind,revision,hash,blob_path,source_name,created_at,extracted_text_json)
+      VALUES('art_broken_pdf','p1','dm_a','u_local','pdf_file',1,?,?,'损坏原件.pdf',0,NULL)`).run(brokenHash, brokenPath);
+    await env.cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '核对损坏原件', intent: 'default', mentions: [], attachmentRefs: ['art_broken_pdf'] });
+    const { worker: w3, adapter: a3 } = env.makeWorker();
+    await w3.runOnce();
+    expect(a3.startTurnLog).toHaveLength(0);
+    expect(env.db.prepare("SELECT extracted_text_json FROM artifacts WHERE id='art_broken_pdf'").get()).toEqual({ extracted_text_json: null });
+    const failed = env.db.prepare("SELECT payload_json FROM domain_events WHERE kind='turn.startupFailed' ORDER BY rowid DESC LIMIT 1").get() as { payload_json: string };
+    expect(failed.payload_json).toContain('损坏原件.pdf');
+    expect(failed.payload_json).toContain('attachment-extraction-failed');
     // 跨会话预览拒绝。
     env.db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('dm_b','p1','dm',NULL)`).run();
     env.db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','dm_b','human','u_other'),('p1','dm_b','agent','mA')`).run();

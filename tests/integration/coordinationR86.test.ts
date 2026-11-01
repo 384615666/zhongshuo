@@ -14,6 +14,7 @@ import type {TaskDetailsResult} from '../../src/contracts/taskDetails.ts';
 import {applyRecovery} from '../../src/daemon/stopFlow.ts';
 import {readTaskExecutionStatus} from '../../src/daemon/executionStatus.ts';
 import {reworkPendingOf} from '../../src/persistence/stores/dm.ts';
+import {pumpCoordinations} from '../../src/daemon/coordination.ts';
 
 afterEach(() => vi.unstubAllEnvs());
 const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,unknown>={}): FakeTurnScript => [{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
@@ -52,7 +53,18 @@ async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorke
   const dir=mkdtempSync(join(tmpdir(),'zs-r86-coordination-')),project=join(dir,'project');mkdirSync(project);
   const db=openDatabase(join(dir,'state.sqlite'));
   let script:FakeTurnScript=output('你好');
-  const adapter=new FakeRuntimeAdapter({structuredFinal:!enableDeliberate,turnScriptSequencer:()=>script});
+  const scriptsByStep=new Map<string,FakeTurnScript>();
+  const adapter=new FakeRuntimeAdapter({structuredFinal:!enableDeliberate,turnScriptSequencer:({text})=>{
+    if(scriptsByStep.size===0)return script;
+    const turnId=/\bturn=([^\s]+)/.exec(text)?.[1];
+    expect(turnId).toBeDefined();
+    const step=db.prepare(`SELECT s.step_key FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id
+      JOIN coordination_steps s ON s.child_task_id=r.task_id WHERE a.id=?`).get(turnId) as {step_key:string}|undefined;
+    if(!step)return script; // Planning/integration still use the supplied parent result.
+    const selected=scriptsByStep.get(step.step_key);
+    expect(selected,`No script bound to actual step ${step.step_key}`).toBeDefined();
+    return selected!;
+  }});
   const worker=new DispatchWorker({db,adapter,leaseOwner:'r86',appDataDir:dir,enableDeliberate,coordinationMaxCalls:6,...options});
   const deps={db,localUserId:'u_local',appDataDir:dir,interruptTurn:(id:string)=>worker.interruptTurn(id)};
   async function raw(method:string,params:unknown,commandId:string=randomUUID()) {return await dispatchDaemonCommand(deps,{protocolVersion:1,commandId,method,params}) as {ok:boolean;data?:unknown;error?:unknown};}
@@ -67,7 +79,8 @@ async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorke
   const send=(mentions:string[]=[])=>cmd<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请两位成员协作分析再复核',intent:'default',...(enableDeliberate?{collaboration:'deliberate'}:{}),mentions:mentions.map(memberId=>({kind:'member',memberId}))});
   const plan={summary:'独立分析后复核',steps:[{key:'analysis',memberId:a,title:'分析',objective:'提出实现方案',role:'analysis',dependsOn:[]},{key:'review',memberId:b,title:'复核',objective:'读取并复核上游方案',role:'review',dependsOn:['analysis']}]};
   const run=async(s:FakeTurnScript)=>{script=s;return worker.runOnce();};
-  return {db,dir,worker,adapter,cmd,raw,send,run,plan,a,b,room,projectId};
+  const setStepScripts=(scripts:Record<string,FakeTurnScript>)=>{for(const [key,value] of Object.entries(scripts))scriptsByStep.set(key,value);};
+  return {db,dir,worker,adapter,cmd,raw,send,run,setStepScripts,plan,a,b,room,projectId};
 }
 
 async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) {
@@ -88,6 +101,26 @@ async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) 
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('R152 queues independent peer assignments before the coordinator implementation',async()=>{
+    const f=await fixture();
+    try{
+      const root=await f.send([f.a]);
+      const plan={summary:'先派同伴，再各自实施',steps:[
+        {key:'own',memberId:f.a,title:'协调者实施',objective:'生成自己的文件',role:'implementation',dependsOn:[]},
+        {key:'peer',memberId:f.b,title:'同伴实施',objective:'生成同伴的文件',role:'implementation',dependsOn:[]},
+      ]};
+      await f.run(output('先提交两份分工',plan));
+      expect(f.db.prepare('SELECT count(*) n FROM agent_turns').get()).toEqual({n:1});
+      pumpCoordinations(f.db);
+      const queued=f.db.prepare(`SELECT t.owner_member_id FROM outbox o JOIN tasks t ON o.dispatch_key='task:'||t.id||':initial'
+        WHERE t.parent_task_id=? AND o.status='pending' ORDER BY o.id`).all(root.taskId) as Array<{owner_member_id:string}>;
+      expect(queued.map(row=>row.owner_member_id)).toEqual([f.b,f.a]);
+      expect(f.db.prepare('SELECT count(*) n FROM task_dependencies').get()).toEqual({n:0});
+      await f.run(output('同伴已先接单'));
+      const firstChild=f.db.prepare('SELECT t.owner_member_id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id WHERE t.parent_task_id=? ORDER BY a.rowid LIMIT 1').get(root.taskId);
+      expect(firstChild).toEqual({owner_member_id:f.b});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
   it('R109 lets the model plan adjacent Chinese names and waits for the dependent review',async()=>{
     const f=await fixture();
     try{
@@ -686,9 +719,14 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
         {key:'revise',memberId:f.a,title:'后继修订',objective:'根据核对结果修订初稿',role:'implementation',dependsOn:variant==='unrelated'?[]:['review']},
       ];
       await f.run(output('明确初稿、复核及后继修订分工',{summary:'统一文档版本链',steps}));
-      await f.run([{kind:'writeFile',path:'decision.md',content:'# 初稿\n金额待核对'},...output('初稿完成')]);
-      await f.run(output('复核发现实际付款应含税，交回作者修订'));
-      await f.run([{kind:'writeFile',path:'decision.md',content:'# 定稿\n含税金额已更正'},...output('已按复核纠正含税金额')]);
+      // Independent ready steps can run before the newly unblocked review.
+      // Bind writes to authentic step identities, never to runOnce call order.
+      f.setStepScripts({
+        write:[{kind:'writeFile',path:'decision.md',content:'# 初稿\n金额待核对'},...output('初稿完成')],
+        review:output('复核发现实际付款应含税，交回作者修订'),
+        revise:[{kind:'writeFile',path:'decision.md',content:'# 定稿\n含税金额已更正'},...output('已按复核纠正含税金额')],
+      });
+      for(let i=0;i<3;i++)await f.worker.runOnce();
       if(variant==='external-change')writeFileSync(join(f.dir,'project','decision.md'),'未经交付的外部修改');
       await f.run(output('统一交付：已核验含税金额'));
       const coordination=f.db.prepare('SELECT state,error_message FROM coordination_runs WHERE task_id=?').get(root.taskId) as {state:string;error_message:string|null};
@@ -705,8 +743,22 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
         expect(first.output.files[0]?.sha256).not.toBe(last.output.files[0]?.sha256);
       }else{
         expect(coordination.state).toBe('blocked');
-        expect(coordination.error_message).toContain(variant==='unrelated'?'没有显式依赖交接':'文件字节已变化');
-        expect(f.adapter.startTurnLog).toHaveLength(4);
+        if(variant==='unrelated'){
+          // revise really overwrote v1 without a DAG dependency. The review is
+          // rejected at its frozen v1 input before integration can merge outputs.
+          const writtenSteps=f.adapter.writtenFiles.map(file=>f.db.prepare(`SELECT s.step_key FROM agent_turns a
+            JOIN workflow_runs r ON r.id=a.run_id JOIN coordination_steps s ON s.child_task_id=r.task_id WHERE a.id=?`).get(file.turnId));
+          expect(writtenSteps).toEqual([{step_key:'write'},{step_key:'revise'}]);
+          const review=f.db.prepare("SELECT child_task_id FROM coordination_steps WHERE step_key='review'").get() as {child_task_id:string};
+          expect(f.db.prepare('SELECT count(*) n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?').get(review.child_task_id)).toEqual({n:0});
+          const blocked=f.db.prepare("SELECT payload_json FROM domain_events WHERE kind='coordination.dispatchBlocked' ORDER BY rowid DESC LIMIT 1").get() as {payload_json:string};
+          expect(blocked.payload_json).toContain('文件字节已变化');
+          expect(coordination.error_message).toContain('review');
+          expect(f.adapter.startTurnLog).toHaveLength(3); // planner + write + independent revise; review never starts
+        }else{
+          expect(coordination.error_message).toContain('文件字节已变化');
+          expect(f.adapter.startTurnLog).toHaveLength(4);
+        }
         expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
       }
     }finally{await f.adapter.closeAllSessions();f.db.close();}
