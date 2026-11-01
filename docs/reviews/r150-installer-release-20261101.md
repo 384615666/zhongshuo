@@ -18,6 +18,16 @@
 - 发布说明 `docs/releases/0.1.1.md`：品牌/文案/安装向导修复，无任务与数据格式变更。
 - 计划：从提交后的干净 worktree 构建 0.1.1 安装器，校验 payload/BUILD/隐私扫描，实际安装冒烟（隔离目录），推公开 main + tag `v0.1.1`，GitHub Release 上传 EXE/SHA256/release.json。
 
-## 3. 发布结果
+## 3. 发布结果（2026-11-01）
 
-（构建与发布结果待补）
+- **发布**：https://github.com/384615666/zhongshuo/releases/tag/v0.1.1 （draft=false、prerelease=false、latest=true）。tag `v0.1.1` 指向源码提交 `a9caca4b030799af800a2850c4f8894f4d146e25`，公开 main 同步该提交；资产三项已上传并核对本地/服务端 digest 一致：`Zhongshuo-Setup-0.1.1-x64.exe`（159,306,032 字节，SHA256 `ba0c0747d902cee2e9fbb8688eb1aa1519337a95909a1f7d90e1321cd08c027d`）、`.exe.sha256`、`.release.json`。未登录访问 Release/latest API 与安装包下载 302→200 正常。
+- **构建身份**：从 `a9caca4` 干净 worktree（node_modules 目录联接）构建；便携源镜像 `bld_333c33bae5aab647` clean，安装镜像 BUILD `bld_0793defc369ebf44`、commit `a9caca4…`、`dirty=false`、661 文件逐项 SHA256 与隐私扫描通过、`runAsNode=false`（fuse 回读）、`dataFilesIncluded=false`。安装器 EXE 文件版本 0.1.1 / ProductVersion 0.1.1 / OriginalFilename 正确，图标回读为正式猫咪 logo；未签名（如实标 `signed:false`）。
+- **payload 核对**：`resources/app/logo.png` 1,092,804B 与根图同哈希；`dist/ui/renderer/assets/logo.png` 存在；渲染器 bundle 含 `welcome-brand`、不含旧 `brand-mark`；`installed-desktop.json` version 0.1.1/numeric 0.1.1.65535、nativeIcon 7 帧 Verified；操作手册 20 张新截图与 `众说操作手册.html` 入包；`安装说明.txt` 首行为「众说 0.1.1」。
+- **安装冒烟（隔离）**：真实安装器 `/VERYSILENT /DIR=<隔离目录> /TASKS=""` 装到临时目录（不覆盖用户安装），校验程序/版本/logo/图标/卸载登记/开始菜单与桌面快捷方式后静默卸载；卸载成功、隔离目录清空。**过程中一次向导截图自动化在模板夹具上误触发了模板安装（默认目录），发现后立即用原 `0.1.0-beta.3` 安装包重装恢复**：原程序 667 文件、`Zhongshuo.exe` 246,140,416 字节、注册表 `DisplayVersion=0.1.0-beta.3`/DisplayIcon/安装目录、桌面与开始菜单四个快捷方式（含图标/AppId）均已核对回原值；用户数据目录未改动（安装器无数据操作、未启动应用）。
+- 用户当前运行/安装的旧版与数据未升级；安装 0.1.1 需自行正常退出旧版后运行新安装包。未做 Authenticode 签名，仍无自动更新。
+
+## 4. 未决/后续
+
+- `scripts/lib/wizard-images.ps1` 需要 Windows PowerShell 5.1 且脚本带 UTF-8 BOM（生成脚本已入库）；更换 logo 后重跑并重新构建安装器。
+- 安装器页面截图脚本仅用于内部视觉核对，属本机 `dist/` 证据，不入库。
+- 历史验证脚本（`scripts/verify-desktop-renderer.mjs` 等）仍断言旧可见文案；e2e 部分既有断言陈旧，均非产品测试范围。
