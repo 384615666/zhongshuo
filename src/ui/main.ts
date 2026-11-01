@@ -22,9 +22,8 @@ import { resolveDisplayPlacement } from './testDisplay.ts';
 import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
 import { installedDaemonPipe, installedDesktopConfiguration } from './installedDesktop.ts';
 
-if (process.platform === 'win32') {
-  app.setAppUserModelId(process.env.ZS_APP_USER_MODEL_ID ?? 'com.zhongshuo.desktop');
-}
+const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ?? 'com.zhongshuo.desktop';
+if (process.platform === 'win32') app.setAppUserModelId(desktopAppId);
 
 // zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
 // file:// 源下 ES 模块被模块 CORS 拦截（Chromium 对 file 源互为 opaque）。standard+secure
@@ -552,11 +551,16 @@ let dataOperationStarting = false;
   if (simMode) {
     process.stderr.write('[zhongshuo-ui] 模拟验证模式：ZS_RUNTIME=fake + 真实派发防护——即使保存了真实 runtime 绑定，派发也会在 spawn 前被拒绝（不发出真实模型请求）\n');
   }
+  let desktopIcon=join(appRoot,'Zhongshuo.ico');
+  try {
+    const metadata=JSON.parse(readFileSync(join(appRoot,installedDesktop?'installed-desktop.json':'desktop-brand.json'),'utf8')) as {icon?:unknown};
+    if(typeof metadata.icon==='string'&&/^Zhongshuo-(?:[a-f0-9]{12})\.ico$/.test(metadata.icon))desktopIcon=join(appRoot,metadata.icon);
+  } catch { /* Older/development images use the existing icon fallback. */ }
+  const windowIcon=existsSync(join(appRoot,'logo.png'))?join(appRoot,'logo.png'):existsSync(desktopIcon)?desktopIcon:null;
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    ...(existsSync(join(appRoot, 'Zhongshuo.ico')) ? { icon: join(appRoot, 'Zhongshuo.ico') }
-      : existsSync(join(appRoot, 'logo.png')) ? { icon: join(appRoot, 'logo.png') } : {}),
+    ...(windowIcon?{icon:windowIcon}:{}),
     show: false,
     // 无边框窗口（第五十四轮 H3 §3）：默认自绘标题栏接管外壳；--no-hifi（legacy 专项对照，
     // 无自绘栏）保留系统原生框——窗口控制不因换装失败/对照模式失去可达性。
@@ -573,6 +577,7 @@ let dataOperationStarting = false;
       backgroundThrottling: false,
     },
   });
+  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0});
   const disposeTaskNotificationIpc = registerTaskNotificationIpc({
     ipcMain,
     assertTrustedSender,

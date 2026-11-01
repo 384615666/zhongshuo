@@ -3,8 +3,8 @@
   "appId": "com.zhongshuo.desktop",
   "productName": "众说",
   "executable": "Zhongshuo.exe",
-  "version": "0.1.0-beta.2",
-  "numericVersion": "0.1.0.2",
+  "version": "0.1.0-beta.3",
+  "numericVersion": "0.1.0.3",
   "architecture": "x64",
   "installScope": "current-user",
   "dataDirectory": "localAppData/Zhongshuo/data"

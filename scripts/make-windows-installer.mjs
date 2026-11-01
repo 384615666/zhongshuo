@@ -7,7 +7,8 @@ import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openS
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { packageUserGuideAssets, renderUserGuide } from './package-user-guide.mjs';
-import { brandIco } from './lib/brand-icon.mjs';
+import { brandIco, brandIconName } from './lib/brand-icon.mjs';
+import { brandWindowsExecutable } from './lib/brand-executable.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const configDir = join(repo, 'packaging/windows');
@@ -115,7 +116,8 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
   if(options.help){console.log('node scripts/make-windows-installer.mjs [--version beta.N|X.Y.Z-beta.N] [--skip-build] [--source-image DIR] [--output-dir DIR] [--prepare-only|--validate-template|--stage-only] [--iscc EXE] [--app-mutex NATIVE_NAME]');return;}
   const version=releaseVersion(options['--version']);
   const work=join(repo,'dist/windows-installer',version.version);mkdirSync(work,{recursive:true});
-  const icon=join(work,'Zhongshuo.ico');writeFileSync(icon,brandIco());
+  const iconBytes=brandIco(),iconName=brandIconName(iconBytes);
+  const icon=join(work,iconName);writeFileSync(icon,iconBytes);
   const output=resolve(options['--output-dir']??join(repo,'dist/installers'));mkdirSync(output,{recursive:true});
   const sourceImage=resolve(options['--source-image']??options['--image']??join(repo,'dist/desktop/众说-便携-win-x64'));
   const compiler=compilerPath(options['--iscc']);
@@ -140,13 +142,14 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     privacyCheck(sourceImage);
     image=mkdtempSync(join(work,'image-'));cpSync(sourceImage,image,{recursive:true});
     renameSync(join(image,'electron.exe'),join(image,release.executable));
+    const nativeIcon=brandWindowsExecutable(join(image,release.executable),icon);
     const fuses=disableRunAsNode(join(image,release.executable));
     const appDir=join(image,'resources/app');
-    const metadata={...release,...version,executable:release.executable,icon:'Zhongshuo.ico',fuses};
+    const metadata={...release,...version,executable:release.executable,icon:iconName,nativeIcon,fuses};
     json(join(appDir,'installed-desktop.json'),metadata);
     const pkg=JSON.parse(readFileSync(join(appDir,'package.json'),'utf8'));
     json(join(appDir,'package.json'),{...pkg,version:version.version,productName:release.productName,description:'众说——本地多 Agent 协同工作台'});
-    cpSync(icon,join(appDir,'Zhongshuo.ico'));cpSync(join(repo,'logo.png'),join(appDir,'logo.png'));
+    cpSync(icon,join(appDir,iconName));cpSync(join(repo,'logo.png'),join(appDir,'logo.png'));
     if(existsSync(join(image,'LICENSE')))renameSync(join(image,'LICENSE'),join(image,'LICENSE-electron.txt'));
     cpSync(join(repo,'LICENSE'),join(image,'LICENSE'));
     const nativeLicense=join(dirname(process.execPath),'LICENSE');
@@ -166,7 +169,7 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     json(join(work,'payload-audit.json'),{...version,...build,runAsNode:false,privacyScanPassed:true,dataFilesIncluded:false});
   }
   const compileOutput=validation?join(work,'syntax-output'):output;mkdirSync(compileOutput,{recursive:true});
-  const defs={PayloadDir:image,ReleaseVersion:version.version,NumericVersion:version.numericVersion,BrandIcon:icon,ReleaseOutputDir:compileOutput,...(appMutex?{NativeAppMutex:appMutex}:{})};
+  const defs={PayloadDir:image,ReleaseVersion:version.version,NumericVersion:version.numericVersion,BrandIcon:icon,BrandIconName:iconName,ReleaseOutputDir:compileOutput,...(appMutex?{NativeAppMutex:appMutex}:{})};
   const args=[...Object.entries(defs).map(([key,value])=>`/D${key}=${value}`),join(configDir,'zhongshuo.iss')];
   const result={...plan,image,...(build??{}),validationOnly:validation};json(join(work,validation?'syntax-plan.json':'build-result.json'),result);
   if(options['--stage-only']&&!validation){console.log(JSON.stringify(result,null,2));return result;}
