@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { Buffer } from 'node:buffer';
@@ -63,6 +64,12 @@ try {
   const duplicate = spawnSync(join(installDir, 'Zhongshuo.exe'), [`--data-dir=${data}`], { env, windowsHide: true, encoding: 'utf8', timeout: 15000 });
   check('second launch exits successfully', duplicate.status === 0); check('second launch keeps same daemon', readFileSync(join(data, 'daemon.pid'), 'utf8') === pid);
   check('primary still serves after second launch', (await command('project.list', {})).items.length > 0);
+  const beforeUpgradeHash = createHash('sha256').update(readFileSync(join(installDir, 'Zhongshuo.exe'))).digest('hex');
+  const refusedUpgrade = spawnSync(upgrade, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', `/DIR=${installDir}`, `/LOG=${join(run, 'busy-upgrade.log')}`], { env, windowsHide: true, timeout: 30000 });
+  check('running app refuses upgrade before file changes', refusedUpgrade.status != null && refusedUpgrade.status !== 0 && createHash('sha256').update(readFileSync(join(installDir, 'Zhongshuo.exe'))).digest('hex') === beforeUpgradeHash);
+  const refusedUninstall = spawnSync(join(installDir, 'unins000.exe'), ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', `/LOG=${join(run, 'busy-uninstall.log')}`], { env, windowsHide: true, timeout: 30000 });
+  check('running app refuses uninstall', refusedUninstall.status != null && refusedUninstall.status !== 0 && existsSync(join(installDir, 'Zhongshuo.exe')));
+  check('refused maintenance preserves daemon and data', readFileSync(join(data, 'daemon.pid'), 'utf8') === pid && (await command('project.list', {})).items.some(p => p.id === projectId));
   const shot = await send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(run, 'installed.png'), Buffer.from(shot.data, 'base64'));
   await close('initial');
   writeFileSync(join(data, 'r144-attachment-marker'), 'preserved attachment bytes'); writeFileSync(join(installDir, 'user-untracked.txt'), 'user file kept');
