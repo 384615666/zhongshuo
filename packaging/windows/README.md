@@ -28,11 +28,7 @@ node scripts/make-windows-installer.mjs --skip-build --stage-only
 
 安装向导外观：`branding/wizard-large-*.png`（164:314，多档 DPI）与 `branding/wizard-small-*.png`（方形多档）由 `scripts/lib/wizard-images.ps1` 从根 `logo.png` 生成，`WizardImageFile`/`WizardSmallImageFile` 按当前 DPI 自动选最近档；`[Messages]` 覆盖欢迎/准备/完成页文案，去掉默认 Inno 许可与纯文本说明页（MIT 许可证与安装说明仍随包安装），完成页同时提供“打开众说/打开操作手册”。安装器开始菜单与桌面快捷方式写 `AppUserModelID=com.zhongshuo.desktop.app`；主程序安装形态也用同一 AUMID，便携/开发形态用 `com.zhongshuo.desktop.portable`，避免与旧 Electron/便携包合并任务栏按钮。卸载登记 AppId 仍为 `com.zhongshuo.desktop`，升级路径不变。
 
-数据由主程序管理，默认 `%LOCALAPPDATA%/Zhongshuo/data`。安装器没有任何数据目录的 Files/Dirs/InstallDelete/UninstallDelete/UninstallRun 操作，不导入既有聊天。正常卸载只移除安装日志登记的程序文件，保留数据及未登记的用户文件。隔离 QA 启动应用时传显式 `--data-dir=<absolute ignored QA root>`。
-
-交互安装发现目标目录中的众说仍在运行时，先询问是否正常关闭并继续；通过已核实窗口的 `WM_QUERYENDSESSION` 触发应用既有停机流程，并有界等待。若进程仍未退出，再单独询问“强制关闭并继续安装”，提示正在执行的任务可能中断、未保存内容可能丢失。只有用户明确同意，才终止已核实属于此安装目录及当前用户的进程树；核验包括产品/程序路径、用户 SID、PID 启动时间和父子归属，使用已打开的进程句柄避免 PID 复用。确认后新出现的实例或无法核实的文件持有者会阻止安装；退出后再次枚举并探测目标 EXE、随包 node.exe 的文件锁，确认清空才允许写入程序文件。Restart Manager 仅用于核实文件持有者，不调用其可能结束非交互进程的 `RmShutdown`。
-
-静默安装发现运行中的进程会拒绝继续，不自动正常关闭或强制关闭。卸载沿用旧行为：程序或后台仍在使用目标文件时拒绝卸载，要求先正常退出。`CloseApplications`/`RestartApplications` 均保持关闭；AppMutex 只有在主程序明确创建同名 mutex 后才允许 `--app-mutex NAME` 启用。
+数据由主程序管理，默认 `%LOCALAPPDATA%/Zhongshuo/data`。安装器没有任何数据目录的 Files/Dirs/InstallDelete/UninstallDelete/UninstallRun 操作，不导入既有聊天。正常卸载只移除安装日志登记的程序文件，保留数据及未登记的用户文件。隔离 QA 启动应用时传显式 `--data-dir=<absolute ignored QA root>`。安装/卸载前对目标 Zhongshuo.exe 与随包 node.exe 做不写入的独占打开探测，若在使用则拒绝操作，不强杀。未启用会在静默时自动关闭用户应用的 Restart Manager；AppMutex 只有在主程序明确创建同名 mutex 后才允许 `--app-mutex NAME` 启用。
 
 安装器镜像独立复制原便携程序，重命名 electron.exe 为 Zhongshuo.exe，并重写两份 PE 资源后再计算镜像清单：①品牌图标组（七尺寸、全语言回读）；②版本信息资源 `RT_VERSION`（ProductName/FileDescription/OriginalFilename 等改为「众说」，文件版本取发布版本）。版本资源用 `scripts/lib/brand-executable.ps1` 内的 Win32 `BeginUpdateResource`/`UpdateResource` 写入，同时提供 en-US 与 zh-CN Unicode 字符串表并回读 `FileVersionInfo` 校验；这样任务栏、文件属性与 Shell 不再继承 Electron 的默认描述。仅改发行副本，不动 `node_modules` 的 Electron 原程序。仅此副本将官方 Electron fuse V1 的 RunAsNode（索引 0）置 0 并回读，其余 fuse 原样保留，不改共享 node_modules 或便携镜像。Windows 本机 Node 独立承载 daemon，不靠这个 EXE 的 Node 模式。布局为 resources/app，未启用 OnlyLoadAppFromAsar。参考 [Electron 官方 fuse 格式](https://www.electronjs.org/docs/latest/tutorial/fuses)。当前发布没有 Authenticode 签名，发行元数据如实标 `signed:false`，Windows 可能显示未知发布者；不能宣称已签名。
 
