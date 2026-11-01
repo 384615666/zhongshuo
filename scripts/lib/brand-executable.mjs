@@ -52,7 +52,7 @@ export function brandWindowsExecutable(executable, icon, brand = null) {
     if(info.companyName!==brand.company)mismatches.push(`CompanyName=${info.companyName}`);
     if(info.fileVersion!==brand.version)mismatches.push(`FileVersion=${info.fileVersion}`);
     if(mismatches.length>0)throw Error(`Embedded Windows version resource verification failed: ${mismatches.join(', ')}`);
-    verified.Version={...verified.Version,...info};
+    verified.Version={verified:true,productName:info.productName,fileDescription:info.fileDescription,fileVersion:info.fileVersion,productVersion:info.productVersion,originalFilename:info.originalFilename,companyName:info.companyName};
   }
   return verified;
 }
