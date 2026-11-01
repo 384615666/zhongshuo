@@ -115,7 +115,9 @@ ${embedded ? '' : `<header class="topbar"><div class="brand">众说<span class="
 }
 
 export function writeUserGuide() {
-  writeFileSync(join(guideDir, 'index.html'), renderUserGuide(), 'utf8');
+  // 已入库的 docs/user-guide/index.html 使用 CRLF；生成时固定同一 EOL，
+  // 避免每次 build:ui 把该跟踪文件标脏、进而让发布 BUILD 误报 dirty。
+  writeFileSync(join(guideDir, 'index.html'), renderUserGuide().replace(/\r?\n/g, '\r\n'), 'utf8');
 }
 
 /** Build the in-app manual from the same source as the offline manual. */
