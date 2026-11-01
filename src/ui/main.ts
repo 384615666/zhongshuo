@@ -20,6 +20,7 @@ import {claimActiveDataOperation,dataControlPaths,dataLocationHash,loadDataCopyJ
 import {findLocalDataRoot} from '../contracts/localDataCopy.ts';
 import { resolveDisplayPlacement } from './testDisplay.ts';
 import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
+import { installedDaemonPipe, installedDesktopConfiguration } from './installedDesktop.ts';
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(process.env.ZS_APP_USER_MODEL_ID ?? 'com.zhongshuo.desktop');
@@ -46,16 +47,58 @@ let daemonShuttingDown = false;
 const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
 const isPackagedUi = process.env.ZS_PACKAGED_UI === '1'
   || existsSync(join(appRoot, 'daemon', 'daemon.cjs')); // 布局判定：便携 exe 未改名时 app.isPackaged=false，不可作依据
+const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
+let installedBaseRoot: string | null = null;
+let installedConfigurationError: string | null = null;
+if (installedDesktop) {
+  const localAppData = process.env.LOCALAPPDATA ?? join(app.getPath('home'), 'AppData', 'Local');
+  try {
+    const config = installedDesktopConfiguration(process.argv, process.env, localAppData);
+    installedBaseRoot = config.dataRoot;
+    for (const key of Object.keys(process.env)) if (!(key in config.env)) delete process.env[key];
+    Object.assign(process.env, config.env);
+  } catch (error) {
+    installedConfigurationError = error instanceof Error ? error.message : String(error);
+    const safe = installedDesktopConfiguration([], process.env, localAppData);
+    installedBaseRoot = safe.dataRoot;
+    for (const key of Object.keys(process.env)) if (!(key in safe.env)) delete process.env[key];
+    Object.assign(process.env, safe.env);
+  }
+}
+let startupLog: string | null = null;
+let startupFailureShown = false;
+async function failDesktopStartup(error: unknown): Promise<void> {
+  if (startupFailureShown) return;
+  startupFailureShown = true;
+  const detail = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`[zhongshuo-ui] 启动失败：${detail}\n`);
+  if (installedDesktop) await dialog.showMessageBox({ type: 'error', title: '众说无法启动', message: '没有打开众说。', detail: `${detail}\n\n诊断日志：${startupLog ?? '日志目录不可写'}`, buttons: ['关闭'], noLink: true });
+  let ownsDaemon = false;
+  try {
+    const owner = JSON.parse(readFileSync(join(appDataDir, 'locks', 'daemon.lock.d', 'owner.json'), 'utf8')) as { pid?: number };
+    ownsDaemon = daemonProcess?.pid != null && owner.pid === daemonProcess.pid;
+  } catch { /* Never stop an unconfirmed or other instance's daemon. */ }
+  if (daemonAuthed && ownsDaemon) await shutdownDaemon();
+  else if (daemonProcess != null && daemonProcess.exitCode == null) daemonProcess.kill();
+  app.exit(1);
+}
 
 /** 启动独立 daemon 子进程（打包=随包 Node+daemon.cjs；开发=PATH node+源码 entry）。 */
 async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'codex' | 'claude'): Promise<void> {
+  if (installedDesktop) {
+    for (const file of [join(appDataDirToUse, 'locks', 'daemon.lock.d', 'owner.json'), join(appDataDirToUse, 'locks', 'daemon.lock')]) {
+      if (!existsSync(file)) continue;
+      const owner = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number };
+      if (owner.pid != null && processAlive(owner.pid)) throw Error('这份数据已由另一个众说后台使用。请回到已有窗口，或正常退出旧版后再打开。');
+    }
+  }
   const entry = process.env.ZS_DAEMON_ENTRY ?? (isPackagedUi
     ? join(appRoot, 'daemon', 'daemon.cjs')
     : join(__dirname, '..', '..', 'src', 'daemon', 'entry.ts'));
   mkdirSync(appDataDirToUse, { recursive: true }); // 凭据/数据库目录可能尚不存在
   const credential = ensureLocalCredential(appDataDirToUse);
   // 管道名默认按本机用户（单实例语义）；显式 ZS_PIPE_NAME 供多实例/端到端隔离。
-  daemonPipe = process.env.ZS_PIPE_NAME ?? daemonPipeNameFor(localUserId());
+  daemonPipe = installedDesktop ? installedDaemonPipe(appDataDirToUse) : process.env.ZS_PIPE_NAME ?? daemonPipeNameFor(localUserId());
   daemonToken = credential.token;
   // daemon 用随包 Node 运行（ELECTRON_RUN_AS_NODE 的 electron.exe 是 Electron ABI，
   // better-sqlite3 原生模块按 Node ABI 预编译——混用即 NODE_MODULE_VERSION 不匹配）。
@@ -99,7 +142,7 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
     spawnError = error.message;
     process.stderr.write(`[zhongshuo-ui] daemon spawn 失败：${error.message}
 `);
-    app.exit(1); // 明确失败退出——不留静默未就绪窗口
+    void failDesktopStartup(error);
   });
   process.stderr.write(`[zhongshuo-ui] ready: spawn ok（+${Date.now() - uiSpawnAt}ms，pid=${daemonProcess.pid}，pipe=${daemonPipe}）
 `);
@@ -110,7 +153,7 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
     // 状态继续（空管道重连永远失败=挂死窗口，比明确退出更糟）。
     if (!daemonShuttingDown && code !== 0) {
       process.stderr.write('[zhongshuo-ui] daemon 异常退出——应用退出（明确失败，不降级）\n');
-      app.exit(1);
+      void failDesktopStartup(Error(`后台服务异常退出（${code}）。请查看诊断日志中的具体原因。`));
     }
   });
 }
@@ -200,11 +243,37 @@ let daemonToken = '';
 // 测试/多实例（ZS_APP_DATA）互不串扰。userData 必须在 app ready 前设定。
 const progressJobIndex = process.argv.indexOf('--zs-data-progress-job');
 const progressJobFile = progressJobIndex >= 0 ? process.argv[progressJobIndex + 1] ?? null : null;
-const baseDataRoot = resolve(process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo'));
+const baseDataRoot = installedBaseRoot ?? resolve(process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo'));
+if (installedDesktop && installedConfigurationError == null) {
+  try {
+    const logs = join(baseDataRoot, 'logs'); mkdirSync(logs, { recursive: true });
+    startupLog = join(logs, 'desktop-startup.log');
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+      try { appendFileSync(startupLog!, chunk); } catch { /* Native failure dialog still reports errors. */ }
+      return (originalWrite as (...parts: unknown[]) => boolean)(chunk, ...args);
+    }) as typeof process.stderr.write;
+    process.stderr.write(`\n[desktop] ${new Date().toISOString()} pid=${process.pid}\n`);
+  } catch { /* Native failure dialog still reports errors. */ }
+}
 let dataPickSeq = 0; // R87 data-folder picker test hook (only when ZS_DATA_PICK_FILE is explicit)
 let startupDataLocationError: string | null = null;
 let appDataDir = baseDataRoot;
-if (progressJobFile != null) {
+let ownsDesktopInstance = true;
+if (installedDesktop) {
+  // Lock the stable entry root before reconciling operations or following redirects.
+  const profile = progressJobFile == null ? join(baseDataRoot, 'electron-user-data') : join(dataControlPaths(baseDataRoot).root, 'progress-app', 'electron-user-data');
+  app.setPath('userData', profile);
+  ownsDesktopInstance = app.requestSingleInstanceLock();
+  if (!ownsDesktopInstance) app.quit();
+  else app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows().find(candidate => !candidate.isDestroyed());
+    if (win != null) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  });
+}
+if (!ownsDesktopInstance || installedConfigurationError != null) {
+  // Invalid command-line input must not reconcile or read a data root.
+} else if (progressJobFile != null) {
   // The progress host has its own disposable profile under the sibling control
   // directory. It never opens the source/destination profile and never starts a daemon.
   appDataDir = join(dataControlPaths(baseDataRoot).root, 'progress-app');
@@ -221,7 +290,7 @@ if (progressJobFile != null) {
     appDataDir = join(dataControlPaths(baseDataRoot).root, 'recovery-app');
   }
 }
-app.setPath('userData', join(appDataDir, 'electron-user-data'));
+if (ownsDesktopInstance) app.setPath('userData', join(appDataDir, 'electron-user-data'));
 
 // 就绪链阶段（第二十一轮一）：spawnOk（进程已创建）→ pipeListening（daemon 侧 listen）→
 // authOk（首次 auth.ok=真正可用）→ failed/exit（spawn error/提前退出/截止超时——立即失败，
@@ -317,6 +386,8 @@ if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI 
 }
 
 app.whenReady().then(async () => {
+  if (!ownsDesktopInstance) return;
+  if (installedConfigurationError != null) throw Error(installedConfigurationError);
   powerMonitor.on('suspend',()=>connectionMonitor.suspend());
   powerMonitor.on('resume',()=>connectionMonitor.resume());
   app.once('will-quit',()=>connectionMonitor.dispose());
@@ -472,6 +543,7 @@ let dataOperationStarting = false;
   void ensureConnection().catch((error) => {
     process.stderr.write(`[zhongshuo-ui] 预热连接失败（将由首条命令重试/报错）：${error instanceof Error ? error.message : String(error)}
 `);
+    if (installedDesktop) void failDesktopStartup(error);
   });
 
   // 模拟验证模式（第十六轮二/四：本地体验入口 ZS_APP_MODE=fake-sim）——窗口标题明示 +
@@ -483,6 +555,7 @@ let dataOperationStarting = false;
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    ...(installedDesktop ? { icon: join(appRoot, 'Zhongshuo.ico') } : {}),
     show: false,
     // 无边框窗口（第五十四轮 H3 §3）：默认自绘标题栏接管外壳；--no-hifi（legacy 专项对照，
     // 无自绘栏）保留系统原生框——窗口控制不因换装失败/对照模式失去可达性。
@@ -678,8 +751,7 @@ let dataOperationStarting = false;
     });
   }
 }).catch((error) => {
-  process.stderr.write(`[zhongshuo-ui] 启动失败：${String(error)}\n`);
-  app.quit();
+  void failDesktopStartup(error);
 });
 
 function latestDataStatus(baseRoot: string): (Pick<DataJobStatus, 'id'|'state'|'error'|'at'|'recoveredReceipt'> & { action: DataCopyJob['action']|null }) | null {
@@ -883,13 +955,14 @@ async function showDataProgressWindow(jobFile: string): Promise<void> {
 
 function relaunchApplication(root: string): void {
   const debugPort = process.env.ZS_DEV25_DEBUG_PORT;
-  const args = [...(isPackagedUi ? [] : [appRoot]), ...(debugPort ? ['--remote-debugging-port=0'] : [])];
+  const args = [...(isPackagedUi ? [] : [appRoot]), ...(installedDesktop ? [`--data-dir=${root}`] : []), ...(debugPort ? ['--remote-debugging-port=0'] : [])];
   const child = spawn(process.execPath, args, {detached:true,windowsHide:true,stdio:'ignore',env:{...process.env,ZS_APP_DATA:root}});
   child.on('error',()=>{});
   child.unref();
 }
 
 app.on('window-all-closed', () => {
+  if (!ownsDesktopInstance) return;
   // 停机命令须在关闭管道**之前**发出（shutdownDaemon 内部：daemon.shutdown→有界等待→
   // kill 兜底→关管道）；此处不再先行 close（否则 requestDelivered 恒 false）。
   // 受控同步点（第二十二轮二）：关闭请求后延迟开始停机——制造"旧实例窗口已关、进程

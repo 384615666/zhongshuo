@@ -24,6 +24,8 @@ Windows 官方 Harness 桌面安装版也可直接使用：默认 `dsh` 会解�
 
 ## 从源码构建
 
+Windows 安装版：安装 Inno Setup 6 后执行 `node scripts/make-windows-installer.mjs`。输出目录为 `dist/installers/`，安装后从开始菜单或桌面打开 **众说**。程序附带运行所需的 Electron 和 Node.js；AI 渠道仍使用用户自行安装和配置的 CLI。安装版数据位于 `%LOCALAPPDATA%\Zhongshuo\data`，升级和卸载保留数据。当前发行包未配置代码签名。
+
 准备 Windows、Node.js 24 或更高版本、pnpm 和 Git：
 
 ```powershell

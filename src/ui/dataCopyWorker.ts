@@ -8,17 +8,19 @@ import {CURRENT_DATA_SCHEMA_VERSION,dataJobPaths,loadDataCopyJob,runDataCopyJob,
 import {atomicWriteFile} from '../contracts/atomicFile.ts';
 
 const appRoot=resolve(__dirname,'..','..'),packaged=existsSync(join(appRoot,'daemon','daemon.cjs'));
-const electron=packaged?resolve(appRoot,'..','..','electron.exe'):join(appRoot,'node_modules','electron','dist','electron.exe');
+const installed=existsSync(join(appRoot,'installed-desktop.json'));
+const electron=packaged?resolve(appRoot,'..','..',installed?'Zhongshuo.exe':'electron.exe'):join(appRoot,'node_modules','electron','dist','electron.exe');
 const appArgs=packaged?[]:[appRoot];
 const debugPort=process.env.ZS_DEV25_DEBUG_PORT;
 const relaunchArgs=[...appArgs,...(debugPort?['--remote-debugging-port=0']:[])];
 async function main(){
 const file=process.argv[2];if(!file)throw Error('DATA_JOB_MISSING');
 const job=loadDataCopyJob(file),paths=dataJobPaths(job);
+const dataArgs=installed?[`--data-dir=${job.baseRoot}`]:[];
 const require=createRequire(join(appRoot,'package.json'));
 const Database=require(packaged?join(appRoot,'daemon','node_modules','better-sqlite3'):'better-sqlite3') as typeof DatabaseConstructor;
 let progress:ChildProcess|undefined;
-const startProgress=()=>{if(progress||!existsSync(electron))return;const child=spawn(electron,[...appArgs,'--zs-data-progress-job',file],{windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:job.baseRoot}});progress=child;child.on('error',()=>{if(progress===child)progress=undefined;});};
+const startProgress=()=>{if(progress||!existsSync(electron))return;const child=spawn(electron,[...appArgs,...dataArgs,'--zs-data-progress-job',file],{windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:job.baseRoot}});progress=child;child.on('error',()=>{if(progress===child)progress=undefined;});};
 let result:DataJobStatus;
 try{
   result=await runDataCopyJob(file,{maxSchemaVersion:CURRENT_DATA_SCHEMA_VERSION,verifyDatabase:path=>{
@@ -42,7 +44,7 @@ if(progressChild){
 }
 if(result.state==='succeeded'||result.state==='failed'||result.state==='unknown'){
   if(!processAlive(job.ownerPid)){
-    const child=spawn(electron,relaunchArgs,{detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:job.baseRoot}});child.on('error',()=>{});child.unref();
+    const child=spawn(electron,[...relaunchArgs,...dataArgs],{detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:job.baseRoot}});child.on('error',()=>{});child.unref();
   }
 }
 
