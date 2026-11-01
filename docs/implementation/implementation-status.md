@@ -4,6 +4,8 @@ R142复核R141报告：产品无Magpie硬依赖；修复PiMCP配置未入执行�
 
 默认全量316文件2765通过14跳过0失败，官方5项另行显式通过。
 
+V78 clean源码e2d7a10/BUILD bld_df3992438fc6001d，622程序hash/ZIP652 CRC、实际包内14项/正常停机通过；沿用数据入口与V77相同，仅本地提交未推送。
+
 R140修复恢复检查误报已解决历史中断：recovery.status只列未完成任务最新INTERRUPTED，DONE/CANCELLED及已有新运行的旧中断不再提醒，历史不改；UNKNOWN/保护/撤销/门禁独立保留。原库只读复核从1旧提醒归零，新16/既有124恢复回归通过、双types/UI构建通过、lint无新增。0真实模型调用，MCP/Skill测试延期。见[R140](../reviews/r140-recovery-current-20261101.md)。
 
 V77 clean源码248c23b/BUILD bld_4f7e269cfc383220，622程序hash/ZIP652 CRC、实际包内恢复UI两组14项与通用入口14项/正常退出通过；沿用数据入口与V76一致，仅本地提交不推送。

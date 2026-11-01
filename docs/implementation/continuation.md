@@ -12,6 +12,8 @@
 
 默认全量316文件2765通过14跳过0失败，证据dist/r142-full.json；官方5项已单独显式通过。原R141脚本本机改动SHA与worktree ignored副本核对一致，不加入发布程序或本轮git提交。
 
+V78：desktop-daily-win-v78-r142-runtime-config-20261101，clean源码e2d7a10339366ada5055372d688f8f77700d7853、BUILD bld_df3992438fc6001d。622hash/ZIP652 CRC通过/220454707字节，SHA256 57eb7184c493a8d8f1ebc3d2cbaf1179de62d48602346cdc2808078ee857637d。包内实际Electron/daemon14项/正常退出0通过，沿用数据入口与V77相同；正常退出旧版后start-existing-data.vbs。R141脚本不打入包，不修改Magpie或其他CLI配置，不新增推理。
+
 ## 2026-11-01：R140 恢复检查过滤已解决的历史中断
 
 用户反馈“查看中断任务”仍定位到已修复完成的旧任务。原库只读确认唯一INTERRUPTED属于DONE任务，后续最新SUCCEEDED；旧recovery.status无条件列全部历史中断。现仅每任务最新run仍INTERRUPTED且task非DONE/CANCELLED才提醒，历史保留；UNKNOWN/保留保护/撤销/门禁独立查询不隐藏。新正式方法在原库readonly+query_only读取interruptedRuns[]，其余空/门禁false，无写入。见[R140](../reviews/r140-recovery-current-20261101.md)。
