@@ -1,5 +1,9 @@
 # 众说正式工程 · 施工总账
 
+R142复核R141报告：产品无Magpie硬依赖；修复PiMCP配置未入执行身份、纠正Harness web与zhongshuo profile不自动共享的文档。R141本机未跟踪验收脚本清理skills根/Pi同名MCP还原错误已备份修正，不随本轮提交原脚本；9隔离检查通过。4文件66相关、官方Pi5本地固定响应通过，双types/lint/UI构建通过，0真实模型。原个人技能无完整备份证据，不能据九项还原宣称完整恢复。见[R142](../reviews/r142-runtime-config-20261101.md)。
+
+默认全量316文件2765通过14跳过0失败，官方5项另行显式通过。
+
 R140修复恢复检查误报已解决历史中断：recovery.status只列未完成任务最新INTERRUPTED，DONE/CANCELLED及已有新运行的旧中断不再提醒，历史不改；UNKNOWN/保护/撤销/门禁独立保留。原库只读复核从1旧提醒归零，新16/既有124恢复回归通过、双types/UI构建通过、lint无新增。0真实模型调用，MCP/Skill测试延期。见[R140](../reviews/r140-recovery-current-20261101.md)。
 
 V77 clean源码248c23b/BUILD bld_4f7e269cfc383220，622程序hash/ZIP652 CRC、实际包内恢复UI两组14项与通用入口14项/正常退出通过；沿用数据入口与V76一致，仅本地提交不推送。

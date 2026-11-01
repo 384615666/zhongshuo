@@ -89,11 +89,15 @@
 
 ### 使用 DeepSeek Harness 或 Pi
 
-**DeepSeek Harness：** 首版对应官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该版本及其要求的 Node.js、包管理工具，再打开便携包内的 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。在终端运行 `dsh web` 配置模型后，回众说选择 **DeepSeek Harness**，读取模型并添加成员。
+**DeepSeek Harness：** 对应官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该版本及其要求的 Node.js、包管理工具，再打开便携包内的 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 `zhongshuo` profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。
 
 从源码运行时，先执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime`。找不到程序时可在高级设置填写实际 CLI 路径。
 
+Harness 的配置按 profile 区分。`dsh web` 的设置通常写入 `web` profile，不会自动搬到众说的专用 profile。专用配置文件为 `$DSH_HOME/profiles/zhongshuo/cordis.patch.yml`；未设置 `DSH_HOME` 时位于用户目录下的 `.dsh/profiles/zhongshuo/cordis.patch.yml`。按 Harness 官方说明添加所需供应商或 MCP 条目，并保留已有供应商、默认模型和插件条目，避免用单段配置覆盖整份文件。无需把其他 profile 的权限或全部配置复制过来。
+
 **Pi：** 安装官方 Pi CLI，在 Pi 内完成供应商和模型配置，再回众说选择 **Pi**。Pi 无需安装众说连接插件。众说为不同任务建立独立会话，续接时核对原会话编号与目录；原会话缺失会明确失败，不会自动创建替代会话。
+
+这两种渠道均不要求安装 Magpie。官方直连、其他网关或本地服务按对应 CLI 的供应商配置方式接入，众说不预置个人网关地址、模型或密钥。MCP 和 Skill 也沿用对应 CLI 的配置。Pi 的 MCP 可以通过默认 codemode 调用，或按原生配置选择 direct 展示；不要仅因界面里没有同名独立工具就判断 MCP 不可用。修改 Pi 的用户级或项目级 MCP 配置后，已排队的旧执行会要求重新确认当前配置，避免默默采用不同工具设置。
 
 Windows 上，Harness 官方桌面版安装后提供的 `dsh` 入口可直接使用，也可以在高级设置选择 `DeepSeek Harness.exe`。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 `pi`。已安装好时无需重复安装 CLI，只需为 Harness 运行一次众说连接组件安装入口。
 

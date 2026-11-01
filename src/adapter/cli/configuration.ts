@@ -37,7 +37,10 @@ export function externalRuntimeLaunchIdentity(kind: ExternalRuntimeKind, options
     ? [join(dshHome, 'cordis.patch.yml'), join(dshHome, 'settings.yaml'), join(dshHome, '.credentials.yaml'), join(dshHome, '.env'), join(cwd, '.env'),
       ...['package.json', 'cordis.yml', 'cordis.patch.yml', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'].map(name => join(profile, name)),
       ...['package.json', 'index.mjs', 'backend.mjs', 'protocol.mjs', 'cordis.patch.yml'].map(name => join(bundle, name))]
-    : [join(piHome, 'settings.json'), join(piHome, 'models.json'), join(piHome, 'auth.json'), join(cwd, '.pi', 'settings.json')];
+    : [join(piHome, 'settings.json'), join(piHome, 'models.json'), join(piHome, 'auth.json'), join(cwd, '.pi', 'settings.json'),
+      // MCP changes alter the tools available to a queued task or resumed DM.
+      // Keep the prior identity for installations with no MCP files at all.
+      ...[join(piHome,'mcp.json'),join(cwd,'.pi','mcp.json')].filter(existsSync)];
   const script=entry.prefixArgs.find(arg=>/\.(?:mjs|cjs|js)$/i.test(arg));
   if(script&&!entry.integrityFiles)paths.push(join(dirname(script), 'package.json'), join(dirname(dirname(script)), 'package.json'));
   if(kind==='pi'&&script&&/[\\/]pi-launcher\.js$/i.test(script))paths.push(join(dirname(dirname(script)),'install','current-version'));

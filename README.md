@@ -16,7 +16,9 @@
 
 AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 或 Pi 渠道。第三方兼容模型由对应渠道配置。
 
-DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。在 `dsh web` 配置模型后，回众说添加该渠道。Pi 直接连接已安装的官方 CLI，沿用其模型配置。两种渠道使用原生完整权限，暂不提供只读、项目受限编辑或图片模式。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交：使用独立新会话，仅整理已有输出，禁用所有工具，不重复执行业务。Pi 无需额外插件。
+DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。Pi 直接连接已安装的官方 CLI，沿用其模型配置。两种渠道使用原生完整权限，暂不提供只读、项目受限编辑或图片模式。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交：使用独立新会话，仅整理已有输出，禁用所有工具，不重复执行业务。Pi 无需额外插件。
+
+众说不依赖 Magpie 或特定网关。可使用 CLI 支持的官方服务或自行配置的网关，模型列表来自各自 CLI。添加 Harness 配置时保留已有供应商、默认模型和其他插件配置；详见操作手册的渠道配置说明。
 
 Windows 官方 Harness 桌面安装版也可直接使用：默认 `dsh` 会解析桌面安装器入口，也可选择 `DeepSeek Harness.exe`。Pi 同时兼容官方安装器和 npm 全局安装；无需替换本机安装方式。
 

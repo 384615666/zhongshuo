@@ -218,6 +218,13 @@ afterEach(async () => {
 });
 
 describe.skipIf(!enabled)('R139 installed official Pi 1.4.0: literal schema and mechanically locked repair', () => {
+  it('reads models and efforts without starting configured MCP servers or loading skills', async () => {
+    const f=await fixture(),a=new PiAdapter({executable:f.executable,cwd:f.cwd,model:'r139-local/fixed'});adapters.push(a);
+    expect(await a.listModels()).toEqual([{id:'r139-local/fixed',label:'R139 Local',efforts:['none']}]);
+    expect(await a.probe()).toMatchObject({version:'1.4.0'});
+    expect(f.requests).toHaveLength(0);
+    for(const marker of f.markers)expect(existsSync(marker),marker).toBe(false);
+  },25000);
   it('sends the literal schema with standing instructions and refreshes it on the next normal turn', async () => {
     const f = await fixture(false), a = adapter(f), s = await a.openSession(input(f));
     const first = request(); await a.startTurn(s, first);

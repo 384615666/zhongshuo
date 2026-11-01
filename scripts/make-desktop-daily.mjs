@@ -123,7 +123,7 @@ writeFileSync(join(out, 'README-DAILY.md'), `# 众说·日常桌面版 ${outArg 
 
 成员管理 → 添加 AI，现在可选择 Claude、Codex、DeepSeek Harness 或 Pi。已有成员和原任务保持原配置；不会自动新增成员或重跑任务。
 
-Harness 首版对应官方 \`@deepseek-ai/dsh@0.2.1-rc.5\`。先安装该版本及其要求的工具链，再运行 \`ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd\` 安装众说专用 profile 连接组件。在 \`dsh web\` 完成模型配置后，回众说读取模型。该安装入口只安装连接组件，不替你安装 DSH，不把密钥写入众说。
+Harness 对应官方 \`@deepseek-ai/dsh@0.2.1-rc.5\`。先安装该版本及其要求的工具链，再运行 \`ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd\` 安装众说专用 profile 连接组件。模型及 MCP 需在 \`zhongshuo\` profile 生效，\`dsh web\` 的配置不会自动复制过去。添加配置时保留原有供应商、默认模型和插件条目。众说不依赖 Magpie 或特定网关，模型与凭据由对应 CLI 管理。安装入口只安装连接组件，不替你安装 DSH，不把密钥写入众说。
 
 Pi 验证版本为官方 \`@earendil-works/pi-coding-agent@1.4.0\`，直接连接本机 Pi CLI；模型和凭据由 Pi 管理。两种渠道使用原生完整权限，暂不提供只读、项目受限编辑或图片模式。Harness 连接组件 0.1.2 和 Pi 1.4.0 支持禁用所有工具的结果格式补交，使用独立新会话，仅整理已有输出。Pi 无需额外插件；Harness 旧版用户需运行新版包中的连接组件安装入口。之后可在原串明确继续失败任务。停止、续接、调用记录与普通任务沿用众说机制。
 

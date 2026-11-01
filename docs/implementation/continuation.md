@@ -2,6 +2,16 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-01：R142 MCP/Skill 报告复核与网关配置独立性
+
+用户提供另一轮R141报告并强调Magpie是个人网关。确认产品无Magpie依赖，DSH安装保留既有profile；修复Pi执行配置摘要漏用户/项目mcp.json（有文件才加入，未配置MCP身份不变），4新增配置反例原2失败/修后8通过；修正文档dshweb配模不自动共享zhongshuo profile，保留既有provider/默认模型/MCP条目，不复制凭据或权限。见[R142](../reviews/r142-runtime-config-20261101.md)。
+
+另本机未跟踪R141验收脚本发现清理会删整个skills根、Pi已有同名MCP漏还原；已备份dist/r142-review-backup原件，原文件本机修复不加入本轮提交：只清本次zs-test、拒覆盖已有同名、完整字节还原/仅实际修改才清理，去个人gateway默认值改CLI参数。9临时目录隔离清理检查通过，旧四渠道负例均检出；无用户配置执行。R141九项还原不能证明其他技能完整，16报告/assets无个人技能备份，未推测具体历史损失或自动恢复。
+
+相关4文件66通过、官方Pi本地固定响应5通过（新元数据不启MCP用例原本也通过，不冒称已修复缺陷），双types/lint/UI构建通过，0真实模型调用。原R141报告/脚本及R130/R131等84未跟踪文件与续工原内容保留，独立worktree，仅本地提交不推送。
+
+默认全量316文件2765通过14跳过0失败，证据dist/r142-full.json；官方5项已单独显式通过。原R141脚本本机改动SHA与worktree ignored副本核对一致，不加入发布程序或本轮git提交。
+
 ## 2026-11-01：R140 恢复检查过滤已解决的历史中断
 
 用户反馈“查看中断任务”仍定位到已修复完成的旧任务。原库只读确认唯一INTERRUPTED属于DONE任务，后续最新SUCCEEDED；旧recovery.status无条件列全部历史中断。现仅每任务最新run仍INTERRUPTED且task非DONE/CANCELLED才提醒，历史保留；UNKNOWN/保留保护/撤销/门禁独立查询不隐藏。新正式方法在原库readonly+query_only读取interruptedRuns[]，其余空/门禁false，无写入。见[R140](../reviews/r140-recovery-current-20261101.md)。

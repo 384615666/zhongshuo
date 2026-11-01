@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveAgentExecutable } from '../../src/adapter/cli/executable.ts';
 import { externalRuntimeLaunchIdentity } from '../../src/adapter/cli/configuration.ts';
+import { PiAdapter } from '../../src/adapter/pi/adapter.ts';
 
 const roots: string[] = [];
 function directory() { const dir=mkdtempSync(join(tmpdir(),'zs-cli-r136-'));roots.push(dir);return dir; }
@@ -30,5 +31,36 @@ describe('external CLI launch resolution',()=>{
     writeFileSync(join(config,'sessions.json'),'unrelated conversation');expect(externalRuntimeLaunchIdentity('deepseek-harness',options,dir).identityKey).toBe(first.identityKey);
     writeFileSync(entry,'// different executable B');expect(externalRuntimeLaunchIdentity('deepseek-harness',options,dir).identityKey).not.toBe(first.identityKey);
     expect(JSON.stringify(first)).not.toContain('sk-fixture');expect(Object.values(first.launchEvidence).every(hash=>/^[0-9a-f]{64}$/.test(hash))).toBe(true);
+  });
+  it.each(['user','project'] as const)('binds Pi %s MCP configuration while excluding session activity',scope=>{
+    const dir=directory(),config=join(dir,'agent'),project=join(dir,'project'),entry=join(dir,'pi.mjs');
+    mkdirSync(config);mkdirSync(join(project,'.pi'),{recursive:true});writeFileSync(entry,'// independent CLI fixture');
+    vi.stubEnv('PI_CODING_AGENT_DIR',config);
+    const options={executable:entry,model:'custom-provider/model-with/slashes'};
+    const key=()=>externalRuntimeLaunchIdentity('pi',options,project);
+    const absent=key();const file=scope==='user'?join(config,'mcp.json'):join(project,'.pi','mcp.json');
+    const first=JSON.stringify({mcpServers:{local:{command:'node',args:['first-server.mjs'],env:{TOKEN:'fixture-secret'}}}});
+    writeFileSync(file,first);const installed=key();expect(installed.identityKey).not.toBe(absent.identityKey);
+    writeFileSync(file,first.replace('first-server','second-server'));const changed=key();expect(changed.identityKey).not.toBe(installed.identityKey);
+    writeFileSync(join(config,'unrelated-session.jsonl'),'conversation state');expect(key().identityKey).toBe(changed.identityKey);
+    expect(JSON.stringify(changed)).not.toContain('fixture-secret');expect(JSON.stringify(changed)).not.toContain('second-server');
+  });
+  it.each(['user','project'] as const)('rejects a Pi turn before spawn when its %s MCP configuration changes after authorization',async scope=>{
+    const dir=directory(),config=join(dir,'agent'),project=join(dir,'project'),entry=join(dir,'pi.mjs');
+    mkdirSync(config);mkdirSync(join(project,'.pi'),{recursive:true});writeFileSync(entry,'throw Error("must not run");');
+    vi.stubEnv('PI_CODING_AGENT_DIR',config);
+    const file=scope==='user'?join(config,'mcp.json'):join(project,'.pi','mcp.json');
+    writeFileSync(file,JSON.stringify({mcpServers:{fixture:{command:'first'}}}));
+    const options={executable:entry,model:'another-gateway/vendor/model'};
+    const frozen=externalRuntimeLaunchIdentity('pi',options,project).identityKey;
+    let spawns=0;const a=new PiAdapter({...options,spawnFn:()=>{spawns++;throw Error('unexpected spawn');}});
+    try{
+      const session=await a.openSession({projectId:'p',memberId:'m',taskId:'t',threadId:'th',sessionGeneration:0,cwd:project,policyId:'full',
+        writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey:'frozen-task',launchConfigurationKey:frozen}});
+      writeFileSync(file,JSON.stringify({mcpServers:{fixture:{command:'changed'}}}));
+      await expect(a.startTurn(session,{turnId:'turn',dispatchKey:'d',inputBundleId:'b',text:'no inference',policyId:'full',taskRevision:0}))
+        .rejects.toMatchObject({code:'STALE_EXECUTION',notStarted:true});
+      expect(spawns).toBe(0);
+    }finally{await a.disposeAll();}
   });
 });
