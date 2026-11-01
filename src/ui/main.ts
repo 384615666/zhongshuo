@@ -22,7 +22,12 @@ import { resolveDisplayPlacement } from './testDisplay.ts';
 import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
 import { installedDaemonPipe, installedDesktopConfiguration } from './installedDesktop.ts';
 
-const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ?? 'com.zhongshuo.desktop';
+const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
+const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
+// Windows AUMID（任务栏分组/通知身份）：安装版与便携/开发版必须分开，避免旧 Electron 进程
+// 或旧开发包把安装版合并到同一任务栏按钮、沿用旧的 Electron 名称与图标。安装版使用新的稳定
+// AUMID，安装器开始菜单/桌面快捷方式写同一个值；便携/开发版使用单独的 id。
+const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ?? (installedDesktop ? 'com.zhongshuo.desktop.app' : 'com.zhongshuo.desktop.portable');
 if (process.platform === 'win32') app.setAppUserModelId(desktopAppId);
 
 // zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
@@ -43,10 +48,8 @@ let daemonShuttingDown = false;
  * =daemon 拒绝启动→本应用明确失败退出，不静默降级为未受管执行；ZS_MANAGED_RUNTIME=0 显式
  * 关闭仅排障用）。开发/测试（node_modules/electron + dist/ui）维持源码 entry.ts+PATH node。
  */
-const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
 const isPackagedUi = process.env.ZS_PACKAGED_UI === '1'
   || existsSync(join(appRoot, 'daemon', 'daemon.cjs')); // 布局判定：便携 exe 未改名时 app.isPackaged=false，不可作依据
-const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
 let installedBaseRoot: string | null = null;
 let installedConfigurationError: string | null = null;
 if (installedDesktop) {

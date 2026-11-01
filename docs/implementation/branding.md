@@ -12,7 +12,9 @@ R149 补齐程序内品牌位（用户反馈「logo 还有很多地方没替换�
 
 R150 安装向导品牌图：`scripts/lib/wizard-images.ps1` 从根 `logo.png` 生成 `packaging/windows/branding/wizard-large-*.png`（164:314，202–534 七档）与 `wizard-small-*.png`（方形 58–159 七档），`.iss` 用逗号列表交给 Inno 按 DPI 自动选档；品牌浅色渐变、白色圆角 logo 卡与产品中英文层级只做排版，不裁剪/重绘原图。修改 logo 后需重新运行该脚本并重新构建安装器。
 
-R151 原生版本资源：`scripts/lib/brand-executable.ps1` 在同一发行副本上同时重写七尺寸图标组与 PE 版本资源（`RT_VERSION`），把 ProductName/FileDescription/InternalName/OriginalFilename/公司/版权/文件版本从 Electron 默认值改为「众说」；写入 en-US 与 zh-CN 两套 Unicode 字符串表并回读 `FileVersionInfo` 校验。任务栏、文件属性与 Shell 分组不再显示 Electron；只改发行副本，不改 `node_modules` 内 Electron 原程序。修改版本号时更新 `packaging/windows/release.json`，构建器会同时写入安装器与随包 EXE。
+R151 原生版本资源：`scripts/lib/brand-executable.ps1` 在同一发行副本上同时重写七尺寸图标组与 PE 版本资源（`RT_VERSION`），把 ProductName/FileDescription/InternalName/OriginalFilename/公司/版权/文件版本从 Electron 默认值改为「众说」；写入 en-US 与 zh-CN 两套 Unicode 字符串表，并由独立 PowerShell 进程回读 `FileVersionInfo` 校验。任务栏、文件属性与 Shell 分组不再显示 Electron；只改发行副本，不改 `node_modules` 内 Electron 原程序。修改版本号时更新 `packaging/windows/release.json`，构建器会同时写入安装器与随包 EXE。
+
+任务栏身份（AUMID）：安装版使用 `com.zhongshuo.desktop.app`（安装器快捷方式同值），便携/开发形态使用 `com.zhongshuo.desktop.portable`；卸载登记 AppId 仍为 `com.zhongshuo.desktop`。旧的 `com.zhongshuo.desktop` AUMID 缓存（旧 V78/0.1.1/Electron）不再与新版合并；如再次运行旧 V78，它会以自己的旧身份单独出现。
 
 旧 `packaging/windows/zhongshuo.svg` 保留为历史素材，构建不再使用。首页和项目 README 由用户安排的其他 AI 更新。
 

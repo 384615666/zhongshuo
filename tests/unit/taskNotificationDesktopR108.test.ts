@@ -235,8 +235,9 @@ describe('R108 preload and main wiring', () => {
     const source = readFileSync(new URL('../../src/ui/main.ts', import.meta.url), 'utf8');
     expect(source).toContain('registerTaskNotificationIpc({');
     expect(source).toContain('new ElectronNotification({ title, body })');
-    expect(source).toContain("const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ?? 'com.zhongshuo.desktop'");
+    expect(source).toContain("const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ??");
+    expect(source).toContain("installedDesktop ? 'com.zhongshuo.desktop.app' : 'com.zhongshuo.desktop.portable'");
     expect(source).toContain('app.setAppUserModelId(desktopAppId)');
-    expect(source).toContain('win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0})');
+    expect(source).toContain('win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchDisplayName:');
   });
 });

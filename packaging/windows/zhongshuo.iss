@@ -89,10 +89,10 @@ Name: "desktopicon"; Description: "在桌面创建众说快捷方式"; GroupDesc
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop"
+Name: "{group}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop.app"
 Name: "{group}\众说操作手册"; Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"
 Name: "{group}\卸载众说"; Filename: "{uninstallexe}"; IconFilename: "{app}\resources\app\{#BrandIconName}"
-Name: "{userdesktop}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop"; Check: RefreshDesktopIcon
+Name: "{userdesktop}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\{#BrandIconName}"; AppUserModelID: "com.zhongshuo.desktop.app"; Check: RefreshDesktopIcon
 
 [Run]
 Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; Description: "打开众说"; Flags: nowait postinstall skipifsilent unchecked
