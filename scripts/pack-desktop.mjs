@@ -99,7 +99,7 @@ writeFileSync(join(dshTools, 'README.txt'), [
   '',
   'Install official @deepseek-ai/dsh@0.2.1-rc.5 and its required toolchain first.',
   'Run setup.cmd to install only the Zhongshuo profile connector.',
-  'Configure your provider in dsh web, then select DeepSeek Harness in Zhongshuo.',
+  'Configure provider/model/MCP in the zhongshuo profile; dsh web uses its separate web profile.',
   'The connector does not install DSH or store API keys in Zhongshuo.',
   'Pi uses its installed CLI directly and needs no connector.',
   '',
