@@ -1,38 +1,109 @@
-<p align="center">
-  <img src="logo.png" alt="众说 Logo" width="360">
-</p>
+<div align="center">
+  <a href="site/index.html">
+    <img src="logo.png" alt="众说 Logo" width="280">
+  </a>
+  <h1>众说</h1>
+  <p>
+    <b>Windows 本地多 AI 协作工作台</b><br>
+    打开一个文件夹，让多个 AI 一起把事做成。
+  </p>
+  <p>
+    <a href="https://github.com/384615666/zhongshuo"><img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%2F11-2563eb?style=flat-square&logo=windows&logoColor=white"></a>
+    <a href="#为什么是众说"><img alt="local-first" src="https://img.shields.io/badge/local--first-0f766e?style=flat-square"></a>
+    <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-172431?style=flat-square"></a>
+    <a href="https://github.com/384615666/zhongshuo"><img alt="status beta" src="https://img.shields.io/badge/status-beta-2563eb?style=flat-square"></a>
+  </p>
+  <p>
+    <a href="site/index.html">产品主页</a>
+    &nbsp;·&nbsp;
+    <a href="docs/user-guide/README.md">操作手册</a>
+    &nbsp;·&nbsp;
+    <a href="#quick-start">快速开始</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/384615666/zhongshuo">GitHub</a>
+  </p>
+</div>
 
-# 众说
+<a href="site/index.html">
+  <img src="site/assets/shots/room.png" alt="众说工作台：多个 AI 在同一个房间协作">
+</a>
 
-众说是一个 Windows 本地多 AI 协作工作台。以文件夹作为项目，在房间里交代工作，让不同 AI 分析、执行和核对，在同一条对话里查看进展、文件成果并继续修改。
+<p align="center"><sub>同一个项目、同一间房：多个 AI 分工、讨论、执行，进度与成果留在回复串里。</sub></p>
 
-产品主页：[`site/index.html`](site/index.html)（浏览器打开）。
+---
 
-![众说房间界面](docs/user-guide/images/02-workspace.png)
+## 为什么是众说
 
-## 日常使用
+把文件夹当作项目，在房间里交代工作。不同 AI 可以分析、执行、互相核对；你在同一条对话里看进展、预览文件、继续修改。
 
-打开 **设置 → 操作手册** 查看图文教程，或阅读仓库内的 [操作手册](docs/user-guide/README.md)（[离线 HTML](docs/user-guide/index.html)）。教程包含 20 张带编号的截图，从打开项目、添加 AI 到发出第一条消息逐步说明。
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>📁 文件夹就是项目</h3>
+      <p>直接打开本地文件夹，项目、房间和对话串按你已有的工作组织，不另外建一套工作流。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>🤝 按你的方式协作</h3>
+      <p>自动分工、指定一位执行、多人分工、共同研讨，或在原对话串里继续追问和返工。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🧩 各跑各的 harness</h3>
+      <p>Claude Code、Codex、DeepSeek Harness、Pi 各自保留工具、MCP、记忆与 skill，在项目层交接。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>✅ 过程与结果都在原处</h3>
+      <p>任务进度、停止与验收、文件成果和修改意见回到原对话串，不用在多个窗口之间来回找。</p>
+    </td>
+  </tr>
+</table>
 
-- **项目与房间**：每个项目对应本地工作文件夹，房间按话题组织任务。
-- **多人协作**：用自然语言说明谁先做、谁核对；在原对话串中补充要求。
-- **私信**：与一位 AI 独立讨论，每条新私信保持独立上下文。
-- **任务与成果**：查看执行进展、停止或继续工作，预览、保存文件并提出修改意见。
-- **本地资料**：聊天、附件、设置和任务记录保存在本机。
+聊天、附件、设置和任务记录保存在本机；模型请求由你配置的 AI 渠道发出。
 
-AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 或 Pi 渠道。第三方兼容模型由对应渠道配置。
+## 四种协作方式
 
-DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。Pi 直接连接已安装的官方 CLI，沿用其模型配置。两种渠道使用原生完整权限，暂不提供只读、项目受限编辑或图片模式。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交：使用独立新会话，仅整理已有输出，禁用所有工具，不重复执行业务。Pi 无需额外插件。
+| 你想…… | 众说里可以…… |
+| --- | --- |
+| 让它做事 | 自动协作、指定成员执行、多人分工 |
+| 让它一起想 | 共同研讨、简短交流 |
+| 单独聊或记录 | 私信、文件评论 |
+| 继续或修改 | 在原串继续、停止 / 验收 / 返工 |
 
-众说不依赖 Magpie 或特定网关。可使用 CLI 支持的官方服务或自行配置的网关，模型列表来自各自 CLI。添加 Harness 配置时保留已有供应商、默认模型和其他插件配置；详见操作手册的渠道配置说明。
+## 界面
 
-Windows 官方 Harness 桌面安装版也可直接使用：默认 `dsh` 会解析桌面安装器入口，也可选择 `DeepSeek Harness.exe`。Pi 同时兼容官方安装器和 npm 全局安装；无需替换本机安装方式。
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="site/assets/shots/brainstorm.png" alt="头脑风暴：几位 AI 各自出方案">
+      <br>
+      <sub><b>头脑风暴</b> · 先让几位 AI 各出几招</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="site/assets/shots/review.png" alt="方案评审：对照约束给出意见">
+      <br>
+      <sub><b>方案评审</b> · 对照约束逐条讨论</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="site/assets/shots/audit.png" alt="代码审计：多位专家分头检查">
+      <br>
+      <sub><b>代码审计</b> · 多位专家分头检查</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="site/assets/shots/thread.png" alt="回复串：进度、文件和结论留在原处">
+      <br>
+      <sub><b>回复串</b> · 进度、文件和结论都在原处</sub>
+    </td>
+  </tr>
+</table>
 
-## 从源码构建
+<a id="quick-start"></a>
 
-Windows 安装版：安装 Inno Setup 6 后执行 `node scripts/make-windows-installer.mjs`。输出目录为 `dist/installers/`，安装后从开始菜单或桌面打开 **众说**。程序附带运行所需的 Electron 和 Node.js；AI 渠道仍使用用户自行安装和配置的 CLI。安装版数据位于 `%LOCALAPPDATA%\Zhongshuo\data`，升级和卸载保留数据。当前发行包未配置代码签名。
+## 快速开始
 
-准备 Windows、Node.js 24 或更高版本、pnpm 和 Git：
+> 需要 **Windows 10/11**、**Node.js 24+**、**pnpm**、**Git**；并先在电脑上安装、登录至少一个 AI CLI。
 
 ```powershell
 git clone https://github.com/384615666/zhongshuo.git
@@ -41,11 +112,53 @@ pnpm install --frozen-lockfile
 node scripts/make-desktop-daily.mjs desktop-daily-win-local
 ```
 
-构建结果位于 `dist/desktop/desktop-daily-win-local/`。双击其中的 `start-desktop.vbs` 启动应用，再按图文手册选择项目和添加 AI。该目录也附带离线操作手册。
+双击 `dist/desktop/desktop-daily-win-local/start-desktop.vbs` 启动，再按 [操作手册](docs/user-guide/README.md) 完成第一次协作：打开项目 → 添加 AI → 发出第一条消息。安装后也可以在 **设置 → 操作手册** 随时查看图文教程。
 
-如需让新包直接使用已有数据，关闭旧程序后执行 `node scripts/install-existing-data-launcher.mjs <新包目录> <已有server-data的绝对路径>`，再双击新包的 `start-existing-data.vbs`。该入口固定使用选定目录；连接标记缺失时自动补建，找不到原数据库时会报错。启动失败可查看包目录的 `startup-existing-data.log`。
+<details>
+<summary><b>构建 Windows 安装包</b></summary>
 
-## 开发与验证
+需要先安装 Inno Setup 6：
+
+```powershell
+node scripts/make-windows-installer.mjs
+```
+
+安装包输出到 `dist/installers/`。安装版默认把聊天、任务和设置保存在 `%LOCALAPPDATA%\Zhongshuo\data`，升级和卸载保留数据；当前发行包未配置代码签名。
+
+</details>
+
+<details>
+<summary><b>已有数据 / 便携入口</b></summary>
+
+关闭旧程序后执行：
+
+```powershell
+node scripts/install-existing-data-launcher.mjs <新包目录> <已有 server-data 的绝对路径>
+```
+
+再双击新包的 `start-existing-data.vbs`。该入口固定使用选定目录；连接标记缺失时自动补建，找不到原数据库时会报错。启动失败可查看包目录的 `startup-existing-data.log`。
+
+</details>
+
+## AI 渠道
+
+AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 或 Pi。第三方兼容模型由对应渠道配置。众说不依赖 Magpie 或特定网关；模型列表来自各自 CLI。
+
+<details>
+<summary><b>DeepSeek Harness / Pi 配置说明</b></summary>
+
+DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。
+
+Pi 直接连接已安装的官方 CLI，沿用其模型配置；同时兼容官方安装器和 npm 全局安装，无需额外插件。
+
+两种渠道使用原生完整权限，暂不提供只读、项目受限编辑或图片模式。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交：使用独立新会话，仅整理已有输出，禁用所有工具，不重复执行业务。
+
+Windows 官方 Harness 桌面安装版也可直接使用：默认 `dsh` 会解析桌面安装器入口，也可选择 `DeepSeek Harness.exe`。
+
+</details>
+
+<details>
+<summary><b>开发与验证</b></summary>
 
 ```powershell
 pnpm typecheck
@@ -72,6 +185,14 @@ pnpm build:ui
 
 修改用户功能或按钮入口时，同时更新手册步骤和对应编号截图。`pnpm build:ui` 会从同一份手册源码生成应用内版与离线版；`node scripts/capture-user-guide.cjs` 可用独立示例项目重新采集截图。
 
-## 许可证
+</details>
 
-众说自有代码使用 [MIT 许可证](LICENSE)。随项目保留的第三方代码与资源使用各自许可证，参见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+---
+
+<p align="center">
+  <sub>Windows 本地多 AI 协作工作台 · 项目持续开发中</sub><br>
+  <a href="site/index.html">产品主页</a> &nbsp;·&nbsp;
+  <a href="docs/user-guide/README.md">操作手册</a> &nbsp;·&nbsp;
+  <a href="LICENSE">MIT License</a> &nbsp;·&nbsp;
+  <a href="THIRD_PARTY_NOTICES.md">第三方说明</a>
+</p>
