@@ -141,7 +141,7 @@ export function ExecutionConcurrencyPanel({ readOnly = false }: { readOnly?: boo
         </div>
       </div>
       {fields.map(field => <SettingsRow key={field.key} label={field.label} hint={field.hint} control={<input className="input pset-number" type="number" inputMode="numeric" name={field.key} aria-label={`${field.label}同时运行上限`} min={1} max={32} step={1} value={draft[field.key]} disabled={disabled} onChange={e => { setDraft(current => ({ ...current, [field.key]: e.target.value })); setSaved(false); }} />} />)}
-      <div className="small faint" style={{ lineHeight: 1.7, marginTop: 8 }}>同成员、前后依赖或未解除保护的任务仍会等待。需要同时修改同一项目的文件时，请在项目设置中选择「允许成员并行」。</div>
+      <div className="small faint" style={{ lineHeight: 1.7, marginTop: 8 }}>同一成员在同一对话串中仍依次执行；有前后依赖或未解除保护的任务会等待。同串不同成员若需同时修改文件，还要在项目设置中选择「允许成员并行」。</div>
       {error ? <div className="pset-row-error" role="alert">{error}</div> : null}
       {(readOnly || localOnly) ? <div className="small faint">仅可在本机修改。</div> : null}
       <div className="row" style={{ marginTop: 12, gap: 8 }}>
