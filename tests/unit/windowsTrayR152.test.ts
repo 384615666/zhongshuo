@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { WindowsTrayLifecycle, type WindowsTrayDependencies } from '../../src/ui/windowsTray.ts';
 
 function harness(platform: NodeJS.Platform = 'win32') {
-  const app = Object.assign(new EventEmitter(), { quit: vi.fn() });
+  const app = Object.assign(new EventEmitter(), { quit: vi.fn(), getVersion: vi.fn(() => '9.9.9') });
   const win = Object.assign(new EventEmitter(), {
-    isDestroyed: vi.fn(() => false), isMinimized: vi.fn(() => false),
+    isDestroyed: vi.fn(() => false), isMinimized: vi.fn(() => false), isVisible: vi.fn(() => false),
     restore: vi.fn(), show: vi.fn(), hide: vi.fn(), focus: vi.fn(), minimize: vi.fn(),
   });
   const tray = Object.assign(new EventEmitter(), {
@@ -20,14 +20,21 @@ function harness(platform: NodeJS.Platform = 'win32') {
     shutdown, daemonStopping: vi.fn(() => false),
     createTray: vi.fn(() => tray as unknown as ReturnType<WindowsTrayDependencies['createTray']>),
     buildMenu: vi.fn(items => { menu = items; return {} as Menu; }),
-    openSettings: vi.fn(), openManual: vi.fn(), openDataDirectory: vi.fn(), reportError: vi.fn(),
+    openSettings: vi.fn(), navigate: vi.fn(),
+    readFacts: vi.fn(async () => ({ projects: [], updatedAt: null })),
+    reportError: vi.fn(),
   };
   const lifecycle = new WindowsTrayLifecycle(deps);
   const attach = (icon: string | null = 'ROOT/logo.png') => lifecycle.attachWindow(win as unknown as Parameters<typeof lifecycle.attachWindow>[0], icon);
   const event = () => ({ preventDefault: vi.fn() });
   const close = () => { const e = event(); win.emit('close', e); return e; };
   const click = (label: string) => menu.find(item => item.label === label)!.click!({} as never, {} as never, {} as never);
-  return { app, win, tray, deps, shutdown, lifecycle, attach, event, close, click, finish: () => finishDrain() };
+  const clickSub = (label: string) => {
+    const workspace = menu.find(item => item.label === 'AI 工作台')!;
+    const sub = (workspace.submenu as MenuItemConstructorOptions[]).find(item => item.label === label)!;
+    sub.click!({} as never, {} as never, {} as never);
+  };
+  return { app, win, tray, deps, shutdown, lifecycle, attach, event, close, click, clickSub, finish: () => finishDrain() };
 }
 
 describe('R152 Windows native tray lifecycle', () => {
@@ -57,14 +64,36 @@ describe('R152 Windows native tray lifecycle', () => {
     expect(h.shutdown).not.toHaveBeenCalled();
   });
 
-  it('opens existing settings/manual/data actions and supports second-launch show', () => {
+  it('opens settings and the workspace route shortcuts, and supports second-launch show', () => {
     const h = harness(); h.attach();
-    h.click('打开众说'); h.click('设置'); h.click('操作手册'); h.click('打开数据目录');
+    h.click('设置');
+    h.clickSub('打开任务看板');
+    h.clickSub('成员与 AI 设置');
+    h.clickSub('待我处理');
     h.lifecycle.show();
     expect(h.deps.openSettings).toHaveBeenCalledOnce();
-    expect(h.deps.openManual).toHaveBeenCalledOnce();
-    expect(h.deps.openDataDirectory).toHaveBeenCalledOnce();
-    expect(h.win.focus).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(h.deps.navigate).mock.calls).toEqual([['/board'], ['/members'], ['/pending']]);
+    // 设置 + 三个路由 + 显式 show 各聚焦一次
+    expect(h.win.focus).toHaveBeenCalledTimes(5);
+  });
+
+  it('renders the workspace status line and per-project rows from the facts snapshot', async () => {
+    const h = harness();
+    vi.mocked(h.deps.readFacts).mockResolvedValue({
+      projects: [{ id: 'p1', name: '默认项目', activeTurns: 2, unfinishedTasks: 3 }],
+      updatedAt: Date.now(),
+    });
+    h.attach();
+    h.tray.setContextMenu.mockClear();
+    h.tray.emit('click');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const workspace = vi.mocked(h.deps.buildMenu).mock.calls.at(-1)![0]
+      .find(item => item.label === 'AI 工作台')!.submenu as MenuItemConstructorOptions[];
+    expect(workspace[0]).toMatchObject({ label: '2 个 AI 正在执行 · 3 个任务未完成', enabled: false });
+    expect(workspace[1]).toEqual({ type: 'separator' });
+    expect(workspace[2]).toMatchObject({ label: '默认项目 · 2 个执行中 · 3 个未完成', enabled: false });
+    expect(h.tray.setContextMenu).toHaveBeenCalledTimes(1);
+    expect(h.tray.setToolTip).toHaveBeenCalledWith('众说 · 2 个 AI 正在执行');
   });
 
   it('shares one drain across repeated tray exit, app.quit and close during shutdown', async () => {

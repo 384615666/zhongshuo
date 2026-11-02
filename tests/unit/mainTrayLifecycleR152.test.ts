@@ -24,7 +24,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
   const nativeQuit = vi.fn();
   const event = () => ({ defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
   const app = Object.assign(new EventEmitter(), {
-    setAppUserModelId: vi.fn(), setPath: vi.fn(), getPath: () => 'C:/fixture',
+    setAppUserModelId: vi.fn(), setPath: vi.fn(), getPath: () => 'C:/fixture', getVersion: () => '9.9.9',
     requestSingleInstanceLock: vi.fn(() => options.singleInstance !== false),
     commandLine: { appendSwitch: vi.fn() }, whenReady: () => Promise.resolve(),
     quit: vi.fn(() => {
@@ -135,7 +135,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
   });
   const invoke = (channel: string, payload?: unknown) => handlers.get(channel)!({ senderFrame: { url: 'zsres://app/index.html' } }, payload);
   const click = (label: string) => menu.find(item => item.label === label)!.click!();
-  return { app, windows, child, stop, drain, pipe, send, spawn, connect, writes, nativeQuit, trays, dialog, shell, invoke, click, proc, publishOwner: () => { ownerAvailable = true; } };
+  return { app, windows, child, stop, drain, pipe, send, spawn, connect, writes, nativeQuit, trays, dialog, shell, invoke, click, menu: () => menu, proc, publishOwner: () => { ownerAvailable = true; } };
 }
 
 afterEach(() => { vi.useRealTimers(); });
@@ -250,13 +250,17 @@ describe('R152 actual main lifecycle wiring', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it('tray settings/manual use fixed routes and open only the current data directory', async () => {
+  it('tray menu carries the live workspace panel and fixed routes, not the old manual/data entries', async () => {
     const h = harness(); await flush(); const win = h.windows[0]!;
-    h.click('设置'); h.click('操作手册'); h.click('打开数据目录');
+    const labels = h.menu().map(item => item.label).filter((label): label is string => typeof label === 'string');
+    expect(labels).toContain('AI 工作台');
+    expect(labels.some(label => label.startsWith('众说 9.9.9'))).toBe(true);
+    expect(labels).not.toContain('操作手册');
+    expect(labels).not.toContain('打开数据目录');
+    h.click('设置');
     expect(win.webContents.executeJavaScript.mock.calls).toEqual([
-      ["location.hash = '#/settings?section=general'; true"], ["location.hash = '#/settings?section=guide'; true"],
+      ["location.hash = '#/settings?section=general'; true"],
     ]);
-    expect(h.shell.openPath).toHaveBeenCalledWith(path.resolve('C:/fixture'));
     expect(() => h.invoke('zs:window', 'quit')).toThrow('未知窗口操作');
   });
 });

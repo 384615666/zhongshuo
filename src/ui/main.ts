@@ -6,7 +6,7 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, shell, Notification as ElectronNotification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, Notification as ElectronNotification } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,7 +21,7 @@ import {findLocalDataRoot} from '../contracts/localDataCopy.ts';
 import { resolveDisplayPlacement } from './testDisplay.ts';
 import { registerTaskNotificationIpc } from './taskNotificationIpc.ts';
 import { installedDaemonPipe, installedDesktopConfiguration } from './installedDesktop.ts';
-import { WindowsTrayLifecycle } from './windowsTray.ts';
+import { WindowsTrayLifecycle, type TrayMenuFacts, type TrayProjectFacts } from './windowsTray.ts';
 import { isRuntimeMetadataRead, RUNTIME_METADATA_PIPE_DEADLINE_MS } from '../contracts/runtimeMetadataDeadline.ts';
 import { registerEditContextMenu } from './editContextMenu.ts';
 
@@ -423,18 +423,50 @@ function pipeClosedCheck(): void {
   connectionMonitor.start();
 }
 
-function openTraySection(section: 'general' | 'guide'): void {
+/** 托盘菜单里的页面入口：窗口由托盘负责显示，这里只切 hash。 */
+function openTrayRoute(route: string): void {
   const win = mainWindow;
   if (win == null || win.isDestroyed()) return;
+  const target = route.startsWith('#') ? route : `#${route}`;
   const navigate = (): void => {
     if (!win.isDestroyed() && win.webContents.getURL().startsWith('zsres://app/')) {
-      void win.webContents.executeJavaScript(`location.hash = '#/settings?section=${section}'; true`).catch(error => {
-        process.stderr.write(`[zhongshuo-ui] 无法打开设置：${String(error)}\n`);
+      void win.webContents.executeJavaScript(`location.hash = '${target}'; true`).catch(error => {
+        process.stderr.write(`[zhongshuo-ui] 无法打开 ${target}：${String(error)}\n`);
       });
     }
   };
   if (win.webContents.isLoadingMainFrame()) win.webContents.once('did-finish-load', navigate);
   else navigate();
+}
+
+/** 托盘「AI 工作台」数据：项目清单 + 每个项目正在执行的 AI 数与未完成任务数。 */
+async function readTrayFacts(): Promise<TrayMenuFacts> {
+  await ensureConnection();
+  const client = pipe;
+  if (client == null) throw Error('后台进程未就绪');
+  const call = async (method: string, params: unknown): Promise<Record<string, unknown>> => {
+    const reply = await client.send({ protocolVersion: 1, commandId: `tray-${randomUUID()}`, method, params }) as { ok?: boolean; data?: unknown };
+    if (reply?.ok !== true || reply.data == null) throw Error(`${method} 读取失败`);
+    return reply.data as Record<string, unknown>;
+  };
+  const list = await call('project.list', {});
+  const items = ((list.items ?? []) as Array<{ id: string; displayName: string; status: string }>)
+    .filter(project => project.status === 'active');
+  const projects: TrayProjectFacts[] = await Promise.all(items.map(async project => {
+    try {
+      const summary = await call('project.taskSummary', { projectId: project.id });
+      return {
+        id: project.id,
+        name: project.displayName,
+        activeTurns: Number(summary.activeTurns ?? 0),
+        unfinishedTasks: Number(summary.unfinishedTasks ?? 0),
+      };
+    } catch {
+      // 单个项目读失败只影响它那一行，不让整个菜单退回「状态读取中」。
+      return { id: project.id, name: project.displayName, activeTurns: 0, unfinishedTasks: 0 };
+    }
+  }));
+  return { projects, updatedAt: Date.now() };
 }
 
 // Register before ready/daemon startup so app.quit during startup also drains.
@@ -455,14 +487,9 @@ const desktopLifecycle = new WindowsTrayLifecycle({
     return new Tray(image.resize({ width: 32 }));
   },
   buildMenu: items => Menu.buildFromTemplate(items),
-  openSettings: () => openTraySection('general'),
-  openManual: () => openTraySection('guide'),
-  openDataDirectory: () => {
-    void shell.openPath(appDataDir).then(error => {
-      if (error) return dialog.showMessageBox({ type: 'error', title: '无法打开数据目录', message: error, buttons: ['确定'] });
-      return undefined;
-    });
-  },
+  openSettings: () => openTrayRoute('/settings?section=general'),
+  navigate: route => openTrayRoute(route),
+  readFacts: readTrayFacts,
   reportError: error => {
     process.stderr.write(`[zhongshuo-ui] 托盘或退出操作失败：${String(error)}\n`);
     // Unparented: the error remains visible even when the window is minimized.
