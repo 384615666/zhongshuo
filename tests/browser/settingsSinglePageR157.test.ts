@@ -1,7 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { appSectionOf, searchAppSettings, SettingsPage } from '../../src/ui/hifi/pages/SettingsPage.tsx';
+
+const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
 /** R157：设置改成单页——所有分区自上而下排在一页，不再有左侧分区菜单。 */
 const page = (query: Record<string, string> = {}) => renderToStaticMarkup(createElement(SettingsPage, { query }));
@@ -76,5 +81,42 @@ describe('R157 单页设置', () => {
     ]) {
       expect(html).not.toContain(text);
     }
+  });
+
+  /** R158 排版精修：卡片分组、控件右对齐、去重、折叠。 */
+  it('每个分区都按卡片分组，控件统一在右列', () => {
+    const html = page();
+    // 外观：主题与显示头像都在右列控件里，不再堆在名称下面
+    expect(html).toMatch(/data-settings-row="appearance-theme"[\s\S]{0,400}?pset-row-control[\s\S]{0,200}?seg/);
+    expect(html).toMatch(/data-settings-row="appearance-avatars"[\s\S]{0,400}?pset-row-control[\s\S]{0,300}?switch/);
+    // 我的头像：卡片标题已说明，不再重复「头像」字段名
+    expect(html).not.toContain('field-label">头像<');
+    // 通知：卡片标题「桌面通知」，行标签是开关本身的含义，不再重复同一个词
+    expect(html).toContain('允许弹出系统通知');
+    // 投递记录收进折叠区
+    expect(html).toContain('投递记录（本机排查用）');
+    expect(html).toMatch(/data-zs-notification-delivery="1"[\s\S]{0,400}?settings-why/);
+    // AI 设置：预算与成员各自成卡
+    expect(html).toContain('调用次数预算');
+    expect(html).toContain('AI 成员');
+    // 数据：三个卡片分组
+    expect(html).toContain('数据位置与备份');
+    expect(html).toContain('草稿');
+    expect(html).toContain('归档与项目');
+  });
+
+  it('页头吸顶、搜索结果是浮层', () => {
+    const css = readFileSync(resolve(root, 'src/ui/hifi/styles/components.css'), 'utf8');
+    expect(css).toMatch(/\.settings-head\s*\{[^}]*position:\s*sticky/);
+    expect(css).toMatch(/\.settings-search-results\s*\{[^}]*position:\s*absolute/);
+    // 段间不再画第二条线（页头已有一条发丝线）
+    expect(css).not.toMatch(/\.settings-section \+ \.settings-section\s*\{[^}]*border-top/);
+  });
+
+  it('私信页与房间页共用同一主区底色', () => {
+    const dm = readFileSync(resolve(root, 'src/ui/hifi/DmPage.tsx'), 'utf8');
+    expect(dm).toContain('<div className="main"');
+    const base = readFileSync(resolve(root, 'src/ui/hifi/styles/base.css'), 'utf8');
+    expect(base).toMatch(/\.main\s*\{[^}]*background:\s*var\(--bg-surface\)/);
   });
 });

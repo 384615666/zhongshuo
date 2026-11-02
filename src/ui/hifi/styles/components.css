@@ -1347,6 +1347,7 @@ button.composer-file-token-open:hover {
 
 /** 设置搜索：输入框 + 结果列表（§3.4 的追加项） */
 .settings-search {
+  position: relative;
   margin-bottom: 4px;
 }
 .settings-search .row {
@@ -1379,12 +1380,26 @@ button.composer-file-token-open:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
+/**
+ * 搜索结果（R158 精修）：做成浮层，不再把下面所有段落顶下去。
+ * 浮层自己带底色/描边/圆角，滚动列表仍限高，避免长结果盖住整屏。
+ */
 .settings-search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 12;
   display: flex;
   flex-direction: column;
   gap: 2px;
   max-height: 46vh;
   overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: 0 10px 28px rgba(20, 35, 50, 0.14);
 }
 .settings-search-hit {
   display: flex;
@@ -1585,7 +1600,7 @@ button.composer-file-token-open:hover {
 }
 
 /* ============================================================
-   应用设置（R157 单页）：启动 / 外观 / 通知 / AI / 数据 / 帮助 自上而下排在一页，
+   应用设置（R157 单页 → R158 精修）：启动 / 外观 / 通知 / AI / 数据 / 帮助 自上而下排在一页，
    不再有左侧分区菜单；`?section=` 只负责滚动到对应段落（深链兼容）。
    ============================================================ */
 
@@ -1598,15 +1613,28 @@ button.composer-file-token-open:hover {
   margin-inline: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
 }
 
-/* 页头：标题 + 设置搜索（搜索仍按项定位到具体段落里的那一行） */
+/**
+ * 页头吸顶（R158）：标题与搜索在任何段落都能看到。
+ *
+ * 吸顶元素必须是 `.page`（滚动容器）的直接后代链上的元素；这里用负外边距把
+ * `.page > :first-child` 的 20px 顶部留白吃回来，让页头真正贴住容器顶部，
+ * 否则滚动时会先露出一条 20px 的缝（旧左导航踩过同一个坑，见 base.css 注释）。
+ */
 .settings-head {
+  position: sticky;
+  top: 0;
+  z-index: 9;
   display: flex;
   align-items: flex-start;
   gap: 16px;
   flex-wrap: wrap;
+  margin-top: calc(-1 * var(--page-top-gap, 20px));
+  padding: 16px 0 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .settings-head-text {
   flex: 1 1 340px;
@@ -1621,16 +1649,48 @@ button.composer-file-token-open:hover {
 .settings-sections {
   display: flex;
   flex-direction: column;
-  gap: 30px;
+  gap: 0;
 }
 
-/* 段落：自带锚点（深链 / 搜索定位），段与段之间用发丝线分开 */
+/* 段落：自带锚点（深链 / 搜索定位）。
+   段与段之间只用留白分层（§4.1 面差优先）：页头吸顶已经有一条发丝线，
+   段间再画线就会在滚动后出现「两条线叠在一起」的观感（R158 截图实测 y=116/142）。 */
 .settings-section {
-  scroll-margin-top: 12px;
+  /* 页头吸顶高度约 96px：深链滚动后标题落在页头下方而不是被盖住 */
+  scroll-margin-top: 104px;
 }
 .settings-section + .settings-section {
-  padding-top: 26px;
-  border-top: 1px solid var(--border);
+  margin-top: 34px;
+}
+
+/**
+ * 卡片的统一节奏（R158）：
+ * - 卡内标题与第一行之间留 8px，最后一行不留尾部空白；
+ * - 同一段落里相邻卡片之间 12px，不再靠各处 marginBottom 各自写一个数。
+ */
+.settings-section .card > .card-title {
+  margin-bottom: 8px;
+}
+.settings-section .card + .card,
+.settings-section .card + .panel,
+.settings-section .card + .settings-why {
+  margin-top: 12px;
+}
+.settings-section .card > .pset-row:last-child {
+  padding-bottom: 0;
+}
+.settings-section .card > .pset-row:first-of-type {
+  padding-top: 2px;
+}
+/* 折叠区若是卡片里唯一的内容，不要再画一条上分隔线（否则像卡内又开了一个头） */
+.settings-section .card > .settings-why:first-child {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+.settings-section .card > .settings-why > summary {
+  font-size: var(--fs-12);
+  color: var(--text-2);
 }
 
 /**

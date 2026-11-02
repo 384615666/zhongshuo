@@ -404,7 +404,12 @@ export function DmPage() {
     && (failedItemsWithoutRecoveryDuplicate.length > 0 || failedView.error != null);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
+    /**
+     * 私信页就是主内容区：必须带 `.main`（背景 = --bg-surface）。
+     * 原来这里只是个普通 flex div，没有底色，于是整页透出窗口底色 --bg-app（#f2f8fb），
+     * 与房间/回复串的白色主区不一致（用户 2026-11-02 反馈「私信背景颜色不对」）。
+     */
+    <div className="main" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
       {/* 单区域时的「对话 / 文件」切换器（原型 §5.3：空间不足二选一，隐藏区域保留状态） */}
       {dmSingle ? (
         <div className="single-region-switch row tight" style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>

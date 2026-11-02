@@ -21,12 +21,15 @@ export function AvatarPicker({
   value,
   disabled,
   allowCustom = true,
+  hideLabel = false,
   onChange,
 }: {
   value: string | null;
   disabled?: boolean;
   /** 模板只存预设标识、不存图片，所以模板表单要关掉自定义上传。 */
   allowCustom?: boolean;
+  /** 外层卡片标题已经写了「我的头像」时，不再重复渲染「头像」字段名。 */
+  hideLabel?: boolean;
   onChange: (dataUrl: string | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -62,7 +65,7 @@ export function AvatarPicker({
 
   return (
     <div className="field" data-zs-avatar-picker="1">
-      <span className="field-label">头像</span>
+      {hideLabel ? null : <span className="field-label">头像</span>}
 
       <div className="row tight wrap" role="group" aria-label="预置头像" style={{ gap: 8 }}>
         {AVATAR_PRESETS.map((preset) => {

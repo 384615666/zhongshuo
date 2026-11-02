@@ -105,9 +105,33 @@ Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"; Description: "�
 procedure RefreshShellItem(EventId, Flags: LongWord; ItemPath: String; Reserved: LongWord);
   external 'SHChangeNotify@shell32.dll stdcall';
 
+{ R158：早期未品牌化的构建被固定到开始菜单后，留下了名为 Electron / ElectronApp 的快捷方式；
+  它们带着同一个 AppUserModelID，会让 Windows 把「众说」显示成 Electron。
+  这里只删除**目标确实指向本程序**的同名快捷方式，不碰其它软件的同名项。 }
+procedure RemoveStaleAppShortcut(const ShortcutName: String);
+var
+  LinkPath, Target: String;
+  Shell, Shortcut: Variant;
+begin
+  LinkPath := ExpandConstant('{userprograms}\' + ShortcutName + '.lnk');
+  if not FileExists(LinkPath) then exit;
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    Shortcut := Shell.CreateShortcut(LinkPath);
+    Target := Shortcut.TargetPath;
+  except
+    exit;
+  end;
+  if CompareText(Target, ExpandConstant('{app}\Zhongshuo.exe')) <> 0 then exit;
+  if DeleteFile(LinkPath) then
+    RefreshShellItem($2000, $1005, LinkPath, 0);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then begin
+    RemoveStaleAppShortcut('Electron');
+    RemoveStaleAppShortcut('ElectronApp');
     if FileExists(ExpandConstant('{userdesktop}\众说.lnk')) then
       RefreshShellItem($2000, $1005, ExpandConstant('{userdesktop}\众说.lnk'), 0);
     if FileExists(ExpandConstant('{group}\众说.lnk')) then

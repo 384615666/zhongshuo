@@ -158,6 +158,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
     <div className="main">
       <div className="page settings-page">
         <div className="settings-single">
+          {/* 页头吸顶：滚到任何一段都还能看到标题与搜索（R158 精修）。 */}
           <header className="settings-head">
             <div className="settings-head-text">
               <div className="page-title">设置</div>
@@ -179,29 +180,30 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
                   </button>
                 ) : null}
               </div>
+              {/* 结果做成浮层：不再把下面所有段落顶下去。 */}
+              {search.trim() ? (
+                <div className="settings-search-results" role="list">
+                  {results.length === 0 ? (
+                    <div className="small faint" style={{ padding: '4px 8px' }}>
+                      没找到匹配的设置项，请换个关键词。
+                    </div>
+                  ) : (
+                    results.map((r) => (
+                      <button
+                        key={`${r.section}-${r.match}`}
+                        className="settings-search-hit"
+                        role="listitem"
+                        onClick={() => { setJumpTo(r.match); setSearch(''); }}
+                      >
+                        <span className="settings-search-hit-label">{r.label}</span>
+                        <span className="small faint">{SECTIONS.find((s) => s.key === r.section)?.title}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : null}
             </div>
           </header>
-          {search.trim() ? (
-            <div className="settings-search-results" role="list">
-              {results.length === 0 ? (
-                <div className="small faint" style={{ padding: '4px 8px' }}>
-                  没找到匹配的设置项，请换个关键词。
-                </div>
-              ) : (
-                results.map((r) => (
-                  <button
-                    key={`${r.section}-${r.match}`}
-                    className="settings-search-hit"
-                    role="listitem"
-                    onClick={() => { setJumpTo(r.match); setSearch(''); }}
-                  >
-                    <span className="settings-search-hit-label">{r.label}</span>
-                    <span className="small faint">{SECTIONS.find((s) => s.key === r.section)?.title}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          ) : null}
           <div className="settings-sections">
             <SectionGeneral />
             <SectionAppearance />
@@ -312,25 +314,29 @@ function SectionAppearance() {
   }, []);
   return (
     <SectionShell section="appearance" title="外观" sub={<>主题、头像显示与个人图片（只在本机生效）。</>}>
-      <SettingsRow id="appearance-theme" label="主题" hint="浅色 / 深色">
-        <div className="seg" role="group" aria-label="主题">
-          <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
-          <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>深色</button>
-        </div>
-      </SettingsRow>
-      <SettingsRow id="appearance-avatars" label="显示头像" hint="默认显示个人和 AI 头像，姓名始终保留">
-        <Switch
-          checked={showAvatars}
-          disabled={busy === 'visibility'}
-          label={showAvatars ? '显示' : '隐藏'}
-          onChange={(next) => void save('visibility', { showAvatars: next })}
-        />
-      </SettingsRow>
-      <div className="card" style={{ marginTop: 14, padding: '10px 14px 14px' }} data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
-        <div className="card-title" style={{ padding: 0 }}>我的头像</div>
+      <div className="card">
+        <div className="card-title">显示</div>
+        <SettingsRow id="appearance-theme" label="主题" hint="浅色 / 深色" control={
+          <div className="seg" role="group" aria-label="主题">
+            <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
+            <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>深色</button>
+          </div>
+        } />
+        <SettingsRow id="appearance-avatars" label="显示头像" hint="默认显示个人和 AI 头像，姓名始终保留" control={
+          <Switch
+            checked={showAvatars}
+            disabled={busy === 'visibility'}
+            label={showAvatars ? '显示' : '隐藏'}
+            onChange={(next) => void save('visibility', { showAvatars: next })}
+          />
+        } />
+      </div>
+      <div className="card" data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
+        <div className="card-title">我的头像</div>
         <AvatarPicker
           value={myAvatar}
           disabled={busy != null}
+          hideLabel
           onChange={(dataUrl) => void save('avatar:user', { avatar: { subject: 'user', dataUrl } })}
         />
         <div className="small faint" style={{ marginTop: 6 }}>聊天里你自己那一侧显示这张；AI 成员的头像在「成员管理 → AI 设置」里选。</div>
@@ -429,21 +435,18 @@ export function DesktopNotificationsRow() {
 
   const status = loading ? '读取中…' : readError != null ? '无法确认设置' : enabled ? '已开启' : '已关闭';
   return (
-    <div data-zs-notification-master="1" data-zs-notification-enabled={enabled ? 'true' : 'false'}>
+    <div data-zs-notification-master="1" data-zs-notification-enabled={enabled ? 'true' : 'false'} data-zs-notification-status={status}>
       <SettingsRow
         id="notification-desktop"
-        label="桌面通知"
+        label="允许弹出系统通知"
         hint="关闭后，任务完成、需要处理、等待输入或待验收时不再弹出系统通知；任务与未读照常保留。"
         control={(
-          <div className="col" style={{ alignItems: 'flex-end', gap: 5 }}>
-            <Switch
-              checked={enabled}
-              disabled={loading || busy || readError != null}
-              label={enabled ? '已开启' : '已关闭'}
-              onChange={(next) => void save(next)}
-            />
-            <span className="small faint" data-zs-notification-status={status}>{status}</span>
-          </div>
+          <Switch
+            checked={enabled}
+            disabled={loading || busy || readError != null}
+            label={enabled ? '已开启' : '已关闭'}
+            onChange={(next) => void save(next)}
+          />
         )}
       />
       {readError != null ? (
@@ -536,7 +539,7 @@ export function SectionNotifications() {
 
   return (
     <SectionShell section="notifications" title="通知" sub={<>桌面通知的总开关，以及按对话串的静音设置。</>}>
-      <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card">
         <div className="card-title">桌面通知</div>
         <DesktopNotificationsRow />
       </div>
@@ -550,7 +553,7 @@ export function SectionNotifications() {
           </div>
         ) : null}
         {!loading && error == null && items.length === 0 ? (
-          <div className="small faint" style={{ padding: '10px 14px' }}>
+          <div className="small faint" style={{ padding: '2px 14px 12px' }}>
             暂无单独设置的对话串。
           </div>
         ) : null}
@@ -559,49 +562,49 @@ export function SectionNotifications() {
             key={item.threadId}
             label={titles[item.taskId ?? ''] ?? `对话串 ${item.threadId.slice(0, 12)}`}
             hint={`${item.followed ? '已关注' : '未关注'} · 项目 ${item.projectId.slice(0, 12)}`}
-          >
-            <Switch
-              checked={item.muted}
-              disabled={busy != null}
-              label={item.muted ? '已静音' : '通知'}
-              onChange={(next) => void setMuted(item, next)}
-            />
-          </SettingsRow>
+            control={(
+              <Switch
+                checked={item.muted}
+                disabled={busy != null}
+                label={item.muted ? '已静音' : '通知'}
+                onChange={(next) => void setMuted(item, next)}
+              />
+            )}
+          />
         ))}
       </div>
-      <div className="card" style={{ marginTop: 14 }} data-zs-notification-delivery="1">
-        <div className="card-title">投递记录</div>
-        {deliveryError != null ? (
-          <div className="panel warning" style={{ margin: 12 }}>投递记录读取失败：{userFacingSystemText(deliveryError ?? '')}</div>
-        ) : delivery == null ? (
-          <div className="small faint" style={{ padding: '10px 14px' }}>正在读取桌面投递记录…</div>
-        ) : (
-          <>
-            <div className="row tight" style={{ padding: '8px 14px', flexWrap: 'wrap' }}>
-              <Tag tone="neutral">已尝试 {delivery.health.attempted}</Tag>
-              <Tag tone="neutral">已请求显示 {delivery.health.showRequested}</Tag>
-              <Tag tone="neutral">已显示 {delivery.health.shown}</Tag>
-              <Tag tone={delivery.health.unknown > 0 ? 'warning' : 'neutral'}>未确认 {delivery.health.unknown}</Tag>
-              <Tag tone={delivery.health.failed > 0 ? 'danger' : 'neutral'}>失败 {delivery.health.failed}</Tag>
-              <Tag tone="neutral">已点击 {delivery.health.clicked}</Tag>
-            </div>
-            {delivery.recentAttempts.length === 0 ? (
-              <div className="small faint" style={{ padding: '2px 14px 12px' }}>尚无桌面投递尝试。</div>
-            ) : (
-              <DetailFold summary="查看最近投递记录">
-                {delivery.recentAttempts.map((attempt: TaskNotificationAttemptView) => (
+      {/* 投递记录是排障信息：收进折叠区，不再占正文一屏。 */}
+      <div className="card" data-zs-notification-delivery="1">
+        <DetailFold summary={<>投递记录（本机排查用）</>}>
+          {deliveryError != null ? (
+            <div className="panel warning">投递记录读取失败：{userFacingSystemText(deliveryError ?? '')}</div>
+          ) : delivery == null ? (
+            <div className="small faint">正在读取桌面投递记录…</div>
+          ) : (
+            <>
+              <div className="row tight" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
+                <Tag tone="neutral">已尝试 {delivery.health.attempted}</Tag>
+                <Tag tone="neutral">已请求显示 {delivery.health.showRequested}</Tag>
+                <Tag tone="neutral">已显示 {delivery.health.shown}</Tag>
+                <Tag tone={delivery.health.unknown > 0 ? 'warning' : 'neutral'}>未确认 {delivery.health.unknown}</Tag>
+                <Tag tone={delivery.health.failed > 0 ? 'danger' : 'neutral'}>失败 {delivery.health.failed}</Tag>
+                <Tag tone="neutral">已点击 {delivery.health.clicked}</Tag>
+              </div>
+              {delivery.recentAttempts.length === 0 ? (
+                <div className="small faint">尚无桌面投递尝试。</div>
+              ) : (
+                delivery.recentAttempts.map((attempt: TaskNotificationAttemptView) => (
                   <SettingsRow
                     key={attempt.notificationId}
                     label={attempt.title}
                     hint={attemptStateLabel(attempt)}
-                  >
-                    <span className="small faint">{new Date(attempt.claimRequestedAt).toLocaleString()}</span>
-                  </SettingsRow>
-                ))}
-              </DetailFold>
-            )}
-          </>
-        )}
+                    value={<span className="small faint">{new Date(attempt.claimRequestedAt).toLocaleString()}</span>}
+                  />
+                ))
+              )}
+            </>
+          )}
+        </DetailFold>
       </div>
     </SectionShell>
   );
@@ -707,21 +710,19 @@ export function CallBudgetSettingsRow() {
       data-zs-call-budget-enabled={enabled ? 'true' : 'false'}
       data-zs-call-budget-enforcement={enabled ? 'enabled' : 'disabled'}
       data-zs-call-budget-counting="always"
+      data-zs-call-budget-status={status}
     >
       <SettingsRow
         id="call-budget"
         label="启用调用次数预算"
         hint="默认关闭。开启后，AI 调用达到上限时暂停；关闭时只计数。更改对新请求生效。"
         control={(
-          <div className="col" style={{ alignItems: 'flex-end', gap: 5 }}>
-            <Switch
-              checked={enabled}
-              disabled={loading || busy || readError != null}
-              label={enabled ? '开启' : '关闭'}
-              onChange={(next) => void save(next)}
-            />
-            <span className="small faint" data-zs-call-budget-status={status}>{status}</span>
-          </div>
+          <Switch
+            checked={enabled}
+            disabled={loading || busy || readError != null}
+            label={enabled ? '开启' : '关闭'}
+            onChange={(next) => void save(next)}
+          />
         )}
       >
         <div
@@ -748,23 +749,30 @@ function SectionRuntime() {
   const projectId = useStore((s) => s.activeProjectId);
   return (
     <SectionShell section="runtime" title="AI 设置" sub={<>管理同时运行的 AI、调用预算，以及成员使用的程序、模型和权限。</>}>
-      <CallBudgetSettingsRow />
+      <div className="card">
+        <div className="card-title">调用次数预算</div>
+        <CallBudgetSettingsRow />
+      </div>
       <ExecutionConcurrencyPanel />
-      {members.map((m) => {
-        const rt = runtimes[m.id];
-        return (
-          <SettingsRow
-            key={m.id}
-            label={m.displayName}
-            hint={rt == null ? '读取中…' : rt.status === 'bound' ? `${rt.kind === 'codex' ? 'Codex' : rt.kind === 'claude' ? 'Claude' : '已配置'}${rt.model != null && rt.model !== '' ? <span title={`完整模型 ID：${rt.model}`}> · {runtimeModelDisplayName({id:rt.model,label:rt.model})}</span> : ''}` : rt.status === 'unbound' ? '还没有选择模型' : '配置读取失败'}
-          >
-            <button className="btn sm" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
-              {rt?.status === 'bound' ? '查看/修改' : '配置 AI'}
-            </button>
-          </SettingsRow>
-        );
-      })}
-      {members.length === 0 ? <div className="panel info">还没有 AI 成员。打开项目后，在成员页添加 AI。</div> : null}
+      <div className="card">
+        <div className="card-title">AI 成员</div>
+        {members.map((m) => {
+          const rt = runtimes[m.id];
+          return (
+            <SettingsRow
+              key={m.id}
+              label={m.displayName}
+              hint={rt == null ? '读取中…' : rt.status === 'bound' ? `${rt.kind === 'codex' ? 'Codex' : rt.kind === 'claude' ? 'Claude' : '已配置'}${rt.model != null && rt.model !== '' ? <span title={`完整模型 ID：${rt.model}`}> · {runtimeModelDisplayName({id:rt.model,label:rt.model})}</span> : ''}` : rt.status === 'unbound' ? '还没有选择模型' : '配置读取失败'}
+              control={(
+                <button className="btn sm" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
+                  {rt?.status === 'bound' ? '查看/修改' : '配置 AI'}
+                </button>
+              )}
+            />
+          );
+        })}
+        {members.length === 0 ? <div className="small faint" style={{ padding: '2px 0 10px' }}>还没有 AI 成员。打开项目后，在成员页添加 AI。</div> : null}
+      </div>
     </SectionShell>
   );
 }
@@ -822,10 +830,10 @@ function SectionData() {
   };
   return (
     <SectionShell section="data" title="数据与存储" sub={<>数据位置、草稿保存与清理。</>}>
-      <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '（读取中…）'} />
-      <div className="card" style={{ marginBottom: 14 }} data-zs-data-guide="1">
-        <div className="card-title">备份全部数据与使用已有数据</div>
-        <div className="small muted" style={{padding:'0 14px 8px',lineHeight:1.7}}>
+      <div className="card" data-zs-data-guide="1">
+        <div className="card-title">数据位置与备份</div>
+        <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '（读取中…）'} />
+        <div className="small muted" style={{ lineHeight: 1.7, marginBottom: 6 }}>
           备份会完整保留对话、附件、草稿、本地账号资料和设置。请像保管自己的文件一样妥善保管备份。
         </div>
         <SettingsRow id="备份全部数据" label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
@@ -851,6 +859,8 @@ function SectionData() {
           </div>
         } />
       </div>
+      <div className="card">
+        <div className="card-title">草稿</div>
       <SettingsRow id="草稿保存" label="草稿保存" hint="草稿和未确认发送的保存状态（刷新或崩溃后仍保留；普通草稿 24 小时过期）">
         <div className="small" style={{ lineHeight: 1.7 }}>
           {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
@@ -862,21 +872,21 @@ function SectionData() {
       {draftPersist.recoveryNote != null ? (
         <div className="small faint" style={{ padding: '0 14px 6px' }} data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div>
       ) : null}
-      <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）">
+      <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）" control={
         <div className="row tight">
           <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试保存</button>
           <button className="btn sm" onClick={clearDrafts}>清理本地草稿</button>
         </div>
-      </SettingsRow>
+      } />
       {cleared != null ? <div className="small faint" style={{ padding: '0 14px 6px' }}>{cleared}</div> : null}
       <SettingsRow
         label="从旧版本导入草稿"
         hint="首次从旧版本升级或复制数据目录后，可在这里导入旧的草稿和未确认发送记录。"
+        control={(
+          <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重新扫描旧目录，结果见下方', 'info')); }}>重扫旧目录</button>
+        )}
       >
-        <div className="small" style={{ lineHeight: 1.7, minWidth: 0, width: 'min(320px, 100%)' }}>
-          <div className="row tight">
-            <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重新扫描旧目录，结果见下方', 'info')); }}>重扫旧目录</button>
-          </div>
+        <div className="small" style={{ lineHeight: 1.7, minWidth: 0, width: 'min(420px, 100%)' }}>
           {legacy == null || legacy.candidates.length === 0 ? (
             <div className="faint" style={{ marginTop: 4 }}>当前没有待确认的旧目录。</div>
           ) : (
@@ -906,6 +916,9 @@ function SectionData() {
           )}
         </div>
       </SettingsRow>
+      </div>
+      <div className="card">
+        <div className="card-title">归档与项目</div>
       {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
           「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}
       <SettingsRow id="归档管理" label="归档管理" hint="查看已归档项目和房间的历史，或恢复使用；已有文件与记录会保留">
@@ -913,9 +926,10 @@ function SectionData() {
           <ArchiveManager embedded />
         </div>
       </SettingsRow>
-      <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目">
+      <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目" control={
         <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
-      </SettingsRow>
+      } />
+      </div>
     </SectionShell>
   );
 }
@@ -949,7 +963,7 @@ function SectionHelp() {
   };
   return (
     <SectionShell section="help" title="帮助与关于" sub={<>操作手册、项目链接、版本与诊断。</>}>
-      <div className="card" style={{ marginBottom: 14 }} data-zs-app-links="1">
+      <div className="card" data-zs-app-links="1">
         <div className="card-title">手册与项目链接</div>
         {APP_LINKS.map((link) => (
           <SettingsRow
@@ -966,11 +980,12 @@ function SectionHelp() {
         ))}
       </div>
       <div className="card">
-        <div className="card-title">版本与诊断</div>
-        <LocalDiagnostics />
+        <div className="card-title">版本</div>
         <ReadOnlyRow id="版本与构建" label="应用" value="众说 · 本地多成员协作工作台" />
         <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />
       </div>
+      {/* LocalDiagnostics 自带 .card：作为独立卡片并列，避免卡中卡的双层描边。 */}
+      <LocalDiagnostics />
     </SectionShell>
   );
 }
