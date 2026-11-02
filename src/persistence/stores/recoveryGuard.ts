@@ -11,8 +11,8 @@
  *    recovery.protectionReleased(released=true) 事件（服务端 no-os-process/
  *    受管 Job 证据解除）才算恢复闭环；事件持久化=跨重启同判。
  *
- * dm.ts 的可恢复性呈现与 commands.ts 的 task.redispatch 守卫**共用本判定**
- * （单一真相源）；命令侧在事务内 INSERT 前调用=提交时重查。
+ * 内部自动执行使用完整判定；用户继续先在同一事务收口历史占用再重查。
+ * allowInterrupted 仅供用户入口只读预览，不写状态或解除占用。
  */
 import type { ZhongshuoDatabase } from '../db.ts';
 
@@ -24,7 +24,7 @@ export interface RecoveryBlockReason {
 }
 
 /** 任务是否可新建派发（redispatch/恢复）：null=可；否则返回阻断原因。 */
-export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: string, options: { queueOnly?: boolean } = {}): RecoveryBlockReason | null {
+export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: string, options: { queueOnly?: boolean; allowInterrupted?: boolean } = {}): RecoveryBlockReason | null {
   // A parent cannot acquire a fresh planning identity around an unresolved child.
   // Existing formal UNKNOWN / process-exit / lease checks remain authoritative.
   const children=db.prepare(`SELECT DISTINCT child.id FROM tasks child JOIN workflow_runs r ON r.task_id=child.id
@@ -52,8 +52,9 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
     `SELECT t.id AS turnId FROM agent_turns t
      JOIN workflow_runs r ON r.id = t.run_id
      WHERE r.task_id = ? AND t.protection_state = 'retained'
+       AND (?=0 OR t.status NOT IN ('UNKNOWN','SUCCEEDED','FAILED','CANCELLED'))
      LIMIT 1`,
-  ).get(taskId) as { turnId: string } | undefined;
+  ).get(taskId,options.allowInterrupted?1:0) as { turnId: string } | undefined;
   if (retained != null) {
     return {
       code: 'RECONCILE_REQUIRED',
@@ -69,8 +70,9 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
      JOIN workflow_runs r ON r.id = t.run_id
      WHERE r.task_id = ? AND l.status != 'released'
        AND (? = 0 OR t.status IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN'))
+       AND (? = 0 OR t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN'))
      LIMIT 1`,
-  ).get(taskId, options.queueOnly ? 1 : 0) as { lockDomain: string; turnId: string } | undefined;
+  ).get(taskId, options.queueOnly ? 1 : 0,options.allowInterrupted?1:0) as { lockDomain: string; turnId: string } | undefined;
   if (heldLease != null) {
     return {
       code: 'RECONCILE_REQUIRED',
@@ -90,7 +92,7 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
        )
      LIMIT 1`,
   ).get(taskId) as { turnId: string; budgetMark: string | null } | undefined;
-  if (unclosed != null) {
+  if (unclosed != null && !options.allowInterrupted) {
     const tail = unclosed.budgetMark == null
       ? '预算未处置（budget 未对账）'
       : `预算已结算但退出未确认（对账取证为身份缺失/存活观察——保护保留，turn 仍 UNKNOWN）`;

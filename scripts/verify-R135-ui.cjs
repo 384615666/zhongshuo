@@ -35,13 +35,7 @@ function resolved(hash){return {kind:'task',projectId:'R135-project',conversatio
 window.zs={command:async env=>{
   calls.push(env);
   if(env.method==='recovery.status')return {ok:true,data:recovery};
-  if(env.method==='recovery.inspect'){
-    if(env.params.turnId!=='R135-turn-unknown')throw Error('Unexpected inspection target: '+env.params.turnId);
-    return {ok:true,data:{schemaVersion:'recovery-inspection-v1',turnId:'R135-turn-unknown',taskId:'R135-task-unknown',parentTaskId:null,
-      taskTitle:'R135 合成待确认任务',memberName:'分析员',turnStatus:'UNKNOWN',protectionState:'retained',budgetMark:'settled',
-      result:{complete:false,answer:null,files:[]},lastActivity:null,
-      exitCheck:{state:'blocked',message:'尚不能确认旧执行已经结束，请保留原状态后重新检查。',action:'retry',checkedAt:1}}};
-  }
+  if(env.method==='task.get')return {ok:true,data:{task:{id:env.params.taskId,title:'R135 合成待恢复任务',owner_member_id:ids[0],parent_task_id:null,status:'BLOCKED',project_id:'R135-project',revision:1,stop_generation:0}}};
   if(env.method==='app.settings.get')return {ok:true,data:{values:{'callBudget.enabled':'true'}}};
   if(env.method==='deepLink.resolve'){
     if(resolveMode==='failure')return {ok:false,error:{code:'NOT_FOUND',message:'找不到原任务，请重新检查任务是否仍可访问'}};
@@ -57,13 +51,12 @@ const reactRoot=createRoot(document.getElementById('root'));
 function RouteProof(){const route=useHashRoute();return createElement('div',{className:'panel info','data-R135-route':route},'实际正式路由：'+route);}
 function frame(child){return createElement('div',null,createElement('h2',null,'R135 正式组件 · 隔离合成验证'),createElement('p',{className:'faint'},'仅合成状态与命令回包；不连接数据库或模型'),createElement(RouteProof),child);}
 async function unmount(){reactRoot.render(null);await pause(25);}
-async function mountRecovery(){await unmount();navigate('/room/R135-room-a');reactRoot.render(frame(createElement(RecoveryPanel,{origin:'startup',onClose:()=>{closes++;reactRoot.render(frame(null));}})));await until(()=>document.querySelector('[data-zs-recovery-summary]')&&document.querySelector('[data-zs-exit-check=blocked]'));await pause(25);}
-async function details(){clickText('查看详情');await until(()=>document.querySelector('details.settings-why'));document.querySelector('details.settings-why').open=true;await pause(20);}
-function locateButton(index){if(index<2)return [...document.querySelectorAll('[data-zs-recovery-summary] button')].find(b=>b.textContent.trim()===(index===0?'查看待确认任务':'查看中断任务'));return [...document.querySelectorAll('details button')].filter(b=>b.textContent.trim()==='定位任务')[index-2];}
+async function mountRecovery(){await unmount();navigate('/room/R135-room-a');reactRoot.render(frame(createElement(RecoveryPanel,{origin:'startup',onClose:()=>{closes++;reactRoot.render(frame(null));}})));await until(()=>document.querySelector('[data-zs-recovery-summary]')&&document.querySelectorAll('[data-zs-recovery-task]').length===2);await pause(25);}
+function locateButton(index){const task='R135-task-'+(index%2?'interrupted':'unknown');return [...document.querySelector('[data-zs-recovery-task="'+task+'"]').querySelectorAll('button')].find(button=>button.textContent.trim()==='查看任务');}
 window.prepareRecovery=async()=>{resolveMode='success';await mountRecovery();};
 window.runRecovery=async()=>{
   for(let i=0;i<4;i++){
-    await mountRecovery();await details();const before=closes;const hashBefore=location.hash;
+    await mountRecovery();const before=closes;const hashBefore=location.hash;
     resolveMode='failure';locateButton(i).click();await until(()=>document.querySelector('[role="alert"]'));
     eq('recovery_'+i+'_failure_keeps_dialog',!!document.querySelector('[data-zs-recovery]'),true);
     eq('recovery_'+i+'_failure_does_not_close',closes,before);
@@ -78,12 +71,12 @@ window.runRecovery=async()=>{
     eq('recovery_'+i+'_formal_route',location.hash,expected);
     eq('recovery_'+i+'_exact_task',calls.filter(c=>c.method==='deepLink.resolve').at(-1).params.hash,'#task=R135-task-'+(i===1||i===3?'interrupted':'unknown'));
   }
-  await mountRecovery();resolveMode='no-route';clickText('查看中断任务');await until(()=>document.querySelector('[role="alert"]'));
+  await mountRecovery();resolveMode='no-route';locateButton(1).click();await until(()=>document.querySelector('[role="alert"]'));
   eq('resolved_without_landing_keeps_dialog',!!document.querySelector('[data-zs-recovery]'),true);
   eq('resolved_without_landing_explained',document.querySelector('[role="alert"]').textContent.includes('定位失败'),true);
-  resolveMode='failure';clickText('查看中断任务');await until(()=>document.querySelector('[role="alert"]').textContent.includes('找不到原任务'));
+  resolveMode='failure';locateButton(1).click();await until(()=>document.querySelector('[role="alert"]').textContent.includes('找不到原任务'));
 };
-window.finishRecovery=async()=>{resolveMode='success';landingKind='thread';clickText('查看中断任务');await until(()=>!document.querySelector('[data-zs-recovery]'));};
+window.finishRecovery=async()=>{resolveMode='success';landingKind='thread';locateButton(1).click();await until(()=>!document.querySelector('[data-zs-recovery]'));};
 let roomIndex=0, targetKind='room_root', readOnly=false;
 function draftKey(){return targetKind==='room_root'?'room:'+rooms[roomIndex].id:targetKind==='thread'?'thread:R135-thread':'dm:R135-dm';}
 function editor(){return document.querySelector('.composer-editor');}
@@ -141,7 +134,7 @@ window.finishComposer=async()=>{
   readOnly=false;await mountComposer();await runMenu();clickText('回到自然协作');await pause(40);
 };
 window.report=()=>{
-  const allowed=['recovery.status','recovery.inspect','deepLink.resolve','app.settings.get'];
+  const allowed=['recovery.status','task.get','deepLink.resolve','app.settings.get'];
   eq('only_read_rpcs_no_dispatch_or_resume',calls.filter(c=>!allowed.includes(c.method)).map(c=>c.method),[]);
   return {ok:checks.every(c=>c.ok),syntheticOnly:true,databaseOpened:false,realBusinessCalls:0,checks,calls,sends,envelopes};
 };

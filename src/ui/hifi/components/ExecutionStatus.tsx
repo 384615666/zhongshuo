@@ -34,6 +34,7 @@ const ACTION_ICON: Record<TaskExecutionAction['kind'], IconName> = {
   recover: 'help-circle',
   review: 'clipboard-check',
   retry: 'play',
+  continue: 'play',
   close: 'x',
 };
 
@@ -63,7 +64,7 @@ function memberWaitingText(member: TaskExecutionMember): string {
   if (member.state === 'waiting-user') return `${member.displayName}等你回复`;
   if (member.state === 'starting') return `${member.displayName}等待开始`;
   if (member.state === 'stopping') return `${member.displayName}正在停止`;
-  if (member.state === 'unknown') return `${member.displayName}执行中断，待检查`;
+  if (member.state === 'unknown') return `${member.displayName}执行中断，可继续`;
   return `${member.displayName}等待结果`;
 }
 
@@ -83,14 +84,14 @@ function friendlyDetail(status: TaskExecutionStatus): string | null {
       return '另一任务正在修改同一位置，结束后会继续。';
     }
     if (blocker?.reason === 'unknown-turn') {
-      return '上一项执行已中断；检查程序是否结束后才能安全继续。';
+      return '上一项执行已中断，可以继续任务。';
     }
     return '请求已登记，正在等待开始。';
   }
   if (status.phase === 'UNKNOWN') {
-    if (status.reason.code === 'PROTECTION_RETAINED') return '上次执行中断；请检查程序是否已结束，再继续任务。';
+    if (status.reason.code === 'PROTECTION_RETAINED') return '上次执行已中断，已有回复和文件保留，可以继续任务。';
     if (status.reason.code === 'NO_EXECUTION_EVIDENCE') return '没有取得可确认的执行进展，正在安全等待刷新。';
-    return '本轮未收到完整结果；请检查中断原因与执行是否已结束。';
+    return '本轮未收到完整结果，可以继续任务。';
   }
   if (status.phase === 'NOT_STARTED_FAILED' || status.phase === 'FAILED') {
     const text=executionReasonText(status);
@@ -131,7 +132,7 @@ export function taskExecutionStatusSummary(status: TaskExecutionStatus): TaskExe
   } else if (status.phase === 'WAITING_FOR_USER') {
     main = '等待你处理';
   } else if (status.phase === 'UNKNOWN') {
-    main = '执行中断，等待检查';
+    main = '执行中断，可继续';
   } else if (status.phase === 'NOT_STARTED_FAILED') {
     main = '请求未能开始';
   } else if (status.phase === 'FAILED') {
@@ -191,6 +192,7 @@ export interface ExecutionStatusProps {
   className?: string;
   surface?: 'default'|'thread';
   onOpenDetails?: () => void;
+  busy?: boolean;
 }
 
 /**
@@ -204,18 +206,19 @@ export function ExecutionStatus({
   className,
   surface='default',
   onOpenDetails,
+  busy=false,
 }: ExecutionStatusProps) {
   const presentation = taskExecutionNeedsReview(status)?{label:'待你验收',tone:'warning' as const,icon:'eye' as const}:PHASE[status.phase];
   const summary = taskExecutionStatusSummary(status);
   const firstAction = status.actions.find(action =>
-    action.kind === 'recover' || action.kind === 'review' || action.kind === 'retry' || action.kind==='close')
+    action.kind === 'continue' || action.kind === 'recover' || action.kind === 'review' || action.kind === 'retry' || action.kind==='close')
     ?? status.actions[0];
   const remainingActions = status.actions.filter(action => action !== firstAction);
   const threadNotice=surface==='thread';
   const noticeDetail=threadNotice&&status.phase==='WAITING_FOR_USER'&&(summary.detail?.length??0)>180
     ?'请答复下方 AI 提出的问题，再继续处理；完整问题保留在最新回复中。':summary.detail;
   const nextStep=status.phase==='FAILED'||status.phase==='NOT_STARTED_FAILED'
-    ?status.actions.some(action=>action.kind==='retry')?'可继续任务；不再处理时可结束任务。':status.actions.some(action=>action.kind==='recover')?'请先检查中断原因与程序检查结果。':status.actions.some(action=>action.kind==='close')?'可查看原因，或结束这项任务。':'请查看原因后决定下一步。'
+    ?status.actions.some(action=>action.kind==='continue'||action.kind==='retry')?'可继续任务；不再处理时可结束任务。':status.actions.some(action=>action.kind==='recover')?'可以继续任务。':status.actions.some(action=>action.kind==='close')?'可查看原因，或结束这项任务。':'请查看原因后决定下一步。'
     :null;
 
   return (
@@ -244,20 +247,20 @@ export function ExecutionStatus({
         {firstAction != null ? (
           <button
             type="button"
-            className={`btn sm${firstAction.kind === 'recover' || firstAction.kind === 'retry' ? ' primary' : ' ghost'}`}
+            className={`btn sm${firstAction.kind === 'continue' || firstAction.kind === 'recover' || firstAction.kind === 'retry' ? ' primary' : ' ghost'}`}
             data-zs-execution-action={firstAction.kind}
             data-zs-action-id={firstAction.id}
-            disabled={onAction == null}
+            disabled={onAction == null||busy}
             title={onAction == null ? '此处暂不可操作，请打开对应任务详情' : undefined}
             onClick={onAction == null ? undefined : () => onAction(firstAction)}
           >
             <Icon name={ACTION_ICON[firstAction.kind]} size={12} />
-            {firstAction.kind==='recover'?'检查中断':firstAction.label}
+            {busy&&['continue','recover'].includes(firstAction.kind)?'正在继续…':['continue','recover'].includes(firstAction.kind)?'继续任务':firstAction.label}
           </button>
         ) : null}
         {density==='compact'?remainingActions.filter(action=>action.kind==='close').map(action=><button
           type="button" key={action.id} className="btn sm ghost" data-zs-execution-action="close" data-zs-action-id={action.id}
-          disabled={onAction==null} onClick={onAction==null?undefined:()=>onAction(action)}>
+          disabled={onAction==null||busy} onClick={onAction==null?undefined:()=>onAction(action)}>
           <Icon name="x" size={12}/>{action.label}
         </button>):null}
         {density==='compact'&&onOpenDetails?<button type="button" className="btn sm ghost" data-zs-execution-details onClick={onOpenDetails}>{['FAILED','NOT_STARTED_FAILED','UNKNOWN'].includes(status.phase)?'查看原因':'查看详情'}</button>:null}
@@ -291,12 +294,12 @@ export function ExecutionStatus({
                   className="btn ghost sm"
                   data-zs-execution-action={action.kind}
                   data-zs-action-id={action.id}
-                  disabled={onAction == null}
+                  disabled={onAction == null||busy}
                   title={onAction == null ? '此处暂不可操作，请打开对应任务详情' : undefined}
                   onClick={onAction == null ? undefined : () => onAction(action)}
                 >
                   <Icon name={ACTION_ICON[action.kind]} size={12} />
-                  {action.kind==='recover'?'检查中断':action.label}
+                  {['continue','recover'].includes(action.kind)?'继续任务':action.label}
                 </button>
               ))}
             </div>

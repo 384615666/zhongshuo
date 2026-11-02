@@ -1,57 +1,35 @@
-import type {RecoveryInspection} from '../../../contracts/recoveryInspection';
-type RecoveryCommand = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+import {sendCommand,type BridgeOutcome} from '../bridge';
 
-interface ReplyOccupancyStatus {
-  unknownTurns: readonly {id: string; protectionReleased?: boolean; protectionState?: string | null}[];
-  pendingRelease: readonly {turnId: string}[];
-  heldLeases: readonly {owner_turn_id: string}[];
+export interface TaskContinuationBinding {
+  taskId: string;
+  expectedTaskRevision?: number;
+  expectedStopGeneration?: number;
+  sourceRunId?: string;
 }
+export interface TaskContinuationResult {enqueued: boolean; dispatchKey: string}
+type SendContinuation = (commandId:string,method:string,params:Record<string,unknown>)=>Promise<BridgeOutcome<TaskContinuationResult>>;
 
-/** Only the backend's guard-aligned release fact closes an unknown execution.
- * Missing rows/leases or a raw protectionState alone never prove release.
- */
-export function previousReplyStillHeld(status: ReplyOccupancyStatus, turnId: string): boolean {
-  return status.unknownTurns.find(turn => turn.id === turnId)?.protectionReleased !== true
-    || status.pendingRelease.some(item => item.turnId === turnId)
-    || status.heldLeases.some(item => item.owner_turn_id === turnId);
-}
-
-export function previousReplySummary(status: ReplyOccupancyStatus): string {
-  const held = status.unknownTurns.filter(turn => previousReplyStillHeld(status, turn.id)).length;
-  const released = status.unknownTurns.length - held;
-  return [
-    held > 0 ? `有 ${held} 次上次回复需要检查，相关新请求可能正在等待，请检查后继续。` : '',
-    released > 0 ? `有 ${released} 次原回复结果仍未确认，但已不再保留占用，不阻挡新消息；原请求不会重发。` : '',
-  ].filter(Boolean).join(' ');
-}
-
-/** One operation per stable turn, including rapid clicks and partial-failure retry.
- * Only the backend can prove the old execution ended; never redispatch that request.
- */
-export function createPreviousReplyCheck(send: RecoveryCommand) {
-  const inFlight = new Map<string, Promise<RecoveryInspection>>();
-  const inspect = async (turnId: string) => {
-    const value = await send('recovery.inspect', {turnId}) as RecoveryInspection;
-    if (value.turnId !== turnId || value.schemaVersion !== 'recovery-inspection-v1') throw Error('中断检查对象已变化，请重新检查。');
-    return value;
+/** Reuse the command identity after an uncertain transport; a rejected attempt can be retried. */
+export function createTaskContinuation(send:SendContinuation) {
+  const attempts=new Map<string,{commandId:string;pending?:Promise<BridgeOutcome<TaskContinuationResult>>}>();
+  return (binding:TaskContinuationBinding):Promise<BridgeOutcome<TaskContinuationResult>>=>{
+    const params={taskId:binding.taskId,...(binding.expectedTaskRevision!=null?{expectedTaskRevision:binding.expectedTaskRevision}:{}),
+      ...(binding.expectedStopGeneration!=null?{expectedStopGeneration:binding.expectedStopGeneration}:{}),...(binding.sourceRunId?{sourceRunId:binding.sourceRunId}:{})};
+    const key=JSON.stringify(params);
+    let attempt=attempts.get(key);
+    if(attempt?.pending)return attempt.pending;
+    if(!attempt){attempt={commandId:crypto.randomUUID()};attempts.set(key,attempt);}
+    const current=attempt;
+    current.pending=Promise.resolve().then(()=>send(current.commandId,'task.continue',params)).then(result=>{
+      if(result.status!=='unknown')attempts.delete(key);
+      return result;
+    }).finally(()=>{current.pending=undefined;});
+    return current.pending;
   };
-  return (turnId: string): Promise<RecoveryInspection> => {
-    const existing = inFlight.get(turnId);
-    if (existing) return existing;
-    const pending = (async () => {
-      const current = await inspect(turnId);
-      if (current.exitCheck.state !== 'ready' || current.exitCheck.action !== 'release') return current;
-      if (current.turnStatus === 'UNKNOWN' && !['settled','refunded'].includes(current.budgetMark ?? '')) {
-        await send('recovery.reconcile', {turnId, verdict:'executed', note:'程序已确认旧执行结束；保留未知业务结果，不重发原请求'});
-      }
-      await send('recovery.releaseProtection', {
-        turnId, note: '检查并继续排队消息；保留原执行结果', endPreviousExecution: true,
-      });
-      const refreshed = await inspect(turnId);
-      if (refreshed.exitCheck.state !== 'released') throw Error(refreshed.exitCheck.message || '占用尚未解除，请重新检查。');
-      return refreshed;
-    })().finally(() => { inFlight.delete(turnId); });
-    inFlight.set(turnId, pending);
-    return pending;
-  };
+}
+export const continueTask=createTaskContinuation(sendCommand);
+
+export function previousReplyStillHeld(status:{unknownTurns:readonly {id:string;protectionReleased?:boolean}[];pendingRelease:readonly {turnId:string}[];heldLeases:readonly {owner_turn_id:string}[]},turnId:string):boolean {
+  return status.unknownTurns.find(turn=>turn.id===turnId)?.protectionReleased!==true
+    ||status.pendingRelease.some(item=>item.turnId===turnId)||status.heldLeases.some(item=>item.owner_turn_id===turnId);
 }

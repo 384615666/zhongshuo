@@ -854,10 +854,13 @@ describe('R108 authoritative task execution status', () => {
 
       expect(statuses.unknown.phase).toBe('UNKNOWN');
       expect(statuses.unknown.evidence.unknownTurnIds).toEqual(['turn_r108_unknown']);
+      const interruptedTask=fixture.db.prepare("SELECT revision,stop_generation FROM tasks WHERE id='task_r108_unknown'").get() as {revision:number;stop_generation:number};
       expect(statuses.unknown.actions).toContainEqual(expect.objectContaining({
-        kind: 'recover',
-        target: { kind: 'recovery', id: 'turn_r108_unknown' },
+        kind: 'continue',
+        label: '继续任务',
+        binding: { taskId:'task_r108_unknown',expectedTaskRevision:interruptedTask.revision,expectedStopGeneration:interruptedTask.stop_generation },
       }));
+      expect(statuses.unknown.actions.some(action=>action.kind==='recover')).toBe(false);
       expect(taskExecutionStatusSummary(statuses.unknown).detail).not.toMatch(/protection|recovery|turn|保护/);
 
       expect(statuses.completed.phase).toBe('COMPLETED');

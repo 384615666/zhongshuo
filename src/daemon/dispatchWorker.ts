@@ -2241,6 +2241,7 @@ export class DispatchWorker {
   /** Persist the delta before the terminal transaction. If shutdown interrupts
    * settlement, a successful durable turn can finish the same merge on restart. */
   private prepareRoleMemoryProposal(task:TaskRow,turnId:string,finalText?:string):void {
+    if(this.wasContinuedByUser(turnId))return;
     const bundle=this.db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(turnId) as {included_refs_json:string}|undefined;
     if(!bundle)return;
     let snapshot:ReturnType<typeof roleMemorySnapshotSchema.parse>;
@@ -2375,8 +2376,30 @@ export class DispatchWorker {
     }
   }
 
+  /** A user continuation closes this attempt without rewriting its UNKNOWN
+   * business result. Later runtime output is historical evidence only. */
+  private wasContinuedByUser(turnId:string):boolean {
+    return this.db.prepare(`SELECT 1 FROM domain_events WHERE turn_id=? AND kind='recovery.protectionReleased'
+      AND json_extract(payload_json,'$.released')=1
+      AND json_extract(payload_json,'$.reason')='user-continue-interrupted-task' LIMIT 1`).get(turnId)!=null;
+  }
+
+  private auditEventAfterContinue(task:TaskRow,runId:string,turnId:string,event:NormalizedRuntimeEvent):void {
+    this.audit(task,runId,turnId,'turn.lateEventAfterContinue',{
+      eventKey:event.eventKey,kind:event.kind,reason:'user-continue-interrupted-task',
+      ...(event.kind==='turn.completed'?{finalText:(event.finalText??'').slice(0,400)}:{}),
+      ...(event.kind==='turn.failed'?{code:event.code,message:event.message.slice(0,400)}:{}),
+    });
+  }
+
   /** 事件应用（public：迟到输出一致性用例经生产方法定点注入——不绕过状态机）。 */
   applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent, context?: { deadlineInterruptSent?: boolean }): void {
+    // Preserve factual usage/tool history, but never publish an abandoned
+    // attempt's answer, revive its state, or settle its budget a second time.
+    if(event.kind!=='usage.updated'&&event.kind!=='tool.started'&&event.kind!=='tool.completed'&&this.wasContinuedByUser(turnId)){
+      this.auditEventAfterContinue(task,runId,turnId,event);
+      return;
+    }
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key, turn_purpose FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null; turn_purpose: string } | undefined;
     if(event.kind==='turn.failed'&&event.code==='CODEX_INVALID_TERMINAL_STATUS'){
@@ -2938,6 +2961,14 @@ export class DispatchWorker {
         });
         tx();
         applied.push({ eventKey: event.eventKey, outcome: 'ignored-non-terminal' });
+        continue;
+      }
+      if(this.wasContinuedByUser(turnId)){
+        this.db.transaction(()=>{
+          recordReceipt.run(sourceScope,turnId,event.eventKey,'ignored','用户已继续；旧执行只保留历史，不重新结算或交付',this.clock());
+          this.auditEventAfterContinue(task,turn.run_id,turnId,event);
+        })();
+        applied.push({eventKey:event.eventKey,outcome:'skipped-user-continue'});
         continue;
       }
       const fresh = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };

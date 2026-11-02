@@ -6,123 +6,119 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import App from '../../../src/ui/hifi/App.tsx';
 import {TaskExecutionStatusView} from '../../../src/ui/hifi/components/TaskExecutionStatusView.tsx';
-import {OPEN_RECOVERY_EVENT,requestRecoveryOpen} from '../../../src/ui/hifi/lib/recovery.ts';
+import {requestRecoveryOpen,OPEN_RECOVERY_EVENT} from '../../../src/ui/hifi/lib/recovery.ts';
 import * as store from '../../../src/ui/hifi/data/store.ts';
 const config=__CONFIG__,calls=[],events=[];
-let mode='restart',empty=false,releaseError=false;
+let revision=config.status.evidence.taskRevision,view='interrupted',outcome='delay',finish,continued=false,history=false,empty=false,gate=false,taskError=false;
+const success=data=>({ok:true,data}),failure=message=>({ok:false,error:{code:'SYNTHETIC_REJECTED',message}});
 window.addEventListener(OPEN_RECOVERY_EVENT,event=>events.push(event.detail));
-const success=data=>({ok:true,data});
-const failure=message=>({ok:false,error:{code:'SYNTHETIC_ONLY',message}});
-function inspection(){
- const value=structuredClone(config.inspection);
- value.exitCheck={state:mode==='released'?'released':mode==='ready'?'ready':'blocked',action:mode==='released'?'none':mode==='ready'?'release':mode==='restart'?'restart-windows':'retry',checkedAt:Date.now(),
-  message:mode==='released'?'旧执行的占用已解除。原结果和记录保留，可以回原任务继续。':mode==='ready'?'程序已确认旧执行结束。可以解除占用；这不代表原任务已完成，也不会重发旧请求。':mode==='restart'?'缺少上次退出记录，尚未确认较新的 Windows 启动代次。请重启 Windows 后再检查；不会重发原请求。':'尚不能确认旧执行已经结束，请保留原状态后重新检查。'};
- if(mode==='ready')value.result={complete:false,answer:'已保存部分整理记录，完整结果尚未收到。',files:[{artifactId:'saved-file',filename:'测试说明.md',kind:'text'}]};
- if(mode==='mismatch')value.taskId='wrong-child';
+function status(){
+ if(view==='ongoing')return config.ongoing;
+ const value=structuredClone(config.status);value.evidence.taskRevision=revision;
+ value.actions=value.actions.map(action=>action.kind==='continue'?{...action,binding:{...action.binding,expectedTaskRevision:revision}}:action);
+ if(continued){value.phase='QUEUED';value.actions=value.actions.filter(action=>action.kind!=='continue');}
  return value;
 }
 window.zs={command:async env=>{
  calls.push(structuredClone(env));
- if(env.method==='recovery.status')return success({gateHeld:false,pendingDispatchCount:0,pendingDispatchKeys:[],interruptedRuns:[],unknownTurns:empty?[]:[{id:'held-turn',runId:'child-run',taskId:'child',stageKey:'coordination.child',status:'UNKNOWN',protectionReleased:mode==='released'}],pendingRelease:empty||mode==='released'?[]:[{turnId:'held-turn',protectionState:'retained',budgetMark:'settled',turnStatus:'UNKNOWN',leaseCount:0}],heldLeases:[],activeUndos:[],stopRecord:null});
- if(env.method==='recovery.inspect'){
-  if(env.params.turnId!=='held-turn')return failure('指定执行不存在');
-  if(mode==='error')return failure('程序检查暂时不可用，请重新检查');
-  return success(inspection());
- }
- if(env.method==='recovery.releaseProtection'){
-  await new Promise(resolve=>setTimeout(resolve,50));
-  if(releaseError)return failure('旧执行退出证据已变化，占用仍保留');
-  if(mode!=='ready')return failure('程序尚未确认退出，不可解除');
-  mode='released';return success({stateChanged:true,releasedLeases:[]});
- }
- if(env.method==='deepLink.resolve')return success({kind:'task',projectId:'p',conversationId:'conv',threadId:'thread',taskId:env.params.hash==='#task=child'?'child':'parent',parentTaskId:env.params.hash==='#task=child'?'parent':null});
  if(env.method==='app.appearance.get')return success({showAvatars:true,avatars:{}});
+ if(env.method==='recovery.status')return success({gateHeld:gate,pendingDispatchCount:gate?2:0,pendingDispatchKeys:[],unknownTurns:empty?[]:[{id:'held-turn',taskId:'child',protectionReleased:history},{id:'other-turn',taskId:'old-child',protectionReleased:history}],pendingRelease:empty||history?[]:[{turnId:'held-turn',taskId:'child'}],interruptedRuns:empty||history?[]:[{id:'child-run',task_id:'child',status:'INTERRUPTED'}],heldLeases:[],activeUndos:[],stopRecord:null});
+ if(env.method==='task.get'){
+  if(taskError)return failure('原任务暂时无法读取，请刷新重试');
+  const id=env.params.taskId;
+  if(!['parent','child','old-child'].includes(id))return failure('任务不存在');
+  return success({task:{id,title:id==='parent'?'原父任务：完成测试文件':'Pi 子任务',status:'BLOCKED',project_id:'p',parent_task_id:id==='parent'?null:'parent',revision,stop_generation:config.status.evidence.stopGeneration},executionStatus:id==='parent'?status():undefined});
+ }
+ if(env.method==='task.continue'){
+  if(outcome==='error')return failure('任务仍在执行，请稍后继续');
+  if(outcome==='unknown')throw Error('连接已中断');
+  if(outcome==='delay')await new Promise(resolve=>{finish=resolve;});
+  continued=true;render();return success({enqueued:true,dispatchKey:'task:'+env.params.taskId+':continue'});
+ }
+ if(env.method==='dispatch.resume'){gate=false;return success({});}
  if(env.method==='conversation.list')return success({conversations:[]});
  if(env.method==='room.list')return success({items:[]});
- return failure('隔离测试没有后台服务：'+env.method);
+ if(env.method==='room.pool')return success({items:[]});
+ if(env.method==='deepLink.resolve')return success({kind:'task',projectId:'p',conversationId:'conv',threadId:'thread',taskId:env.params.hash.slice(6)});
+ return failure('测试未提供命令：'+env.method);
 },onDisconnect:()=>{},onReconnected:()=>{}};
-store.setState(s=>({...s,boot:'pending',conn:'online',ui:{...s.ui,theme:'dark'},activeProjectId:'p',projects:[{id:'p',displayName:'隔离项目',rootPath:'合成目录',status:'active',revision:1}],members:[{id:'reviewer',projectId:'p',displayName:'Pi',principalType:'agent',enabled:true,ordinal:1}],dms:[],rooms:[],visibleProjectIds:[],expandedProjectIds:[]}));
+store.setState(s=>({...s,boot:'pending',conn:'online',ui:{...s.ui,theme:'dark'},activeProjectId:'p',projects:[{id:'p',displayName:'隔离验证项目',rootPath:'合成目录',status:'active',revision:1}],members:[],dms:[],rooms:[{id:'room',projectId:'p',conversationId:'conv',name:'合成房间',coordinatorMemberId:'owner',memberIds:[],revision:1,unread:0}],visibleProjectIds:[],expandedProjectIds:[]}));
 document.body.classList.add('hifi-on');location.hash='#/welcome';
-createRoot(document.getElementById('root')).render(<><div style={{position:'fixed',top:40,left:260,right:20,zIndex:30}}><TaskExecutionStatusView status={config.status}/></div><App/></>);
-window.r155={
- events,calls,open:target=>requestRecoveryOpen(target),
- scenario:(next,options={})=>{mode=next;empty=!!options.empty;releaseError=!!options.releaseError;},
+const app=createRoot(document.getElementById('root'));
+function render(){app.render(<><div style={{position:'fixed',top:48,left:260,right:20,zIndex:30}}><TaskExecutionStatusView status={status()}/></div><App/></>);}
+render();
+window.r156={calls,events,open:target=>requestRecoveryOpen(target),finish:()=>{finish?.();finish=undefined;},outcome:value=>{outcome=value;},
+ scenario:value=>{view=value;continued=false;revision++;history=value==='history';empty=value==='empty'||value==='queue';gate=value==='queue';taskError=value==='task-error';render();},
  boot:value=>store.setState(s=>({...s,boot:value})),
- snapshot:()=>({hash:location.hash,text:document.body.innerText,events:events.slice(),calls:calls.map(c=>({method:c.method,params:c.params})),focused:document.querySelector('[data-zs-recovery-focused="1"]')?.getAttribute('data-zs-previous-reply'),attention:document.querySelector('[data-zs-recovery-attention]')?.getAttribute('data-zs-recovery-attention'),inspectionCount:document.querySelectorAll('[data-zs-previous-reply]').length})
-};
+ snapshot:()=>({text:document.body.innerText,hash:location.hash,calls:calls.map(c=>({commandId:c.commandId,method:c.method,params:c.params})),events:events.slice(),pending:!!finish,modal:!!document.querySelector('[data-zs-recovery]'),tasks:[...document.querySelectorAll('[data-zs-recovery-task]')].map(card=>card.dataset.zsRecoveryTask),attention:document.querySelector('[data-zs-recovery-attention]')?.dataset.zsRecoveryAttention,forms:document.querySelectorAll('[data-zs-recovery] textarea,[data-zs-recovery] input,[data-zs-recovery] select').length})};
 `;
 async function runVerifier(config){
- if(!config?.status||!config?.inspection)throw Error('The verifier requires a status constructed by the backend fixture.');
- const out=path.join(root,'dist/r155-recovery-ui',`${Date.now()}-${process.pid}`);fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'entry.tsx'),renderer.replace('__CONFIG__',JSON.stringify(config)));
+ const out=path.join(root,'dist/r156-direct-continue-ui',`${Date.now()}-${process.pid}`);fs.mkdirSync(out,{recursive:true});
  fs.mkdirSync(path.join(out,'assets'));fs.copyFileSync(path.join(root,'logo.png'),path.join(out,'assets/logo.png'));
+ fs.writeFileSync(path.join(out,'entry.tsx'),renderer.replace('__CONFIG__',JSON.stringify(config)));
  await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
- fs.writeFileSync(path.join(out,'app.css'),['tokens.css','base.css','components.css','preview.css','titlebar.css','h1-overrides.css'].map(f=>fs.readFileSync(path.join(root,'src/ui/hifi/styles',f),'utf8')).join('\n'));
- fs.writeFileSync(path.join(out,'index.html'),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><div id="zs-titlebar"></div><div class="app" id="root"></div><script type="module" src="ui.mjs"></script>');
+ fs.writeFileSync(path.join(out,'app.css'),['tokens.css','base.css','components.css','preview.css','titlebar.css','h1-overrides.css'].map(file=>fs.readFileSync(path.join(root,'src/ui/hifi/styles',file),'utf8')).join('\n'));
+ fs.writeFileSync(path.join(out,'index.html'),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><div class="app" id="root"></div><script type="module" src="ui.mjs"></script>');
  fs.writeFileSync(path.join(out,'main.cjs'),String.raw`
 const {app,BrowserWindow}=require('electron'),fs=require('node:fs'),path=require('node:path');app.disableHardwareAcceleration();app.setPath('userData',path.join(__dirname,'isolated-profile'));
-const pause=ms=>new Promise(r=>setTimeout(r,ms)),checks=[],screenshots=[];const check=(name,ok,detail)=>checks.push({name,ok:!!ok,detail});
-const mutating=call=>/reconcile|releaseProtection|redispatch|task.close|dispatch.resume/.test(call.method);
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),checks=[],screenshots=[];
+function check(name,ok,detail){checks.push({name,ok:!!ok,detail});}
 app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1280,height:900,webPreferences:{offscreen:true,backgroundThrottling:false,contextIsolation:true,nodeIntegration:false,sandbox:true}});
- const js=async code=>{try{return await win.webContents.executeJavaScript(code);}catch(error){throw Error(code+'\n'+error.message);}},snap=()=>js('r155.snapshot()');
- const until=async(code,label)=>{for(let i=0;i<170;i++){if(await js(code))return;await pause(20);}throw Error('timeout '+label+' '+JSON.stringify(await snap()));};
- const click=async text=>{const clicked=await js('(()=>{const b=[...document.querySelectorAll("[data-zs-recovery] button")].find(b=>b.textContent==='+JSON.stringify(text)+');if(!b||b.disabled)return false;b.click();return true;})()');if(!clicked)throw Error('Button unavailable: '+text);};
- const capture=async name=>{await pause(200);const size=name.endsWith('3440')?{width:3440,height:1440}:{width:1280,height:900};const file=path.join(__dirname,name+'.png');fs.writeFileSync(file,(await win.webContents.capturePage({x:0,y:0,...size})).toPNG());screenshots.push(file);};
- const close=async()=>{await click('关闭');await until('!document.querySelector("[data-zs-recovery]")','closed');};
- const open=async()=>{await js('r155.open({turnId:"held-turn",taskId:"child",requestTaskId:"parent"})');await until('!!document.querySelector("[data-zs-recovery-focused]")','open');};
- const reload=async()=>{const n=(await snap()).calls.filter(c=>c.method==='recovery.inspect').length;await click('重新检查状态');await until('r155.snapshot().calls.filter(c=>c.method==="recovery.inspect").length>'+n,'inspect refresh');await pause(40);};
- try{
-  await win.loadFile(path.join(__dirname,'index.html'));await until('window.r155&&document.querySelector("[data-zs-execution-action=recover]")','parent action');let s=await snap();
-  check('render-is-read-only',!s.calls.some(mutating),s.calls);
-  check('action-describes-interruption',await js('document.querySelector("[data-zs-execution-action=recover]").textContent==="检查中断"'));
-  await js('document.querySelector("[data-zs-execution-action=recover]").click()');await until('document.querySelector("[data-zs-exit-check=blocked]")','focused child inspection');s=await snap();
-  check('backend-parent-action-preserves-exact-child',s.events.at(-1).target.turnId==='held-turn'&&s.events.at(-1).target.taskId==='child'&&s.events.at(-1).target.runId==='child-run'&&s.events.at(-1).target.requestTaskId==='parent',s.events);
-  check('App-delivers-target-without-same-page-navigation',s.hash==='#/welcome'&&s.focused==='held-turn',s.hash);
-  check('specific-child-member-last-tool-missing-result-visible',s.text.includes('Pi · Pi 生成六件套测试文件')&&s.text.includes('python -')&&s.text.includes('本轮未收到完整结果，不能视为任务完成')&&!s.text.includes('已保存回复：'),s.text);
-  check('restart-guidance-and-no-release-button',s.text.includes('请保存其他工作并重启一次 Windows')&&!s.text.includes('解除占用\n'),s.text);
-  check('opening-inspects-only-the-actual-turn',s.calls.some(c=>c.method==='recovery.inspect'&&c.params.turnId==='held-turn')&&!s.calls.some(mutating),s.calls);
-  await capture('01-parent-to-child-restart-windows-1280');
-  await reload();s=await snap();check('restart-recheck-is-readonly',!s.calls.some(mutating),s.calls);
-  await js('r155.scenario("ready")');await reload();await until('document.querySelector("[data-zs-exit-check=ready]")','ready');s=await snap();
-  check('ready-shows-saved-answer-and-file-without-completion-claim',s.text.includes('已保存部分整理记录')&&s.text.includes('测试说明.md')&&s.text.includes('本轮未收到完整结果'),s.text);
-  check('ready-does-not-write-before-explicit-click',!s.calls.some(mutating),s.calls);
-  await capture('02-ready-explicit-release-1280');
-  await js('r155.scenario("restart")');await click('解除占用');await until('document.querySelector("[data-zs-exit-check=blocked]")','ready proof changed');s=await snap();
-  check('stale-ready-rechecks-and-does-not-release',!s.calls.some(mutating),s.calls);
-  await js('r155.scenario("ready",{releaseError:true})');await reload();await until('document.querySelector("[data-zs-exit-check=ready]")','ready failed release');
-  await click('解除占用');await until('document.body.innerText.includes("旧执行退出证据已变化")','honest release error');s=await snap();
-  check('release-failure-keeps-protection-and-shows-reason',!!(await js('document.querySelector("[data-zs-exit-check=ready]")'))&&!s.text.includes('此项仅保留为历史记录')&&s.text.includes('旧执行退出证据已变化'),s.text);
-  const prior=s.calls.filter(c=>c.method==='recovery.releaseProtection').length;
-  await js('r155.scenario("ready")');await reload();await js('const b=[...document.querySelectorAll("[data-zs-recovery] button")].find(b=>b.textContent==="解除占用");b.click();b.click()');
-  await until('document.querySelector("[data-zs-exit-check=released]")','released');s=await snap();
-  const releases=s.calls.filter(c=>c.method==='recovery.releaseProtection');
-  check('explicit-release-exactly-once-for-settled-child',releases.length===prior+1&&releases.at(-1).params.turnId==='held-turn'&&releases.at(-1).params.endPreviousExecution===true&&!s.calls.some(c=>c.method==='recovery.reconcile'),releases);
-  check('released-UNKNOWN-is-readable-history-with-no-attention',s.text.includes('此项仅保留为历史记录，不再阻挡新消息')&&s.text.includes('本轮未收到完整结果')&&!s.text.includes('上次处理尚有待检查事项'),s.text);
-  check('release-never-resumes-closes-or-replays',!s.calls.some(c=>/redispatch|task.close|dispatch.resume/.test(c.method)),s.calls);
-  await capture('03-released-unknown-history-1280');
-  await click('回原任务继续');await until('location.hash.includes("task=child")&&!document.querySelector("[data-zs-recovery]")','formal child task route');s=await snap();
-  check('child-record-link-resolves-real-child-details',s.hash==='#/thread/thread?tab=task&task=child'&&s.calls.some(c=>c.method==='deepLink.resolve'&&c.params.hash==='#task=child'),s.hash);
-  await js('location.hash="#/welcome"');await open();await until('document.querySelector("[data-zs-exit-check=released]")','reopen released');await click('回父任务继续或结束');await until('location.hash==="#/thread/thread?tab=task"&&!document.querySelector("[data-zs-recovery]")','formal parent task route');
-  s=await snap();check('parent-link-opens-parent-context-without-execution',s.calls.some(c=>c.method==='deepLink.resolve'&&c.params.hash==='#task=parent')&&!s.calls.some(c=>/redispatch|task.close|dispatch.resume/.test(c.method)),s.hash);
-  await js('location.hash="#/welcome";r155.scenario("released");r155.boot("ready")');await until('r155.snapshot().attention==="0"','released no sidebar attention');
-  await js('r155.open()');await until('document.body.innerText.includes("没有需要处理的事项")','general panel excludes released');s=await snap();
-  check('general-entry-omits-released-history',s.inspectionCount===0&&s.attention==='0',s);
-  const beforeRefresh=s.calls.filter(c=>c.method==='recovery.inspect').length;await click('重新检查状态');await pause(80);s=await snap();
-  check('released-cache-refresh-does-not-reinspect-or-restore-attention',s.inspectionCount===0&&s.attention==='0'&&s.calls.filter(c=>c.method==='recovery.inspect').length===beforeRefresh,s);
-  await close();await js('r155.boot("pending");r155.scenario("restart",{empty:true})');await open();await until('document.querySelector("[data-zs-exit-check=blocked]")','explicit target without aggregate rows');s=await snap();
-  check('explicit-turn-inspected-even-with-empty-global-lists',s.focused==='held-turn'&&s.text.includes('Pi · Pi 生成六件套测试文件')&&!s.text.includes('没有需要处理的事项'),s.text);
-  win.setSize(3440,1440);await capture('04-parent-to-child-restart-windows-3440');win.setSize(1280,900);
-  await js('r155.scenario("error",{empty:true})');await reload();await until('document.body.innerText.includes("检查失败：程序检查暂时不可用")','inspection error');s=await snap();
-  check('inspection-error-visible-without-release-action',s.text.includes('检查失败：程序检查暂时不可用')&&!s.text.includes('解除占用\n'),s.text);
-  await js('r155.scenario("mismatch",{empty:true})');await reload();await until('document.body.innerText.includes("中断任务归属与打开时不一致")','mismatch refuses');s=await snap();
-  check('changed-task-binding-refused-with-no-unsafe-action',s.text.includes('中断任务归属与打开时不一致')&&!s.text.includes('解除占用\n'),s.text);
-  check('never-opens-legacy-or-calls-a-model',!(await js('document.body.classList.contains("legacy-on")'))&&!s.calls.some(c=>/message.submit|turn.start|dm.resume/.test(c.method)),s.calls);
-  const report={ok:checks.every(c=>c.ok),realBusinessCalls:0,userDatabaseOpened:false,checks,screenshots};fs.writeFileSync(path.join(__dirname,'result.json'),JSON.stringify(report,null,2));app.exit(report.ok?0:1);
- }catch(e){fs.writeFileSync(path.join(__dirname,'error.txt'),e.stack);fs.writeFileSync(path.join(__dirname,'failure.png'),(await win.webContents.capturePage()).toPNG());app.exit(2);}
+const js=async code=>{try{return await win.webContents.executeJavaScript(code);}catch(error){throw Error(code+'\n'+error.message);}},snap=()=>js('r156.snapshot()');
+const until=async(code,label)=>{for(let i=0;i<180;i++){if(await js(code))return;await pause(20);}throw Error('timeout '+label+' '+JSON.stringify(await snap()));};
+const click=async text=>{const ok=await js('(()=>{const b=[...document.querySelectorAll("[data-zs-recovery] button")].find(b=>b.textContent==='+JSON.stringify(text)+');if(!b||b.disabled)return false;b.click();return true;})()');if(!ok)throw Error('Missing button '+text);};
+const capture=async(name,wide=false)=>{await pause(180);const file=path.join(__dirname,name+'.png');fs.writeFileSync(file,(await win.webContents.capturePage({x:0,y:0,width:wide?3440:1280,height:wide?1440:900})).toPNG());screenshots.push(file);};
+const close=async()=>{await click('关闭');await until('!r156.snapshot().modal','closed');};
+const open=async()=>{await js('r156.open()');await until('document.querySelector("[data-zs-recovery-summary]")&&!document.body.innerText.includes("正在读取任务…")','loaded recovery');};
+const writes=s=>s.calls.filter(c=>['task.continue','task.redispatch','dispatch.resume','changeset.undo'].includes(c.method));
+try{
+ await win.loadFile(path.join(__dirname,'index.html'));await until('window.r156&&document.querySelector("[data-zs-execution-action=continue]")','real backend parent action');let s=await snap();
+ check('render-does-not-continue',writes(s).length===0,s.calls);
+ await js('r156.boot("ready")');await until('r156.snapshot().calls.some(c=>c.method==="recovery.status")','startup sidebar status');await pause(40);s=await snap();
+ check('startup-interruption-only-marks-sidebar-without-modal',s.attention==='1'&&!s.modal,s);await js('r156.boot("pending")');
+ check('header-and-sidebar-use-direct-task-copy',s.text.includes('继续任务')&&s.text.includes('恢复任务')&&!/检查中断|恢复检查/.test(s.text),s.text);
+ await capture('01-parent-direct-continue-1280');
+ await js('const b=document.querySelector("[data-zs-execution-action=continue]");b.click();b.click()');await until('r156.snapshot().pending','one parent request');s=await snap();
+ const first=s.calls.filter(c=>c.method==='task.continue');
+ check('one-click-uses-real-backend-parent-binding',first.length===1&&first[0].params.taskId==='parent'&&typeof first[0].params.expectedTaskRevision==='number'&&typeof first[0].params.expectedStopGeneration==='number',first);
+ check('continuation-disables-button-without-opening-a-modal',!s.modal&&await js('document.querySelector("[data-zs-execution-action=continue]").disabled')&&s.events.length===0,s);
+ check('no-inspection-note-or-reboot-workflow',!s.calls.some(c=>/recovery\.(inspect|reconcile|releaseProtection|probeProcess)/.test(c.method))&&!/重启|解除占用|填写.*依据/.test(s.text),s.calls);
+ await js('r156.finish()');await until('document.querySelector("[data-zs-execution-phase=QUEUED]")','continued queue');s=await snap();
+ check('accepted-parent-refreshes-current-views-without-claiming-completion',s.calls.some(c=>c.method==='room.pool'||c.method==='room.list')&&s.text.includes('排队')&&!s.text.includes('任务已完成'),s.text);
+ await js('r156.scenario("interrupted");r156.outcome("error")');await until('document.querySelector("[data-zs-execution-action=continue]")','retry scenario');await js('document.querySelector("[data-zs-execution-action=continue]").click()');await until('document.body.innerText.includes("任务仍在执行，请稍后继续")','rejected visible');s=await snap();
+ check('definite-rejection-displays-real-reason-and-no-modal',s.text.includes('任务仍在执行，请稍后继续')&&!s.modal,s.text);
+ await js('r156.scenario("interrupted");r156.outcome("unknown")');await pause(40);await js('document.querySelector("[data-zs-execution-action=continue]").click()');await until('document.body.innerText.includes("继续请求尚未收到回执")','unknown visible');s=await snap();const unknown=s.calls.filter(c=>c.method==='task.continue').at(-1);
+ await js('r156.outcome("accepted");document.querySelector("[data-zs-execution-action=continue]").click()');await until('document.querySelector("[data-zs-execution-phase=QUEUED]")','unknown same identity retry');s=await snap();
+ check('uncertain-retry-reuses-command-id',unknown.commandId===s.calls.filter(c=>c.method==='task.continue').at(-1).commandId,s.calls.filter(c=>c.method==='task.continue'));
+ await js('r156.scenario("interrupted")');await open();s=await snap();
+ check('recovery-groups-sibling-turns-into-the-real-root',JSON.stringify(s.tasks)==='["parent"]'&&s.calls.some(c=>c.method==='task.get'&&c.params.taskId==='child')&&s.calls.some(c=>c.method==='task.get'&&c.params.taskId==='parent'),s);
+ check('recovery-has-one-parent-action-and-no-forms',await js('document.querySelectorAll("[data-zs-recovery] [data-zs-continue-task=parent]").length===1')&&s.forms===0&&!/检查中断|重启|对账|解除保护|填写.*依据/.test(s.text),s.text);
+ await capture('02-recovery-root-task-1280');
+ const count=s.calls.filter(c=>c.method==='task.continue').length;await js('(()=>{r156.outcome("delay");const b=document.querySelector("[data-zs-recovery] [data-zs-continue-task=parent]");b.click();b.click();})()');await until('r156.snapshot().pending','panel continuation');s=await snap();
+ check('panel-direct-single-click-continues-root-once',s.calls.filter(c=>c.method==='task.continue').length===count+1&&s.calls.filter(c=>c.method==='task.continue').at(-1).params.taskId==='parent',s.calls);
+ await js('r156.finish()');await until('document.querySelector("[data-zs-recovery]").innerText.includes("任务已在处理中")','panel refresh');await capture('03-continued-task-1280');
+ await click('查看任务');await until('location.hash==="#/thread/thread?tab=task"&&!r156.snapshot().modal','root formal route');s=await snap();
+ check('view-task-uses-formal-root-route',s.calls.some(c=>c.method==='deepLink.resolve'&&c.params.hash==='#task=parent'),s.hash);
+ await js('location.hash="#/welcome";r156.scenario("ongoing")');await pause(40);s=await snap();const before=writes(s).length;
+ check('true-running-task-has-no-continue-action',!!await js('document.querySelector("[data-zs-execution-phase=RUNNING]")')&&!await js('document.querySelector("[data-zs-execution-action=continue]")'),s.text);
+ await js('r156.open({taskId:"parent"})');await until('document.querySelector("[data-zs-recovery-task=parent]")','running root');s=await snap();
+ check('recovery-preserves-active-task-with-only-view',s.text.includes('任务已在处理中')&&!await js('document.querySelector("[data-zs-recovery] [data-zs-continue-task]")')&&writes(s).length===before,s.text);
+ win.setSize(3440,1440);await capture('04-active-task-preserved-3440',true);win.setSize(1280,900);await close();
+ await js('r156.scenario("history");r156.boot("ready")');await open();s=await snap();
+ check('released-unknown-history-does-not-reappear-as-attention',s.tasks.length===0&&s.attention==='0'&&s.text.includes('没有需要恢复的任务'),s);
+ await close();await js('r156.boot("pending");r156.scenario("queue")');await open();s=await snap();const queueBefore=s.calls.filter(c=>c.method==='dispatch.resume').length;
+ check('queue-is-not-resumed-on-open',queueBefore===0,s.calls);await click('继续处理排队消息');await until('r156.snapshot().calls.some(c=>c.method==="dispatch.resume")','queue continue');s=await snap();
+ check('explicit-queue-continue-retains-confirmation-contract',s.calls.filter(c=>c.method==='dispatch.resume').length===1&&s.calls.find(c=>c.method==='dispatch.resume').params.confirm===true,s.calls);
+ await close();await js('r156.scenario("task-error")');await open();s=await snap();
+ check('unreadable-task-is-an-honest-error-without-guessed-continue',s.text.includes('原任务暂时无法读取')&&!await js('document.querySelector("[data-zs-recovery] [data-zs-continue-task]")'),s.text);
+ check('all-scenarios-avoid-old-check-commands-and-models',!s.calls.some(c=>/recovery\.(inspect|reconcile|releaseProtection|probeProcess)|message.submit|turn.start/.test(c.method)),s.calls);
+ const report={ok:checks.every(c=>c.ok),checks,screenshots,realBusinessCalls:0,userDatabaseOpened:false};fs.writeFileSync(path.join(__dirname,'result.json'),JSON.stringify(report,null,2));app.exit(report.ok?0:1);
+}catch(error){fs.writeFileSync(path.join(__dirname,'error.txt'),error.stack);fs.writeFileSync(path.join(__dirname,'failure.png'),(await win.webContents.capturePage()).toPNG());app.exit(2);}
 });setTimeout(()=>app.exit(3),28000);
 `);
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;for(const key of Object.keys(env))if(key.startsWith('ZS_'))delete env[key];
  const proc=spawnSync(require('electron'),[path.join(out,'main.cjs')],{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:32000});
- if(!fs.existsSync(path.join(out,'result.json')))throw Error(`R155 exited ${proc.status}: ${fs.existsSync(path.join(out,'error.txt'))?fs.readFileSync(path.join(out,'error.txt'),'utf8'):proc.stderr}; evidence ${out}`);
+ if(!fs.existsSync(path.join(out,'result.json')))throw Error(`R156 UI exited ${proc.status}: ${fs.existsSync(path.join(out,'error.txt'))?fs.readFileSync(path.join(out,'error.txt'),'utf8'):proc.stderr}; evidence ${out}`);
  return {...JSON.parse(fs.readFileSync(path.join(out,'result.json'),'utf8')),evidence:out};
 }
 module.exports={runVerifier};

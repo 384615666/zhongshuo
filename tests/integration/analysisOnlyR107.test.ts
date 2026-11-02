@@ -724,7 +724,7 @@ describe('R107 analysisOnly formal command and worker scope', () => {
     }
   }, 30_000);
 
-  it('does not let analysisOnly bypass runtime drift, stop generation, or an unclosed UNKNOWN turn', async () => {
+  it('keeps runtime drift and stop generation checks, while explicit continuation closes an old UNKNOWN', async () => {
     const drift = await createFixture();
     try {
       const root = await submit(drift, 'Analyze only', { analysisOnly: true });
@@ -794,9 +794,9 @@ describe('R107 analysisOnly formal command and worker scope', () => {
         expectedTaskRevision: task.revision,
         expectedStopGeneration: task.stop_generation,
       });
-      expect(result.ok).toBe(false);
-      expect(result.error?.code).toBe('RECONCILE_REQUIRED');
-      expect(count(unknown.db, 'outbox', "WHERE dispatch_key GLOB 'task:*:redispatch*'")).toBe(0);
+      expect(result.ok).toBe(true);
+      expect(unknown.db.prepare('SELECT status,protection_state FROM agent_turns WHERE id=?').get(turnId)).toEqual({status:'UNKNOWN',protection_state:'released'});
+      expect(count(unknown.db, 'outbox', "WHERE dispatch_key GLOB 'task:*:redispatch*'")).toBe(1);
       expect(unknown.adapter.startTurnLog).toHaveLength(0);
     } finally {
       await unknown.cleanup();

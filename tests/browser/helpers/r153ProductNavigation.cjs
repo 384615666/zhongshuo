@@ -138,7 +138,6 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:144
    const before=s.calls.filter(c=>c.method==='changeset.undo').length;
    await js('r153.undo('+JSON.stringify(mode)+')');await until('!!document.querySelector("[data-zs-recovery-summary]")','undo status');await pause(40);s=await snap();
    check('undo-'+mode+'-read-is-not-execution',s.calls.filter(c=>c.method==='changeset.undo').length===before&&!s.text.includes('原界面'),s.text);
-   await click('查看详情');await js('document.querySelector("details.settings-why").open=true');
    await until('!!document.querySelector("[data-zs-continue-undo]")','continue undo');
    await js('document.querySelector("[data-zs-continue-undo]").click();document.querySelector("[data-zs-continue-undo]").click()');
    check('undo-'+mode+'-busy-disables-action',await js('document.querySelector("[data-zs-continue-undo]").disabled'));

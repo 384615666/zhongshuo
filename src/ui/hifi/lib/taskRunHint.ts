@@ -22,8 +22,8 @@ export function executionBlockerHint(blocker: TaskExecutionBlocker): TaskRunHint
   const member = blocker.blockingMemberName ?? blocker.memberName ?? '成员';
   switch (blocker.reason) {
     case 'unknown-turn':
-      return { label: '等待确认上次回复', icon: 'help-circle', tone: 'warning',
-        detail: `${member} 的上次回复尚未确认结束，当前请求正在等待。请检查上次回复状态。` };
+      return { label: '可继续任务', icon: 'play', tone: 'info',
+        detail: `${member} 的上次回复未完成，已有记录保留，可以继续任务。` };
     case 'member-occupied':
       return { label: '等待成员', icon: 'clock', tone: 'neutral',
         detail: `${member} 正在处理其他请求，当前请求正在排队等待。` };

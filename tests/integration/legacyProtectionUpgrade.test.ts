@@ -34,7 +34,7 @@ import { classifyProtectionFactStrict } from '../../src/persistence/migrations/0
 import { classifyProtectionFactComplete } from '../../src/persistence/migrations/044-turn-protection-evidence-complete.ts';
 import { migration042 } from '../../src/persistence/migrations/042-turn-protection-state-backfill.ts';
 import { migration043 } from '../../src/persistence/migrations/043-turn-protection-release-evidence.ts';
-import { classifyProtectionFactFinal, migration045 } from '../../src/persistence/migrations/045-turn-probe-field-integrity.ts';
+import { classifyProtectionFactFinal } from '../../src/persistence/migrations/045-turn-probe-field-integrity.ts';
 import { migration044 } from '../../src/persistence/migrations/044-turn-protection-evidence-complete.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-r43upg-'));
@@ -215,8 +215,8 @@ describe('第四十五轮 §2：最终分类纯函数（classifyProtectionFactFi
   });
 });
 
-/** 40→最新的形态矩阵（expectRecoverable/expectBlockSnippet 由 expectState 推导）。 */
-function seedAll(db: ZhongshuoDatabase, convId: string): { list: Array<{ key: string; taskId: string; runId: string; turnId: string; fixture: Fixture & { expectRecoverable: boolean; expectBlockSnippet?: string } }>; byKey: Record<string, { taskId: string; runId: string; turnId: string }> } {
+/** 40→最新的历史保护事实矩阵；R156 的继续入口不再要求先解除旧占用。 */
+function seedAll(db: ZhongshuoDatabase, convId: string): { list: Array<{ key: string; taskId: string; runId: string; turnId: string; fixture: Fixture }>; byKey: Record<string, { taskId: string; runId: string; turnId: string }> } {
   const defs: Array<Fixture> = [
     { key: 'keep1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":1,"inFlightReservedTurns":0}', events: [NOT_STARTED_AUDIT], expectState: 'retained' }, // 复核反例本体：无租约人工退款
     { key: 'rel1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":1,"inFlightReservedTurns":0}', events: [NOT_STARTED_AUDIT, RELEASED_NO_OS_EVENT], expectState: 'released' }, // 可靠释放（no-os-process probe）——不误拦
@@ -235,11 +235,7 @@ function seedAll(db: ZhongshuoDatabase, convId: string): { list: Array<{ key: st
   ];
   const list = defs.map((fixture) => {
     const ids = seedFixture(db, convId, fixture);
-    const expectRecoverable = fixture.expectState !== 'retained' && !(fixture.turnStatus === 'UNKNOWN');
-    const expectBlockSnippet = fixture.turnStatus === 'UNKNOWN'
-      ? (fixture.budgetMark == null ? '预算未处置' : 'protection_state=retained')
-      : 'protection_state=retained';
-    return { ...ids, key: fixture.key, fixture: { ...fixture, expectRecoverable, expectBlockSnippet } };
+    return { ...ids, key: fixture.key, fixture };
   });
   const byKey: Record<string, { taskId: string; runId: string; turnId: string }> = {};
   for (const item of list) byKey[item.key] = { taskId: item.taskId, runId: item.runId, turnId: item.turnId };
@@ -269,25 +265,25 @@ describe('第四十三/四十四轮：40→最新（文件库）——回填/修
     expect(after.eventDigest).toBe(before.eventDigest);
     expect(after.turns).toBe(before.turns);
     expect(after.budgets).toBe(before.budgets);
-    // ③ 呈现（conversation.list 与守卫同源）：保留项不可恢复+人话原因；释放/普通项可恢复。
+    // ③ R156 呈现提供显式继续；只读查询保留迁移后的旧保护事实。
     const cmd = cmdOn(db, join(tmpRoot, 'upg40', 'app'));
     const list = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: TaskRow[] }> }>('conversation.list', {});
     const byTask = new Map<string, TaskRow>(list.conversations.find((c) => c.conversationId === 'convUpg40')!.interruptedTasks.map((t) => [t.taskId, t] as [string, TaskRow]));
     expect(byTask.size).toBe(fx.list.length);
     for (const f of fx.list) {
       const row = byTask.get(f.taskId)!;
-      expect(row.recoverable, f.fixture.key).toBe(f.fixture.expectRecoverable);
-      if (!f.fixture.expectRecoverable) {
-        expect(row.blockReason, f.fixture.key).toContain(f.fixture.expectBlockSnippet!);
-      }
+      expect(row.recoverable, f.fixture.key).toBe(true);
+      expect(row.blockReason, f.fixture.key).toBeNull();
+      expect(protectionStateOf(db, f.turnId), f.fixture.key).toBe(f.fixture.expectState);
     }
-    // ④ 准入：旧保留项（含第四十三/四十四/四十五轮新增形态）redispatch 拒绝且零新增派发行。
+    // ④ 未点击继续时，严格事实守卫仍报告旧保护，且不写库/新增派发行。
     const cmdRaw = cmdRawOn(db, join(tmpRoot, 'upg40', 'app'));
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
     for (const key of ['keep1', 'exec1', 'exited1', 'order1', 'contra1', 'alive1', 'corrupt1', 'badmev1', 'reasonover1', 'corruptprobe1']) {
-      const rej = await cmdRaw('task.redispatch', { taskId: fx.byKey[key]!.taskId, reason: 'x' });
-      expect(rej.ok, key).toBe(false);
-      expect(rej.error?.code, key).toBe('RECONCILE_REQUIRED');
+      expect(assessTaskRedispatchReadiness(db, fx.byKey[key]!.taskId), key).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:fx.byKey[key]!.turnId}});
     }
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
+    expect(snapshot(db)).toEqual(after);
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
     // ⑤ 恢复中心：保留项可见（无租约 leaseCount=0）；释放/普通项不在列。
     const status = await cmd<{ pendingRelease: PendingRow[] }>('recovery.status', {});
@@ -327,7 +323,7 @@ describe('第四十三/四十四轮：40→最新（文件库）——回填/修
 });
 
 describe('第四十三轮 §4：41→最新（内存库）——先复现漏洞，升级后同 row 收口', () => {
-  it('041 已应用但未回填：升级前放行（复核反例复现）→ 042+043 回填 retained → 呈现/准入/解除全部收口', async () => {
+  it('041 已应用但未回填：升级前放行（复核反例复现）→ 042+043 回填 retained；只读事实守卫保持保护，提供显式继续', async () => {
     const db = openAtVersion(':memory:', 41);
     seedBase(db, 'convUpg41');
     const keep = seedFixture(db, 'convUpg41', {
@@ -350,17 +346,18 @@ describe('第四十三轮 §4：41→最新（内存库）——先复现漏洞�
 
     const res = migrate(db);
     expect(res.applied).toEqual(MIGRATIONS.filter(m=>m.id>=42).map(m=>m.id));
-    // 收口：retained 回填 → 呈现不可恢复、准入拒绝且零新派发、恢复中心可见。
+    // 收口：retained 回填；R156 提供继续入口，但查看列表/严格守卫不解除旧事实。
     expect(protectionStateOf(db, keep.turnId)).toBe('retained');
     const cmd = cmdOn(db, join(tmpRoot, 'upg41', 'app'));
     const list = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: TaskRow[] }> }>('conversation.list', {});
     const rows = new Map<string, TaskRow>(list.conversations.find((c) => c.conversationId === 'convUpg41')!.interruptedTasks.map((t) => [t.taskId, t] as [string, TaskRow]));
-    expect(rows.get(keep.taskId)!.recoverable).toBe(false);
-    expect(rows.get(keep.taskId)!.blockReason).toContain('protection_state=retained');
+    expect(rows.get(keep.taskId)!.recoverable).toBe(true);
+    expect(rows.get(keep.taskId)!.blockReason).toBeNull();
     expect(rows.get(plain.taskId)!.recoverable).toBe(true); // 普通失败不误拦
-    const rej = await cmdRaw('task.redispatch', { taskId: keep.taskId, reason: 'legacy-recovery' });
-    expect(rej.ok).toBe(false);
-    expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
+    expect(assessTaskRedispatchReadiness(db, keep.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:keep.turnId}});
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
+    expect(protectionStateOf(db, keep.turnId)).toBe('retained');
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
     const status = await cmd<{ pendingRelease: Array<{ turnId: string; leaseCount: number }> }>('recovery.status', {});
     expect(status.pendingRelease.some((r) => r.turnId === keep.turnId && r.leaseCount === 0)).toBe(true);
@@ -412,12 +409,13 @@ describe('第四十三轮 §4：42→最新——042 已按宽松判定误回填
     const after = snapshot(db);
     expect(after.eventDigest).toBe(before.eventDigest);
     expect(after.budgets).toBe(before.budgets);
-    // 误回填修正后在守卫/呈现面重新拦截（升级前该库处于放行状态）。
+    // 误回填修正后严格事实守卫仍报告保护；不调用会显式继续的 redispatch。
     expect(assessTaskRedispatchReadiness(db, exited.taskId)?.fact.kind).toBe('protection-retained');
     const cmdRaw = cmdRawOn(db, join(tmpRoot, 'upg42', 'app'));
-    const rej = await cmdRaw('task.redispatch', { taskId: exited.taskId, reason: 'x' });
-    expect(rej.ok).toBe(false);
-    expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
+    expect(assessTaskRedispatchReadiness(db, exited.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:exited.turnId}});
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
+    expect(snapshot(db)).toEqual(after);
     // 可靠释放行不误拦。
     const ok2 = await cmdRaw('task.redispatch', { taskId: good.taskId, reason: 'x' });
     expect(ok2.ok).toBe(true);
@@ -485,11 +483,12 @@ describe('第四十四轮 §1：43→最新（文件库）——043 已按残缺
     expect(assessTaskRedispatchReadiness(db, badmev.taskId)?.fact.kind).toBe('protection-retained');
     expect(assessTaskRedispatchReadiness(db, goodMev.taskId)).toBe(null);
     const cmdRaw = cmdRawOn(db, join(tmpRoot, 'upg43', 'app'));
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
     for (const t of [badmev, reasonover, mevFalse]) {
-      const rej = await cmdRaw('task.redispatch', { taskId: t.taskId, reason: 'x' });
-      expect(rej.ok).toBe(false);
-      expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+      expect(assessTaskRedispatchReadiness(db, t.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:t.turnId}});
     }
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
+    expect(snapshot(db)).toEqual(after);
     const okNoOs = await cmdRaw('task.redispatch', { taskId: goodNoOs.taskId, reason: 'x' });
     expect(okNoOs.ok).toBe(true);
     // 幂等：重跑无动作。
@@ -562,11 +561,12 @@ describe('第四十五轮 §2：44→最新（文件库）——044 已按「损
     expect(assessTaskRedispatchReadiness(db, corruptNull.taskId)?.fact.kind).toBe('protection-retained');
     expect(assessTaskRedispatchReadiness(db, legacyNoProbe.taskId)).toBe(null);
     const cmdRaw = cmdRawOn(db, join(tmpRoot, 'upg44', 'app'));
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
     for (const t of [corruptNull, corruptArr]) {
-      const rej = await cmdRaw('task.redispatch', { taskId: t.taskId, reason: 'x' });
-      expect(rej.ok).toBe(false);
-      expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+      expect(assessTaskRedispatchReadiness(db, t.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:t.turnId}});
     }
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
+    expect(snapshot(db)).toEqual(after);
     const okLegacy = await cmdRaw('task.redispatch', { taskId: legacyNoProbe.taskId, reason: 'x' });
     expect(okLegacy.ok).toBe(true);
     // 幂等：重跑无动作。

@@ -113,7 +113,7 @@ describe('R154 durable coordination failure reasons',()=>{
       expect(status.phase).toBe('UNKNOWN');
       expect(status.reason).toMatchObject({code:'RECOVERY_REQUIRED',runId:'interrupted',turnId:'held'});
       if(variant==='matching'){
-        expect(status.reason.message).toContain('应用关闭时本轮中断，未收到完整结果');
+        expect(status.reason.message).toContain('应用关闭时本轮中断；可直接继续任务');
         expect(status.reason.eventSeq).toBe(seq);
       }else expect(status.reason.message).not.toContain('应用关闭');
       expect(db.prepare('SELECT total_changes() n').get()).toEqual(before);

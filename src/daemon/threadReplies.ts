@@ -131,7 +131,7 @@ export function assertThreadTaskReady(db:ZhongshuoDatabase,threadId:string){
   const task=db.prepare(`SELECT t.id,t.status FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {id:string;status:string}|undefined;
   if(!task)return;
   if(task.status==='CANCELLED')throw new DaemonCommandError('TASK_STOPPED','该任务已停止，请明确选择新的工作；输入保留');
-  const blocked=assessTaskRedispatchReadiness(db,task.id,{queueOnly:true});
+  const blocked=assessTaskRedispatchReadiness(db,task.id,{queueOnly:true,allowInterrupted:true});
   if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
 }
 

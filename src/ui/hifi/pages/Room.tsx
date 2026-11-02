@@ -1204,7 +1204,7 @@ export function RootCard({
       ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
       {primary?.detail ? <div className="root-next" title={primary.detail}>{primary.detail}</div> : null}
-      {executionBlocker != null ? <ExecutionWaitActions blocker={executionBlocker}/> : null}
+      {executionBlocker != null ? <ExecutionWaitActions blocker={executionBlocker} taskId={task?.id} projectId={message.projectId}/> : null}
       {deliveryFactLine ? <div className="faint small" data-zs-delivery-fact={delivery?.status}>{deliveryFactLine}</div> : null}
       <div className="root-body"><RootMessagePreview message={message} /></div>
 

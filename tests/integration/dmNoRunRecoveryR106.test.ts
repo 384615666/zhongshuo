@@ -258,14 +258,14 @@ describe('R106 DM pre-dispatch failure recovery', () => {
           unknownTurnId, unknownRunId, unknownConversation.conversationId, `dmtask:${unknownTask.taskId}:initial`,
         );
       })();
-      const unknownRejected = await raw('task.redispatch', {
+      const unknownContinued = await raw('task.redispatch', {
         taskId: unknownTask.taskId,
-        reason: 'UNKNOWN 显式恢复仍须先对账',
+        reason: '直接继续中断任务',
       });
-      expect(unknownRejected.ok).toBe(false);
-      expect(unknownRejected.error?.code).toBe('RECONCILE_REQUIRED');
+      expect(unknownContinued.ok).toBe(true);
+      expect(db.prepare('SELECT status,protection_state FROM agent_turns WHERE id=?').get(unknownTurnId)).toEqual({status:'UNKNOWN',protection_state:'released'});
       expect(db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key GLOB ?`)
-        .get(`task:${unknownTask.taskId}:redispatch*`)).toEqual({ c: 0 });
+        .get(`task:${unknownTask.taskId}:redispatch*`)).toEqual({ c: 1 });
     } finally {
       db.close();
     }

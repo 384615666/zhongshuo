@@ -12,6 +12,7 @@ import {pendingAutomaticRecovery,pumpAutomaticRecoveries} from '../../src/daemon
 import {applyRecovery} from '../../src/daemon/stopFlow.ts';
 import {registerTurnProcess} from '../../src/daemon/processRegistry.ts';
 import {DispatchAdmission} from '../../src/daemon/admission.ts';
+import {assessTaskRedispatchReadiness} from '../../src/persistence/stores/recoveryGuard.ts';
 import {seedExplicitRecipientCoordination} from '../../src/daemon/coordination.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
@@ -76,14 +77,14 @@ describe('R105 formal bounded recovery and completed-work handoffs',()=>{
     const f=await fixture();try{
       const root=await f.send(true);await f.run();await f.run(failure('connection interrupted','INTERRUPTED'));await f.worker.runOnce();
       const turn=f.db.prepare("SELECT a.id,a.run_id,a.member_id,r.task_id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE a.status='UNKNOWN'").get() as {id:string;run_id:string;member_id:string;task_id:string};
-      await expect(f.cmd('task.redispatch',{taskId:turn.task_id})).rejects.toThrow();
+      expect(assessTaskRedispatchReadiness(f.db,turn.task_id)?.code).toBe('RECONCILE_REQUIRED');
       // Protocol fixture: initially missing carrier identity; later the inline
       // adapter confirms its real no-OS-process model through the registry API.
       const identity={turnId:turn.id,runId:turn.run_id,memberId:turn.member_id,adapterKind:'fake',pid:null,startedAtMs:null};
       registerTurnProcess(f.db,{...identity,processModel:'unknown',identitySource:'pre-launch'});
       await f.cmd('recovery.reconcile',{turnId:turn.id,verdict:'executed',note:'合成执行已发生，载体身份尚待补齐'});
       expect(f.db.prepare('SELECT status,budget_mark FROM agent_turns WHERE id=?').get(turn.id)).toEqual({status:'UNKNOWN',budget_mark:'settled'});
-      await expect(f.cmd('task.redispatch',{taskId:turn.task_id})).rejects.toThrow();
+      expect(assessTaskRedispatchReadiness(f.db,turn.task_id)?.code).toBe('RECONCILE_REQUIRED');
       registerTurnProcess(f.db,{...identity,processModel:'none',identitySource:'none'});
       await f.cmd('recovery.releaseProtection',{turnId:turn.id,note:'合成内联适配器程序证据：无OS载体'});
       expect(f.db.prepare('SELECT status,protection_state FROM agent_turns WHERE id=?').get(turn.id)).toEqual({status:'UNKNOWN',protection_state:'released'});

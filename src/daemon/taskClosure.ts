@@ -81,7 +81,13 @@ function safetyBlock(db: ZhongshuoDatabase, task: TaskRow): TaskClosureBlockReas
     if (turn.status === 'UNKNOWN') {
       const events = db.prepare(`SELECT kind,payload_json FROM domain_events WHERE turn_id=?
         AND kind IN ('recovery.reconciled','recovery.protectionReleased') ORDER BY seq DESC`).all(turn.id) as Array<{kind:string;payload_json:string}>;
-      const fact = events.map(event => classifyProtectionFactComplete(event.kind,event.payload_json)).find(value => value != null);
+      const fact = events.map(event => {
+        try{
+          const payload=JSON.parse(event.payload_json) as {released?:boolean;reason?:string}|null;
+          if(event.kind==='recovery.protectionReleased'&&payload?.released===true&&payload.reason==='user-continue-interrupted-task')return 'released';
+        }catch{/* legacy malformed events are interpreted by the existing classifier */}
+        return classifyProtectionFactComplete(event.kind,event.payload_json);
+      }).find(value => value != null);
       if (turn.budget_mark == null || fact !== 'released') return blocked('RECONCILE_REQUIRED','任务或子任务存在未闭环的 UNKNOWN 执行；请先在恢复中心完成核实');
     }
   }

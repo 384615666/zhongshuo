@@ -1,378 +1,102 @@
-import { userFacingSystemText } from '../../../contracts/userFacingText';
-/**
- * 恢复检查（r56 H4 §4——正式事实接线）：消费 `recovery.status` 只读聚合，四类动作**分列**：
- *  - 确认继续派发=dispatch.resume{confirm:true}（恢复门禁的用户显式确认——不接受空参数；
- *    未派发意图确认前保持排队，不自动重放）。
- *  - 对账=recovery.reconcile（仅 UNKNOWN turn；verdict 人工判断+note 必填；notStarted 需
- *    manualRiskAck——租约与准入保留，不冒充程序确认）。
- *  - 解除保护=recovery.releaseProtection（只按服务端取证；alive/unknown/身份缺失=拒绝并保留）。
- *  - 定位=正式深链回原上下文（定位≠执行）。
- * 不自动重放、不用点击替代退出证明、不清预算；失败原因如实上屏。中断恢复执行
- * （task.redispatch）留在任务自身上下文（线程详情/DM 头部）——与对账/解除保护分离。
- */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Icon } from './Icon';
-import { Select, Tag } from './ui';
-import { DetailFold } from './SettingsRow';
-import { command } from '../bridge';
-import { toast } from '../shell';
-import { openExternalDeepLink } from '../loader';
-import { recordWrite } from '../data/store';
-import {getState} from '../data/store';
-import {refreshDms, refreshRooms, loadRoomPool, loadThread, loadDmHistory} from '../loader';
-import {createPreviousReplyCheck, previousReplyStillHeld, previousReplySummary} from '../lib/checkPreviousReply';
-import type {RecoveryTarget} from '../lib/recovery';
-import type {RecoveryInspection} from '../../../contracts/recoveryInspection';
+import {useCallback,useEffect,useRef,useState} from 'react';
+import {userFacingSystemText} from '../../../contracts/userFacingText';
+import {Icon} from './Icon';
+import {command} from '../bridge';
+import {toast} from '../shell';
+import {recordWrite} from '../data/store';
+import {openExternalDeepLink} from '../loader';
+import {previousReplyStillHeld} from '../lib/checkPreviousReply';
+import {loadRecoveryTasks,type RecoveryTask,type RecoveryTarget} from '../lib/recovery';
+import {ContinueTaskButton} from './ContinueTaskButton';
 
 interface RecoveryStatus {
-  gateHeld: boolean;
-  pendingDispatchCount: number;
-  pendingDispatchKeys: string[];
-  interruptedRuns: Array<{ id: string; task_id: string; status: string }>;
-  unknownTurns: Array<{ id: string; runId: string; stageKey: string; taskId: string; status: string; protectionState?: string | null; protectionReleased?: boolean }>;
-  pendingRelease: Array<{ turnId: string; budgetMark: string | null; turnStatus: string; protectionState: string | null; leaseCount: number; lastProbeResult: string | null }>;
-  stopRecord: { at?: number; phase?: string; reason?: string; drainPending?: boolean } | null;
-  activeUndos: Array<{ id: string; changeSetId: string; status: string }>;
-  heldLeases: Array<{ lock_domain: string; owner_turn_id: string; status: string; heartbeat_at: number }>;
+  gateHeld:boolean;pendingDispatchCount:number;
+  interruptedRuns:Array<{id:string;task_id:string;status:string}>;
+  unknownTurns:Array<{id:string;taskId:string;protectionReleased?:boolean}>;
+  pendingRelease:Array<{turnId:string;taskId?:string}>;
+  heldLeases:Array<{owner_turn_id:string}>;
+  activeUndos:Array<{id:string;changeSetId:string;status:string}>;
 }
-
-const fmtAt = (at?: number) => (at != null ? new Date(at).toLocaleString() : '—');
-const checkPreviousReply = createPreviousReplyCheck(command);
-
-export function RecoveryPanel({ onClose, origin, target }: { onClose: () => void; origin?: 'startup' | 'runtime' | null; target?: RecoveryTarget }) {
-  const [data, setData] = useState<RecoveryStatus | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [locateError, setLocateError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  /** 对账表单（按 turn 展开：verdict/note/manualRiskAck）。 */
-  const [recon, setRecon] = useState<{ turnId: string; verdict: 'notStarted' | 'executed' | 'keepUnknown'; note: string; manualRiskAck: boolean } | null>(null);
-  const [relNote, setRelNote] = useState<{ turnId: string; note: string } | null>(null);
-  const [showDetails, setShowDetails] = useState(false);
-  const genRef = useRef(0);
-  const checkBusy = useRef(false);
-  const undoBusy = useRef(false);
-  const [undoResult, setUndoResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [checkResult, setCheckResult] = useState<Record<string, {ok: boolean; detail?: string}>>({});
-  const [inspections, setInspections] = useState<Record<string, {value?: RecoveryInspection; error?: string; loading?: boolean}>>({});
-  const focusedReply = useRef<HTMLDivElement | null>(null);
-  useEffect(() => { focusedReply.current?.scrollIntoView({block:'nearest'}); }, [target?.turnId, data]);
-
-  const reload = useCallback(async () => {
-    const gen = ++genRef.current;
-    setErr(null);
-    try {
-      const r = await command<RecoveryStatus>('recovery.status', {});
-      if (gen !== genRef.current) return;
-      setData(r);
-      const ids = [...new Set([...r.unknownTurns.filter(turn=>previousReplyStillHeld(r,turn.id)).map(turn=>turn.id),...r.pendingRelease.map(turn=>turn.turnId),...(target?.turnId?[target.turnId]:[])])];
-      setInspections(old=>Object.fromEntries(ids.map(id=>[id,{...old[id],loading:true}])));
-      const facts = await Promise.all(ids.map(async turnId => {
-        try {
-          const value = await command<RecoveryInspection>('recovery.inspect', {turnId});
-          if (value.schemaVersion !== 'recovery-inspection-v1' || value.turnId !== turnId) throw Error('中断检查对象不匹配，请重新检查。');
-          if (turnId===target?.turnId && target.taskId && value.taskId!==target.taskId) throw Error('中断任务归属与打开时不一致，请回原任务重新检查。');
-          return [turnId,{value}] as const;
-        } catch(error) { return [turnId,{error:error instanceof Error?error.message:String(error)}] as const; }
-      }));
-      if (gen === genRef.current) setInspections(Object.fromEntries(facts));
-    } catch (e) {
-      if (gen === genRef.current) setErr((e as Error).message);
-    }
-  }, [target?.turnId,target?.taskId]);
-  useEffect(() => { void reload(); return () => { genRef.current++; }; }, [reload]);
-
-  const continueUndo = async (undo: RecoveryStatus['activeUndos'][number]) => {
-    if (undoBusy.current || busy != null || !data?.activeUndos.some(item => item.id === undo.id && item.changeSetId === undo.changeSetId)) return;
-    undoBusy.current = true;
-    setBusy(`undo:${undo.id}`);
-    setUndoResult(null);
-    try {
-      const result = await command<{ status: 'succeeded' | 'failed' | 'conflict'; manualPaths: string[] }>('changeset.undo', { changeSetId: undo.changeSetId });
-      recordWrite('changeset.undo', `继续撤销：${result.status}`);
-      const paths = result.manualPaths.length ? ` 待处理文件：${result.manualPaths.join('、')}` : '';
-      setUndoResult(result.status === 'succeeded'
-        ? { ok: true, message: '撤销已完成。文件状态已重新检查，不会自动重发原任务。' }
-        : { ok: false, message: `${result.status === 'conflict' ? '撤销遇到冲突，冲突文件未被覆盖。请先核对文件版本。' : '撤销尚未完成，已完成的步骤保留。请核对文件版本后重试。'}${paths}` });
-    } catch (error) {
-      setUndoResult({ ok: false, message: `撤销未完成：${userFacingSystemText(error instanceof Error ? error.message : String(error))}。可重新检查状态后重试。` });
-    } finally {
-      await reload();
-      undoBusy.current = false;
-      setBusy(null);
-    }
-  };
-
-  const checkAndContinue = async (turnId: string) => {
-    if (checkBusy.current || busy != null) return;
-    checkBusy.current = true;
-    setBusy(`check:${turnId}`);
-    setCheckResult(previous => ({...previous, [turnId]: {ok: false}}));
-    try {
-      const result=await checkPreviousReply(turnId);
-      setInspections(previous=>({...previous,[turnId]:{value:result}}));
-      if(result.exitCheck.state==='released'){
-        recordWrite('recovery.releaseProtection', '旧执行占用已解除；原结果与记录保留，未重发');
-        setCheckResult(previous => ({...previous, [turnId]: {ok: true}}));
-        toast('占用已解除，可回原任务继续；原请求未重发。', 'success');
-      }else setCheckResult(previous=>({...previous,[turnId]:{ok:false,detail:result.exitCheck.message}}));
-    } catch (error) {
-      setCheckResult(previous => ({...previous, [turnId]: {ok: false, detail: error instanceof Error ? error.message : String(error)}}));
-      toast('占用尚未解除，请查看原因后重新检查。', 'warn');
-    } finally {
-      await reload();
-      const state = getState();
-      await Promise.allSettled([
-        refreshDms(), refreshRooms(),
-        ...(state.ui.activeRoomId ? [loadRoomPool(state.ui.activeRoomId)] : []),
-        ...(state.ui.activeThreadId ? [loadThread(state.ui.activeThreadId)] : []),
-        ...state.dms.filter(dm => dm.interruptedTasks?.some(task => data?.unknownTurns.some(turn => turn.id === turnId && turn.taskId === task.taskId))).map(dm => loadDmHistory(dm.id)),
-      ]);
-      checkBusy.current = false;
-      setBusy(null);
-    }
-  };
-
-  const resumeGate = async () => {
-    setBusy('gate');
-    try {
-      await command('dispatch.resume', { confirm: true });
-      recordWrite('dispatch.resume', '已确认继续处理排队消息');
-      toast('已允许排队消息继续；尚未确认结束的回复仍需检查。', 'success');
-      await reload();
-    } catch (e) { toast(`确认继续失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
-    finally { setBusy(null); }
-  };
-  const submitReconcile = async () => {
-    if (recon == null) return;
-    if (recon.note.trim().length === 0) { toast('请填写判断依据，说明你如何确认这次执行的结果', 'warn'); return; }
-    if (recon.verdict === 'notStarted' && !recon.manualRiskAck) { toast('选择「未启动」需先勾选风险确认：文件保护会继续保留，不会人工解除', 'warn'); return; }
-    setBusy(`recon:${recon.turnId}`);
-    try {
-      await command('recovery.reconcile', { turnId: recon.turnId, verdict: recon.verdict, note: recon.note.trim(), ...(recon.verdict === 'notStarted' ? { manualRiskAck: true } : {}) });
-      recordWrite('recovery.reconcile', `对账 ${recon.turnId.slice(0, 12)}… verdict=${recon.verdict}`);
-      toast('核对结果已保存；只有确认上次处理已结束，等待中的请求才能继续。', 'success');
-      setRecon(null);
-      await reload();
-    } catch (e) { toast(`对账失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
-    finally { setBusy(null); }
-  };
-  const submitRelease = async () => {
-    if (relNote == null) return;
-    if (relNote.note.trim().length === 0) { toast('请填写解除保护的依据', 'warn'); return; }
-    setBusy(`rel:${relNote.turnId}`);
-    try {
-      const r = await command<{ stateChanged: boolean; note?: string; releasedLeases: string[] }>('recovery.releaseProtection', { turnId: relNote.turnId, note: relNote.note.trim() });
-      recordWrite('recovery.releaseProtection', `解除保护 ${relNote.turnId.slice(0, 12)}…（${r.stateChanged ? `释放 ${r.releasedLeases.length} 租约` : '已处理，无需重复操作'}）`);
-      toast(r.stateChanged ? `保护已解除（释放 ${r.releasedLeases.length} 项文件保护）` : `未变化：${r.note ?? '没有需要解除的保护'}`, r.stateChanged ? 'success' : 'info');
-      setRelNote(null);
-      await reload();
-    } catch (e) { toast(`解除保护被拒：${userFacingSystemText((e as Error).message ?? '')}（仍需确认执行已结束，文件保护已保留）`, 'error'); }
-    finally { setBusy(null); }
-  };
-  const locate = (link: string) => {
+/** Recovery offers the original tasks directly; the backend owns continuation. */
+export function RecoveryPanel({onClose,target}:{onClose:()=>void;origin?:'startup'|'runtime'|null;target?:RecoveryTarget}) {
+  const [data,setData]=useState<RecoveryStatus|null>(null),[tasks,setTasks]=useState<RecoveryTask[]>([]);
+  const [error,setError]=useState<string|null>(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState<string|null>(null);
+  const [locateError,setLocateError]=useState<string|null>(null),[undoResult,setUndoResult]=useState<{ok:boolean;message:string}|null>(null);
+  const generation=useRef(0),actionBusy=useRef(false),focused=useRef<HTMLDivElement|null>(null);
+  const reload=useCallback(async()=>{
+    const gen=++generation.current;setLoading(true);setError(null);
+    try{
+      const value=await command<RecoveryStatus>('recovery.status',{});
+      if(gen!==generation.current)return;
+      setData(value);
+      const ids=[...value.unknownTurns.filter(turn=>previousReplyStillHeld(value,turn.id)).map(turn=>turn.taskId),
+        ...value.interruptedRuns.map(run=>run.task_id),...value.pendingRelease.map(item=>item.taskId??value.unknownTurns.find(turn=>turn.id===item.turnId)?.taskId),
+        target?.requestTaskId??target?.taskId].filter((id):id is string=>!!id);
+      const list=await loadRecoveryTasks(ids);
+      if(gen===generation.current)setTasks(list);
+    }catch(reason){if(gen===generation.current)setError(userFacingSystemText(reason instanceof Error?reason.message:String(reason)));}
+    finally{if(gen===generation.current)setLoading(false);}
+  },[target?.taskId,target?.requestTaskId]);
+  useEffect(()=>{void reload();return()=>{generation.current++;};},[reload]);
+  useEffect(()=>{focused.current?.scrollIntoView({block:'nearest'});},[tasks]);
+  const locate=(taskId:string)=>{
     setLocateError(null);
-    void openExternalDeepLink(link).then(onClose).catch((error: unknown) => {
-      const message = `定位失败：${userFacingSystemText(error instanceof Error ? error.message : String(error)) || '暂时无法打开原任务，请重试'}`;
-      setLocateError(message);
-      toast(message, 'error');
+    void openExternalDeepLink(`#task=${taskId}`).then(onClose).catch(reason=>{
+      const message=`定位失败：${userFacingSystemText(reason instanceof Error?reason.message:String(reason))}`;setLocateError(message);toast(message,'error');
     });
   };
-
-  const heldUnknown = data?.unknownTurns.filter(turn=>previousReplyStillHeld(data,turn.id)) ?? [];
-  const realAttention = data != null && (data.gateHeld || heldUnknown.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 || data.interruptedRuns.length > 0);
-  const inspectionIds=[...new Set([...(target?.turnId?[target.turnId]:[]),...heldUnknown.map(turn=>turn.id),...(data?.pendingRelease.map(turn=>turn.turnId)??[])])];
-  /** 仅普通排队（无任何恢复类事项）——不是故障（R66 P5 三态分类之一）。 */
-  const pendingOnly = data != null && !realAttention && data.pendingDispatchCount > 0;
-  const attention = realAttention || pendingOnly;
-
-  return (
-    <div className="scrim center" onClick={onClose} style={{ zIndex: 92 }} data-zs-recovery="hifi">
-      <div className="modal lg" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="恢复检查" style={{ maxHeight: '78vh', display: 'flex', flexDirection: 'column', width: 'min(860px, 94vw)' }}>
-        <div className="row tight" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-          <Icon name="shield" size={15} />
-          <strong>检查中断</strong>
-          {realAttention && origin === 'startup' ? <Tag tone="warning" icon="clock">启动时已有</Tag> : null}
-          {realAttention && origin === 'runtime' ? <Tag tone="warning" icon="zap">本次运行新出现</Tag> : null}
-          {pendingOnly ? <Tag plain icon="clock">普通排队（非故障）</Tag> : null}
-          <span className="faint small">先查看状态，再决定下一步；不会自动重发消息</span>
-          <span style={{ flex: 1 }} />
-          <button className="btn ghost sm" onClick={() => void reload()}>重新检查状态</button>
-          <button className="btn ghost sm" onClick={() => setShowDetails((value) => !value)}>{showDetails ? '收起详情' : '查看详情'}</button>
-          <button className="btn ghost sm" onClick={onClose}>关闭</button>
-        </div>
-        <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
-          {locateError != null ? <div className="panel warning" role="alert">{locateError}</div> : null}
-          {undoResult != null ? <div className={`panel ${undoResult.ok ? 'info' : 'warning'}`} role={undoResult.ok ? 'status' : 'alert'} data-zs-undo-result="1">{undoResult.message}</div> : null}
-          {err != null ? <div className="panel warning">恢复状态读取失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
-          {data == null && err == null ? <div className="panel info">正在检查上次回复状态…</div> : null}
-          {data != null && !attention && !target ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}
-          {data != null && realAttention ? (
-            <div className="panel info" data-zs-recovery-summary="1">
-              <div className="row tight"><Icon name="info" size={14} /><strong>{data.gateHeld || data.pendingRelease.length > 0 || data.heldLeases.length > 0 || data.activeUndos.length > 0 || data.unknownTurns.some(turn => previousReplyStillHeld(data, turn.id)) ? '上次处理尚有待检查事项' : '上次回复记录'}</strong></div>
-              <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-                {data.gateHeld ? <div>上次关闭时还有未完成的事项；新消息会先等待。</div> : null}
-                {data.unknownTurns.length > 0 ? <div>{previousReplySummary(data)}</div> : null}
-                {data.interruptedRuns.length > 0 ? <div>有 {data.interruptedRuns.length} 个任务上次中断了。任务和文件都还在，可打开原任务继续处理。</div> : null}
-                {data.pendingRelease.length > 0 ? <div>上次文件操作还未确认结束，相关请求会继续等待。检查后仍在等待时，可打开诊断详情核对。</div> : null}
-                {data.activeUndos.length > 0 ? <div>还有未完成的撤销操作。可在详情中检查并继续撤销；遇到文件冲突会停止。</div> : null}
+  const resumeQueue=async()=>{
+    if(actionBusy.current)return;actionBusy.current=true;setBusy('queue');
+    try{await command('dispatch.resume',{confirm:true});recordWrite('dispatch.resume','继续处理排队消息');await reload();}
+    catch(reason){setError(userFacingSystemText(reason instanceof Error?reason.message:String(reason)));}
+    finally{actionBusy.current=false;setBusy(null);}
+  };
+  const continueUndo=async(undo:RecoveryStatus['activeUndos'][number])=>{
+    if(actionBusy.current)return;actionBusy.current=true;setBusy(undo.id);setUndoResult(null);
+    try{
+      const result=await command<{status:'succeeded'|'failed'|'conflict';manualPaths:string[]}>('changeset.undo',{changeSetId:undo.changeSetId});
+      recordWrite('changeset.undo',`继续撤销：${result.status}`);
+      const paths=result.manualPaths.length?` 待处理文件：${result.manualPaths.join('、')}`:'';
+      setUndoResult(result.status==='succeeded'?{ok:true,message:'撤销已完成。文件状态已重新检查，不会自动重发原任务。'}:
+        {ok:false,message:`${result.status==='conflict'?'撤销遇到冲突，冲突文件未被覆盖。请先核对文件版本。':'撤销尚未完成，已完成的步骤保留。请核对文件版本后重试。'}${paths}`});
+    }catch(reason){setUndoResult({ok:false,message:`撤销未完成：${userFacingSystemText(reason instanceof Error?reason.message:String(reason))}。可刷新后重试。`});}
+    finally{await reload();actionBusy.current=false;setBusy(null);}
+  };
+  return <div className="scrim center" onClick={onClose} style={{zIndex:92}} data-zs-recovery="hifi">
+    <div className="modal lg" onClick={event=>event.stopPropagation()} role="dialog" aria-modal="true" aria-label="恢复任务" style={{maxHeight:'78vh',display:'flex',flexDirection:'column',width:'min(800px,94vw)'}}>
+      <div className="row tight wrap" style={{padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+        <Icon name="play" size={15}/><strong>恢复任务</strong><span style={{flex:1}}/>
+        <button className="btn ghost sm" disabled={loading||busy!=null} onClick={()=>void reload()}>刷新</button>
+        <button className="btn ghost sm" onClick={onClose}>关闭</button>
+      </div>
+      <div className="page-stack" style={{padding:'12px 16px',overflow:'auto'}}>
+        {error?<div className="panel warning" role="alert">读取失败：{error}</div>:null}
+        {locateError?<div className="panel warning" role="alert">{locateError}</div>:null}
+        {loading?<div className="small muted">正在读取任务…</div>:null}
+        {data?<div data-zs-recovery-summary="1">
+          {!loading&&!tasks.length&&!data.gateHeld&&!data.activeUndos.length&&!error?<div className="panel info">没有需要恢复的任务。可以正常继续使用。</div>:null}
+          {tasks.map((item,index)=>{
+            const phase=item.executionStatus?.phase;
+            const ongoing=['RUNNING','STOPPING','QUEUED','WAITING_FOR_PEER','WAITING_FOR_USER'].includes(phase??'');
+            const done=item.task.status==='DONE';
+            const isFocused=target?.requestTaskId===item.task.id||target?.taskId===item.task.id;
+            return <div key={item.task.id} ref={isFocused?focused:undefined} className="card tight" data-zs-recovery-task={item.task.id} data-zs-recovery-focused={isFocused?'1':undefined} style={{marginTop:index?8:0}}>
+              <strong>{item.task.title}</strong>
+              <div className="small" style={{marginTop:5}}>{done?'任务已完成，已有结果可查看。':ongoing?phase==='STOPPING'?'任务正在停止。':'任务已在处理中。':'已有回复和文件保留，可以继续任务。'}</div>
+              <div className="row tight wrap" style={{marginTop:8}}>
+                {!ongoing&&!done?<ContinueTaskButton key={JSON.stringify(item.binding)} binding={item.binding} projectId={item.task.project_id} onContinued={()=>void reload()}/>:null}
+                <button className="btn ghost sm" onClick={()=>locate(item.task.id)}>查看任务</button>
               </div>
-              <div className="row tight wrap" style={{ marginTop: 8 }}>
-                {data.gateHeld ? <button className="btn sm" disabled={busy != null} onClick={() => void resumeGate()}>{busy === 'gate' ? '正在继续…' : '继续处理已排队的消息'}</button> : null}
-                {heldUnknown.slice(0, 3).map((turn, index) => <button key={turn.id} className="btn ghost sm" onClick={() => locate(`#task=${turn.taskId}`)}>查看待确认任务{heldUnknown.length > 1 ? ` ${index + 1}` : ''}</button>)}
-                {data.interruptedRuns.slice(0, 3).map((run, index) => <button key={run.id} className="btn ghost sm" onClick={() => locate(`#task=${run.task_id}`)}>查看中断任务{data.interruptedRuns.length > 1 ? ` ${index + 1}` : ''}</button>)}
-                {data.unknownTurns.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 ? <button className="btn ghost sm" onClick={() => setShowDetails(true)}>查看诊断与处理选项</button> : null}
-              </div>
-            </div>
-          ) : null}
-          {inspectionIds.map(turnId=>{
-            const item=inspections[turnId],fact=item?.value,focused=turnId===target?.turnId;
-            return <div key={turnId} ref={focused?focusedReply:undefined} className="card tight" data-zs-previous-reply={turnId} data-zs-recovery-focused={focused?'1':undefined}>
-              <strong>{fact?`${fact.memberName} · ${fact.taskTitle}`:'正在检查指定执行…'}</strong>
-              {item?.loading?<div className="small">正在读取程序检查结果…</div>:null}
-              {item?.error?<div role="alert" className="small">检查失败：{userFacingSystemText(item.error)}。保留原执行状态，可重新检查。</div>:null}
-              {fact?<>
-                <div className="small">{fact.result.complete?'本轮已保存完整结果。':'本轮未收到完整结果，不能视为任务完成。'}</div>
-                {fact.result.answer?<div className="small" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>已保存回复：{fact.result.answer}</div>:null}
-                {fact.result.files.length?<div className="small">已保存文件：{fact.result.files.map(file=>file.filename).join('、')}</div>:null}
-                <div className="small">{fact.lastActivity?`最后动作（${fmtAt(fact.lastActivity.at)}）：${fact.lastActivity.description}${fact.lastActivity.outcome?` · ${fact.lastActivity.outcome}`:''}`:'未读取到最后动作记录。'}</div>
-                <div className="small" data-zs-exit-check={fact.exitCheck.state}>{userFacingSystemText(fact.exitCheck.message)}</div>
-                {fact.exitCheck.action==='restart-windows'?<div className="panel info">请保存其他工作并重启一次 Windows，然后重新打开众说检查中断。程序不会自动重启电脑或重放原请求。</div>:null}
-                {fact.exitCheck.state==='ready'&&fact.exitCheck.action==='release'?<button className="btn sm" disabled={busy!=null||item.loading} onClick={()=>void checkAndContinue(turnId)}>{busy===`check:${turnId}`?'正在解除…':'解除占用'}</button>:null}
-                {fact.exitCheck.state==='released'?<div className="small">此项仅保留为历史记录，不再阻挡新消息。原请求未重发。</div>:null}
-                <div className="row tight wrap" style={{marginTop:6}}>
-                  <button className="btn ghost sm" disabled={busy!=null} onClick={()=>void reload()}>重新检查中断</button>
-                  <button className="btn ghost sm" onClick={()=>locate(`#task=${fact.taskId}`)}>{fact.exitCheck.state==='released'?'回原任务继续':'查看中断任务与记录'}</button>
-                  {fact.parentTaskId?<button className="btn ghost sm" onClick={()=>locate(`#task=${fact.parentTaskId}`)}>{fact.exitCheck.state==='released'?'回父任务继续或结束':'查看父任务'}</button>:null}
-                </div>
-              </>:<button className="btn ghost sm" onClick={()=>void reload()}>重新检查中断</button>}
-              {checkResult[turnId]?.detail?<div className="small" role="alert">{userFacingSystemText(checkResult[turnId].detail ?? '')}</div>:null}
             </div>;
           })}
-          {pendingOnly ? (
-            <div className="panel info">
-              <div className="row tight">
-                <Icon name="clock" size={13} />
-                <strong>有 {data?.pendingDispatchCount ?? 0} 条消息在排队</strong>
-              </div>
-              <div className="small muted" style={{ marginTop: 4, lineHeight: 1.7 }}>
-                这是正常等待，不是故障；无需确认。队列会按顺序继续处理。
-              </div>
-            </div>
-          ) : null}
-          {showDetails && data != null ? <DetailFold summary="详细状态与人工处理（高级）">
-          {data.pendingDispatchCount > 0 ? (
-            <div className="panel info">
-              <div className="row tight"><strong>排队消息（{data.pendingDispatchCount}）</strong></div>
-            </div>
-          ) : null}
-          {data.gateHeld ? (
-            <div className="panel info" style={{ borderColor: 'var(--warning)' }}>
-              <div className="row tight">
-                <Icon name="octagon" size={13} />
-                <strong>排队消息已暂停</strong>
-                <span className="faint small">上次退出时有执行尚未确认结束。新请求已暂停；当前 {data.pendingDispatchCount} 条消息仍在排队，确认后继续处理。</span>
-              </div>
-              <div className="row tight" style={{ marginTop: 8 }}>
-                <button className="btn sm" disabled={busy != null} title="确认后继续处理排队消息" onClick={() => void resumeGate()}>
-                  {busy === 'gate' ? '确认中…' : '确认继续处理'}
-                </button>
-                <span className="faint small">允许继续后，结果不明的执行仍需逐项核对。要继续中断的任务，请打开任务详情或对应私信。</span>
-              </div>
-            </div>
-          ) : null}
-          {data != null && data.unknownTurns.length > 0 ? (
-            <div className="panel info">
-              <div className="row tight"><strong>待核对的执行（{data.unknownTurns.length}）——结果还未确认，请逐项核对</strong></div>
-              {data.unknownTurns.map((t) => (
-                <div key={t.id} style={{ marginTop: 8, padding: 8, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
-                  <div className="row tight wrap">
-                    <Tag tone="warning" icon="alert-triangle">结果待核对</Tag>
-                    <span style={{ flex: 1 }} />
-                    <button className="btn ghost sm" title="打开原任务查看" onClick={() => locate(`#task=${t.taskId}`)}>定位任务</button>
-                    <button className="btn ghost sm" disabled={busy != null} onClick={() => setRecon(recon?.turnId === t.id ? null : { turnId: t.id, verdict: 'executed', note: '', manualRiskAck: false })}>对账…</button>
-                  </div>
-                  {recon?.turnId === t.id ? (
-                    <div className="page-stack" style={{ marginTop: 8 }}>
-                      <div className="row tight wrap">
-                        <Select
-                          value={recon.verdict}
-                          ariaLabel="对账判定"
-                          onChange={(v) => setRecon({ ...recon, verdict: v as typeof recon.verdict })}
-                          options={[
-                            { value: 'executed', label: '已执行（将检查是否结束）' },
-                            { value: 'notStarted', label: '未启动（退回调用次数，保留文件保护）' },
-                            { value: 'keepUnknown', label: '暂时无法确认' },
-                          ]}
-                        />
-                        {recon.verdict === 'notStarted' ? (
-                          <label className="row tight small"><input type="checkbox" checked={recon.manualRiskAck} onChange={(e) => setRecon({ ...recon, manualRiskAck: e.target.checked })} />我已了解：仍有执行未确认结束时，文件保护会继续保留</label>
-                        ) : null}
-                      </div>
-                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="判断依据（必填）" value={recon.note} onChange={(e) => setRecon({ ...recon, note: e.target.value })} />
-                      <div className="row tight">
-                        <button className="btn sm" disabled={busy != null} onClick={() => void submitReconcile()}>{busy === `recon:${t.id}` ? '提交中…' : '提交对账'}</button>
-                        <button className="btn ghost sm" onClick={() => setRecon(null)}>取消</button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {data != null && data.pendingRelease.length > 0 ? (
-            <div className="panel info">
-              <div className="row tight"><strong>待解除保护（{data.pendingRelease.length}）——确认执行结束后解除</strong></div>
-              {data.pendingRelease.map((p) => (
-                <div key={p.turnId} style={{ marginTop: 8, padding: 8, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
-                  <div className="row tight wrap">
-                    <Tag tone={p.protectionState === 'retained' ? 'warning' : 'neutral'} icon="lock">{p.protectionState === 'retained' ? '保护中' : '待确认'}</Tag>
-                    <span style={{ flex: 1 }} />
-                    <button className="btn ghost sm" disabled={busy != null} onClick={() => setRelNote(relNote?.turnId === p.turnId ? null : { turnId: p.turnId, note: '' })}>解除保护…</button>
-                  </div>
-                  {relNote?.turnId === p.turnId ? (
-                    <div className="page-stack" style={{ marginTop: 8 }}>
-                      <textarea className="composer-input" style={{ width: '100%', minHeight: 52 }} placeholder="请填写解除依据。只有确认执行已结束，才能解除保护。" value={relNote.note} onChange={(e) => setRelNote({ ...relNote, note: e.target.value })} />
-                      <div className="row tight">
-                        <button className="btn sm" disabled={busy != null} onClick={() => void submitRelease()}>{busy === `rel:${p.turnId}` ? '提交中…' : '提交解除'}</button>
-                        <button className="btn ghost sm" onClick={() => setRelNote(null)}>取消</button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {data != null && data.interruptedRuns.length > 0 ? (
-            <div className="panel info">
-              <div className="row tight"><strong>中断的执行（{data.interruptedRuns.length}）</strong><span className="faint small">点击定位打开原任务；可在任务详情或私信中继续执行</span></div>
-              {data.interruptedRuns.map((r) => (
-                <div key={r.id} className="row tight" style={{ marginTop: 6 }}>
-                  <span className="faint small">已中断</span>
-                  <span style={{ flex: 1 }} />
-                  <button className="btn ghost sm" onClick={() => locate(`#task=${r.task_id}`)}>定位任务</button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {data != null && (data.activeUndos.length > 0 || data.heldLeases.length > 0 || data.stopRecord != null) ? (
-            <div className="panel info">
-              <div className="row tight"><strong>其它恢复记录</strong></div>
-              <div className="small" style={{ marginTop: 4, lineHeight: 1.8 }}>
-                {data.stopRecord != null ? <div>上次退出：{fmtAt(data.stopRecord.at)} · 阶段 {data.stopRecord.phase ?? '?'}{data.stopRecord.reason != null ? ` · ${userFacingSystemText(data.stopRecord.reason ?? '')}` : ''}{data.stopRecord.drainPending === true ? ' · 停止时仍有执行未确认结束' : ''}</div> : null}
-                {data.activeUndos.length > 0 ? <div data-zs-undo-records="1">
-                  <div>未完成的撤销 {data.activeUndos.length} 项。继续撤销会恢复这些操作的文件；执行前逐个检查当前版本，冲突文件保留。</div>
-                  {data.activeUndos.map((undo, index) => <div key={undo.id} className="row tight wrap" style={{ marginTop: 6 }}>
-                    <span>撤销记录 {index + 1} · {undo.status === 'failed' ? '上次未完成' : '尚未完成'}</span>
-                    <button className="btn sm" disabled={busy != null} data-zs-continue-undo={undo.id} onClick={() => void continueUndo(undo)}>{busy === `undo:${undo.id}` ? '正在撤销…' : '继续撤销'}</button>
-                  </div>)}
-                </div> : null}
-                {data.heldLeases.length > 0 ? <div>仍有 {data.heldLeases.length} 项文件保护未解除（确认执行结束后才能解除）</div> : null}
-              </div>
-            </div>
-          ) : null}
-          </DetailFold> : null}
-        </div>
+          {data.gateHeld?<div className="panel info" style={{marginTop:8}}><div>有 {data.pendingDispatchCount} 条消息等待继续处理。</div><button className="btn sm" disabled={busy!=null} onClick={()=>void resumeQueue()}>{busy==='queue'?'正在继续…':'继续处理排队消息'}</button></div>:
+            data.pendingDispatchCount>0?<div className="small muted" style={{marginTop:8}}>有 {data.pendingDispatchCount} 条消息正在排队。</div>:null}
+        </div>:null}
+        {undoResult?<div className={`panel ${undoResult.ok?'info':'warning'}`} role={undoResult.ok?'status':'alert'} data-zs-undo-result="1">{undoResult.message}</div>:null}
+        {data?.activeUndos.length?<div className="panel info" data-zs-undo-records="1"><strong>未完成的撤销</strong>
+          {data.activeUndos.map((undo,index)=><div key={undo.id} className="row tight wrap" style={{marginTop:8}}><span>撤销记录 {index+1} · {undo.status==='failed'?'上次未完成':'尚未完成'}</span><button className="btn sm" disabled={busy!=null} data-zs-continue-undo={undo.id} onClick={()=>void continueUndo(undo)}>{busy===undo.id?'正在撤销…':'继续撤销'}</button></div>)}
+        </div>:null}
       </div>
     </div>
-  );
+  </div>;
 }

@@ -17,6 +17,7 @@ import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { applyRecovery } from '../../src/daemon/stopFlow.ts';
+import { assessTaskRedispatchReadiness } from '../../src/persistence/stores/recoveryGuard.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
@@ -160,12 +161,14 @@ describe('同成员 R123 scope 并行与 legacy member 恢复保护合同', () =
     const turn1 = must(env.taskTurns(t1.taskId)[0], 'turn1');
     legacyBundle(env.db, turn1.id);
 
-    // 崩溃+重启（applyRecovery 同 entry 启动路径）：UNKNOWN+门禁；redispatch 在收口前拒绝。
+    // 崩溃+重启（applyRecovery 同 entry 启动路径）：UNKNOWN+门禁；未显式继续时保留旧事实。
     const snap = applyRecovery(env.db, Date.now());
     expect(snap.unknownTurns).toBeGreaterThanOrEqual(1);
     expect(env.turnRow(turn1.id).status).toBe('UNKNOWN');
     expect((env.db.prepare(`SELECT value FROM daemon_state WHERE key = 'dispatch_gate'`).get() as { value: string } | undefined)?.value).toBe('held');
-    await expect(env.cmd('task.redispatch', { taskId: t1.taskId, reason: 'R57 测试：未收口旧意图不得复活' })).rejects.toThrow(/RECONCILE|UNKNOWN|保护|对账/);
+    const changesBeforeGuard = env.db.prepare('SELECT total_changes() changes').get();
+    expect(assessTaskRedispatchReadiness(env.db, t1.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'unclosed-unknown',turnId:turn1.id}});
+    expect(env.db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
 
     // 确认继续≠退出证明：门禁开放后，新 worker（空 admission 内存）必须从持久事实恢复占用
     //——同成员另一任务零新增 startTurn（r56 版此处曾成功派发=独立复核证伪的缺口）。

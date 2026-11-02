@@ -52,15 +52,17 @@ const detail: TaskDetailsResult = {
 describe('R99 queued work and non-final evidence presentation', () => {
   it('RUNNING without an active turn uses the exact blocker instead of claiming a member is processing', () => {
     const hint = taskRunHint('RUNNING', blocker);
-    expect(hint.label).toBe('等待确认上次回复');
-    expect(hint.detail).toContain('甲 的上次回复尚未确认结束');
+    expect(hint.label).toBe('可继续任务');
+    expect(hint.detail).toContain('甲 的上次回复未完成');
+    expect(hint.detail).toContain('可以继续任务');
     expect(hint.detail).not.toContain('正在处理');
-    expect(taskRunGuidance(detail)).toContain('等待确认上次回复');
+    expect(taskRunGuidance(detail)).toContain('可继续任务');
     const html = renderToStaticMarkup(createElement(RunExtraFacts, { detail }));
     expect(html).toContain('data-zs-execution-blocker="unknown-turn"');
     expect(html).toContain('前序根任务');
     expect(html).toContain('占用任务 #12');
-    expect(html).toContain('data-zs-open-recovery="1"');
+    expect(html).toContain('data-zs-continue-task="waiter"');
+    expect(html).not.toContain('data-zs-continue-task="root_holder"');
     expect(html).toContain('不会自动释放或重放');
     expect(html).not.toContain('成员正在处理');
   });

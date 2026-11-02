@@ -192,7 +192,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
     // 四分离：在途/保护未解除（FAILED+未释放租约同样拦）/UNKNOWN 未闭环（settled 但无
     // 正式 protectionReleased 事件=退出未确认）；停止代次生效另行拦截。
     const interrupted = interruptedRaw.map((t) => {
-      const blocked = assessTaskRedispatchReadiness(db, t.taskId);
+      const blocked = assessTaskRedispatchReadiness(db, t.taskId,{allowInterrupted:t.formatRepair!==1});
       let blockReason: string | null = null;
       if (t.stopGen > 0) blockReason = '停止代次已生效：不再追加执行';
       else if (blocked != null) blockReason = blocked.message;

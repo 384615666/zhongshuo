@@ -118,7 +118,7 @@ export function readExecutionBlocker(db: ZhongshuoDatabase, taskId: string): Tas
   if (unknown != null) {
     return {
       reason: 'unknown-turn',
-      note: `待执行队列 ${outboxRows.length} 项；任务 #${unknown.rootTaskNumber ?? '?'}（${unknown.memberName}）的上一轮结果未知，当前任务不会越过这项占用自动执行。请到恢复中心核对。`,
+      note: `待执行队列 ${outboxRows.length} 项；任务 #${unknown.rootTaskNumber ?? '?'}（${unknown.memberName}）的上次执行中断，可直接继续当前任务。`,
       pendingOutboxCount: outboxRows.length,
       outboxId: first.id,
       outboxStatus: first.status,

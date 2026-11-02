@@ -206,6 +206,12 @@ export interface TaskExecutionActionTarget {
 
 export type TaskExecutionAction =
   | {
+      id:string;
+      kind:'continue';
+      label:string;
+      binding:{taskId:string;expectedTaskRevision:number;expectedStopGeneration:number};
+    }
+  | {
       id: string;
       kind: 'navigate';
       label: string;

@@ -209,8 +209,12 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
     try{
       const id=randomUUID(),p=f.params('本次回复结果将未知');const saved=await f.raw<Root>('message.submit',p,id);await f.worker.runOnce();expect(f.db.prepare('SELECT status FROM thread_reply_requests').get()).toEqual({status:'unknown'});
       const replay=await f.raw<Root>('message.submit',p,id);expect(replay.replayed).toBe(true);expect(replay.data.messageId).toBe(saved.data.messageId);await f.worker.runOnce();expect(f.count('agent_turns')).toBe(2);
-      expect((await f.raw('message.submit',f.params('不能新号绕过未知'))).error?.code).toBe('RECONCILE_REQUIRED');
-      const readonly=openDatabase(join(f.dir,'state.sqlite'));try{expect(readonly.prepare('SELECT status FROM thread_reply_requests').get()).toEqual({status:'unknown'});}finally{readonly.close();}
+      expect((await f.raw('message.submit',f.params('明确继续下一轮'))).ok).toBe(true);
+      expect(f.db.prepare("SELECT status,protection_state FROM agent_turns WHERE status='UNKNOWN'").get()).toEqual({status:'UNKNOWN',protection_state:'released'});
+      const readonly=openDatabase(join(f.dir,'state.sqlite'));try{
+        expect(readonly.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(saved.data.messageId)).toEqual({status:'unknown'});
+        expect(readonly.prepare("SELECT count(*) n FROM thread_reply_requests WHERE status='queued'").get()).toEqual({n:1});
+      }finally{readonly.close();}
     }finally{f.db.close();}
   });
   it('explicit failure is projected next to the original human message with actual reason',async()=>{

@@ -106,14 +106,17 @@ describe('R155 concrete interrupted execution inspection',()=>{
     }finally{db.close();}
   });
 
-  it('binds parent recovery to the actual child and permits new explicit work only after verified release',async()=>{
+  it('offers a version-bound parent continue action while retaining optional child inspection and evidence release',async()=>{
     const{db}=fixture();try{
       registerTurnProcess(db,{turnId:'lost',runId:'interrupted',memberId:'reviewer',adapterKind:'fake',processModel:'none',
         pid:null,startedAtMs:null,identitySource:'none'});
       const before=readTaskExecutionStatus(db,'parent')!;
       expect(before.phase).toBe('UNKNOWN');
       expect(before.reason).toMatchObject({taskId:'child',runId:'interrupted',turnId:'lost'});
-      expect(before.actions).toContainEqual(expect.objectContaining({kind:'recover',label:'检查中断',target:{kind:'recovery',id:'lost'}}));
+      const task=db.prepare("SELECT revision,stop_generation FROM tasks WHERE id='parent'").get() as {revision:number;stop_generation:number};
+      expect(before.actions).toContainEqual(expect.objectContaining({kind:'continue',label:'继续任务',
+        binding:{taskId:'parent',expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation}}));
+      expect(before.actions.some(action=>action.kind==='recover')).toBe(false);
       expect(assessTaskRedispatchReadiness(db,'parent')?.fact).toMatchObject({turnId:'lost'});
       const outbox=db.prepare('SELECT * FROM outbox ORDER BY id').all();
       expect(inspectRecovery(db,'lost',{})).toMatchObject({exitCheck:{state:'ready'}});

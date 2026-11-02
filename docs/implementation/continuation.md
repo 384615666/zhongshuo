@@ -2,6 +2,10 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-02：R156 中断任务直接继续（替代 R155 前置检查）
+
+用户明确不要依据表单、检查中断、保护解除及Windows重启前置，已改为原任务直接“继续任务”，串内发送跟进也自动处理旧中断；保留UNKNOWN历史和原文件，预算自动只处置一次、旧队列代次隔离、迟到结果不再改业务或重复结算。后台同事务释放本任务/协作子任务旧占用并入队；正在排队的新任务受其他旧中断影响时继续现有请求，不重跑旧任务或重复派发。恢复面板简化任务列表，启动不自动弹窗。旧取证API只为历史兼容，普通继续不依赖；安装器仍须托盘先退出。beta.5回归与安装收口中，见[R156](../reviews/r156-direct-continue-20261102.md)。原用户数据不改，不重启电脑、不重放旧业务，不推送发布。
+
 ## 2026-11-01：R155 中断检查与继续入口
 
 用户仍被旧Pi UNKNOWN/settled/retained挡住，且“核对执行结果”没有对象。原库只读确认旧completed stop被beta2空stop覆盖，当前无history/stalelock、同次Windows启动；不能重新开app就补造退出依据。新增本机readonly recovery.inspect与具体结果/最后动作/退出检查，父按钮精确指child/turn，文案改检查中断；明确ready才release、保留UNKNOWN和历史、不重放。新增丢失旧owner证据时的Windows reboot程序证据，系统启动时刻+monotonic/时间边界/当前锁/进程代次及树/重读核验，不把睡眠或重开app当重启，允许真正新PID代次复用。无retained/no lease但UNKNOWN未闭环不再release noop，矛盾none登记拒绝。

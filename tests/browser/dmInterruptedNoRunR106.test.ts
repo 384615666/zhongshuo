@@ -50,7 +50,7 @@ describe('R106 DM interrupted notice', () => {
     expect(html).not.toContain('按当前配置重新提交');
   });
 
-  it('keeps UNKNOWN non-recoverable and routes the user to recovery evidence', () => {
+  it('offers direct continuation for an UNKNOWN non-recoverable run', () => {
     const html = render({
       taskId: 'task_unknown',
       title: '结果不确定',
@@ -60,8 +60,9 @@ describe('R106 DM interrupted notice', () => {
       blockReason: '存在结果不确定且未闭环的执行',
       lastFailureReason: 'process exit unconfirmed',
     });
-    expect(html).toContain('检查上次回复');
-    expect(html).toContain('目前还不能继续这次请求');
+    expect(html).toContain('data-zs-continue-task="task_unknown"');
+    expect(html).toContain('继续任务');
+    expect(html).toContain('可以继续任务');
     expect(html).toContain('当前限制：存在结果不确定且未闭环的执行');
     expect(html).not.toMatch(/>继续这次请求<\/button>/);
     expect(html).not.toContain('按当前配置重新提交');

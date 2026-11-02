@@ -2,6 +2,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {DispatchAdmission,type AdmissionDimensions} from '../../src/daemon/admission.ts';
+import {assessTaskRedispatchReadiness} from '../../src/persistence/stores/recoveryGuard.ts';
 import {collisionFixture,finish,ObservedAdapter,pause} from '../helpers/collisionHarnessR122.ts';
 
 beforeEach(()=>{
@@ -116,7 +117,7 @@ describe('R123 production worker session scope isolation with no real models',()
       expect(original.executionScopeKey).toBe(JSON.stringify([f.projects[0]!.id,f.projects[0]!.rooms[0]!.conversationId,hung.threadId,f.projects[0]!.members[0]]));
       // Probe the restored production gate without releasing or rewriting its UNKNOWN slot.
       expect(restored.tryAcquire('same-scope-probe',original)).toEqual({granted:false,reason:'member'});
-      await expect(follow(f,hung,'原串尚未核实，不得绕保护')).rejects.toThrow('RECONCILE_REQUIRED');
+      expect(assessTaskRedispatchReadiness(f.db,hung.taskId)?.code).toBe('RECONCILE_REQUIRED');
       const other=await f.send(0,0,[0],'TOKEN_AFTER_RESTART 另一个只读串');
       const deadline=Date.now()+5000;
       while(f.taskStatus(other.taskId)!=='DONE'&&Date.now()<deadline){await restarted.drain();await pause(5);}

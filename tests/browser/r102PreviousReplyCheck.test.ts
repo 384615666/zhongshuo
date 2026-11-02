@@ -1,96 +1,65 @@
-import {describe, expect, it, vi} from 'vitest';
-import {createPreviousReplyCheck, previousReplyStillHeld, previousReplySummary} from '../../src/ui/hifi/lib/checkPreviousReply';
+import {describe,expect,it,vi} from 'vitest';
+import {createTaskContinuation,previousReplyStillHeld} from '../../src/ui/hifi/lib/checkPreviousReply';
+import {loadRecoveryTasks} from '../../src/ui/hifi/lib/recovery';
 
-describe('one-click previous reply check', () => {
-  it('keeps an unknown historical outcome visible after release without claiming new messages are blocked', () => {
-    const status = {unknownTurns: [{id: 'old-turn', protectionState: 'released', protectionReleased: true}], pendingRelease: [], heldLeases: []};
-    expect(previousReplyStillHeld(status, 'old-turn')).toBe(false);
-    const summary = previousReplySummary(status);
-    expect(summary).toContain('原回复结果仍未确认');
-    expect(summary).toContain('不阻挡新消息');
-    expect(summary).not.toContain('正在等待');
-    expect(summary).not.toContain('尚未确认结束');
-    // Same read after reopening the panel: no local success marker is needed.
-    expect(previousReplySummary(JSON.parse(JSON.stringify(status)))).toBe(summary);
-  });
-
-  it('still reports retained protection even with no workspace lease, and handles mixed released/held turns', () => {
-    const status = {unknownTurns: [{id: 'retained'}, {id: 'released', protectionReleased: true}], pendingRelease: [{turnId: 'retained'}], heldLeases: []};
-    expect(previousReplyStillHeld(status, 'retained')).toBe(true);
-    expect(previousReplyStillHeld(status, 'released')).toBe(false);
-    const summary = previousReplySummary(status);
-    expect(summary).toContain('有 1 次上次回复需要检查');
-    expect(summary).toContain('有 1 次原回复结果仍未确认');
-    expect(previousReplyStillHeld({...status, pendingRelease: [], heldLeases: [{owner_turn_id: 'retained'}]}, 'retained')).toBe(true);
-  });
-
-  it.each([
-    {id: 'old-turn'},
-    {id: 'old-turn', protectionState: null, protectionReleased: false},
-    {id: 'old-turn', protectionState: 'released', protectionReleased: false},
-  ])('does not treat an unknown execution with no leases or no formal release as released: %j', turn => {
-    const status = {unknownTurns: [turn], pendingRelease: [], heldLeases: []};
-    expect(previousReplyStillHeld(status, turn.id)).toBe(true);
-    expect(previousReplySummary(status)).toContain('需要检查');
-    expect(previousReplySummary(status)).not.toContain('不阻挡新消息');
-  });
-
-  const inspection=(state:'ready'|'released'|'blocked',turnId='old-turn',budgetMark='settled')=>({
-    schemaVersion:'recovery-inspection-v1',turnId,taskId:'child',budgetMark,turnStatus:'UNKNOWN',
-    exitCheck:{state,action:state==='ready'?'release':state==='blocked'?'restart-windows':'none',message:'程序检查状态'},
-  });
-
-  it.each(['settled','refunded'])('rechecks a %s turn, releases only ready protection and verifies the receipt without redispatch',async budgetMark=>{
-    const send=vi.fn().mockResolvedValueOnce(inspection('ready','old-turn',budgetMark)).mockResolvedValueOnce({released:true}).mockResolvedValueOnce(inspection('released'));
-    const value=await createPreviousReplyCheck(send)('old-turn');
-    expect(value.exitCheck.state).toBe('released');
-    expect(send.mock.calls.map(call=>call[0])).toEqual(['recovery.inspect','recovery.releaseProtection','recovery.inspect']);
-    expect(send.mock.calls.every(call=>call[1].turnId==='old-turn')).toBe(true);
-  });
-
-  it('keeps a blocked inspection readonly and never guesses the business outcome',async()=>{
-    const send=vi.fn().mockResolvedValue(inspection('blocked'));
-    expect((await createPreviousReplyCheck(send)('old-turn')).exitCheck.state).toBe('blocked');
-    expect(send.mock.calls).toEqual([['recovery.inspect',{turnId:'old-turn'}]]);
-  });
-
-  it('does not rewrite a released historical UNKNOWN turn',async()=>{
-    const send=vi.fn().mockResolvedValue(inspection('released'));
-    await createPreviousReplyCheck(send)('old-turn');
-    expect(send.mock.calls).toEqual([['recovery.inspect',{turnId:'old-turn'}]]);
-  });
-
-  it('joins rapid duplicate clicks until the whole asynchronous operation settles',async()=>{
-    let finish!:(value:unknown)=>void;
-    const send=vi.fn().mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockResolvedValueOnce({}).mockResolvedValueOnce(inspection('released'));
-    const check=createPreviousReplyCheck(send),first=check('old-turn');
-    expect(check('old-turn')).toBe(first);expect(send).toHaveBeenCalledTimes(1);
-    finish(inspection('ready'));await first;expect(send).toHaveBeenCalledTimes(3);
-  });
-
-  it('only reconciles an unaccounted unknown turn after a ready inspection',async()=>{
-    const send=vi.fn().mockResolvedValueOnce(inspection('ready','old-turn','reserved')).mockResolvedValueOnce({}).mockResolvedValueOnce({}).mockResolvedValueOnce(inspection('released'));
-    await createPreviousReplyCheck(send)('old-turn');
-    expect(send.mock.calls.map(call=>call[0])).toEqual(['recovery.inspect','recovery.reconcile','recovery.releaseProtection','recovery.inspect']);
-  });
-
-  it('does not report release success when the final inspection remains blocked',async()=>{
-    const send=vi.fn().mockResolvedValueOnce(inspection('ready')).mockResolvedValueOnce({}).mockResolvedValueOnce(inspection('blocked'));
-    await expect(createPreviousReplyCheck(send)('old-turn')).rejects.toThrow('程序检查状态');
-    expect(send.mock.calls.some(call=>call[0]==='dispatch.resume')).toBe(false);
-  });
-
-  it('stops at a failed release and permits another explicit attempt',async()=>{
-    const send=vi.fn().mockResolvedValueOnce(inspection('ready')).mockRejectedValueOnce(Error('still held'));
-    const check=createPreviousReplyCheck(send);await expect(check('old-turn')).rejects.toThrow('still held');
-    expect(send).toHaveBeenCalledTimes(2);
-    send.mockResolvedValueOnce(inspection('ready')).mockResolvedValueOnce({}).mockResolvedValueOnce(inspection('released'));
-    await check('old-turn');expect(send.mock.calls.filter(call=>call[0]==='recovery.reconcile')).toHaveLength(0);
-  });
-
-  it('rejects a changed inspection target before any mutation',async()=>{
-    const send=vi.fn().mockResolvedValue(inspection('ready','another-turn'));
-    await expect(createPreviousReplyCheck(send)('old-turn')).rejects.toThrow('对象已变化');
+const binding={taskId:'parent',expectedTaskRevision:4,expectedStopGeneration:2};
+const accepted={status:'ok' as const,data:{enqueued:true,dispatchKey:'task:parent:continue'}};
+describe('R156 direct task continuation',()=>{
+  it('sends the original parent binding once without inspecting or reconciling a turn',async()=>{
+    const send=vi.fn().mockResolvedValue(accepted);
+    const result=await createTaskContinuation(send)(binding);
+    expect(result).toEqual(accepted);
     expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]).toEqual([expect.any(String),'task.continue',binding]);
+  });
+  it('keeps the selected source run bound when supplied',async()=>{
+    const send=vi.fn().mockResolvedValue(accepted);
+    await createTaskContinuation(send)({...binding,sourceRunId:'source-run'});
+    expect(send.mock.calls[0]![2]).toEqual({...binding,sourceRunId:'source-run'});
+  });
+  it('joins rapid repeated clicks while the continuation is pending',async()=>{
+    let finish!:(value:typeof accepted)=>void;
+    const send=vi.fn().mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const resume=createTaskContinuation(send),first=resume(binding);
+    expect(resume(binding)).toBe(first);await Promise.resolve();expect(send).toHaveBeenCalledTimes(1);
+    finish(accepted);await first;expect(send).toHaveBeenCalledTimes(1);
+  });
+  it('permits a later interruption of the same task without returning an old successful receipt',async()=>{
+    const send=vi.fn().mockResolvedValue(accepted),resume=createTaskContinuation(send);
+    await resume({taskId:'parent'});await resume({taskId:'parent'});
+    expect(send).toHaveBeenCalledTimes(2);expect(send.mock.calls[0]![0]).not.toBe(send.mock.calls[1]![0]);
+  });
+  it('retries an uncertain transport using the same command identity',async()=>{
+    const send=vi.fn().mockResolvedValueOnce({status:'unknown',error:'连接中断'}).mockResolvedValueOnce(accepted);
+    const resume=createTaskContinuation(send);
+    expect((await resume(binding)).status).toBe('unknown');await resume(binding);
+    expect(send.mock.calls[0]![0]).toBe(send.mock.calls[1]![0]);
+    expect(send.mock.calls.map(call=>call[1])).toEqual(['task.continue','task.continue']);
+  });
+  it('permits a fresh explicit attempt after a definite rejection and uses new identity for a new revision',async()=>{
+    const send=vi.fn().mockResolvedValueOnce({status:'failed',error:'任务版本已变化',code:'STALE_REVISION'}).mockResolvedValue(accepted);
+    const resume=createTaskContinuation(send);expect((await resume(binding)).status).toBe('failed');await resume({...binding,expectedTaskRevision:5});
+    expect(send.mock.calls[0]![0]).not.toBe(send.mock.calls[1]![0]);
+    expect(send.mock.calls[1]![2]).toMatchObject({expectedTaskRevision:5});
+  });
+  it('does not offer released UNKNOWN history as an outstanding task',()=>{
+    const status={unknownTurns:[{id:'old',protectionReleased:true}],pendingRelease:[],heldLeases:[]};
+    expect(previousReplyStillHeld(status,'old')).toBe(false);
+    expect(previousReplyStillHeld({...status,pendingRelease:[{turnId:'old'}]},'old')).toBe(true);
+  });
+  it('resolves siblings and multiple generations to one actual root, using its revision rather than the child revision',async()=>{
+    const facts:Record<string,{id:string;title:string;status:string;parent_task_id:string|null;revision:number;stop_generation:number}>={
+      child:{id:'child',title:'child',status:'BLOCKED',parent_task_id:'middle',revision:8,stop_generation:1},
+      sibling:{id:'sibling',title:'sibling',status:'BLOCKED',parent_task_id:'parent',revision:9,stop_generation:2},
+      middle:{id:'middle',title:'middle',status:'BLOCKED',parent_task_id:'parent',revision:10,stop_generation:3},
+      parent:{id:'parent',title:'原父任务',status:'BLOCKED',parent_task_id:null,revision:11,stop_generation:4},
+    };
+    const read=vi.fn(async(id:string)=>({task:facts[id]!}));
+    expect(await loadRecoveryTasks(['child','sibling','parent'],read)).toEqual([{task:facts.parent,executionStatus:undefined,binding:{taskId:'parent',expectedTaskRevision:11,expectedStopGeneration:4}}]);
+    expect(read.mock.calls.filter(call=>call[0]==='parent')).toHaveLength(1);
+  });
+  it('shows missing or cyclic task ownership as a read failure instead of continuing the wrong task',async()=>{
+    await expect(loadRecoveryTasks(['child'],async()=>({task:{id:'another',title:'wrong',status:'BLOCKED'}}))).rejects.toThrow('不匹配');
+    await expect(loadRecoveryTasks(['child'],async id=>({task:{id,title:id,status:'BLOCKED',parent_task_id:'child'}}))).rejects.toThrow('归属记录异常');
   });
 });

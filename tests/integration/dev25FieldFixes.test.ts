@@ -20,6 +20,7 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { registerTurnProcess } from '../../src/daemon/processRegistry.ts';
+import { assessTaskRedispatchReadiness } from '../../src/persistence/stores/recoveryGuard.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../../src/adapter/fake/script.ts';
@@ -59,7 +60,6 @@ const waitFor = async (f: () => boolean, ms: number, what: string): Promise<void
   const t0 = Date.now();
   while (!f()) {
     if (Date.now() - t0 > ms) throw new Error(`等待超时：${what}`);
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, 150));
   }
 };
@@ -89,7 +89,7 @@ describe('第三十八轮 #2：防护模式拒绑真实 runtime', () => {
 });
 
 describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () => {
-  it('第四十轮合同（review-r39 §2/§3）：对账≠退出；保护未解除拒；正式闭环后可恢复；sourceRunId 归属；任务级意图', async () => {
+  it('取证对账保留未知与旧保护，R156 可显式继续；证据闭环、sourceRunId 归属与任务级意图仍完整', async () => {
     const { db, cmd, cmdRaw } = await makeDb(join(tmpRoot, 'app7'));
     const { worker } = makeWorker(db);
     const conv = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA', title: '中断恢复演练' });
@@ -107,32 +107,30 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
       db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId2, c2.taskId, conv.conversationId);
       db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:${c2.taskId}:initial', 1, 1)`).run(turnId2, runId2, conv.conversationId);
     })();
-    // ①呈现：interrupted+recoverable=false（UNKNOWN 未对账——服务端分列，前端不得给按钮）。
+    // ① R156 呈现：中断任务可显式继续；查看列表不更改未对账 UNKNOWN。
     const list1 = await cmd<{ conversations: Array<{ conversationId: string; execState: string; interruptedTasks: Array<{ taskId: string; recoverable: boolean; blockReason: string | null; lastRunId: string | null }> }> }>('conversation.list', {});
     const me1 = list1.conversations.find((c) => c.conversationId === conv.conversationId)!;
     expect(me1.execState).toBe('interrupted');
     expect(me1.interruptedTasks.length).toBe(1);
-    expect(me1.interruptedTasks[0]!.recoverable).toBe(false);
-    expect(me1.interruptedTasks[0]!.blockReason).toContain('对账');
-    // ②命令面：未对账 UNKNOWN → RECONCILE_REQUIRED（不新建 outbox——零派发行）。
-    const rejected = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
-    expect(rejected.ok).toBe(false);
-    expect(rejected.error?.code).toBe('RECONCILE_REQUIRED');
+    expect(me1.interruptedTasks[0]!.recoverable).toBe(true);
+    expect(me1.interruptedTasks[0]!.blockReason).toBeNull();
+    // ② 只读事实守卫保留未对账 UNKNOWN；这里不发出显式继续命令，保留后续取证夹具。
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
+    expect(assessTaskRedispatchReadiness(db, c2.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'unclosed-unknown',turnId:turnId2}});
+    expect(db.prepare('SELECT status, budget_mark FROM agent_turns WHERE id=?').get(turnId2)).toEqual({status:'UNKNOWN',budget_mark:null});
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
     // ③§2.1 反例（正式链复现）：recovery.reconcile(executed)——turn 无进程登记 → 服务端
     // 取证=identity-missing → 预算结算但**保护保留、turn 仍 UNKNOWN**（退出未确认）。
-    // 旧守卫把「budget_mark 已置+无租约」当可恢复而放行；新合同=仍拒（显式点击不构成
-    // 退出证明），呈现也保持不可恢复。
+    // 严格事实守卫不把「budget_mark 已置+无租约」当退出证明；R156 仍提供显式继续。
     const rec1 = await cmd<{ protectionRetained: boolean; turnFinalStatus: string; reason: string }>('recovery.reconcile', { turnId: turnId2, verdict: 'executed', note: '测试：停机中断后按已执行对账（无进程登记）' });
     expect(rec1.protectionRetained).toBe(true);
     expect(rec1.turnFinalStatus).toBe('UNKNOWN');
     const list2 = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>('conversation.list', {});
     const me2 = list2.conversations.find((c) => c.conversationId === conv.conversationId)!;
-    expect(me2.interruptedTasks[0]!.recoverable).toBe(false);
-    expect(me2.interruptedTasks[0]!.blockReason).toContain('protection_state=retained'); // 第四十一轮：对账后保护=独立持久事实（无租约同样拦）
-    const stillRejected = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
-    expect(stillRejected.ok).toBe(false);
-    expect(stillRejected.error?.code).toBe('RECONCILE_REQUIRED');
+    expect(me2.interruptedTasks[0]!.recoverable).toBe(true);
+    expect(me2.interruptedTasks[0]!.blockReason).toBeNull();
+    expect(assessTaskRedispatchReadiness(db, c2.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:turnId2}});
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
     // ③b 补交退出证据（正式闭环第二段）：取得 none 模型登记后再次 executed 对账（预算不
     // 双算，仅推进退出事实）→ no-os-process → FAILED+释放 → c2 任务此后才真正可恢复。
@@ -141,7 +139,7 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
     expect(rec1b.turnFinalStatus).toBe('FAILED');
     expect(rec1b.protectionRetained).toBe(false);
     // ④§2.2 反例（独立任务，正式链）：notStarted 人工声明（manualRiskAck）→ FAILED/refunded
-    // 但**租约保留** → 仍不可恢复、仍拒（保护未解除——FAILED 不是恢复事实）。
+    // 但**租约保留**；只读查询仍如实报告 FAILED 不是退出证明，R156 可显式继续。
     const convB = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mB', title: '人工声明演练' });
     const cb = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convB.conversationId }, body: '人工声明未启动', intent: 'default', mentions: [] });
     db.prepare(`UPDATE outbox SET status = 'done' WHERE dispatch_key = ?`).run(`dmtask:${cb.taskId}:initial`);
@@ -157,11 +155,10 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
     expect(recB.turnFinalStatus).toBe('FAILED');
     const listB = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>('conversation.list', {});
     const meB = listB.conversations.find((c) => c.conversationId === convB.conversationId)!;
-    expect(meB.interruptedTasks[0]!.recoverable).toBe(false);
-    expect(meB.interruptedTasks[0]!.blockReason).toContain('租约');
-    const rejectedB = await cmdRaw('task.redispatch', { taskId: cb.taskId, reason: 'manual-recovery' });
-    expect(rejectedB.ok).toBe(false);
-    expect(rejectedB.error?.code).toBe('RECONCILE_REQUIRED');
+    expect(meB.interruptedTasks[0]!.recoverable).toBe(true);
+    expect(meB.interruptedTasks[0]!.blockReason).toBeNull();
+    expect(assessTaskRedispatchReadiness(db, cb.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId:turnIdB}});
+    expect(db.prepare('SELECT status FROM workspace_leases WHERE lock_domain=?').get('test:guard:file')).toEqual({status:'active'});
     // ⑤正式闭环正例（§2.2 任务续）：fake 执行的诚实登记=none 模型（无 OS 子进程）——
     // recovery.releaseProtection 以服务端 no-os-process 程序事实解除保护 → protectionReleased
     // 事件落库 → 可恢复=true → redispatch 正式入队（键绑最新源 run）。
@@ -297,7 +294,7 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
 });
 
 describe('第四十一轮 §2（review-r40）：无租约人工退款——保护状态独立持久化', () => {
-  it('notStarted 无租约：retained 拦呈现与派发（零 outbox）→ 恢复中心可见 → 无证据解除被拒 → none 证据解除 → 恰一次恢复 → 跨重启同判', async () => {
+  it('notStarted 无租约：严格守卫与恢复中心保留 retained（零 outbox），提供继续；显式取证解除仍须证据，恢复恰一次', async () => {
     const { db, cmd, cmdRaw } = await makeDb(join(tmpRoot, 'r41-noLease'));
     const conv = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA', title: '无租约人工退款' });
     const c1 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '无租约中断任务', intent: 'default', mentions: [] });
@@ -309,24 +306,24 @@ describe('第四十一轮 §2（review-r40）：无租约人工退款——保�
       db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:${c1.taskId}:initial', 1, 1)`).run(turnId, runId, conv.conversationId);
     })();
     // ① 对账前：UNKNOWN 未闭环拦。
-    const before = await cmdRaw('task.redispatch', { taskId: c1.taskId, reason: 'x' });
-    expect(before.error?.code).toBe('RECONCILE_REQUIRED');
+    expect(assessTaskRedispatchReadiness(db, c1.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'unclosed-unknown',turnId}});
+    expect(db.prepare('SELECT status, budget_mark FROM agent_turns WHERE id=?').get(turnId)).toEqual({status:'UNKNOWN',budget_mark:null});
     // ② 正式人工退款（无租约、无登记——复核反例形态）：FAILED/refunded 且 protectionRetained。
     const rec = await cmd<{ protectionRetained: boolean; turnFinalStatus: string }>('recovery.reconcile', { turnId, verdict: 'notStarted', note: '测试：无租约人工声明未启动', manualRiskAck: true });
     expect(rec.turnFinalStatus).toBe('FAILED');
     expect(rec.protectionRetained).toBe(true);
-    // ③ 呈现与守卫：protection_state=retained 拦（无租约不等于退出已确认）；恢复中心可见（leaseCount=0）。
+    // ③ 呈现可继续；严格守卫保留 protection_state=retained，恢复中心仍可见（leaseCount=0）。
     const list = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>('conversation.list', {});
     const me = list.conversations.find((c) => c.conversationId === conv.conversationId)!;
-    expect(me.interruptedTasks[0]!.recoverable).toBe(false);
-    expect(me.interruptedTasks[0]!.blockReason).toContain('protection_state=retained');
+    expect(me.interruptedTasks[0]!.recoverable).toBe(true);
+    expect(me.interruptedTasks[0]!.blockReason).toBeNull();
     const status = await cmd<{ pendingRelease: Array<{ turnId: string; leaseCount: number; protectionState: string }> }>('recovery.status', {});
     const row = status.pendingRelease.find((r) => r.turnId === turnId);
     expect(row != null && row.leaseCount === 0 && row.protectionState === 'retained').toBe(true);
-    // ④ 派发准入：拒绝且零新增 outbox。
-    const rej = await cmdRaw('task.redispatch', { taskId: c1.taskId, reason: 'x' });
-    expect(rej.ok).toBe(false);
-    expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    // ④ 未发出继续命令时，只读守卫报告保护且零新增 outbox。
+    const changesBeforeGuard = db.prepare('SELECT total_changes() changes').get();
+    expect(assessTaskRedispatchReadiness(db, c1.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId}});
+    expect(db.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
     // ⑤ 无证据解除被拒（不再无租约 no-op 冒充已闭环）：无登记→identity-missing→STALE_REVISION。
     const denied = await cmdRaw('recovery.releaseProtection', { turnId, note: '测试：无证据尝试解除' });
@@ -349,7 +346,7 @@ describe('第四十一轮 §2（review-r40）：无租约人工退款——保�
     expect(dup.error?.code).toBe('IDEMPOTENCY_CONFLICT');
   }, 120_000);
 
-  it('跨重启同判：文件库重开后 retained 仍拦（protection_state 持久）', async () => {
+  it('跨重启同判：文件库重开后 retained 事实持久，查看继续入口不解除保护', async () => {
     const dbPath = join(tmpRoot, 'r41-restart', 'state.sqlite');
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = openDatabase(dbPath);
@@ -371,16 +368,16 @@ describe('第四十一轮 §2（review-r40）：无租约人工退款——保�
     const rec = await cmdOn<{ protectionRetained: boolean }>(db)('recovery.reconcile', { turnId, verdict: 'notStarted', note: '跨重启前人工退款', manualRiskAck: true });
     expect(rec.protectionRetained).toBe(true);
     db.close();
-    // 「进程二」：重开同一库——retained 仍拦（呈现与命令面同源）。
+    // 「进程二」：重开同一库——提供继续入口，严格事实守卫仍报告 retained。
     const db2 = openDatabase(dbPath);
     const list = await cmdOn<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>(db2)('conversation.list', {});
     const me = list.conversations.find((x) => x.conversationId === conv.conversationId)!;
-    expect(me.interruptedTasks[0]!.recoverable).toBe(false);
-    
-    expect(me.interruptedTasks[0]!.blockReason).toContain('protection_state=retained');
-    const rej = await dispatchDaemonCommand({ db: db2, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'r41-restart', 'app') }, { protocolVersion: 1, commandId: `r41x-${randomUUID().slice(0, 8)}`, method: 'task.redispatch', params: { taskId: c.taskId, reason: 'x' } }) as unknown as { ok: boolean; error?: { code: string } };
-    expect(rej.ok).toBe(false);
-    expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    expect(me.interruptedTasks[0]!.recoverable).toBe(true);
+    expect(me.interruptedTasks[0]!.blockReason).toBeNull();
+    const changesBeforeGuard = db2.prepare('SELECT total_changes() changes').get();
+    expect(assessTaskRedispatchReadiness(db2, c.taskId)).toMatchObject({code:'RECONCILE_REQUIRED',fact:{kind:'protection-retained',turnId}});
+    expect(db2.prepare('SELECT total_changes() changes').get()).toEqual(changesBeforeGuard);
+    expect(db2.prepare('SELECT status, budget_mark, protection_state FROM agent_turns WHERE id=?').get(turnId)).toEqual({status:'FAILED',budget_mark:'refunded',protection_state:'retained'});
     db2.close();
   }, 60_000);
 });

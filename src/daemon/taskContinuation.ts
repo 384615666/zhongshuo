@@ -1,0 +1,52 @@
+import {randomUUID} from 'node:crypto';
+import type {ZhongshuoDatabase} from '../persistence/db.ts';
+import {appendDomainEvent} from '../persistence/events.ts';
+
+/** Called inside the accepted user command's transaction. Continuing is the
+ * user's decision to move past an interruption, not a claim of successful work
+ * or proof that an old OS process exited. Never changes a currently active turn.
+ */
+export function continueInterruptedTask(db:ZhongshuoDatabase,taskId:string,now=Date.now()):string[]{
+  const turns=db.prepare(`WITH RECURSIVE scope(id) AS (
+    SELECT id FROM tasks WHERE id=? UNION SELECT t.id FROM tasks t JOIN scope s ON t.parent_task_id=s.id
+  ) SELECT a.id,a.run_id,a.status,a.budget_mark,r.task_id,t.project_id,r.budget_json
+    FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+    WHERE r.task_id IN (SELECT id FROM scope)
+      AND a.status IN ('UNKNOWN','SUCCEEDED','FAILED','CANCELLED')
+      AND (a.protection_state='retained'
+        OR EXISTS(SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id=a.id AND l.status!='released')
+        OR (a.status='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id
+          AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1)))
+    ORDER BY a.rowid`).all(taskId) as {id:string;run_id:string;status:string;budget_mark:string|null;task_id:string;project_id:string;budget_json:string|null}[];
+  for(const turn of turns){
+    if(turn.budget_mark==null&&turn.status==='UNKNOWN'){
+      // Re-read per turn: multiple interrupted turns may share a run budget.
+      const run=db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(turn.run_id) as {budget_json:string|null};
+      if(run.budget_json){
+        const budget=JSON.parse(run.budget_json) as {usedTurns:number;inFlightReservedTurns:number};
+        db.prepare('UPDATE workflow_runs SET budget_json=? WHERE id=?').run(JSON.stringify({...budget,
+          usedTurns:budget.usedTurns+1,inFlightReservedTurns:Math.max(0,budget.inFlightReservedTurns-1)}),turn.run_id);
+      }
+      db.prepare("UPDATE agent_turns SET budget_mark='settled' WHERE id=? AND budget_mark IS NULL").run(turn.id);
+    }
+    const leases=db.prepare("SELECT lock_domain FROM workspace_leases WHERE owner_turn_id=? AND status!='released'").all(turn.id) as {lock_domain:string}[];
+    db.prepare("UPDATE workspace_leases SET status='released' WHERE owner_turn_id=? AND status!='released'").run(turn.id);
+    db.prepare("UPDATE agent_turns SET protection_state='released' WHERE id=?").run(turn.id);
+    // Fence only the interrupted attempt's old delivery row. A fresh continuation
+    // gets its own dispatch identity; the abandoned attempt must not be reclaimed.
+    db.prepare(`UPDATE outbox SET status='done',attempt_epoch=attempt_epoch+1,lease_owner=NULL,lease_until=NULL
+      WHERE turn_id=? AND status IN ('pending','leased')`).run(turn.id);
+    for(const table of ['thread_reply_requests','conversation_reply_requests']){
+      db.prepare(`UPDATE ${table} SET status='unknown',updated_at=? WHERE turn_id=? AND status IN ('queued','running')`).run(now,turn.id);
+    }
+    appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:turn.project_id,
+      taskId:turn.task_id,runId:turn.run_id,turnId:turn.id,kind:'recovery.protectionReleased',createdAt:now,
+      payload:{released:true,reason:'user-continue-interrupted-task',requestTaskId:taskId,
+        releasedLeases:leases.map(l=>l.lock_domain),businessResultUnchanged:true}});
+    // An interrupted turn can survive an old run status. Close only that stale
+    // run when no genuinely active turns remain; real active work still queues.
+    db.prepare(`UPDATE workflow_runs SET status='INTERRUPTED' WHERE id=? AND status IN ('RUNNING','WAITING','QUEUED')
+      AND NOT EXISTS(SELECT 1 FROM agent_turns WHERE run_id=? AND status NOT IN ('UNKNOWN','SUCCEEDED','FAILED','CANCELLED'))`).run(turn.run_id,turn.run_id);
+  }
+  return turns.map(turn=>turn.id);
+}

@@ -183,14 +183,9 @@ export default function App() {
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryTarget, setRecoveryTarget] = useState<RecoveryTarget | undefined>();
   const [recoveryAttention, setRecoveryAttention] = useState(false);
-  /** 恢复三态（R66 P5，review-r65 §F：启动已有 vs 运行中新增 vs 普通排队）——
-   *  · 启动已有异常：首次检查即存在 → 自动开一次面板（既有合同）；
-   *  · 运行中新失败：首次检查之后才出现 → **就地 toast** 提醒 + 侧栏标记，不再突然弹遮挡
-   *    输入的通用弹窗（原会话/任务自身的状态面板是主反馈位）；
-   *  · 普通排队（仅 pendingDispatch>0，无任何恢复类事项）：不是故障——中性展示，不标警示色。 */
+  // Recovery stays manual: startup and later interruptions only mark the sidebar.
   const [recoveryOrigin, setRecoveryOrigin] = useState<'startup' | 'runtime' | null>(null);
   const [pendingWaitCount, setPendingWaitCount] = useState(0);
-  const recoveryAutoShownRef = useRef(false);
   useEffect(() => {
     const openRecovery = (event: Event): void => {
       setRecoveryTarget((event as CustomEvent<{ target?: RecoveryTarget }>).detail?.target);
@@ -200,17 +195,7 @@ export default function App() {
     window.addEventListener(OPEN_RECOVERY_EVENT, openRecovery);
     return () => window.removeEventListener(OPEN_RECOVERY_EVENT, openRecovery);
   }, []);
-  /**
-   * R67 P2-A（review-r66 §2P2-A 反例）：**启动来源按首次成功快照的异常实体签名固定**——
-   * `startupSignatureRef` 在第一次成功 recovery.status 时记录当时全部异常实体 id（UNKNOWN
-   * turns/中断 runs/待解除保护/未收口撤销/门禁）。此后任何轮询：
-   *  - 实体全部 ⊆ 启动签名 → origin=startup（同一运行中**永不**改判、永不再自动弹窗——
-   *    反例根因是旧判据 `isFirstCheck || hadRealAttention` 在第二次轮询把 runtime 倒退成
-   *    startup 并弹遮挡窗）；
-   *  - 出现签名外**新实体** → origin=runtime：就地 toast（每个新实体集只提醒一次）+侧栏
-   *    标记，不自动弹窗；
-   *  - 全部消失 → origin=null；之后再出现（即便实体同旧）=运行中新失败（toast，不弹窗）。
-   */
+  // Keep the first snapshot only to distinguish existing tasks from new interruptions.
   const startupSignatureRef = useRef<Set<string> | null>(null);
   const lastNotifiedSignatureRef = useRef<string>('');
   const [sidebarOpen] = useState(true);
@@ -295,18 +280,17 @@ export default function App() {
             const startupSet = startupSignatureRef.current ?? new Set<string>();
             const allFromStartup = entities.every((e) => startupSet.has(e));
             if (isFirstSnapshot) {
-              // 启动时已有：沿用一次自动打开合同（仅此一次）。
+              // Existing interruptions are available from the sidebar.
               setRecoveryOrigin('startup');
-              if (!recoveryAutoShownRef.current) { recoveryAutoShownRef.current = true; setRecoveryOpen(true); }
             } else if (allFromStartup) {
-              // 持续的启动既有事项：保持 startup 分类，**不再自动弹窗**（面板开着也不动）。
+              // 启动时已有的任务继续保留侧栏提示。
               setRecoveryOrigin('startup');
             } else {
               // 运行中新失败（签名外新实体）：就地 toast（同一实体集只提醒一次）+侧栏标记。
               setRecoveryOrigin('runtime');
               if (lastNotifiedSignatureRef.current !== signature) {
                 lastNotifiedSignatureRef.current = signature;
-                toast('刚刚出现需要处理的新事项（未知结果/中断/保护）——侧栏「恢复检查」已标记，点击查看', 'warn');
+                toast('有任务可以恢复，点击侧栏“恢复任务”继续。', 'warn');
               }
             }
           } else {
@@ -550,16 +534,16 @@ export default function App() {
                 className={`side-item${recoveryAttention ? ' zs-recovery-attention' : ''}`}
                 title={recoveryAttention
                   ? recoveryOrigin === 'runtime'
-                    ? `恢复检查：本次运行新出现需要处理的事项（未知/中断/保护）——点击查看`
-                    : `恢复检查：存在需要处理的事项——点击查看`
+                    ? `恢复任务：有新的中断任务，可继续`
+                    : `恢复任务：查看可继续的任务`
                   : pendingWaitCount > 0
-                    ? `恢复检查：${pendingWaitCount} 条请求正在排队等待派发（非故障）`
-                    : '恢复检查：查看恢复与保护'}
+                    ? `恢复任务：${pendingWaitCount} 条请求正在排队等待派发（非故障）`
+                    : '恢复任务：查看可继续的任务'}
                 data-zs-recovery-attention={recoveryAttention ? '1' : '0'}
                 onClick={() => setRecoveryOpen(true)}
               >
                 <Icon name="shield" size={14} />
-                <span className="side-item-label">恢复检查</span>
+                <span className="side-item-label">恢复任务</span>
                 {recoveryAttention ? <span className="side-marks"><span className="nav-dot" title={recoveryOrigin === 'runtime' ? '本次运行新出现' : '启动时已有'} style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span> : null}
                 {!recoveryAttention && pendingWaitCount > 0 ? <span className="side-marks"><span className="nav-dot" title="普通排队（非故障）" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--text-4,#98a0ad)', display: 'inline-block' }} /></span> : null}
               </button>

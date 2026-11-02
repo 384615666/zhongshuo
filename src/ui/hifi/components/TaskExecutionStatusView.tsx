@@ -4,7 +4,7 @@ import type {TaskExecutionAction,TaskExecutionStatus} from '../../../contracts/e
 import {ExecutionStatus,taskExecutionNeedsReview} from './ExecutionStatus';
 import {sendCommand} from '../bridge';
 import {loadRoomPool,refreshDms,refreshThreadTask,openExternalDeepLink} from '../loader';
-import {requestRecoveryOpen} from '../lib/recovery';
+import {continueTask} from '../lib/checkPreviousReply';
 import {navigate} from '../lib/router';
 
 /** Bind the shared factual view to existing local actions; rendering never dispatches. */
@@ -12,20 +12,20 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
   const [error,setError]=useState<string|null>(null);
   const pending=useRef<{key:string;commandId:string}|null>(null);
   const busy=useRef(false);
+  const [submitting,setSubmitting]=useState(false);
   if(!status)return null;
   if(density==='compact'&&hideThreadNavigation&&status.phase==='COMPLETED'&&!taskExecutionNeedsReview(status))return null;
   const handle=async(action:TaskExecutionAction)=>{
     if(busy.current)return;
-    busy.current=true;setError(null);
+    busy.current=true;setSubmitting(true);setError(null);
     try{
-      const openRecovery=(turnId:string)=>{
-        const member=[...status.actualPerformingMembers,...status.waitingMembers].find(item=>item.turnId===turnId);
-        const matchingReason=status.reason.turnId===turnId;
-        requestRecoveryOpen({turnId,projectId:status.scope.projectId,requestTaskId:status.taskId,
-          taskId:matchingReason?status.reason.taskId??undefined:member?.taskId,
-          runId:matchingReason?status.reason.runId??undefined:member?.runId??undefined});
-      };
-      if(action.kind==='recover'){openRecovery(action.target.id);return;}
+      if(action.kind==='continue'||action.kind==='recover'){
+        const binding=action.kind==='continue'?action.binding:{taskId:status.taskId,expectedTaskRevision:status.evidence.taskRevision,expectedStopGeneration:status.evidence.stopGeneration};
+        const result=await continueTask(binding);
+        if(result.status!=='ok')throw Error(result.status==='unknown'?`继续请求尚未收到回执，可重试。${result.error}`:result.error);
+        await Promise.allSettled([...(status.scope.roomId?[loadRoomPool(status.scope.roomId)]:[refreshDms(status.scope.projectId)]),...(status.scope.threadId?[refreshThreadTask(status.scope.threadId)]:[])]);
+        return;
+      }
       if(action.kind==='close'){
         const key=JSON.stringify(action.binding);
         if(pending.current?.key!==key)pending.current={key,commandId:crypto.randomUUID()};
@@ -50,15 +50,19 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
         return;
       }
       const target=action.target;
-      if(target.kind==='recovery')openRecovery(target.id);
+      if(target.kind==='recovery'){
+        const result=await continueTask({taskId:status.taskId,expectedTaskRevision:status.evidence.taskRevision,expectedStopGeneration:status.evidence.stopGeneration});
+        if(result.status!=='ok')throw Error(result.error);
+        await Promise.allSettled([...(status.scope.roomId?[loadRoomPool(status.scope.roomId)]:[refreshDms(status.scope.projectId)]),...(status.scope.threadId?[refreshThreadTask(status.scope.threadId)]:[])]);
+      }
       else if(target.kind==='thread')navigate(`/thread/${target.id}`);
       else if(target.kind==='room')await openExternalDeepLink(`#task=${status.taskId}`);
       else await openExternalDeepLink(`#${target.kind==='delivery'?'delivery':target.kind==='dm'?'dm':'task'}=${target.id}`);
     }catch(reason){setError((reason as Error).message);}
-    finally{busy.current=false;}
+    finally{busy.current=false;setSubmitting(false);}
   };
   return <div>
-    <ExecutionStatus status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} surface={surface} onOpenDetails={onOpenDetails} onAction={action=>void handle(action)}/>
+    <ExecutionStatus busy={submitting} status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} surface={surface} onOpenDetails={onOpenDetails} onAction={action=>void handle(action)}/>
     {error?<div className="small warning" role="alert">{userFacingSystemText(error ?? '')}</div>:null}
   </div>;
 }

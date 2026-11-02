@@ -34,6 +34,7 @@ import {
   releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate, reworkPendingOf,
 } from '../persistence/stores/dm.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
+import {continueInterruptedTask} from './taskContinuation.ts';
 import { ensureDefaultProject, openProject, relocateProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
 import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch.ts';
@@ -59,7 +60,7 @@ import { discoverLocalMemberDefaults, ensureDefaultMembers, type DefaultMemberCa
 import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
-import { openDispatchGate } from '../persistence/daemonState.ts';
+import { openDispatchGate,isDispatchGateHeld } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
 import {runtimeOptions} from './runtimeOptions.ts';
@@ -1003,6 +1004,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
   const withCommandId = (result: object): object => ({ commandId: env.commandId, ...result });
   const payloadHash = computeCommandPayloadHash({ method: env.method, target: null, params: env.params, expectedRevision: env.expectedRevision ?? null });
   const scope = localScope(deps.localUserId);
+  const continuedTurns=new Set<string>();
   // runCommand 为同步事务：handler 必须同步返回（异步命令自包 runCommand，如 task.stop）。
   // replayGuard（第三十一轮一）：重放返回持久结果前执行的纯校验——旧回执不绕过当前
   // 权限变化（会话归档/audience 变化后重放同号同参请求=明确拒绝）。
@@ -1015,6 +1017,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     }
     const outcome = runCommand<T>(deps.db, { idempotencyScope: scope, commandId: env.commandId, payloadHash, now: Date.now(), ...(replayGuard != null ? { replayGuard } : {}) }, handler);
     if (!outcome.ok) throw new DaemonCommandError(outcome.error.code, outcome.error.message);
+    // Run memory cleanup only after the whole accepted command commits. A
+    // rejected/stale followup leaves both durable and in-memory state untouched.
+    for(const turnId of continuedTurns){try{deps.releaseAdmission?.(turnId);}catch{/* restart rebuilds admission from durable release */}}
+    continuedTurns.clear();
     return { data: outcome.data, replayed: outcome.replayed };
   };
 
@@ -1941,7 +1947,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
               const selection=params.intent==='default'?selectThreadRecipients(deps.db,thread.id,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,target):undefined;
-              if(params.intent==='default')assertThreadTaskReady(deps.db,thread.id);
+              if(params.intent==='default'){
+                const released=thread.root_task_id?continueInterruptedTask(deps.db,thread.root_task_id):[];
+                for(const id of released)continuedTurns.add(id);
+                if(released.length&&isDispatchGateHeld(deps.db))openDispatchGate(deps.db);
+                assertThreadTaskReady(deps.db,thread.id);
+              }
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
               assertImageGate(resolvedAtts,params.intent==='default',params.imageAck,params.body,(selection?.recipientIds??[]).every(id=>memberImageCapability(deps.db,id).status==='supported'));
               assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
@@ -2207,6 +2218,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           FROM workflow_runs r JOIN tasks t ON t.id=r.task_id
           WHERE r.status='INTERRUPTED' AND t.status NOT IN ('DONE','CANCELLED')
             AND NOT EXISTS(SELECT 1 FROM workflow_runs newer WHERE newer.task_id=r.task_id AND newer.rowid>r.rowid)
+            AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.run_id=r.id AND e.kind='recovery.protectionReleased'
+              AND json_extract(e.payload_json,'$.reason')='user-continue-interrupted-task')
+            AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.task_id=r.task_id AND e.kind='task.redispatchEnqueued'
+              AND json_extract(e.payload_json,'$.sourceRunId')=r.id)
           ORDER BY r.rowid`).all() as Array<{ id: string; task_id: string; status: string }>;
         const unknownTurns = deps.db.prepare(
           `SELECT t.id, t.run_id AS runId, t.stage_key AS stageKey, r.task_id AS taskId, t.status,
@@ -3045,11 +3060,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const items = rows.slice(0, 20).map((t) => {
           const pending = deps.db.prepare("SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'")
             .get(`task:${t.id}:redispatch:${t.run_id}`) != null;
-          const blocked = pending ? null : assessTaskRedispatchReadiness(deps.db, t.id);
           const formatRepair = deps.db.prepare(`SELECT 1 FROM agent_turns a
             JOIN domain_events e ON e.turn_id=a.id AND e.kind='turn.outputInvalid'
             WHERE a.run_id=? AND a.status='FAILED' LIMIT 1`).get(t.run_id) != null
             && deps.db.prepare('SELECT 1 FROM format_repair_workitems WHERE task_id=? AND status IN (\'pending\',\'consumed\')').get(t.id) == null;
+          const blocked = pending ? null : assessTaskRedispatchReadiness(deps.db, t.id,{allowInterrupted:!formatRepair});
           return { taskId: t.id, title: t.title, taskRevision: t.revision, stopGeneration: t.stop_generation,
             latestRunId: t.run_id, available: projectActive && !archived && !pending && blocked == null, pending,
             formatRepair,
@@ -5310,6 +5325,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         deps.scheduleShutdown();
         return withCommandId({ ok: true, data: { accepted: true, note: '优雅关闭已调度（拒新命令→收拢→关库→退出 0；未收敛→强制→退出 3）——确认以进程退出码与 daemon:stop:last 为准' } });
       }
+      case 'task.continue':
       case 'task.redispatch': {
         // DIRECT 追加 turn（跟进/格式修复/中断恢复）：经 outbox 正式编排（worker 领取→准入→
         // 成员绑定 adapter），不绕过产品链路直调 CLI。前置：任务存在、非终态、stop_generation=0、
@@ -5322,9 +5338,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // - **在途检查按真实归属**（workflow_runs.task_id）——旧查询按 dispatch_key 前缀 'task:'
         //   匹配，漏掉 DM 初始键 dmtask:（旧 DM turn 仍 RUNNING 也放行）；现在覆盖 DM/房间/提醒/
         //   修复/重派全部键形态，run 级在途一并核对。
-        // - **UNKNOWN 未对账拒绝**：显式点击不构成旧执行已退出的证明——预算未结算
-        //   （budget_mark IS NULL）或存在未释放 workspace_leases 的 UNKNOWN turn = 结果不确定，
-        //   先走恢复中心取证/对账/保护解除（RECONCILE_REQUIRED），不得新建派发或借新 run 绕预算。
+        // - 用户继续时自动收口历史中断占用及未结算预算，不要求检查或填写依据；
+        //   当前仍在执行的轮次保持正常串行/排队规则，原中断不改记为成功。
         // - **恢复意图绑定源执行**：非修复派发键=task:<id>:redispatch:<sourceRunId>（缺省取任务
         //   最新 run；无 run 保持旧键）。同源重试在途=幂等冲突；同源已完成=STALE（该次恢复已
         //   派发过——新一次合法中断产生新源 run=新意图）；不再撞固定唯一键。
@@ -5412,8 +5427,39 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               throw new DaemonCommandError('STALE_REVISION', '失败运行或任务状态已变化——请刷新后重新决定');
             }
           }
-          // 恢复就绪=共享判定（第四十轮 §2 四分离：在途/保护未解除/UNKNOWN 未闭环——
-          // 与 dm.ts 可恢复性呈现同源；FAILED+未释放租约、settled 但无正式保护解除事件均拦）。
+          // 用户继续时收口历史占用；随后仍核对实际在途执行，避免重复派发。
+          if(!params.formatRepair){
+            for(const id of continueInterruptedTask(deps.db,params.taskId))continuedTurns.add(id);
+            if(isDispatchGateHeld(deps.db))openDispatchGate(deps.db);
+          }
+          // A queued request may be waiting on an interrupted DIFFERENT task.
+          // Continue that existing request, rather than rerunning the old task or
+          // adding a second dispatch for the request that is already queued.
+          if(env.method==='task.continue'&&!params.formatRepair&&params.sourceRunId==null&&params.expectedRunStatus==null
+            &&!deps.db.prepare("SELECT 1 FROM workflow_runs WHERE task_id=? AND status IN ('RUNNING','WAITING','STOPPING') LIMIT 1").get(task.id)){
+            const visited=new Set<string>();
+            let resumedQueue=false;
+            let queued:ReturnType<typeof readExecutionBlocker>=null;
+            while(true){
+              const blocker=readExecutionBlocker(deps.db,task.id);
+              if(blocker?.reason!=='unknown-turn'||!blocker.blockingTaskId||visited.has(blocker.blockingTaskId))break;
+              visited.add(blocker.blockingTaskId);
+              assertTaskAudience(deps.db,deps.localUserId,blocker.blockingTaskId);
+              const released=continueInterruptedTask(deps.db,blocker.blockingTaskId);
+              if(!released.length)break;
+              for(const id of released)continuedTurns.add(id);
+              resumedQueue=true;queued=blocker;
+            }
+            if(resumedQueue&&queued){
+              const pending=deps.db.prepare("SELECT dispatch_key,turn_id FROM outbox WHERE id=? AND status IN ('pending','leased')").get(queued.outboxId) as {dispatch_key:string;turn_id:string|null}|undefined;
+              if(pending&&pending.turn_id==null){
+                appendDomainEvent(deps.db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,
+                  projectId:(deps.db.prepare('SELECT project_id FROM tasks WHERE id=?').get(task.id) as {project_id:string}).project_id,
+                  taskId:task.id,kind:'task.queuedContinuationRequested',createdAt:Date.now(),payload:{dispatchKey:pending.dispatch_key}});
+                return{enqueued:true as const,dispatchKey:pending.dispatch_key,formatRepair:false,sourceRunId:null};
+              }
+            }
+          }
           const blockedEarly = assessTaskRedispatchReadiness(deps.db, params.taskId);
           if (blockedEarly != null) throw new DaemonCommandError(blockedEarly.code, blockedEarly.message);
           // sourceRunId 归属校验（第四十轮 §3）：客户端来源只是引用，不替代服务端事实——

@@ -15,6 +15,7 @@ import {applyRecovery} from '../../src/daemon/stopFlow.ts';
 import {readTaskExecutionStatus} from '../../src/daemon/executionStatus.ts';
 import {reworkPendingOf} from '../../src/persistence/stores/dm.ts';
 import {pumpCoordinations} from '../../src/daemon/coordination.ts';
+import {assessTaskRedispatchReadiness} from '../../src/persistence/stores/recoveryGuard.ts';
 
 afterEach(() => vi.unstubAllEnvs());
 const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,unknown>={}): FakeTurnScript => [{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
@@ -456,7 +457,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.adapter.startTurnLog).toHaveLength(1);
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
       expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
-      expect((await f.raw('task.redispatch',{taskId:root.taskId})).ok).toBe(false);
+      expect(assessTaskRedispatchReadiness(f.db,root.taskId)?.code).toBe('RECONCILE_REQUIRED');
     }finally{await f.adapter.closeAllSessions();f.db.close();}
   });
   it('zero parent budget starts no coordinator and no child',async()=>{
@@ -467,13 +468,13 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
     }finally{f.db.close();}
   });
-  it('an UNKNOWN child blocks parent success and fresh parent redispatch without releasing its original identity',async()=>{
+  it('an UNKNOWN child blocks automatic parent success until an explicit continuation',async()=>{
     const f=await fixture(false,{turnDeadlineMs:20,interruptGraceMs:10});try{
       const root=await f.send();await f.run(output('计划',f.plan));
       await f.run([{kind:'unresponsiveToInterrupt'},{kind:'stall',ms:1000}]);await f.worker.runOnce();
       expect(f.adapter.startTurnLog).toHaveLength(2);
       expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
-      expect((await f.raw('task.redispatch',{taskId:root.taskId})).ok).toBe(false);
+      expect(assessTaskRedispatchReadiness(f.db,root.taskId)?.code).toBe('RECONCILE_REQUIRED');
       expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='UNKNOWN'").get()).toEqual({n:1});
       expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
     }finally{await f.adapter.closeAllSessions();f.db.close();}

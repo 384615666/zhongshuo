@@ -25,7 +25,7 @@ export function readFailedTaskRetry(db:ZhongshuoDatabase,taskId:string):{
     WHERE f.task_id=? AND f.status='pending' AND o.status IN ('pending','leased') LIMIT 1`).get(`task:${taskId}:redispatch:${run.id}`,taskId)!=null;
   const scopeBlock=task.project_status!=='active'?'项目已归档或不可用；先恢复项目。'
     :task.conversation_archived!=null?'会话已归档；先恢复会话。':task.room_archived!=null?'房间已归档；先恢复房间。':null;
-  const blockReason=scopeBlock??(!pending?assessTaskRedispatchReadiness(db,taskId)?.message??null:null);
+  const blockReason=scopeBlock??(!pending?assessTaskRedispatchReadiness(db,taskId,{allowInterrupted:!formatRepair})?.message??null:null);
   const available=!pending&&blockReason==null;
   return{available,pending,blockReason,...(formatRepair?{formatRepair:true}:{}),...(available?{binding:{method:'task.redispatch',taskId,
     sourceRunId:run.id,expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation,expectedRunStatus:run.status,

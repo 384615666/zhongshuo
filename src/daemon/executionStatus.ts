@@ -1013,10 +1013,10 @@ export function readTaskExecutionStatus(
     projectionReason = reason(
       retained == null ? 'UNKNOWN_TURN' : 'PROTECTION_RETAINED',
       shutdown != null
-        ? `应用关闭时本轮中断，未收到完整结果；请先检查上次执行已结束，再继续处理。${retained != null ? '执行保护仍保留。' : ''}`
+        ? '应用关闭时本轮中断；可直接继续任务，已有聊天和文件保留。'
         : retained?.protection_state === 'retained'
-        ? '执行保护仍保留；在程序证据解除前，结果不能视为已结束。'
-        : '执行结果不确定，等待正式核对与保护解除。',
+        ? '上次执行中断；可直接继续任务。'
+        : '上次未收到完整结果；可直接继续任务。',
       'recovery',
       { taskId: turn.task_id, runId: turn.run_id, turnId: turn.id, eventSeq: shutdown?.seq },
     );
@@ -1200,7 +1200,7 @@ export function readTaskExecutionStatus(
     projectionReason = {
       ...projectionReason,
       code: 'RECOVERY_REQUIRED',
-      message: sameShutdownTurn ? projectionReason.message : recovery.message,
+      message: sameShutdownTurn ? projectionReason.message : '上次执行中断；可直接继续任务，已有聊天和文件保留。',
       source: 'recovery',
       taskId: heldTurn?.task_id ?? (sameShutdownTurn ? shutdownContext!.turn.task_id : task.id),
       runId: heldTurn?.run_id ?? projectionReason.runId,
@@ -1239,10 +1239,10 @@ export function readTaskExecutionStatus(
     ?? recovery?.fact.turnId;
   if (recoveryTurnId != null) {
     addAction({
-      id: `recover:${recoveryTurnId}`,
-      kind: 'recover',
-      label: '检查中断',
-      target: { kind: 'recovery', id: recoveryTurnId },
+      id: `continue:${task.id}:${task.revision}`,
+      kind: 'continue',
+      label: '继续任务',
+      binding:{taskId:task.id,expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation},
     });
   }
   if (results.pendingReviewDelivery != null) {
