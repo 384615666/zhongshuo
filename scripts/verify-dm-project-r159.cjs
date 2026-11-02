@@ -60,6 +60,7 @@ window.proof={navigate,uncertain:()=>{uncertain=true;},hold:()=>{held=true;},rel
   modal:!!document.querySelector('[data-zs-create-dm-member]'),text:document.body.innerText,
   avatars:kinds.map(kind=>store.getState().ui.avatars['member:m_default_'+kind+'_A']===defaultAiAvatarPreset(kind).dataUrl),
   held:!!releaseCreate,
+  pickerAvatars:kinds.map(kind=>store.getState().ui.avatars['member:m_default_'+kind+'_B']===defaultAiAvatarPreset(kind).dataUrl),
  })};
 
 `;
@@ -101,6 +102,8 @@ async function prove(out) {
     await capture('01-grouped-private-messages');
     await click('[data-zs-dm-project="B"] .dm-project-head button[aria-label]');
     await until('document.querySelector("[data-zs-create-dm-member=m_default_codex_B]")','B member picker');
+    await until('proof.snapshot().pickerAvatars.every(Boolean)','inactive-project member defaults');
+    check('inactive-project-picker-has-channel-default-avatars',(await js('proof.snapshot()')).pickerAvatars.every(Boolean));
     check('member-picker-has-no-second-confirm-button',await js('![...document.querySelectorAll(".modal footer button,.modal .modal-foot button")].some(button=>button.textContent.trim()==="创建")'));
     const choose='[data-zs-create-dm-member="m_default_codex_B"]';
     const rect=await js('(()=>{const r=document.querySelector('+JSON.stringify(choose)+').getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()');

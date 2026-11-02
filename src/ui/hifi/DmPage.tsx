@@ -20,7 +20,8 @@ import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Avatar, Menu, MenuItem, Modal, Tag, memberColor } from './components/ui';
-import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
+import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState, getState } from './shell';
+import { backfillDefaultMemberAvatars } from './data/defaultMemberAvatars';
 import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, loadDmProjectIndex, openDmConversation, type ReviewSnapshot } from './loader';
 import {
   openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown,
@@ -760,7 +761,12 @@ function CreateDmModal({projectId,onClose,onCreated}:{projectId:string;onClose:(
   useEffect(()=>{
     alive.current=true;
     void command<{items:Array<{id:string;displayName:string;enabled:boolean;principalType:string}>}>('member.list',{projectId})
-      .then(result=>{if(alive.current)setMembers(result.items.filter(member=>member.principalType==='agent'));})
+      .then(result=>{
+        if(!alive.current)return;
+        const agents=result.items.filter(member=>member.principalType==='agent');
+        setMembers(agents);
+        void backfillDefaultMemberAvatars(agents,getState().ui.avatars??{});
+      })
       .catch((reason:unknown)=>{if(alive.current)setError((reason as Error).message);});
     return()=>{alive.current=false;};
   },[projectId]);
