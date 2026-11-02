@@ -51,3 +51,12 @@
 - 产品：`src/ui/hifi/pages/SettingsPage.tsx`（重写为单页）、`src/ui/hifi/styles/components.css`（单页布局与窄窗设置行）、`src/ui/hifi/data/store.ts`（通知开关投影）、`src/ui/hifi/App.tsx`（启动读取开关、侧栏提示语）、`src/ui/hifi/components/TaskNotificationController.tsx`（按开关弹窗/只轮询）、`src/contracts/taskNotifications.ts`（键与 parse/serialize）、`src/daemon/commands.ts`（app.settings 白名单）、`src/daemon/taskNotifications.ts`（关闭时抑制）、`src/ui/appLinks.ts`（新）、`src/ui/main.ts`、`src/ui/preload.ts`、`src/ui/hifi/bridge.ts`。
 - 测试：新增 `tests/browser/settingsSinglePageR157.test.ts`、`tests/unit/appLinksR157.test.ts`、`tests/integration/notificationSwitchR157.test.ts`；更新 R108 通知设置、R149 文案护栏、R152 设置布局 Electron 校验、R153 并发面板校验，并为 15 个旧测试/校验脚本补齐 `.png` loader（头像功能引入的 esbuild 缺口）与 `roomReplyPreviewR102` 的后台头像读取断言。
 - 手册：`docs/user-guide/README.md` 第 11、14 章与托盘说明；重采集 `13-appearance / 14-data / 15-help / 18-call-budget / 23-settings-general-dark` 并新增 `24-settings-help-dark`，删除已不存在的 `24-settings-guide-dark`；`scripts/lib/user-guide-scenes.js` 同步。
+
+## 交付（0.1.3-beta.10）
+
+- 安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.10-x64.exe`，**160,106,495 字节**，SHA256 `18197ed8948e7205df5c2ebe1e2505b2a6b3279e151d104e5e4d809d316fe069`，附 `.sha256`、`.release.json`；未签名。
+- 程序源码 `fb26a2e` clean（dirty=false），安装镜像 BUILD `bld_5f6885bf512d64a`、665 文件清单全部核对（脚本内 `verifyManifest` 逐文件 hash）；随包 `Zhongshuo.exe` 版本资源回读 ProductName/FileDescription=众说、FileVersion=`0.1.3-beta.10`、OriginalFilename=`Zhongshuo.exe`。
+- **包内隔离验证 18/18 通过**（`dist/r157/package-qa-*`，独立数据目录、假运行时、不装注册表）：包内 EXE 启动、boot ready/连接在线、使用指定数据根且忽略继承根、版本 `0.1.3-beta.10`、设置页为单页（无侧栏菜单、六段有序）、旧入口（连接与设备/打开一个定位链接/本机运行状态）不出现、通知总开关存在、手册/GitHub/主页三个入口与 `zsAppLinks` 桥存在、GitHub 与主页地址可见、通知开关关闭/开启均回读一致、`?section=help` 滚动到帮助段、正常停机 exit 0 且 daemon 已停止。
+- 本轮**未**执行静默安装/卸载：安装器模板本轮未改，静默安装会改写用户当前 beta.9 的 HKCU 卸载登记与快捷方式，故只对安装镜像做上述包内验证；用户按正常流程从托盘退出旧版后覆盖安装。
+- 已推送公开 `main` 并发布 GitHub Release `v0.1.3-beta.10`（见 release 页）。
+
