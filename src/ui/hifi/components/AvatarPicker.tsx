@@ -1,32 +1,28 @@
 /**
  * 头像选择器：预置头像九宫格 + 上传自定义图片 + 恢复默认。
  *
- * 用在「成员管理 → AI 设置」和「添加 AI」两个弹窗里。选中值就是 data URL
+ * 用在「成员管理 → AI 设置」「添加 AI」以及三个模板弹窗里。选中值就是 data URL
  * （`app.appearance.set` 的 `avatar.dataUrl`），`null` 表示回到默认首字母头像。
  *
  * 预置图走 esbuild 的 dataurl loader，`AVATAR_PRESETS[].dataUrl` 本身就是可直接落库的
  * data URL，所以"选预置"和"传自定义"在下游是同一条路径。
+ *
+ * 版式（用户 2026-11-02 反馈）：**只保留下面一排预置图**。原先上面还有一行
+ * 「大预览 + 预置 · XX娘 + 顶栏、成员卡与消息里都用这张」的说明，属于重复信息——
+ * 当前选中哪张，看下面那排的高亮框就够了，所以那行去掉。
  */
 import { useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { Avatar } from './ui';
 import { toast } from '../shell';
 import { readAvatarFile } from '../data/avatarUpload';
 import { AVATAR_PRESETS, presetForDataUrl } from '../data/avatarPresets';
 
 export function AvatarPicker({
-  name,
-  color,
-  subject,
   value,
   disabled,
   allowCustom = true,
   onChange,
 }: {
-  name: string;
-  color: string;
-  /** `member:<id>`；新成员创建前没有 id，可传 undefined——只影响预览副标题。 */
-  subject?: string;
   value: string | null;
   disabled?: boolean;
   /** 模板只存预设标识、不存图片，所以模板表单要关掉自定义上传。 */
@@ -67,22 +63,8 @@ export function AvatarPicker({
   return (
     <div className="field" data-zs-avatar-picker="1">
       <span className="field-label">头像</span>
-      <div className="row tight wrap" style={{ alignItems: 'center', gap: 10 }}>
-        <Avatar name={name || 'AI'} color={color} size={36} round subject={subject} show />
-        <div style={{ minWidth: 0 }}>
-          <div className="small strong truncate">
-            {value == null ? '默认首字母头像' : current != null ? `预置 · ${current.label}` : '自定义图片'}
-          </div>
-          <div className="small faint">顶栏、成员卡与消息里都用这张</div>
-        </div>
-      </div>
 
-      <div
-        className="row tight wrap"
-        role="group"
-        aria-label="预置头像"
-        style={{ marginTop: 8, gap: 8 }}
-      >
+      <div className="row tight wrap" role="group" aria-label="预置头像" style={{ gap: 8 }}>
         {AVATAR_PRESETS.map((preset) => {
           const selected = value === preset.dataUrl;
           return (
@@ -108,7 +90,7 @@ export function AvatarPicker({
             className="btn"
             disabled={busy}
             aria-pressed
-            aria-label="使用当前上传的图片"
+            aria-label="当前上传的图片"
             title="当前上传的图片"
             style={thumb(true)}
           >
@@ -123,7 +105,7 @@ export function AvatarPicker({
           className="hidden"
           type="file"
           accept="image/png,image/jpeg,image/webp"
-          aria-label={`上传${name || 'AI'}的头像`}
+          aria-label="上传自定义头像"
           onChange={(event) => {
             pickFile(event.currentTarget.files?.[0]);
             event.currentTarget.value = '';

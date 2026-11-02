@@ -96,7 +96,7 @@ export function SaveMemberTemplateModal({ projectId, member, onClose, onSaved }:
     return <Modal title={`保存配置模板 · ${member.displayName}`} size="md" onClose={onClose} subtitle="保存此成员当前的渠道、模型和权限设置；不包含账号、会话和任务" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.saveFromMember', { projectId, memberId: member.id, expectedRevision: member.revision, name, description: desc, ...(avatarPreset ? { avatarPresetId: avatarPreset.id } : {}) }, onSaved)}>保存模板</button></>}>
     {f.invalid ? <div className="panel warning">目标已切换，表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
-    <AvatarPicker name={member.displayName} color="var(--neutral)" value={avatar} disabled={f.busy || f.committed} allowCustom={false} onChange={setAvatar}/>
+    <AvatarPicker value={avatar} disabled={f.busy || f.committed} allowCustom={false} onChange={setAvatar}/>
     <div className="panel info">创建新成员时会使用这里的设置；之后修改模板只影响新建的成员。</div>
   </Modal>;
 }
@@ -122,7 +122,7 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
     {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}（打开项目后可选）</div>}
     <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">{runtimePermissionHint(form.config.kind)}</div>
-    <AvatarPicker name={form.name} color="var(--neutral)" value={avatar} disabled={f.busy||f.committed} allowCustom={false} onChange={setAvatar}/>
+    <AvatarPicker value={avatar} disabled={f.busy||f.committed} allowCustom={false} onChange={setAvatar}/>
   </Modal>;
 }
 export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {
@@ -138,7 +138,7 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
     return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name}`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent, data) => { const memberId = (data as { memberId?: string } | undefined)?.memberId; if (memberId != null) { try { await saveAvatar(`member:${memberId}`, avatar); } catch (error) { toast(`成员已创建，但头像未保存：${userFacingSystemText((error as Error).message ?? '')}`, 'error'); } } await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
     {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">成员名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-member-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">成员说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
-    <AvatarPicker name={name} color="var(--neutral)" value={avatar} disabled={f.busy||f.committed} allowCustom onChange={setAvatar}/>
+    <AvatarPicker value={avatar} disabled={f.busy||f.committed} allowCustom onChange={setAvatar}/>
     <div className="panel">{t.config.kind} · {t.config.model ?? '模型由渠道默认'} · 保存权限 {t.config.permissionMode ?? '未指定'}<br />程序：{t.config.executable}<br />创建后不会自动开始任务，也不成为协调者；加入未归档房间只影响之后派发。</div>
     <RuntimeChannelHelp kind={t.config.kind}/>
   </Modal>;

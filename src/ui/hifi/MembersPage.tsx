@@ -482,9 +482,6 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
         {form.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.kind} executable={form.executable} value={form.model} disabled={busy} onChange={model=>setForm(f=>({...f,model,effort:''}))}/>:null}
         <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
         <AvatarPicker
-          name={member.displayName}
-          color={memberColor(member.id, undefined)}
-          subject={memberSubject}
           value={avatar}
           disabled={busy}
           onChange={setAvatar}
@@ -582,8 +579,6 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
         <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model=>setRuntime(f=>({...f,model,effort:''}))}/>
         <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort=>setRuntime(f=>({...f,effort}))}/>
         <AvatarPicker
-          name={name}
-          color="var(--neutral)"
           value={avatar}
           disabled={busy}
           onChange={setAvatar}
