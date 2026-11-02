@@ -2,6 +2,8 @@
 
 2026-11-02恢复任务批量操作：用户选“一键继续、成功自动清空”。无恢复事项隐藏侧栏入口，普通排队不误报；弹窗按父任务合并批量继续、先续未完成撤销、成功自动关闭并即时刷新隐藏入口，部分失败仅留剩余项、同号重试与交叉点击互斥、关闭后后台提交。pendingRelease补taskId，FAILED/retained单独存在也能载入。相关7文件90项通过、新Electron22检查及原恢复交互通过，界面构建/hifi类型/跟踪主工程类型通过、lint无新增、截图已目视；原未跟踪R130类型13错保留。仅源码和构建，未出新安装包、未动用户运行数据、未重放原任务、0真实模型、未提交推送。见[记录](../reviews/recovery-bulk-20261102.md)。
 
+随后用户授权推送打包，beta.9 EXE160184501字节SHA ce8b2f91…已置根dist/installers，程序2006687 clean/BUILD bld_0ecbd85ae8bec21f/665hash。实际隔离安装45项过、原登记四快捷方式/文件/进程恢复、0真实模型；完整345文件3079过5旧UI夹具失败16跳过，修正头像测试loader/默认头像夹具和旧搜索预期后最终9文件80过，双types过。后续提交仅测试/文档，安装包程序身份不变；未自动覆盖用户安装/继续原任务，未发Release。详见同上交付记录。
+
 R156依用户最新决定替代R155检查/依据/重启前置：原任务与私信直接继续、串内跟进自动处理旧中断，事务内释放旧占用、预算只结算一次，保留UNKNOWN和已有文件；旧派发代次/迟到结果隔离，不重复交付扣费。跨任务旧占用阻塞的现有队列沿用，不重复新派发。UI取消依据/检查及启动自动弹窗，恢复任务列表只留继续/查看；安装器仍要求托盘先退出。beta.5程序93cb16c clean/BUILD bld_f894f04bf51593e3/665hash、EXE159495712字节SHA5d5088bd…根dist/installers交付。冻结全量344文件3082通过0失败16跳过、双types/lint无新增、direct46/UI20及实际安装42检查全过；原beta4登记与四快捷方式精确恢复、原安装/进程/数据保留、fixture0。用户无需重启Windows，原业务未自动重放，0真实模型、不推送。详见[R156](../reviews/r156-direct-continue-20261102.md)。
 
 R155中断恢复闭环：readonly inspect显示实际阻塞child/成员/完整结果缺失/最后动作/退出结论，父入口绑定turn与child，明确ready才显式release并复查，UNKNOWN历史不变/不重放；legacy stop丢失引入系统Windowsboot+monotonic/时钟margin/排他锁/进程新代次与树重查证据，当前原Pi同boot仍需用户安装beta4后重启Windows再检查。修复无retained/no lease UNKNOWN释放noop及矛盾none登记。原库仅只读0修改，安装器不自动关程序。完整343文件3040通过16跳过1旧UI夹具失败，夹具修正后10文件60项/R135内部78检查通过；最终恢复152、inspection10、UI23、独立7及双types/lint无新增通过，非最终源码全量重跑。beta.4程序5011619 clean/BUILD bld_d77fafd9e51e88c5/665hash，EXE159495307字节SHA311e6689…，根dist/installers交付；最终安装42/42通过，原登记四快捷方式精确恢复，原安装/进程/数据保留，0模型/fixture进程。用户原保护未解除，须重启Windows后显式检查→解除→继续。详见[R155](../reviews/r155-interrupted-recovery-20261101.md)，仅本地不推送发布。
