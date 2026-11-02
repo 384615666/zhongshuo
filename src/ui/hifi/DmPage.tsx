@@ -50,7 +50,9 @@ const FORMAL_LIMITS = {
 export function DmPage() {
   const route = useHashRoute();
   const path = pathOf(route);
-  const dms = useStore((s) => s.dms);
+  const dmsAll = useStore((s) => s.dms);
+  const projectId = useStore((s) => s.activeProjectId);
+  const dms = useMemo(() => dmsAll.filter(dm => dm.projectId === projectId), [dmsAll, projectId]);
   const membersAll = useStore((s) => s.members);
   const historyMap = useStore((s) => s.dmHistory);
   const st = useStore((x) => x);
@@ -428,7 +430,7 @@ export function DmPage() {
                     title={d.title !== '' ? d.title : `${d.peerDisplayName ?? '成员'} 的一对一私信`}
                     onClick={() => navigate(`/dm/${d.id}`)}
                   >
-                    <Avatar name={peer?.displayName ?? d.peerDisplayName ?? '成员'} color={peer != null ? memberColor(peer.id) : undefined} size={22} round subject={peer!=null?`member:${peer.id}`:undefined} />
+                    <Avatar name={peer?.displayName ?? d.peerDisplayName ?? '成员'} color={d.memberIds[0] ? memberColor(d.memberIds[0]) : undefined} size={22} round subject={d.memberIds[0] ? `member:${d.memberIds[0]}` : undefined} />
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, fontWeight: d.unread > 0 ? 600 : 400 }}>
                         {d.title != null && d.title.length > 0 ? d.title : d.peerDisplayName ?? '成员'}
@@ -596,7 +598,7 @@ export function DmPage() {
                     ) : null}
                   </div>
                 ) : null}
-                <TaskExecutionStatusView status={active.executionStatus}/>
+                <TaskExecutionStatusView status={active.executionStatus} currentConversationId={active.id} surface="thread"/>
                 <DmInterruptedNotice tasks={active.interruptedTasks ?? []} memberName={active.peerDisplayName ?? members.find(member => active.memberIds.includes(member.id))?.displayName ?? '成员'} queuedCount={active.queuedCount} busy={busy != null} onRecover={task => { void doRecover(task); }}/>
                 {showFailedPanel ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">

@@ -38,7 +38,7 @@ interface RegistryItem { id: string; displayName: string; rootPath: string; cano
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;runtimeAvailable?:boolean;description?:string;revision?:number }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; lastMessageSeq?: number; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?:{maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
-interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
+interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerMemberId?: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 export interface HistoryMessage { repairLineage?:MessageRepairLineage|null; id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[]; progress?: ThreadVisibleProgress[] }
 interface FileChangeCarrier { fileChanges?: MessageFileChange[] }
@@ -807,19 +807,37 @@ export async function roomMembersSetReal(roomId: string, memberId: string, actio
 
 /** R65：焦点切换（不重开目录）——切 activeProjectId 并刷新该项目的房间/成员/私信投影。
  * 已打开项目的房间事实在库里，无需 project.open；未注册 id 返回 false（调用方如实提示）。 */
-export async function switchFocusProject(projectId: string): Promise<boolean> {
+export async function switchFocusProject(projectId: string, opts?: { expand?: boolean }): Promise<boolean> {
   const s = getState();
   const p = s.projects.find((x) => x.id === projectId);
   if (p == null) return false;
   if (s.activeProjectId === projectId) return true;
   cancelAllNavIntents();
   const gen=s.loadGen+1;
-  setState((st) => ({ ...st, loadGen:gen, activeProjectId: projectId, visibleProjectIds: [...new Set([...st.visibleProjectIds, projectId])], expandedProjectIds: [...new Set([...st.expandedProjectIds, projectId])] }));
+  setState((st) => ({ ...st, loadGen:gen, activeProjectId: projectId, visibleProjectIds: [...new Set([...st.visibleProjectIds, projectId])], expandedProjectIds: opts?.expand === false ? st.expandedProjectIds : [...new Set([...st.expandedProjectIds, projectId])] }));
   await Promise.all([refreshRooms(projectId), refreshMembers(projectId), refreshDms(projectId)]);
   if(!stillCurrent(gen,projectId))return false;
   const { persistNav } = await import('./data/store');
   persistNav(getState());
   return true;
+}
+
+/** Project names navigate; the adjacent caret alone controls room expansion.
+ * Commit the route during the click so a late read cannot steal navigation. */
+export function openSidebarProject(projectId: string): void {
+  const state = getState();
+  if (!state.projects.some(project => project.id === projectId && project.removedAt == null)) return;
+  const path = pathOf(window.location.hash.replace(/^#/, ''));
+  const dm = path === '/dm' || path.startsWith('/dm/');
+  const members = path === '/members' || /^\/project\/[^/]+\/members(?:\/|$)/.test(path);
+  if (dm && state.activeProjectId === projectId) return;
+  const first = state.rooms.find(room => room.projectId === projectId && room.archivedAt == null)
+    ?? state.sidebarRoomIndexes[projectId]?.rooms.find(room => room.archivedAt == null);
+  void switchFocusProject(projectId, { expand: false }).catch((error: unknown) => {
+    if (getState().activeProjectId === projectId) toast(`项目读取失败：${(error as Error).message}`, 'error');
+  });
+  navigate(dm ? '/dm' : members ? `/project/${projectId}/members`
+    : first ? `/project/${projectId}/room/${first.id}` : `/project/${projectId}`);
 }
 
 export interface SidebarRoomSummary {
@@ -1140,7 +1158,7 @@ export async function refreshDms(projectIdArg?: string): Promise<void> {  const 
     dms: (data.conversations ?? []).map((c) => ({
       id: c.conversationId, projectId: c.projectId ?? projectId,
       peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.unread ?? 0,
-      memberIds: [], threadId: '', createdAt: 0, lastMessageAt: 0,
+      memberIds: c.peerMemberId ? [c.peerMemberId] : [], threadId: '', createdAt: 0, lastMessageAt: 0,
       executionStatus:c.executionStatus??null,
       execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? undefined, lastMessagePreview: c.lastMessagePreview ?? '',
       // r56 H4 操作面投影：revision CAS/停止三重绑定/中断恢复/待验收/排队数。

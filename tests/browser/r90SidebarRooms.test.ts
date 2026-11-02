@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HifiState } from '../../src/ui/hifi/data/store';
 import { getState, setState } from '../../src/ui/hifi/data/store';
 import { focusProject } from '../../src/ui/hifi/data/actions-nav';
-import { buildRoomRootEnvelope, buildThreadEnvelope, defaultDeliberationMaxTurns, loadSidebarRooms, openSidebarRoom } from '../../src/ui/hifi/loader';
+import { buildRoomRootEnvelope, buildThreadEnvelope, defaultDeliberationMaxTurns, loadSidebarRooms, openSidebarRoom, openSidebarProject, refreshDms } from '../../src/ui/hifi/loader';
 import { cancelAllNavIntents } from '../../src/ui/hifi/lib/navIntent';
 import { currentNavSeq, navigate } from '../../src/ui/hifi/lib/router';
 
@@ -56,6 +56,46 @@ function installWindow(command: Command): { location: { hash: string } } {
 }
 
 describe('R90 independent project room index', () => {
+  it('clicking the current project keeps the selected private conversation',()=>{
+    const {location}=installWindow(async()=>{throw Error('No reload expected');});
+    location.hash='#/dm/second-conversation';
+    openSidebarProject('projA');
+    expect(location.hash).toBe('#/dm/second-conversation');
+  });
+  it.each(['/dm/convA','/members','/project/projA/members'])('project names preserve the page from %s and room expansion',async path=>{
+    const {location}=installWindow(async envelope=>({ok:true,data:envelope.method==='conversation.list'
+      ?{conversations:[{conversationId:'convB',projectId:'projB',peerMemberId:'mB',peerDisplayName:'同名 AI'}]}
+      :{items:[],memberBindings:[]}}));
+    location.hash='#'+path;
+    setState(state=>({...state,expandedProjectIds:['projA']}));
+    openSidebarProject('projB');
+    expect(location.hash.replace(/^#/, '')).toBe(path.startsWith('/dm')?'/dm':'/project/projB/members');
+    expect(getState().activeProjectId).toBe('projB');
+    expect(getState().expandedProjectIds).toEqual(['projA']);
+    await refreshDms('projB');
+    expect(getState().dms[0]?.memberIds).toEqual(['mB']);
+  });
+
+  it('late project reads cannot replace a newer private-message selection',async()=>{
+    let release!:()=>void;
+    const delayed=new Promise<void>(resolve=>{release=resolve;});
+    const {location}=installWindow(async envelope=>{
+      if(envelope.params.projectId==='projB')await delayed;
+      const id=String(envelope.params.projectId);
+      return{ok:true,data:envelope.method==='conversation.list'
+        ?{conversations:[{conversationId:'dm-'+id,projectId:id,peerMemberId:'peer-'+id}]}
+        :{items:[],memberBindings:[]}};
+    });
+    location.hash='#/dm/convA';
+    openSidebarProject('projB');openSidebarProject('projC');
+    await refreshDms('projC');
+    release();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(getState().activeProjectId).toBe('projC');
+    expect(getState().dms.map(dm=>dm.id)).toEqual(['dm-projC']);
+    expect(location.hash.replace(/^#/, '')).toBe('/dm');
+  });
+
   it('navigates within the loaded project without refreshing members or replacing the sidebar projection',async()=>{
     const calls:string[]=[];
     const {location}=installWindow(async envelope=>{

@@ -460,7 +460,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
         >
           <div className="small muted" style={{ lineHeight: 1.75 }}>
             归档后项目退出日常项目列表，历史保留只读；恢复后不会补跑归档期间的任务。磁盘文件与历史记录不受影响。
-            存在未结束任务时不能归档（不会自动停止或派发任务）。
+            失败记录可以保留；仍在排队、执行或等待处理的任务需先结束。
           </div>
         </Modal>
       ) : null}

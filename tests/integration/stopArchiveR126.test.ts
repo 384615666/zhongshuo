@@ -95,6 +95,57 @@ describe('R126 queued archive and stop identity/error contracts; isolated SQLite
     expect(await f.raw('project.lifecycle',{projectId:f.project.id,expectedRevision:2,action:'remove'})).toMatchObject({ok:true});
   });
 
+  it('archives failed DM attempts without changing the failure, queue, or retry history; restore does not dispatch',async()=>{
+    const f=await fixture();
+    const {conversationId}=await f.cmd<{conversationId:string}>('conversation.create',{projectId:f.project.id,peerMemberId:f.members[0]});
+    const root=await f.cmd<Root>('message.submit',{target:{kind:'dm',projectId:f.project.id,conversationId},body:'失败后保留的私信',intent:'default',mentions:[]});
+    f.addRun(root,'failed-dm',0,'FAILED');
+    f.db.prepare("UPDATE agent_turns SET status='FAILED' WHERE run_id='failed-dm'").run();
+    f.db.prepare("UPDATE outbox SET status='done'").run();
+    const before={tasks:f.db.prepare('SELECT * FROM tasks').all(),runs:f.db.prepare('SELECT * FROM workflow_runs').all(),turns:f.db.prepare('SELECT * FROM agent_turns').all(),queue:f.db.prepare('SELECT * FROM outbox').all()};
+    expect(await f.archive('archive')).toMatchObject({ok:true});
+    await f.cmd('project.lifecycle',{projectId:f.project.id,expectedRevision:1,action:'unarchive'});
+    expect({tasks:f.db.prepare('SELECT * FROM tasks').all(),runs:f.db.prepare('SELECT * FROM workflow_runs').all(),turns:f.db.prepare('SELECT * FROM agent_turns').all(),queue:f.db.prepare('SELECT * FROM outbox').all()}).toEqual(before);
+  });
+
+  it.each(['archive','remove'] as const)('%s permits a settled pre-dispatch failure but preserves its BLOCKED record',async action=>{
+    const f=await fixture(),root=await f.send();
+    f.db.prepare("UPDATE tasks SET status='BLOCKED' WHERE id=?").run(root.taskId);
+    f.db.prepare("UPDATE outbox SET status='failed'").run();
+    expect(await f.archive(action)).toMatchObject({ok:true});
+    expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
+    expect(f.interrupts).toEqual([]);
+  });
+
+  it('a failed attempt cannot hide another queued DM that has no outbox row',async()=>{
+    const f=await fixture();
+    const {conversationId}=await f.cmd<{conversationId:string}>('conversation.create',{projectId:f.project.id,peerMemberId:f.members[0]});
+    const target={kind:'dm',projectId:f.project.id,conversationId};
+    const root=await f.cmd<Root>('message.submit',{target,body:'第一条',intent:'default',mentions:[]});
+    await f.cmd('message.submit',{target,body:'尚未进入 outbox 的排队消息',intent:'default',mentions:[]});
+    f.addRun(root,'failed-before-queued-dm',0,'FAILED');
+    f.db.prepare("UPDATE agent_turns SET status='FAILED'").run();
+    f.db.prepare("UPDATE outbox SET status='done'").run();
+    expect(await f.archive('archive')).toMatchObject({ok:false,error:{code:'WORKER_STILL_RUNNING'}});
+  });
+
+  it.each(['RUNNING','STOPPING','UNKNOWN','retained'])('a failed task with %s execution evidence still blocks project archive',async state=>{
+    const f=await fixture(),root=await f.send();f.addRun(root,'unsettled',0,'FAILED');
+    f.db.prepare("UPDATE tasks SET status='BLOCKED' WHERE id=?").run(root.taskId);
+    f.db.prepare("UPDATE outbox SET status='done'").run();
+    f.db.prepare('UPDATE agent_turns SET status=?,protection_state=?').run(state==='retained'?'FAILED':state,state==='retained'?'retained':null);
+    expect(await f.archive('archive')).toMatchObject({ok:false,error:{code:'WORKER_STILL_RUNNING'}});
+  });
+
+  it('released historical UNKNOWN evidence does not block a finished project forever',async()=>{
+    const f=await fixture(),root=await f.send();f.addRun(root,'old-interruption',0,'INTERRUPTED');
+    f.db.prepare("UPDATE tasks SET status='DONE' WHERE id=?").run(root.taskId);
+    f.db.prepare("UPDATE outbox SET status='done'").run();
+    f.db.prepare("UPDATE agent_turns SET status='UNKNOWN',protection_state='released'").run();
+    expect(await f.archive('archive')).toMatchObject({ok:true});
+    expect(f.db.prepare('SELECT status,protection_state FROM agent_turns').get()).toEqual({status:'UNKNOWN',protection_state:'released'});
+  });
+
   it('fresh command IDs and refreshed STOPPING snapshots advance exactly once and preserve the target',async()=>{
     const f=await fixture(),root=await f.send();f.addRun(root,'first',0);
     for(const generation of [0,0,0,1,1])expect(await f.stop(root,'first',generation)).toMatchObject({ok:true,data:{outcome:'stopping',stopGeneration:1}});

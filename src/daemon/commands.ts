@@ -1184,7 +1184,26 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const cur = deps.db.prepare('SELECT revision, status, root_path, canonical_path, directory_identity FROM projects WHERE id = ?').get(params.projectId) as { revision: number; status: string; root_path: string; canonical_path: string; directory_identity: string } | undefined;
           if (cur == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
           if (cur.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `项目已变更（当前 revision ${cur.revision}）——请刷新后重试`);
-          const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks WHERE project_id = ? AND status IN ('OPEN','ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.projectId) as { c: number }).c;
+          // Failed attempts remain ACTIVE/BLOCKED so users can explicitly retry.
+          // Those records may be archived unchanged once execution has settled.
+          // Queued work (including DM tasks without an outbox row yet), review,
+          // live runs/turns and UNKNOWN protection must still block the operation.
+          const unfinished = (deps.db.prepare(`SELECT count(*) c FROM tasks t WHERE t.project_id = ? AND (
+            EXISTS (SELECT 1 FROM workflow_runs r JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=t.id
+              AND (a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')
+                OR (a.status='UNKNOWN' AND a.protection_state IS NOT 'released') OR a.protection_state='retained'))
+            OR EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id=t.id AND r.status IN ('RUNNING','WAITING','STOPPING'))
+            OR EXISTS (SELECT 1 FROM outbox o WHERE o.status IN ('pending','leased')
+              AND (instr(o.dispatch_key,'task:'||t.id||':')=1 OR instr(o.dispatch_key,'dmtask:'||t.id||':')=1))
+            OR EXISTS (SELECT 1 FROM conversation_reply_requests q WHERE q.task_id=t.id AND q.status IN ('queued','running'))
+            OR EXISTS (SELECT 1 FROM thread_reply_requests q WHERE q.task_id=t.id AND q.status IN ('queued','running'))
+            OR (t.status IN ('OPEN','ACTIVE','WAITING_USER','BLOCKED','REVIEW') AND NOT (
+              t.status IN ('ACTIVE','BLOCKED') AND (
+                (t.status='BLOCKED' AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id=t.id))
+                OR COALESCE((SELECT r.status FROM workflow_runs r WHERE r.task_id=t.id ORDER BY r.rowid DESC LIMIT 1) IN ('FAILED','CANCELLED','INTERRUPTED'),0)
+              )
+            ))
+          )`).get(params.projectId) as { c: number }).c;
           if ((params.action === 'archive' || params.action === 'remove') && unfinished > 0) {
             throw new DaemonCommandError('WORKER_STILL_RUNNING', `项目还有 ${unfinished} 个未结束的任务——先在房间/看板处理（停止或等完成）；归档/移除不会自动停止或派发`);
           }

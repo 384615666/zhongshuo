@@ -8,13 +8,14 @@ import {continueTask} from '../lib/checkPreviousReply';
 import {navigate} from '../lib/router';
 
 /** Bind the shared factual view to existing local actions; rendering never dispatches. */
-export function TaskExecutionStatusView({status,density='compact',hideThreadNavigation=false,surface='default',onOpenDetails}:{status:TaskExecutionStatus|null|undefined;density?:'compact'|'detail';hideThreadNavigation?:boolean;surface?:'default'|'thread';onOpenDetails?:()=>void}){
+export function TaskExecutionStatusView({status,density='compact',hideThreadNavigation=false,currentConversationId,surface='default',onOpenDetails}:{status:TaskExecutionStatus|null|undefined;density?:'compact'|'detail';hideThreadNavigation?:boolean;currentConversationId?:string;surface?:'default'|'thread';onOpenDetails?:()=>void}){
   const [error,setError]=useState<string|null>(null);
   const pending=useRef<{key:string;commandId:string}|null>(null);
   const busy=useRef(false);
   const [submitting,setSubmitting]=useState(false);
   if(!status)return null;
-  if(density==='compact'&&hideThreadNavigation&&status.phase==='COMPLETED'&&!taskExecutionNeedsReview(status))return null;
+  const inConversation = currentConversationId != null && currentConversationId === status.scope.conversationId;
+  if(density==='compact'&&(hideThreadNavigation||inConversation)&&status.phase==='COMPLETED'&&!taskExecutionNeedsReview(status))return null;
   const handle=async(action:TaskExecutionAction)=>{
     if(busy.current)return;
     busy.current=true;setSubmitting(true);setError(null);
@@ -62,7 +63,7 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
     finally{busy.current=false;setSubmitting(false);}
   };
   return <div>
-    <ExecutionStatus busy={submitting} status={hideThreadNavigation?{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&action.target.kind==='thread'&&action.target.id===status.scope.threadId))}:status} density={density} surface={surface} onOpenDetails={onOpenDetails} onAction={action=>void handle(action)}/>
+    <ExecutionStatus busy={submitting} status={{...status,actions:status.actions.filter(action=>!(action.kind==='navigate'&&((hideThreadNavigation&&action.target.kind==='thread'&&action.target.id===status.scope.threadId)||(inConversation&&action.target.kind==='dm'&&action.target.id===currentConversationId))))}} density={density} surface={surface} onOpenDetails={onOpenDetails} onAction={action=>void handle(action)}/>
     {error?<div className="small warning" role="alert">{userFacingSystemText(error ?? '')}</div>:null}
   </div>;
 }

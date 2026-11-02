@@ -18,7 +18,7 @@ import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
-import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom } from './loader';
+import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom, openSidebarProject } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
 import { MemberDetailPage } from './pages/MemberDetailPage';
@@ -460,8 +460,9 @@ export default function App() {
                         </button>
                         <button
                           className="side-item-label-btn"
-                          title={`${p.displayName} · ${p.rootPath}${p.archivedAt != null ? '（已归档·只读）' : ''}`}
-                          onClick={() => toggleProjectExpanded(p.id)}
+                          title={`切换到「${p.displayName}」${navActive.dm ? '的私信' : navActive.members ? '的成员管理' : ''} · ${p.rootPath}${p.archivedAt != null ? '（已归档·只读）' : ''}`}
+                          aria-current={isCurrent ? 'true' : undefined}
+                          onClick={() => openSidebarProject(p.id)}
                         >
                           <Icon name={p.status === 'missing' ? 'alert-triangle' : p.isGit ? 'git-branch' : 'folder'} size={13} className={p.status === 'missing' ? 'warn-icon' : 'faint'} />
                           <span className="side-item-label">{p.displayName}</span>
@@ -625,7 +626,7 @@ export default function App() {
             footer={<><div className="spacer" /><button className="btn" onClick={() => setArchiveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="archive" onDone={() => { setArchiveProjFor(null); navigate(`/archive?project=${p.id}`); }} /></>}
           >
             <div className="small muted" style={{ lineHeight: 1.75 }}>
-              归档后项目退出日常项目列表、历史保留只读；恢复不重放旧任务。磁盘文件不受影响。存在未结束任务时服务端拒绝（不自动停止/派发）。
+              归档后项目退出日常项目列表，历史保留只读，磁盘文件不受影响。失败记录可以保留；仍在排队、执行或等待处理的任务需先结束。
             </div>
           </Modal>
         );

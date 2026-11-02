@@ -596,6 +596,9 @@ createRoot(document.getElementById('root')!).render(
     <div id="finished-replies"><TaskExecutionStatusView status={{...completed,waitingForUser:null}} hideThreadNavigation /></div>
     <div id="review-replies"><TaskExecutionStatusView status={completed} hideThreadNavigation /></div>
     <div id="finished-details"><TaskExecutionStatusView status={{...completed,waitingForUser:null}} density="detail" /></div>
+    <div id="dm-running"><TaskExecutionStatusView status={{...status,actions:[...status.actions,{id:'dm-self',kind:'navigate',label:'打开私信',target:{kind:'dm',id:status.scope.conversationId}},{id:'dm-other',kind:'navigate',label:'其他私信',target:{kind:'dm',id:'other-conversation'}}]}} currentConversationId={status.scope.conversationId} density="detail" /></div>
+    <div id="dm-completed"><TaskExecutionStatusView status={{...completed,waitingForUser:null}} currentConversationId={completed.scope.conversationId} /></div>
+    <div id="dm-review"><TaskExecutionStatusView status={completed} currentConversationId={completed.scope.conversationId} /></div>
   </div>,
 );
 requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -611,6 +614,10 @@ requestAnimationFrame(() => requestAnimationFrame(() => {
   (window as any).__R108 = {
     mounted: card != null,
     finishedReplyBannerHidden: document.querySelector('#finished-replies [data-zs-execution-status]') == null,
+    dmSelfNavigationHidden: document.querySelector('#dm-running [data-zs-action-id="dm-self"]') == null,
+    dmOtherNavigationVisible: document.querySelector('#dm-running [data-zs-action-id="dm-other"]') != null,
+    dmCompletedBannerHidden: document.querySelector('#dm-completed [data-zs-execution-status]') == null,
+    dmReviewBannerVisible: document.querySelector('#dm-review [data-zs-execution-status]') != null,
     reviewReplyBannerVisible: document.querySelector('#review-replies [data-zs-execution-status]') != null,
     finishedDetailVisible: document.querySelector('#finished-details [data-zs-execution-status]') != null,
     phase: card?.dataset.zsExecutionPhase ?? null,
@@ -891,6 +898,10 @@ describe('R108 authoritative task execution status', () => {
       expect(result).toMatchObject({
         mounted: true,
         finishedReplyBannerHidden: true,
+        dmSelfNavigationHidden: true,
+        dmOtherNavigationVisible: true,
+        dmCompletedBannerHidden: true,
+        dmReviewBannerVisible: true,
         reviewReplyBannerVisible: true,
         finishedDetailVisible: true,
         phase: 'RUNNING',
