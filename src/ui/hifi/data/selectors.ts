@@ -9,6 +9,7 @@ import type {
 } from './types';
 import type { HifiState } from './store.ts';
 import type { TaskExecutionStatus } from '../../../contracts/executionStatus.ts';
+import {ROOM_ACTIVITY_RANK} from '../../../contracts/roomActivity';
 
 export const byId = <T extends { id: string }>(list: T[], id: string | undefined) =>
   id ? list.find((x) => x.id === id) : undefined;
@@ -244,7 +245,7 @@ export const activeTasksOfProject = (s: AppState, projectId: string) =>
  *    同一个房间有多个任务时，结果不会随数组顺序抖动。
  * 3. **只算顶层任务**：子任务（分工卡）跟着根任务走，父子同时计入会虚报数量。
  */
-export const NAV_TASK_STATE_RANK = ['BLOCKED', 'WAITING_USER', 'REVIEW', 'ACTIVE'] as const;
+export const NAV_TASK_STATE_RANK = ROOM_ACTIVITY_RANK;
 export type NavTaskState = (typeof NAV_TASK_STATE_RANK)[number];
 
 export interface NavTaskStateSummary {
@@ -267,8 +268,10 @@ export function navTaskStateOf(tasks: Task[]): NavTaskStateSummary {
   return { state: counts[0]?.state, counts, total: unfinished.length };
 }
 
-export const navTaskStateOfRoom = (s: AppState, roomId: string) =>
-  navTaskStateOf(s.tasks.filter((t) => t.roomId === roomId));
+export function navTaskStateOfRoom(s:AppState&Partial<Pick<HifiState,'sidebarRoomIndexes'>>,roomId:string):NavTaskStateSummary{
+  const actual=Object.values(s.sidebarRoomIndexes??{}).flatMap(index=>index.rooms).find(room=>room.id===roomId)?.activity;
+  return actual??navTaskStateOf(s.tasks.filter(task=>task.roomId===roomId));
+}
 
 /** 项目级聚合：只用于**折叠**后的项目行（展开时房间行各自显示，不在项目行重复） */
 export const navTaskStateOfProject = (s: AppState, projectId: string) =>

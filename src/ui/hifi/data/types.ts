@@ -1193,6 +1193,8 @@ export interface AttentionItem {
  *  - 项目内所有成员都可作为私聊对象
  */
 export interface DmConversation {
+  lastMessageSeq?:number;
+  lastReadSeq?:number;
   executionStatus?:TaskExecutionStatus|null;
   id: string;
   projectId: string;

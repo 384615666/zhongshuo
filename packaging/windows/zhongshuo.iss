@@ -98,6 +98,10 @@ Name: "{userdesktop}\众说"; Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app
 Filename: "{app}\Zhongshuo.exe"; WorkingDir: "{app}"; Description: "打开众说"; Flags: nowait postinstall skipifsilent unchecked
 Filename: "{app}\众说操作手册.html"; WorkingDir: "{app}"; Description: "打开操作手册"; Flags: shellexec nowait postinstall skipifsilent unchecked
 
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.zhongshuo.desktop.app"; ValueType: string; ValueName: "DisplayName"; ValueData: "众说"; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.zhongshuo.desktop.app"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\resources\app\{#BrandIconName}"; Flags: uninsdeletevalue uninsdeletekeyifempty
+
 ; No [InstallDelete], [UninstallDelete], [UninstallRun] or user-data [Dirs].
 ; Inno removes only recorded installed files/shortcuts/its uninstall registration.
 

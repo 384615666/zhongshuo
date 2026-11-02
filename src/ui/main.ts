@@ -6,14 +6,15 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, Notification as ElectronNotification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, shell, Notification as ElectronNotification } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { ConnectionMonitor } from './connectionMonitor.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn,spawnSync, type ChildProcess } from 'node:child_process';
+import {repairLegacyAppShortcuts,windowsIdentityRegistration,windowsRelaunchCommand,WINDOWS_APP_NAME} from './windowsAppIdentity.ts';
 import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
 import type { PipeClient } from '../contracts/daemonIpc.ts';
 import {claimActiveDataOperation,dataControlPaths,dataLocationHash,loadDataCopyJob,prepareDataCopyJob,processAlive,readActiveDataOperation,readDataJobStatus,readDataLocation,reconcileInterruptedDataOperation,releaseActiveDataOperation,type DataCopyJob,type DataJobStatus} from '../contracts/dataCopyJob.ts';
@@ -34,6 +35,7 @@ const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
 // 或旧开发包把安装版合并到同一任务栏按钮、沿用旧的 Electron 名称与图标。安装版使用新的稳定
 // AUMID，安装器开始菜单/桌面快捷方式写同一个值；便携/开发版使用单独的 id。
 const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ?? (installedDesktop ? 'com.zhongshuo.desktop.app' : 'com.zhongshuo.desktop.portable');
+app.setName(WINDOWS_APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId(desktopAppId);
 
 // zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
@@ -538,31 +540,33 @@ if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI 
  * （指向本程序的 exe，但名字是 Electron）。它们带着同一个 AUMID，Windows 会把「众说」
  * 去重成它们，用户看到的就是「开始菜单里名字还是不对」。
  *
- * 只删**文件里确实提到本程序 exe 名**的同名快捷方式（保守判定），且只在安装版运行；
- * 任何异常都吞掉——这只是清理，不影响启动。
+ * 只修复解析后目标等于本机当前 exe 的快捷方式，保留通知激活元数据。
  */
 function removeStaleStartMenuShortcuts(): void {
-  if (process.platform !== 'win32' || !installedDesktop) return;
-  try {
-    const programs = join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs');
-    if (programs.trim() === '' || !existsSync(programs)) return;
-    const exeName = process.execPath.split(/[\\/]/).pop()?.toLowerCase() ?? 'zhongshuo.exe';
-    for (const name of ['Electron', 'ElectronApp']) {
-      const link = join(programs, `${name}.lnk`);
-      if (!existsSync(link)) continue;
-      const bytes = readFileSync(link);
-      const ascii = bytes.toString('latin1').toLowerCase();
-      const wide = bytes.toString('utf16le').toLowerCase();
-      if (!ascii.includes(exeName) && !wide.includes(exeName)) continue;
-      writeFileSync(join(app.getPath('userData'), 'stale-start-menu-cleanup.log'), `${new Date().toISOString()} removed ${link}\n`, { flag: 'a' });
-      unlinkSync(link);
+  if(process.platform!=='win32'||!installedDesktop)return;
+  const appData=process.env.APPDATA;
+  if(!appData)return;
+  const candidate=resolveDesktopIconPath(),icon=existsSync(candidate)?candidate:process.execPath;
+  const repaired=repairLegacyAppShortcuts(join(appData,'Microsoft','Windows','Start Menu','Programs'),process.execPath,icon,desktopAppId,{
+    exists:existsSync,read:link=>shell.readShortcutLink(link),write:(link,details)=>shell.writeShortcutLink(link,'create',details),remove:unlinkSync,
+  });
+  if(repaired.length)try{appendFileSync(join(app.getPath('userData'),'stale-start-menu-cleanup.log'),`${new Date().toISOString()} repaired ${repaired.length} owned shortcut(s)\n`);}catch{/* diagnostic only */}
+}
+function registerNotificationIdentity():void{
+  if(process.platform!=='win32'||!installedDesktop)return;
+  try{
+    const candidate=resolveDesktopIconPath(),icon=existsSync(candidate)?candidate:process.execPath;
+    for(const args of windowsIdentityRegistration(desktopAppId,icon)){
+      const result=spawnSync('reg.exe',args,{windowsHide:true,stdio:'ignore'});
+      if(result.status!==0)throw Error('Windows notification identity registration failed');
     }
-  } catch { /* 清理失败不影响启动 */ }
+  }catch(error){process.stderr.write(`[desktop] ${error instanceof Error?error.message:'Notification identity registration failed'}\n`);}
 }
 
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance || desktopLifecycle.quitting) return;
   if (installedConfigurationError != null) throw Error(installedConfigurationError);
+  registerNotificationIdentity();
   removeStaleStartMenuShortcuts();
   // 系统有时在窗口出现后才把开始菜单项落盘：启动后再复查一次（幂等、失败忽略）。
   const staleShortcutTimer = setTimeout(removeStaleStartMenuShortcuts, 4_000);
@@ -794,13 +798,11 @@ let dataOperationStarting = false;
   desktopLifecycle.attachWindow(win, windowIcon);
   win.setMenu(null);
   /**
-   * Windows 任务栏/通知身份：AppId、正式图标与显示名保持一致（不沿用 Electron 默认描述）。
-   *
-   * R162：必须同时给 relaunchCommand —— 只给 relaunchDisplayName 时 Windows 拿不到完整的
-   * 「重启命令」，AUMID 的显示名注册不成立，系统会按默认身份（ElectronApp）在开始菜单里
-   * 生成一条快捷方式，用户看到的就是「安装后开始菜单名字还是不对」。
+   * 窗口任务栏身份与重启入口。通知来源名另由 AUMID 注册表 DisplayName 注册；
+   * setAppDetails 本身不能覆盖 Electron 原生通知按 PE ProductName 生成的旧快捷方式。
+   * 重启命令保留安装版显式数据目录，避免固定任务栏后打开到另一个聊天根。
    */
-  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchCommand:`"${process.execPath}"`,relaunchDisplayName:'众说'});
+  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchCommand:windowsRelaunchCommand(process.execPath,installedDesktop?baseDataRoot:undefined),relaunchDisplayName:'众说'});
   const disposeTaskNotificationIpc = registerTaskNotificationIpc({
     ipcMain,
     assertTrustedSender,
@@ -814,7 +816,11 @@ let dataOperationStarting = false;
       }) as { ok: boolean; data?: unknown; error?: { message?: string } };
     },
     getWindow: () => win,
-    createNotification: ({ title, body }) => new ElectronNotification({ title, body }),
+    createNotification: ({ title, body }) => {
+      const notification=new ElectronNotification({ title, body });
+      notification.once('show',()=>{const repair=setTimeout(removeStaleStartMenuShortcuts,1000);repair.unref?.();});
+      return notification;
+    },
   });
   app.once('will-quit', disposeTaskNotificationIpc);
   applyRequestedTestDisplay(win, true);

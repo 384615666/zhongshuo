@@ -14,11 +14,12 @@ import {TaskExecutionStatusView} from './components/TaskExecutionStatusView';
  * ——「导出会话记录…」明确命名导出对象（此前三个平铺「导出 MD/HTML/DOCX」被混淆为
  * 保存当前预览文件）；待验收/返工/中断/停止等**状态动作**保持在正文上方原位（就地反馈）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback,useEffect,useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { latestReadableAgentMessageId, MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
+import {NavUnreadCount} from './components/NavMarks';
 import {ConversationPinButton} from './components/ConversationPinButton';
 import {ProjectConversationList} from './components/ProjectConversationList';
 import type {NavigationPin} from '../../contracts/navigationPins';
@@ -34,6 +35,8 @@ import type { ConversationQuote } from './data/store';
 import { command, openExportDir } from './bridge';
 import { pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { dmActivityAt, dmListTime, sortDmConversations, visibleDmProjects } from './lib/dmList';
+import {useChatReading} from './lib/useChatReading';
+import {markDmRead} from './loader';
 import type { DmConversation } from './data/types';
 import { useElementWidth } from './lib/useElementWidth';
 import { SIDEBAR_WIDTH } from './lib/layout';
@@ -69,7 +72,9 @@ export function DmPage() {
   const latestReadableAgentId = useMemo(() => latestReadableAgentMessageId(msgs), [msgs]);
   const dmProgress = st.threadProgress[`dm:${activeId}`]?.items ?? EMPTY;
   const readError = useStore((s) => s.readErrors[activeId]);
-  const listRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useChatReading(`dm:${projectId}:${activeId}`,active?msgs.map(message=>`${message.id}:${message.threadMessageSeq}:${message.body.length}`).join('|'):'');
+  const markRendered=useCallback(()=>{if(active)void markDmRead(activeId,st.dmHistoryThroughSeq[activeId]??0);},[activeId,active,st.dmHistoryThroughSeq]);
+  useLayoutEffect(markRendered,[markRendered,msgs]);
   const highlightMessageId=parseQuery(route).message;
   const highlighted=useRef('');
   useEffect(()=>{
@@ -108,6 +113,8 @@ export function DmPage() {
     return {project,index,entry,daily:items.filter(dm=>dm.archivedAt==null),archived:items.filter(dm=>dm.archivedAt!=null),
       latest:items.filter(dm=>dm.archivedAt==null).reduce((latest,dm)=>Math.max(latest,dmActivityAt(dm)),0)};
   }).sort((a,b)=>b.latest-a.latest||a.index-b.index),[visibleProjects,st.dmProjectIndexes,dmsAll]);
+  const compactDms=new Set([...groups.flatMap(group=>group.daily.map(dm=>dm.id)),...pinnedDms.map(pin=>pin.itemId)]).size>20;
+  const compactArchived=groups.reduce((total,group)=>total+group.archived.length,0)>20;
   useEffect(()=>{const timer=window.setInterval(()=>setListNow(Date.now()),60_000);return()=>window.clearInterval(timer);},[]);
   useEffect(()=>{void Promise.allSettled(requestedIds.split('|').filter(Boolean).map(loadDmProjectIndex));},[requestedIds]);
   const [recordsFor,setRecordsFor]=useState<string|null>(null);
@@ -151,13 +158,24 @@ export function DmPage() {
 
   // 标读统一门（review-r47 §4）：页面注册——markRead 发起**此刻**重查（当前会话/前台/贴底/接管）。
   useEffect(() => {
-    setReadGate((conversationId: string) =>
+    setReadGate((conversationId: string,throughMessageSeq?:number) =>
       conversationId === activeId
       && document.visibilityState === 'visible'
+      && document.hasFocus()
       && !document.body.classList.contains('legacy-on')
-      && (() => { const box = listRef.current; return box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true; })());
+      && (() => {
+        const box=listRef.current;if(!box||box.scrollHeight-box.scrollTop-box.clientHeight>=80)return false;
+        const rendered=Math.max(0,...Array.from(box.querySelectorAll<HTMLElement>('[data-zs-dm-seq]')).map(node=>Number(node.dataset.zsDmSeq)||0));
+        return throughMessageSeq==null||throughMessageSeq<=rendered;
+      })());
+    markRendered();
     return () => { setReadGate(null); };
   }, [activeId]);
+  useEffect(()=>{
+    const visible=()=>{if(activeId&&document.visibilityState==='visible'&&document.hasFocus())void loadDmHistory(activeId,{markRead:true});};
+    window.addEventListener('focus',visible);document.addEventListener('visibilitychange',visible);
+    return()=>{window.removeEventListener('focus',visible);document.removeEventListener('visibilitychange',visible);};
+  },[activeId]);
 
   // 历史装载+已读水位（前台+贴底才推进——装载前记录贴底状态）。
   useEffect(() => {
@@ -465,14 +483,14 @@ export function DmPage() {
                       {entry?.status==='loading'?'正在读取私信…':entry?.status==='error'?'暂时无法读取私信。':'暂无私信，点击项目右侧 + 添加。'}
                     </div>:null}
                     {daily.length>0&&regular.length===0?<div className="small faint" style={{padding:'5px 14px 10px'}}>私信已在置顶区显示。</div>:null}
-                    <ProjectConversationList projectId={project.id} kind="dm" items={regular}>
+                    <ProjectConversationList projectId={project.id} kind="dm" compact={compactDms} items={regular}>
                       {dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>}
                     </ProjectConversationList>
                     {archived.length>0?<>
                       <button className="dm-archived-toggle" onClick={()=>setShowArchived(current=>({...current,[project.id]:!current[project.id]}))}>
                         <Icon name={showArchived[project.id]?'chevron-down':'chevron-right'} size={12}/><Icon name="archive" size={12}/>已归档 {archived.length}
                       </button>
-                      {showArchived[project.id]?<ProjectConversationList projectId={project.id} kind="dm-archive" items={archived}>
+                      {showArchived[project.id]?<ProjectConversationList projectId={project.id} kind="dm-archive" compact={compactArchived} items={archived}>
                         {dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>}
                       </ProjectConversationList>:null}
                     </>:null}
@@ -623,7 +641,7 @@ export function DmPage() {
                     {failedView.truncated ? <div className="faint small">仅显示最近 20 个失败任务。</div> : null}
                   </div>
                 ) : null}
-                <div className="msg-list is-replies" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <div className="msg-list is-replies" ref={listRef} onScroll={markRendered} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                   {readError != null ? (
                     <div className="panel info" style={{ borderColor: 'var(--warning)' }} data-zs-dm-readerror="1">
                       读取失败：{userFacingSystemText(readError ?? '')}（保留上次读取的内容）
@@ -632,7 +650,7 @@ export function DmPage() {
                   ) : null}
                   {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
                   {msgs.map((m) => (
-                    <div key={m.id} className="msg-item" data-zs-message-id={m.id}>
+                    <div key={m.id} className="msg-item" data-zs-message-id={m.id} data-reading-message={m.id} data-zs-dm-seq={m.threadMessageSeq}>
                       <MessageView
                         message={{ ...m, saved: savedRefs[m.id] === true }}
                         author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}
@@ -778,8 +796,7 @@ function DmListRow({dm,selected,now,onSelect,projectName}:{dm:DmConversation;sel
       <span className="small faint truncate" style={{display:'block',marginTop:1}}>{dm.lastMessagePreview||'（暂无消息）'}</span>
       {projectName?<span className="pin-project-label">{projectName}</span>:null}
     </span>
-    {dm.unread>0?<Tag tone="info">{dm.unread}</Tag>:null}
-    {dm.execState==='running'||dm.execState==='queued'?<span className="nav-dot" title={EXEC_TEXT[dm.execState]}/>:null}
+    <NavUnreadCount count={dm.unread} where={dm.title||dm.peerDisplayName||'私信'}/>
   </button><ConversationPinButton target={{kind:'dm',projectId:dm.projectId,itemId:dm.id}} label={dm.title||dm.peerDisplayName||'成员'} disabled={dm.archivedAt!=null}/></div>;
 }
 

@@ -37,18 +37,15 @@ describe('R158 安装器清理早期错误快捷方式', () => {
 describe('R162 运行期开始菜单自愈与身份注册', () => {
   const main = readFileSync(resolve(root, 'src/ui/main.ts'), 'utf8');
 
-  it('安装版启动时清理同名的错误快捷方式，且判定保守', () => {
-    expect(main).toContain('function removeStaleStartMenuShortcuts');
-    expect(main).toMatch(/process\.platform !== 'win32' \|\| !installedDesktop/);
-    // 只在 .lnk 内容确实提到本程序 exe 名时才删
-    expect(main).toMatch(/!ascii\.includes\(exeName\) && !wide\.includes\(exeName\)/);
-    expect(main).toMatch(/unlinkSync\(link\)/);
-    // 启动时执行一次 + 4 秒后复查
-    expect(main).toMatch(/removeStaleStartMenuShortcuts\(\);\s*\n\s*\/\/[^\n]*\n\s*const staleShortcutTimer = setTimeout\(removeStaleStartMenuShortcuts, 4_000\)/);
+  it('安装版以解析后的完整目标路径修复快捷方式，而非匹配文件名片段', () => {
+    expect(main).toContain('repairLegacyAppShortcuts');
+    expect(main).toContain('shell.readShortcutLink(link)');
+    expect(main).not.toContain('ascii.includes(exeName)');
+    expect(main).toContain('setTimeout(removeStaleStartMenuShortcuts, 4_000)');
   });
 
   it('setAppDetails 同时给出 relaunchCommand 与显示名', () => {
-    expect(main).toMatch(/relaunchCommand:\s*`"\$\{process\.execPath\}"`/);
+    expect(main).toContain('relaunchCommand:windowsRelaunchCommand(process.execPath,installedDesktop?baseDataRoot:undefined)');
     expect(main).toMatch(/relaunchDisplayName:\s*'众说'/);
   });
 });

@@ -104,17 +104,17 @@ async function prove(out) {
   };
   try {
     await win.loadFile(path.join(out,'index.html'));
-    await until('window.proof&&document.querySelectorAll("[data-zs-dm-project=A] [data-zs-dm-id]").length===5&&document.querySelectorAll(".side-project [data-zs-room-row]").length===25','initial five rows');
+    await until('window.proof&&document.querySelectorAll("[data-zs-dm-project=A] [data-zs-dm-id]").length===5&&document.querySelectorAll(".side-project [data-zs-room-row]").length===10','initial five rows');
     const count=async(kind,id)=>js('document.querySelectorAll('+JSON.stringify('[data-zs-project-list="'+kind+':'+id+'"] '+(kind==='room'?'[data-zs-room-row]':'[data-zs-dm-id]'))+').length');
     const more=(kind,id)=>'[data-zs-show-more="'+kind+':'+id+'"]';
     check('over-20-starts-with-five-rooms-and-private-messages',(await count('room','A'))===5&&(await count('dm','A'))===5);
-    check('exactly-20-rows-are-all-visible-without-show-more',(await count('room','B'))===20&&(await count('dm','B'))===20&&!await js('document.querySelector('+JSON.stringify(more('room','B'))+')||document.querySelector('+JSON.stringify(more('dm','B'))+')'));
+    check('each-project-compacts-from-the-global-total',(await count('room','B'))===5&&(await count('dm','B'))===5&&await js('document.querySelector('+JSON.stringify(more('room','B'))+')||document.querySelector('+JSON.stringify(more('dm','B'))+')'));
     check('row-pin-is-a-direct-toggle-without-menu-semantics',await js('document.querySelector("[data-zs-pin-toggle]").getAttribute("aria-pressed")==="false"&&!document.querySelector("[data-zs-pin-toggle]").hasAttribute("aria-haspopup")&&!document.querySelector("[data-zs-pin-menu]")'));
     for(const kind of ['room','dm']){
       for(const expected of [15,25,26]){await click(more(kind,'A'));check(kind+'-show-more-reaches-'+expected,(await count(kind,'A'))===expected);}
       check(kind+'-show-more-disappears-when-exhausted',!await js('document.querySelector('+JSON.stringify(more(kind,'A'))+')'));
     }
-    check('expanding-project-A-does-not-change-project-B',(await count('room','B'))===20&&(await count('dm','B'))===20);
+    check('expanding-project-A-does-not-change-project-B',(await count('room','B'))===5&&(await count('dm','B'))===5);
     await click('[data-zs-dm-project=A] .dm-archived-toggle');
     check('archived-private-messages-use-the-same-five-row-default',(await count('dm-archive','A'))===5);
     await click(more('dm-archive','A'));await click(more('dm-archive','A'));

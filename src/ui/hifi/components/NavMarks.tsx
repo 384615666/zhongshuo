@@ -34,6 +34,9 @@ const STATE_COPY: Record<NavTaskState, { label: string; icon: IconName; hint: st
   WAITING_USER: { label: '等你处理', icon: 'hand', hint: '在等你输入或确认' },
   REVIEW: { label: '待验收', icon: 'eye', hint: '交付等你验收' },
   ACTIVE: { label: '执行中', icon: 'play', hint: '任务正在执行' },
+  QUEUED:{label:'排队中',icon:'clock',hint:'等待开始执行'},
+  WAITING_PEER:{label:'等待协作',icon:'clock',hint:'正在等待其他成员'},
+  STOPPING:{label:'停止中',icon:'square',hint:'正在等待执行结束'},
 };
 
 /**
@@ -84,6 +87,13 @@ export function NavUnreadDot({ count, where, hint }: { count: number; where: str
   if (count <= 0) return null;
   const text = hint ? `${hint}（共 ${count} 条未读）` : `${count} 条未读`;
   return <span className="side-unread-dot" title={text} aria-label={`${where}：${text}`} />;
+}
+
+/** Private conversations use a circular number, with the full count accessible. */
+export function NavUnreadCount({count,where}:{count:number;where:string}){
+  if(count<=0)return null;
+  const label=`${where}：${count} 条未读`;
+  return <span className={`dm-unread-count${count>99?' wide':''}`} title={label} aria-label={label}>{count>99?'99+':count}</span>;
 }
 
 /**

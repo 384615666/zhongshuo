@@ -7,7 +7,7 @@ import {TaskNotificationController} from './components/TaskNotificationControlle
  */
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
-import { NavUnreadDot } from './components/NavMarks';
+import { NavUnreadCount } from './components/NavMarks';
 import {RoomNavItem} from './components/RoomNavItem';
 import {ProjectConversationList} from './components/ProjectConversationList';
 import { CommandPalette } from './components/CommandPalette';
@@ -225,7 +225,7 @@ export default function App() {
   useEffect(() => {
     if (s.boot !== 'ready') return;
     for (const candidate of s.projects) {
-      if (!s.expandedProjectIds.includes(candidate.id)&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.projectId===candidate.id)) continue;
+      if (!s.visibleProjectIds.includes(candidate.id)&&!s.pinnedProjectIds.includes(candidate.id)&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.projectId===candidate.id)) continue;
       if (s.sidebarRoomIndexes[candidate.id] != null || sidebarRoomRequests.current.has(candidate.id)) continue;
       sidebarRoomRequests.current.add(candidate.id);
       void loadSidebarRooms(candidate.id)
@@ -234,7 +234,22 @@ export default function App() {
           sidebarRoomRequests.current.delete(candidate.id);
         });
     }
-  }, [s.boot, s.projects, s.expandedProjectIds, s.sidebarRoomIndexes,s.navigationPins]);
+  }, [s.boot, s.projects, s.visibleProjectIds,s.pinnedProjectIds, s.sidebarRoomIndexes,s.navigationPins]);
+  const sidebarProjectsKey=[...new Set([...s.visibleProjectIds,...s.pinnedProjectIds,...s.navigationPins.filter(pin=>pin.kind==='room').map(pin=>pin.projectId)])].sort().join('|');
+  useEffect(()=>{
+    if(s.boot!=='ready')return;
+    const poll=()=>{
+      if(document.visibilityState!=='visible'||document.body.classList.contains('legacy-on'))return;
+      for(const id of sidebarProjectsKey.split('|').filter(Boolean)){
+        const current=getState();
+        if(!current.projects.some(project=>project.id===id&&project.removedAt==null)||current.sidebarRoomIndexes[id]?.status==='loading'||sidebarRoomRequests.current.has(id))continue;
+        sidebarRoomRequests.current.add(id);
+        void loadSidebarRooms(id).catch(()=>{}).finally(()=>sidebarRoomRequests.current.delete(id));
+      }
+    };
+    const timer=window.setInterval(poll,5000);window.addEventListener('focus',poll);document.addEventListener('visibilitychange',poll);
+    return()=>{window.clearInterval(timer);window.removeEventListener('focus',poll);document.removeEventListener('visibilitychange',poll);};
+  },[s.boot,sidebarProjectsKey]);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
 
@@ -357,6 +372,8 @@ export default function App() {
     const index=s.sidebarRoomIndexes[pin.projectId],room=index?.rooms.find(room=>room.id===pin.itemId);
     return room?.archivedAt==null&&(index?.status!=='ready'||room!=null);
   });
+  const visibleRoomProjects=new Set([...s.visibleProjectIds,...s.pinnedProjectIds].filter(id=>s.projects.some(project=>project.id===id&&project.removedAt==null)));
+  const compactRooms=new Set([...Object.entries(s.sidebarRoomIndexes).filter(([id])=>visibleRoomProjects.has(id)).flatMap(([,index])=>index.rooms.filter(room=>room.archivedAt==null).map(room=>room.id)),...pinnedRooms.map(pin=>pin.itemId)]).size>20;
 
   const navActive = {
     library: path === '/library',
@@ -428,7 +445,7 @@ export default function App() {
               >
                 <Icon name="message-square" size={14} />
                 <span className="side-item-label">私信</span>
-                <span className="side-marks"><NavUnreadDot count={dmUnread} where="私信" /></span>
+                <span className="side-marks dm-unread-marks"><NavUnreadCount count={dmUnread} where="私信" /></span>
               </button>
             </div>
             <div className="sidebar-scroll">
@@ -524,7 +541,7 @@ export default function App() {
                       {expanded && roomIndex?.status === 'ready' && rooms.length === 0 ? (
                         <div className="side-empty small">暂无房间</div>
                       ) : null}
-                      {expanded ? <ProjectConversationList projectId={p.id} kind="room" items={rooms.filter(r=>r.archivedAt==null&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.itemId===r.id))}>
+                      {expanded ? <ProjectConversationList projectId={p.id} kind="room" compact={compactRooms} items={rooms.filter(r=>r.archivedAt==null&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.itemId===r.id))}>
                         {room=><RoomNavItem key={room.id} projectId={p.id} roomId={room.id} name={room.name} active={room.id===activeRoomId}/>}
                       </ProjectConversationList> : null}
                     </div>

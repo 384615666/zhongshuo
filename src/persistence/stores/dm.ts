@@ -240,7 +240,9 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       lastMessageAt: lastMsg?.created_at ?? null,
       lastReplyAt: lastReply.at,
       lastReadSeq: read?.last_read_seq ?? 0,
-      unread: Math.max(0, row.last_message_seq - (read?.last_read_seq ?? 0)),
+      unread: (db.prepare(`SELECT count(*) n FROM messages WHERE conversation_id=? AND conversation_seq>?
+        AND status='final' AND (author_type='agent' OR (author_type='human' AND author_id<>?))`)
+        .get(row.id,read?.last_read_seq??0,localUserId) as {n:number}).n,
       execState: paused ? 'paused' : activeRow != null ? 'running' : freshPending > 0 ? 'queued' : interrupted.length > 0 ? 'interrupted' : 'idle',
       activeTaskId: activeRow?.taskId ?? null,
       activeRunId: activeRow?.runId ?? null,

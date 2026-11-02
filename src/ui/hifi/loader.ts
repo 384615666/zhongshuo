@@ -1,5 +1,6 @@
 import type {TaskExecutionStatus} from '../../contracts/executionStatus.ts';
 import type {NavigationPin} from '../../contracts/navigationPins';
+import type {RoomActivitySummary} from '../../contracts/roomActivity';
 import type {MessageRepairLineage} from '../../contracts/repairLineage.ts';
 import {sendRequestPayloadHash} from '../../contracts/sendRecovery.ts';
 import type {SendLookupResult,RecoveredSendLocation} from '../../contracts/sendRecovery.ts';
@@ -37,10 +38,10 @@ import { navIntentActive, cancelAllNavIntents, beginUserNavIntent, onNavIntentCa
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number; rootPath?: string; canonicalPath?: string }; created?: boolean }
 /** R65：注册表条目（project.list——多项目前端集合的事实源）。 */
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
-interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
+interface RoomListData { items: Array<{ activity?:RoomActivitySummary;id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;runtimeAvailable?:boolean;description?:string;revision?:number }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; lastMessageSeq?: number; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?:{maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
-interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerMemberId?: string; peerDisplayName?: string; createdAt?: number; lastMessageAt?: number | null; lastReplyAt?: number | null; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
+interface ConvListData { conversations: Array<{ lastMessageSeq?:number;lastReadSeq?:number;executionStatus?:TaskExecutionStatus|null; conversationId: string; peerMemberId?: string; peerDisplayName?: string; createdAt?: number; lastMessageAt?: number | null; lastReplyAt?: number | null; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 export interface HistoryMessage { repairLineage?:MessageRepairLineage|null; id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[]; progress?: ThreadVisibleProgress[] }
 interface FileChangeCarrier { fileChanges?: MessageFileChange[] }
@@ -866,7 +867,7 @@ async function readRoomList(projectId:string):Promise<RoomListData>{
   try{
     const data=await command<RoomListData>('room.list',{projectId});
     if(roomIndexTickets.get(projectId)===ticket)setState(state=>({...state,sidebarRoomIndexes:{...state.sidebarRoomIndexes,
-      [projectId]:{status:'ready',rooms:(data.items??[]).map(room=>({id:room.id,name:room.name,archivedAt:room.archivedAt??undefined,revision:room.revision??0}))}}}));
+      [projectId]:{status:'ready',rooms:(data.items??[]).map(room=>({id:room.id,name:room.name,archivedAt:room.archivedAt??undefined,revision:room.revision??0,activity:room.activity}))}}}));
     return data;
   }catch(error){
     if(roomIndexTickets.get(projectId)===ticket)setState(state=>({...state,sidebarRoomIndexes:{...state.sidebarRoomIndexes,
@@ -1168,7 +1169,8 @@ export async function loadDmProjectIndex(projectId: string): Promise<void> {
     if (dmIndexTickets.get(projectId) !== ticket) return;
     const items: DmConversation[] = sortDmConversations((data.conversations ?? []).map((c) => ({
       id: c.conversationId, projectId: c.projectId ?? projectId,
-      peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.unread ?? 0,
+      peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.lastMessageSeq!=null&&(getState().dmReadSeq[c.conversationId]??0)>=c.lastMessageSeq?0:c.unread??0,
+      lastMessageSeq:c.lastMessageSeq,lastReadSeq:c.lastReadSeq,
       memberIds: c.peerMemberId ? [c.peerMemberId] : [], threadId: '', createdAt: c.createdAt ?? 0, lastMessageAt: c.lastMessageAt ?? 0, lastReplyAt: c.lastReplyAt ?? null,
       executionStatus:c.executionStatus??null,
       execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? undefined, lastMessagePreview: c.lastMessagePreview ?? '',
@@ -1182,6 +1184,7 @@ export async function loadDmProjectIndex(projectId: string): Promise<void> {
     setState(state => ({...state,
       ...(stillCurrent(gen,projectId) ? {dms:items} : {}),
       dmProjectIndexes:{...state.dmProjectIndexes,[projectId]:{status:'ready',items}},
+      dmReadSeq:{...state.dmReadSeq,...Object.fromEntries(items.map(dm=>[dm.id,Math.max(state.dmReadSeq[dm.id]??0,dm.lastReadSeq??0)]))},
     }));
     const peers=[...new Set(items.flatMap(dm=>dm.memberIds))].map(id=>({id,principalType:'agent'}));
     void backfillDefaultMemberAvatars(peers,getState().ui.avatars??{});
@@ -1377,6 +1380,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, threadTasks, threadProgress, readErrors: errors };
     });
     hydrateRoomFromPool(getState(), projectId, roomId, cards, ticket);
+    if(getState().sidebarRoomIndexes[projectId]?.status!=='loading')void loadSidebarRooms(projectId).catch(()=>{});
   } catch (e) {
     if (!stillCurrent(gen, projectId) || poolTickets.get(roomId) !== ticket) return;
     const msg = (e as Error).message;
@@ -1905,13 +1909,46 @@ export const msgOfDmHistory = (projectId: string, conversationId: string, m: His
   return message;
 };
 
+const dmHistoryTickets=new Map<string,number>();
+const dmReadRequests=new Map<string,Promise<void>>();
+
+/** Only acknowledge a rendered sequence at the current foreground reading gate.
+ * A late list read cannot restore unread counts already acknowledged here. */
+export async function markDmRead(conversationId:string,throughMessageSeq:number):Promise<void>{
+  if(!Number.isSafeInteger(throughMessageSeq)||throughMessageSeq<=0||!canMarkRead(conversationId,throughMessageSeq))return;
+  const state=getState(),dm=state.dms.find(item=>item.id===conversationId);
+  if(!dm||throughMessageSeq<=(state.dmReadSeq[conversationId]??0))return;
+  const existing=dmReadRequests.get(conversationId);if(existing)return existing;
+  let succeeded=false;
+  const request=(async()=>{
+    try{
+      await command('conversation.markRead',{conversationId,throughMessageSeq});
+      succeeded=true;
+      dmIndexTickets.set(dm.projectId,(dmIndexTickets.get(dm.projectId)??0)+1);
+      setState(current=>{
+        const through=Math.max(current.dmReadSeq[conversationId]??0,throughMessageSeq);
+        const update=(item:DmConversation)=>item.id===conversationId?{...item,lastReadSeq:Math.max(item.lastReadSeq??0,through),unread:item.lastMessageSeq!=null&&item.lastMessageSeq<=through?0:item.unread}:item;
+        return {...current,dmReadSeq:{...current.dmReadSeq,[conversationId]:through},dms:current.dms.map(update),
+          dmProjectIndexes:Object.fromEntries(Object.entries(current.dmProjectIndexes).map(([id,index])=>[id,{...index,items:index.items.map(update)}]))};
+      });
+      void loadDmProjectIndex(dm.projectId).catch(()=>{});
+    }catch{/* The next visible history read or scroll retries the watermark. */}
+  })();
+  dmReadRequests.set(conversationId,request);
+  try{await request;}finally{
+    if(dmReadRequests.get(conversationId)===request)dmReadRequests.delete(conversationId);
+    const latest=getState().dmHistoryThroughSeq[conversationId]??0;
+    if(succeeded&&latest>(getState().dmReadSeq[conversationId]??0)&&canMarkRead(conversationId))void markDmRead(conversationId,latest);
+  }
+}
+
 export async function loadDmHistory(conversationId: string, opts: { markRead?: boolean } = {}): Promise<void> {
   const gen = getState().loadGen;
   const projectId = getState().activeProjectId;
+  const ticket=(dmHistoryTickets.get(conversationId)??0)+1;dmHistoryTickets.set(conversationId,ticket);
   try {
     const data = await command<HistoryData>('conversation.history', { conversationId, limit: 100 });
-    if (!stillCurrent(gen, projectId)) return;
-    const conv = getState().dms.find((d) => d.id === conversationId);
+    if (!stillCurrent(gen, projectId)||dmHistoryTickets.get(conversationId)!==ticket) return;
     const msgs: Message[] = (data.messages ?? []).map((m, i) => msgOfDmHistory(projectId, conversationId, m, i));
     const progressKey=`dm:${conversationId}`;
     setState((prev) => {
@@ -1919,6 +1956,7 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
       return {
         ...prev,
         dmHistory: { ...prev.dmHistory, [conversationId]: msgs },
+        dmHistoryThroughSeq:{...prev.dmHistoryThroughSeq,[conversationId]:Math.max(0,...(data.messages??[]).map(message=>message.conversationSeq??message.conversation_seq??0))},
         ...(Array.isArray(data.progress)
           ? { threadProgress: { ...prev.threadProgress, [progressKey]: { items: data.progress, readAt: Date.now() } } }
           : {}),
@@ -1927,17 +1965,9 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
     });
     // 已读水位（统一门——review-r47 §4）：缓存写入与阅读水位分开；**发起点此刻**重查
     // store.readGate（当前会话+前台/焦点+贴底+接管——页面注册，缺省拒绝），不信任请求前快照。
-    if (opts.markRead === true && conv != null && (conv.unread ?? 0) > 0 && canMarkRead(conversationId)) {
-      const last = (data.messages ?? [])[(data.messages ?? []).length - 1];
-      const lastSeq = last ? (last.conversationSeq ?? last.conversation_seq) : undefined;
-      if (lastSeq != null) {
-        void command('conversation.markRead', { conversationId, throughMessageSeq: lastSeq })
-          .then(() => { if (stillCurrent(gen, projectId)) return refreshDms().catch(() => { /* 归属已变/库关闭——下次再进 */ }); })
-          .catch(() => { /* 下次进入再推进 */ });
-      }
-    }
+    if (opts.markRead === true) await markDmRead(conversationId,getState().dmHistoryThroughSeq[conversationId]??0);
   } catch (e) {
-    if (!stillCurrent(gen, projectId)) return;
+    if (!stillCurrent(gen, projectId)||dmHistoryTickets.get(conversationId)!==ticket) return;
     setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [conversationId]: (e as Error).message } }));
   }
 }

@@ -3762,6 +3762,9 @@ button.composer-file-token-open:hover {
 .conversation-nav-label { display:flex; flex-direction:column; flex:1; min-width:0; text-align:left; }
 .pin-project-label { display:block; color:var(--text-3); font-size:var(--fs-11); font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
 .conversation-pins { margin-bottom:10px; }
+.dm-unread-count { display:inline-flex; align-items:center; justify-content:center; flex:0 0 22px; width:22px; height:22px; min-width:22px; max-width:22px; box-sizing:border-box; border-radius:50%; border:1px solid var(--accent-border); color:var(--accent-text); background:var(--bg-surface-2); font-size:11px; font-weight:500; line-height:1; white-space:nowrap; }
+.dm-unread-count.wide { font-size:9px; }
+.dm-unread-marks { width:26px; min-width:26px; }
 .dm-row-shell .dm-row { width:100%; text-align:left; background:transparent; }
 .conversation-pins .side-heading { padding-top:8px; }
 .dm-project-toggle { display:flex; align-items:center; gap:6px; flex:1; min-width:0; padding:3px 4px; border:0; background:transparent; cursor:pointer; text-align:left; font-weight:600; }

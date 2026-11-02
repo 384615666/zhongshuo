@@ -48,6 +48,7 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import {readPreDispatchFailure,unstartedPreparationCounts} from './preDispatchFailure.ts';
 import {readTaskExecutionStatus} from './executionStatus.ts';
+import {readProjectRoomActivity} from './roomActivity.ts';
 import {isRetryRunStatus} from '../contracts/taskRecovery.ts';
 import {taskClosureParamsSchema} from '../contracts/taskClosure.ts';
 import {closeIdleTask} from './taskClosure.ts';
@@ -1424,13 +1425,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'room.list': {
         const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
+        const roomActivity=readProjectRoomActivity(deps.db,params.projectId);
         // R65：补 description（settings_json）与 revision（房间属性乐观锁用）+ archivedAt 时间戳。
         const rooms = deps.db.prepare('SELECT id, name, archived_at, coordinator_member_id, settings_json, revision FROM rooms WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; name: string; archived_at: number | null; coordinator_member_id: string | null; settings_json: string | null; revision: number }>;
         const items = rooms.map((r) => {
           const conversation = deps.db.prepare('SELECT id FROM conversations WHERE room_id = ? LIMIT 1').get(r.id) as { id: string } | undefined;
           let description: string | null = null;
           try { description = ((JSON.parse(r.settings_json ?? '{}') as { description?: string }).description) ?? null; } catch { description = null; }
-          return { id: r.id, name: r.name, archived: r.archived_at != null, archivedAt: r.archived_at, conversationId: conversation?.id ?? null, coordinatorMemberId: r.coordinator_member_id ?? null, description, revision: r.revision };
+          return { id: r.id, name: r.name, archived: r.archived_at != null, archivedAt: r.archived_at, conversationId: conversation?.id ?? null, coordinatorMemberId: r.coordinator_member_id ?? null, description, revision: r.revision,activity:roomActivity[r.id]??{counts:[],total:0} };
         });
         return withCommandId({ ok: true, data: { items } });
       }

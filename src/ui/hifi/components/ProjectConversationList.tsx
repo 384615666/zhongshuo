@@ -1,9 +1,9 @@
 import {useState,type ReactNode} from 'react';
 
 /** Reveal more rows without changing ordering or the selected conversation. */
-export function ProjectConversationList<T>({items,projectId,kind,children}:{items:T[];projectId:string;kind:'room'|'dm'|'dm-archive';children:(item:T)=>ReactNode}){
+export function ProjectConversationList<T>({items,projectId,kind,compact,children}:{items:T[];projectId:string;kind:'room'|'dm'|'dm-archive';compact:boolean;children:(item:T)=>ReactNode}){
   const [more,setMore]=useState(0);
-  const limit=items.length>20?5+more*10:items.length;
+  const limit=compact?5+more*10:items.length;
   const remaining=Math.max(0,items.length-limit);
   return <div data-zs-project-list={`${kind}:${projectId}`}>
     {items.slice(0,limit).map(children)}

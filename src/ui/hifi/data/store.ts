@@ -1,5 +1,6 @@
 import type {TaskExecutionStatus} from '../../../contracts/executionStatus.ts';
 import type {NavigationPin} from '../../../contracts/navigationPins';
+import type {RoomActivitySummary} from '../../../contracts/roomActivity';
 import type {RecoveredSendLocation} from '../../../contracts/sendRecovery.ts';
 /**
  * 正式侧状态层（H1 首包，第四十七轮修订）：**替换原型种子 store 的真实实现**。
@@ -59,13 +60,15 @@ export interface HifiExtension {
   /** Conversation lists are cached by their owning project, independently of focus. */
   dmProjectIndexes: Record<string,{status:'loading'|'ready'|'error';items:AppState['dms'];error?:string}>;
   /** Per-project server room indexes; never inferred from the active roster. */
-  sidebarRoomIndexes: Record<string, {status:'loading'|'ready'|'error';rooms:Array<{id:string;name:string;archivedAt?:number;revision:number}>;error?:string}>;
+  sidebarRoomIndexes: Record<string, {status:'loading'|'ready'|'error';rooms:Array<{id:string;name:string;archivedAt?:number;revision:number;activity?:RoomActivitySummary}>;error?:string}>;
   /** 装载代次：openProject +1；迟到的旧项目响应按代次+项目身份双重门丢弃（review-r46 §5）。 */
   loadGen: number;
   /** 房间主池快照（第五十一轮起）：roomId → 线程卡（room.pool 真实投影）。 */
   roomPool: Record<string, ThreadCard[]>;
   /** 私信历史快照：conversationId → 消息。 */
   dmHistory: Record<string, AppState['messages']>;
+  dmHistoryThroughSeq:Record<string,number>;
+  dmReadSeq:Record<string,number>;
   /** 线程实体（thread.get）：threadId → 实体（含 conversationId——发送目标用）。 */
   threadEntities: Record<string, Thread>;
   /** 线程根消息（thread.get anchor）：threadId → 根消息（缺失=null，呈现层标注）。 */
@@ -91,7 +94,7 @@ export interface HifiExtension {
   lastSendReferences:Record<string,LastSendReference>;
   /** 标读统一门（review-r47 §4）：页面注册——markRead 发起前**此刻**重查（当前会话/前台/
    * 贴底/接管）；缺省拒绝（安全侧）。 */
-  readGate: ((conversationId: string) => boolean) | null;
+  readGate: ((conversationId: string,throughMessageSeq?:number) => boolean) | null;
   /** 线程标读门（review-r50 §4）：**线程独立水位**（thread_message_seq 域）+当前导航代次/
    * 前台/贴底/接管——不与 DM 的 conversationSeq 门混用；缺省拒绝。 */
   threadReadGate: ((threadId: string) => boolean) | null;
@@ -174,7 +177,7 @@ function makeEmptyState(): HifiState {
     ui: { theme: 'light', activeRoomId: '', showAvatars: true, avatars: {}, writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0, sidebarRoomIndexes: {}, dmProjectIndexes: {}, navigationPins:[],navigationPinBusy:{},
-    roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
+    roomPool: {}, dmHistory: {}, dmHistoryThroughSeq:{},dmReadSeq:{},threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
     readErrors: {}, pendingSends: {}, lastSendReferences:{}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null, openInFlight: false, openInFlightTarget: null,
@@ -867,13 +870,13 @@ export interface PendingSendEnvelope {
 
 export interface LastSendReference extends PendingSendEnvelope { outcome:'sending'|'unknown'|'accepted'|'rejected';settled?:boolean;location?:RecoveredSendLocation;error?:string }
 
-export function setReadGate(gate: ((conversationId: string) => boolean) | null): void {
+export function setReadGate(gate: ((conversationId: string,throughMessageSeq?:number) => boolean) | null): void {
   setState((s) => ({ ...s, readGate: gate }));
 }
 
-export function canMarkRead(conversationId: string): boolean {
+export function canMarkRead(conversationId: string,throughMessageSeq?:number): boolean {
   const gate = getState().readGate;
-  try { return gate != null && gate(conversationId); } catch { return false; }
+  try { return gate != null && gate(conversationId,throughMessageSeq); } catch { return false; }
 }
 
 /** 线程独立水位门（review-r50 §4）：thread.markRead 发起前此刻重查——当前线程+前台/贴底/
