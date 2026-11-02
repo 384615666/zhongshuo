@@ -78,6 +78,11 @@ describe('R149 branding and visible-copy hygiene', () => {
       '按页显示',
       '保留上次事实',
       '读取元数据，不发送任务',
+      // R157：设置单页化时用户点名删掉的开发过程说明。
+      '还没有设置过对话串通知',
+      '可在对话串右上角菜单中设置静音',
+      '本机当前能否发送真实任务',
+      '本地偏好键',
     ];
     const hits: string[] = [];
     for (const file of uiSources(join(root, 'src/ui/hifi'))) {

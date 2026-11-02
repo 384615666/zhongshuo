@@ -57,7 +57,7 @@ async function runVerifier() {
   const out = path.join(root, 'dist/r153-concurrency-ui', `${Date.now()}-${process.pid}`);
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(out, 'entry.tsx'), renderer);
-  await require('esbuild').build({ entryPoints: [path.join(out, 'entry.tsx')], outfile: path.join(out, 'ui.js'), bundle: true, platform: 'browser', format: 'esm', jsx: 'automatic', logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' } });
+  await require('esbuild').build({ entryPoints: [path.join(out, 'entry.tsx')], outfile: path.join(out, 'ui.js'), bundle: true, platform: 'browser', format: 'esm', jsx: 'automatic', loader: { '.png': 'dataurl' }, logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' } });
   fs.writeFileSync(path.join(out, 'app.css'), ['tokens.css', 'base.css', 'components.css', 'preview.css', 'titlebar.css', 'h1-overrides.css'].map(file => fs.readFileSync(path.join(root, 'src/ui/hifi/styles', file), 'utf8')).join('\n'));
   fs.writeFileSync(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><div id="root"></div><script type="module" src="ui.js"></script>');
   fs.writeFileSync(path.join(out, 'main.cjs'), String.raw`
@@ -82,8 +82,8 @@ app.whenReady().then(async()=>{
   await js('fixture.boot()');await until(idle);
   check('late root identity automatically loads settings without a manual refresh',await js('document.querySelector("input[name=globalMaxInFlight]").value==="4"'));
   check('actual default 4/4/4',JSON.stringify(await values())===JSON.stringify({globalMaxInFlight:'4',perProjectMaxInFlight:'4',perProviderMaxInFlight:'4'}));
-  await js('fixture.navigate("appearance")');await until('!document.querySelector("[data-settings-row=execution-concurrency]")');
-  await js('fixture.environment();fixture.navigate("runtime")');await until(idle+'&&document.body.textContent.includes("来自启动设置")');
+  // R157 单页设置：切分区只滚动、不再卸载面板；改用面板自己的「重新读取」验证读取来源。
+  await js('fixture.environment()');await js('fixture.button("重新读取")');await until(idle+'&&document.body.textContent.includes("来自启动设置")');
   check('environment values are read rather than replaced by defaults',(await values()).globalMaxInFlight==='9');
   for(const invalid of ['',0,33,1.5]){await inputs(invalid,2,2);await js('fixture.save()');await until('document.querySelector("[role=alert]")?.textContent.includes("1–32")');}
   check('invalid whole-form edits never submit',await setCount()===0);
@@ -111,23 +111,23 @@ app.whenReady().then(async()=>{
   await js('fixture.button("重新读取")');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="7"');
   await inputs(11,10,9);await js('fixture.mode("hold");fixture.save()');await until('fixture.held().set');
   const beforeNavigate=await setCount();
-  await js('fixture.navigate("appearance")');await until('!document.querySelector("[data-settings-row=execution-concurrency]")');
-  check('leaving AI settings unmounts the form',await js('!document.body.textContent.includes("正在保存并核对")'));
-  await js('fixture.navigate("runtime")');await until('!!document.querySelector("input[name=globalMaxInFlight]")');await pause(70);
-  check('reopening while a write is active stays locked',await js('document.querySelector("input[name=globalMaxInFlight]").disabled'));
-  await js('fixture.save()');check('active original request cannot duplicate on a new route',await setCount()===beforeNavigate);
+  // R157 单页：切分区不再卸载面板——同一节点保留，在途写仍锁定，也不能重复提交。
+  await js('document.querySelector("[data-settings-row=execution-concurrency]").dataset.r157="kept";fixture.navigate("appearance")');await pause(160);
+  check('route change keeps the same mounted settings panel',await js('document.querySelector("[data-settings-row=execution-concurrency]").dataset.r157==="kept"'));
+  check('active write stays locked across a route change',await js('document.querySelector("input[name=globalMaxInFlight]").disabled&&document.body.textContent.includes("正在保存并核对")'));
+  await js('fixture.save()');check('active original request cannot duplicate on a route change',await setCount()===beforeNavigate);
   await js('fixture.releaseSet()');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="11"');
   check('late receipt prompts fresh current-page read',await js('fixture.server().changes===3'));
   await inputs(12,11,10);await js('fixture.mode("readback-error");fixture.save()');await until('document.querySelector("[role=alert]")?.textContent.includes("已收到保存回执")');
   check('failed readback offers read recovery instead of another write',await js('!document.body.textContent.includes("使用原请求重试")&&document.querySelector("input[name=globalMaxInFlight]").disabled'));
   const beforeRead=await setCount();await js('fixture.button("重新读取")');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="12"');
   check('readback recovery sends no write',await setCount()===beforeRead);
-  await js('fixture.navigate("appearance")');await until('!document.querySelector("[data-settings-row=execution-concurrency]")');
-  await js('fixture.holdRead();fixture.navigate("runtime")');await until('fixture.held().read');
-  await js('fixture.navigate("appearance")');await until('!document.querySelector("[data-settings-row=execution-concurrency]")');await js('fixture.navigate("runtime")');await until(idle);
+  // R157 单页：切分区不再重新挂载或重新读取，迟到的旧读取无从产生。
+  const readsBefore=await js('fixture.server().calls.filter(e=>e.method==="app.executionConcurrency.get").length');
+  await js('fixture.navigate("appearance")');await pause(140);await js('fixture.navigate("runtime")');await pause(140);
+  check('route changes neither re-read nor rebuild the panel',await js('fixture.server().calls.filter(e=>e.method==="app.executionConcurrency.get").length==='+readsBefore+'&&!!document.querySelector("[data-settings-row=execution-concurrency]")'));
   await inputs(13,12,11);await js('fixture.save()');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="13"');
-  await js('fixture.releaseRead()');await pause(80);
-  check('late old-route read cannot replace current settings',(await values()).globalMaxInFlight==='13');
+  check('saved values survive route changes',(await values()).globalMaxInFlight==='13');
   check('copy explains project writing, dependencies and retained protection',await js('document.body.textContent.includes("允许成员并行")&&document.body.textContent.includes("同一成员在同一对话串中")&&document.body.textContent.includes("前后依赖或未解除保护")'));
   await js('document.querySelector("[data-settings-row=execution-concurrency]").scrollIntoView({block:"center"})');await pause(80);win.webContents.invalidate();
   fs.writeFileSync(path.join(__dirname,'execution-concurrency.png'),(await win.webContents.capturePage()).toPNG());

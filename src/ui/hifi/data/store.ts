@@ -129,6 +129,12 @@ export interface HifiExtension {
   /** r63：本环境派发防护自述（runtime.status dispatchGuard——日常包 fakeAllowed=false）。 */
   dispatchGuard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
   /**
+   * R157 桌面通知总开关（app.settings：ui.taskNotifications.enabled）。
+   * 缺省 true=开启（与旧行为一致）；关闭时通知控制器只推进游标，不弹系统通知。
+   * 唯一真值在 daemon，这里只是投影：启动读取、设置页写入后同步。
+   */
+  notificationsEnabled: boolean;
+  /**
    * r61 P5 草稿/未知信封持久化状态：mode=on（identity 就绪、localStorage 可写）时每次草稿/
    * 信封/上传项变更即快照落盘；error 非空=最近一次持久化失败（内存仍生效，UI 如实提示
    * 「未持久化——刷新/崩溃会丢」，不静默）。mode=off=身份不可用（浏览器宿主/服务未就绪）
@@ -173,6 +179,7 @@ function makeEmptyState(): HifiState {
     outboundLedger: {},
     memberRuntimes: {},
     dispatchGuard: null,
+    notificationsEnabled: true,
     draftPersist: { mode: 'off', error: null, recoveryNote: null, legacyImport: null },
   };
 }
@@ -1531,6 +1538,13 @@ export function setTheme(theme: 'light' | 'dark') {
 }
 export function setAppearanceState(showAvatars:boolean,avatars:Record<string,string>){
   setState((s)=>({...s,ui:{...s.ui,showAvatars,avatars:{...avatars}}}));
+}
+/**
+ * R157 桌面通知总开关的本地投影（真值在 daemon 的 app.settings）。
+ * 启动读取与设置页写入成功后调用；通知控制器按它决定是否真的弹系统通知。
+ */
+export function setNotificationsEnabled(enabled: boolean) {
+  setState((s) => (s.notificationsEnabled === enabled ? s : { ...s, notificationsEnabled: enabled }));
 }
 
 /* ---------- 写操作留痕（真实侧：只记不改状态——供诊断展示，H3 归位） ---------- */

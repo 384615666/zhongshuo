@@ -11,8 +11,9 @@ import { NavTaskMark, NavUnreadDot } from './components/NavMarks';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms, pickAndOpenFolder } from './shell';
-import { getState, setAppearanceState } from './data/store';
+import { getState, setAppearanceState, setNotificationsEnabled } from './data/store';
 import { command } from './bridge';
+import { TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, parseTaskNotificationsEnabledSetting } from '../../contracts/taskNotifications';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
@@ -240,6 +241,17 @@ export default function App() {
     void command<{showAvatars:boolean;avatars:Record<string,string>}>('app.appearance.get',{})
       .then(value=>{if(!cancelled)setAppearanceState(value.showAvatars,value.avatars);})
       .catch(()=>{/* Keep the current appearance when the service is unavailable. */});
+    return()=>{cancelled=true;};
+  },[]);
+
+  // R157 桌面通知总开关：真值在 daemon（app.settings；未设置=开启）。
+  // 启动先读一次，通知控制器按它决定是否弹系统通知；读取失败保持默认开启，
+  // 设置页会再读一次并如实显示「无法确认设置」，不用猜测值冒充。
+  useEffect(()=>{
+    let cancelled=false;
+    void command<{values:Record<string,string|null>}>('app.settings.get',{keys:[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]})
+      .then(value=>{if(!cancelled)setNotificationsEnabled(parseTaskNotificationsEnabledSetting(value.values[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]));})
+      .catch(()=>{/* 保持默认开启 */});
     return()=>{cancelled=true;};
   },[]);
 
@@ -553,7 +565,7 @@ export default function App() {
               </button>
               <button
                 className={`side-item${navActive.settings ? ' active' : ''}`}
-                title="应用设置与操作手册"
+                title="应用设置（含操作手册与项目链接）"
                 onClick={() => navigate('/settings?section=general')}
               >
                 <Icon name="settings" size={14} />

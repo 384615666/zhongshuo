@@ -38,6 +38,8 @@ window.zs = { command: async env => {
   return {ok:false,error:{code:'SYNTHETIC_ONLY',message:'合成界面没有连接后台服务'}};
 }, onDisconnect:()=>{},onReconnected:()=>{} };
 store.initDraftPersistence('r152-synthetic');
+const linkOpens = [];
+window.zsAppLinks = { open: async (target) => { linkOpens.push(target); return { ok: true }; } };
 store.setState(s=>({...s,boot:'ready',conn:'online',activeProjectId:'p',
   projects:[{id:'p',displayName:'界面验证项目',rootPath:'合成目录',revision:1}],
   members:[{id:'m',projectId:'p',displayName:'图片成员',ordinal:1,principalType:'agent',enabled:true,workState:'idle',model:'fixture',effort:'low',internalSubagents:false,isCoordinatorDefault:true}],
@@ -61,17 +63,24 @@ navigate('/settings?section=appearance');
 createRoot(document.getElementById('hifi-root')).render(<Harness/>);
 const rect = el => {const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
 window.r152 = {
-  ready:()=>!!document.querySelector('[data-zs-titlebar-rendered]')&&!!document.querySelector('.settings-nav'),
+  ready:()=>!!document.querySelector('[data-zs-titlebar-rendered]')&&!!document.querySelector('.settings-single'),
   theme:theme=>store.setTheme(theme),
-  section:key=>{const labels={general:'通用',appearance:'外观',notifications:'通知',runtime:'AI 设置',connections:'连接与设备',data:'数据与存储',guide:'操作手册',help:'帮助与关于'};[...document.querySelectorAll('.settings-nav-item')].find(el=>el.textContent===labels[key]).click();},
-  sectionReady:key=>location.hash.endsWith('section='+key)&&!!document.querySelector('.settings-nav-item[aria-current="page"]'),
-  snapshot:()=>({nav:rect(document.querySelector('.settings-nav')),body:rect(document.querySelector('.settings-body')),layout:rect(document.querySelector('.settings-layout')),page:rect(document.querySelector('.page')),
-    navItems:[...document.querySelectorAll('.settings-nav-item')].map(rect),overflow:document.querySelector('.page').scrollWidth-document.querySelector('.page').clientWidth,
-    overflowNodes:[...document.querySelectorAll('.settings-body *')].filter(el=>rect(el).right>rect(document.querySelector('.settings-body')).right+1).slice(0,12).map(el=>({tag:el.tagName,cls:el.className,text:el.textContent.slice(0,100),rect:rect(el)})),
-    frame:document.querySelector('iframe')?rect(document.querySelector('iframe')):null,
-    guideTheme:document.querySelector('iframe')?.contentDocument?.documentElement.dataset.theme,
-    guideLoaded:!!document.querySelector('iframe')?.contentDocument?.querySelector('main h1'),
-    guideScroll:document.querySelector('iframe')?.contentDocument?.scrollingElement?.scrollHeight,
+  // R157 单页设置：不再有左侧分区菜单；?section= 只负责滚动到对应段落。
+  section:key=>{const el=document.getElementById('settings-section-'+key);if(el)el.scrollIntoView({block:'start'});},
+  sectionReady:key=>!!document.getElementById('settings-section-'+key),
+  clickManual:()=>{const b=document.querySelector('[data-zs-open-link="manual"]');if(b)b.click();},
+  linkOpens:()=>linkOpens.slice(),
+  snapshot:()=>({single:rect(document.querySelector('.settings-single')),body:rect(document.querySelector('.settings-single')),page:rect(document.querySelector('.page')),
+    nav:!!document.querySelector('.settings-nav'),
+    sections:[...document.querySelectorAll('[data-settings-section]')].map(el=>({key:el.dataset.settingsSection,rect:rect(el)})),
+    sectionTitles:[...document.querySelectorAll('.settings-section-title')].map(el=>el.textContent),
+    overflow:document.querySelector('.page').scrollWidth-document.querySelector('.page').clientWidth,
+    overflowNodes:[...document.querySelectorAll('.settings-single *')].filter(el=>rect(el).right>rect(document.querySelector('.settings-single')).right+1).slice(0,12).map(el=>({tag:el.tagName,cls:el.className,text:el.textContent.slice(0,100),rect:rect(el)})),
+    manualRow:!!document.querySelector('[data-zs-open-link="manual"]'),
+    githubRow:!!document.querySelector('[data-zs-open-link="github"]'),
+    homepageRow:!!document.querySelector('[data-zs-open-link="homepage"]'),
+    legacyRows:['连接与设备','打开一个定位链接','本机运行状态'].filter(text=>document.body.innerText.includes(text)),
+    firstRowLabelWidth:(()=>{const el=document.querySelector('.settings-sections .pset-row-label');return el?rect(el).width:0;})(),
     pageScroll:document.querySelector('.page').scrollTop}),
   title:()=>({theme:document.documentElement.dataset.theme,root:getComputedStyle(document.getElementById('zs-titlebar')).backgroundColor,
     content:getComputedStyle(document.querySelector('[data-zs-titlebar-rendered]')).backgroundColor,
@@ -98,7 +107,7 @@ async function runVerifier() {
   // Three levels below root, matching imports above.
   const entry = path.join(out, 'entry.tsx');
   fs.writeFileSync(entry, renderer);
-  await require('esbuild').build({ entryPoints:[entry],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'} });
+  await require('esbuild').build({ entryPoints:[entry],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',loader:{'.png':'dataurl'},logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'} });
   fs.writeFileSync(path.join(out,'app.css'),['tokens.css','base.css','components.css','preview.css','titlebar.css','h1-overrides.css'].map(f=>fs.readFileSync(path.join(root,'src/ui/hifi/styles',f),'utf8')).join('\n'));
   fs.copyFileSync(path.join(root,'src/ui/renderer/style.css'),path.join(out,'legacy.css'));
   fs.copyFileSync(path.join(root,'src/ui/renderer/hifi-flag.js'),path.join(out,'hifi-flag.js'));
@@ -143,26 +152,33 @@ app.whenReady().then(async()=>{
    await capture('frameless-renderer-dark');
    await js("document.querySelector('.zs-winbtn').click();document.querySelector('.zs-winbtn.close').click()");
    check('frameless/window-buttons-bridge',(await js('r152.title().controlsCalled')).join(',')==='minimize,close');
-   const sections=['appearance','general','notifications','runtime','connections','data','help','guide'];
+   // R157：设置改成单页（无左侧分区菜单），所有分区自上而下排在一页里。
+   const sections=['general','appearance','notifications','runtime','data','help'];
    for(const size of [{width:3440,height:1440},{width:1920,height:1000},{width:1440,height:900},{width:1280,height:800},{width:1100,height:800},{width:900,height:760},{width:640,height:700}]) {
-    win.setContentSize(size.width,size.height);await pause(60);let base;
-    for(const section of sections) {
-     await js('r152.section('+JSON.stringify(section)+')');await until('r152.sectionReady('+JSON.stringify(section)+')','section '+section);await pause(70);
-     if(section==='guide')await until('r152.snapshot().guideLoaded','packaged guide');
-     const s=await js('r152.snapshot()');samples.push({size,section,snapshot:s});base??=s;
-     const name=size.width+'/'+section;
-     check(name+'/same-nav-and-content-boundary',Math.abs(s.nav.x-base.nav.x)<.6&&Math.abs(s.body.x-base.body.x)<.6&&Math.abs(s.body.width-base.body.width)<.6&&Math.abs(s.nav.y-base.nav.y)<.6,{base,s});
-     check(name+'/contained-navigation-and-content',s.overflow<1&&s.navItems.every(r=>r.x>=s.page.x&&r.right<=s.page.right+.6)&&s.body.right<=s.page.right+.6,s);
-     if(section==='general'&&(size.width===3440||size.width===1280))await capture('settings-general-'+size.width);
-     if(s.overflow>=1)await capture('overflow-'+size.width+'-'+section);
-     if(section==='guide') {
-      check(name+'/manual-uses-content-column',Math.abs(s.frame.x-s.body.x)<.6&&Math.abs(s.frame.width-s.body.width)<.6&&s.frame.width>=Math.min(300,s.body.width)&&s.frame.height>=250&&s.frame.bottom<=size.height+1,s);
-      check(name+'/manual-theme-and-independent-scroll',s.guideTheme==='dark'&&s.guideScroll>s.frame.height&&s.pageScroll===0,s);
-      await capture('settings-guide-'+size.width);
-     }
-     if(section==='appearance'&&(size.width===1920||size.width===640))await capture('settings-appearance-'+size.width);
-    }
+    win.setContentSize(size.width,size.height);await pause(80);
+    await js("document.querySelector('.page').scrollTop=0;true");await pause(40);
+    const s=await js('r152.snapshot()');samples.push({size,snapshot:s});
+    const name=size.width+'';
+    check(name+'/single-column-no-side-menu',s.nav===false&&s.sections.length===6&&s.sections.map(x=>x.key).join(',')===sections.join(','),{nav:s.nav,keys:s.sections.map(x=>x.key)});
+    check(name+'/content-width-capped',s.single.width<=901,{width:s.single.width});
+    check(name+'/content-inside-page',s.single.x>=s.page.x+16&&s.single.right<=s.page.right-16,{single:s.single,page:s.page});
+    check(name+'/no-horizontal-overflow',s.overflow<1,s);
+    check(name+'/sections-stacked-in-order',s.sections.every((sec,i)=>i===0||sec.rect.y>s.sections[i-1].rect.y),s.sections.map(x=>({key:x.key,y:x.rect.y})));
+    check(name+'/legacy-sections-removed',s.legacyRows.length===0,s.legacyRows);
+    // 窄窗：设置行改成上下排，名称不能被挤成一列竖排文字。
+    check(name+'/row-label-keeps-reading-width',s.firstRowLabelWidth>=150,{width:s.firstRowLabelWidth});
+    if(size.width===1440||size.width===640)await capture('settings-single-'+size.width);
    }
+   // 深链：?section=help 只负责滚动到帮助段，不再切换分区菜单。
+   win.setContentSize(1280,800);await pause(60);
+   await js("location.hash='#/settings?section=help';true");await pause(400);
+   const helpState=await js('r152.snapshot()');
+   check('deep-link-scrolls-to-help',helpState.pageScroll>0,{pageScroll:helpState.pageScroll});
+   check('help-external-links-present',helpState.manualRow&&helpState.githubRow&&helpState.homepageRow,{manual:helpState.manualRow,github:helpState.githubRow,homepage:helpState.homepageRow});
+   await js('r152.clickManual()');await pause(150);
+   const opened=await js('r152.linkOpens()');
+   check('manual-opens-via-main-bridge',opened.join(',')==='manual',opened);
+   await capture('settings-help-1280');
    win.setContentSize(1100,760);await pause(50);
    for(const mode of ['supported','record','unsupported','error']) {
     const before=await js('r152.composerState().readCount');

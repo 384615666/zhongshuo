@@ -319,9 +319,9 @@ body.embedded .footer{display:none}
 <a href="#optional"><span>12</span>备份与恢复</a>
 <a href="#send"><span>13</span>发送后看哪里</a>
 <a href="#help"><span>14</span>常见问题</a></aside><main><h1>众说操作手册</h1>
-<p><strong>Windows 桌面版 · 图文入门 · 更新于 2026-11-01</strong></p>
+<p><strong>Windows 桌面版 · 图文入门 · 更新于 2026-11-02</strong></p>
 <p>第一次用众说，可以跟着本手册做一次：打开项目 → 添加 AI → 发消息 → 看回复。本手册用“读书会筹备”举例，你可以换成自己的工作、资料或代码项目。</p>
-<p><strong>怎么看图：</strong> 截图中的蓝色 <strong>①②③</strong> 标出了点击位置，下面的步骤与编号对应。打开 <strong>设置 → 操作手册</strong>，随时可以回来查。</p>
+<p><strong>怎么看图：</strong> 截图中的蓝色 <strong>①②③</strong> 标出了点击位置，下面的步骤与编号对应。打开 <strong>设置 → 帮助与关于 → 操作手册</strong>，随时可以回来查。</p>
 <p><a id="start"></a></p>
 <h2>1. 第一次打开：从一个项目开始</h2>
 <p>使用安装版时，运行下载的 <code>Zhongshuo-Setup-…-x64.exe</code>，按安装向导完成后，从开始菜单或桌面的 <strong>众说</strong> 打开。无需另外安装 Node.js。再次打开会回到已有窗口。</p>
@@ -369,7 +369,7 @@ body.embedded .footer{display:none}
 <ul>
 <li>点窗口右上角的 <strong>—</strong>：收起窗口，AI继续工作。</li>
 <li>点右上角的 <strong>×</strong>：窗口收到 Windows 系统托盘，AI 继续工作。</li>
-<li>单击托盘中的众说图标可重新打开窗口；右键可打开设置、操作手册或数据目录。需要完全关闭时，右键选择 <strong>退出众说</strong>。</li>
+<li>单击托盘中的众说图标可重新打开窗口；右键可以打开任务看板、成员与 AI 设置、待我处理或设置。需要完全关闭时，右键选择 <strong>退出众说</strong>。</li>
 </ul>
 <p><a id="projects"></a></p>
 <h2>2. 认识界面，切换项目和房间</h2>
@@ -634,22 +634,21 @@ body.embedded .footer{display:none}
 <p>项目改动记录沿用Git的忽略规则，安装包、依赖和运行数据等被忽略的内容不混入源码改动；Git中已经跟踪的文件仍会记录。AI交付的文档和附件可以从原回复打开、保存。</p>
 <p><a id="settings"></a></p>
 <h2>11. 调整外观、通知和调用预算</h2>
-<p>点左侧 <strong>设置</strong>，选择要调整的项目。</p>
-<p><img src="images/23-settings-general-dark.png" alt="深色设置页：顶部栏与正文使用同一主题"></p>
+<p>点左侧 <strong>设置</strong>。所有设置都在同一页里，从上往下依次是 <strong>通用 → 外观 → 通知 → AI 设置 → 数据与存储 → 帮助与关于</strong>；右侧搜索框可以直接搜到具体那一项。</p>
+<p><img src="images/23-settings-general-dark.png" alt="深色设置页：所有设置在同一页，右侧可以搜索"></p>
 <p><img src="images/13-appearance.png" alt="外观设置：①主题，②是否显示头像"></p>
 <ol>
-<li>点 <strong>外观</strong>，在 <strong>① 主题</strong> 选择浅色或深色。</li>
+<li>往下找到 <strong>外观</strong>，在 <strong>① 主题</strong> 选择浅色或深色。</li>
 <li>头像默认显示，可在 <strong>② 显示头像</strong> 开关调整。</li>
 </ol>
-<p>在下方找到自己或 AI 成员，点 <strong>选择图片</strong>，选择 PNG、JPEG 或 WebP 头像。图片按原图保存，不限制文件大小；需要恢复时点 <strong>恢复默认</strong>。</p>
-<p><strong>通知：</strong> 到 <strong>设置 → 通知</strong> 查看任务提醒和静音设置。收到任务完成的通知后，点通知即可打开对应内容。</p>
-<p><strong>操作手册：</strong> 设置目录保持相同位置，手册章节在右侧阅读区域中切换。</p>
-<p><img src="images/24-settings-guide-dark.png" alt="操作手册：设置目录与其他设置页对齐"></p>
-<p>只想让某条对话安静一些，可以在那条对话的通知入口静音；想找使用方法，点设置中的 <strong>操作手册</strong>。</p>
+<p>在 <strong>我的头像</strong> 里可以直接点预置头像，也可以点 <strong>上传自定义</strong> 选择 PNG、JPEG 或 WebP 图片（≤ 384 KiB）。需要恢复时点 <strong>恢复默认</strong>。</p>
+<p><strong>通知：</strong> 在 <strong>通知</strong> 一段里有 <strong>桌面通知</strong> 总开关。关掉后不再弹出系统通知，任务和未读照常保留。只想让某条对话安静一些，可以在那条对话的通知入口单独静音；这里的 <strong>对话串通知</strong> 会列出已经单独设置过的对话串。</p>
+<p><strong>操作手册：</strong> 在 <strong>帮助与关于</strong> 一段点 <strong>打开手册</strong>，手册会在系统默认浏览器里打开；同处还有 <strong>GitHub 仓库</strong> 和 <strong>产品主页</strong> 两个入口。</p>
+<p><img src="images/24-settings-help-dark.png" alt="帮助与关于：①打开操作手册，下面还有 GitHub 与产品主页"></p>
 <h3>限制一次请求的 AI 调用次数</h3>
 <p><img src="images/18-call-budget.png" alt="调用预算设置：①AI设置，②调用次数预算开关"></p>
 <ol>
-<li>进入 <strong>设置 → ① AI 设置</strong>。也可以在设置搜索框输入“调用预算”。</li>
+<li>在 <strong>AI 设置</strong> 一段找到调用预算（也可以在设置搜索框输入“调用预算”）。</li>
 <li>需要限制次数时，打开 <strong>② 启用调用次数预算</strong>。返回房间、回复串或私信，输入框旁会显示本次的次数上限。</li>
 <li>不需要限制时，关闭这个开关。输入框会隐藏预算提示，可以直接发消息。</li>
 </ol>
@@ -671,7 +670,6 @@ body.embedded .footer{display:none}
 </ol>
 <h3>收起不常用的项目或房间</h3>
 <p>在项目或房间的菜单里选择 <strong>归档</strong>。需要重新使用时，到 <strong>设置 → 数据与存储 → 归档管理</strong> 恢复。 有尚未开始的排队任务或未结束的工作时，先等待完成或停止，再归档。归档后的房间不会开始旧的排队工作。</p>
-<p>其他设备连接的入口在 <strong>设置 → 连接与设备</strong>；按页面显示的地址和配对步骤连接。</p>
 <p><a id="send"></a></p>
 <h2>13. 点了发送后，该看哪里</h2>
 <div class="guide-flow" aria-label="发送后查看步骤">
@@ -689,8 +687,8 @@ body.embedded .footer{display:none}
 <p><a id="help"></a></p>
 <h2>14. 常见问题：从这里继续操作</h2>
 <h3>想随时打开这份手册</h3>
-<p><img src="images/15-help.png" alt="设置中的手册入口：蓝色①为独立操作手册页签"></p>
-<p>点 <strong>设置 → 操作手册</strong>，按左侧章节目录查找。也可以在设置搜索框输入“手册”或“教程”。</p>
+<p><img src="images/15-help.png" alt="帮助与关于里的手册入口：①打开手册（在浏览器中打开）"></p>
+<p>点 <strong>设置 → 帮助与关于 → 打开手册</strong>，手册会在系统默认浏览器里打开。也可以在设置搜索框输入“手册”或“教程”。</p>
 <h3>AI还没回复</h3>
 <p>打开原对话串，点 <strong>详情 → 活动与进展</strong>，看它正在处理什么。需要补充信息时，在原串回答；需要停止时点 <strong>停止任务</strong>。</p>
 <h3>提示模型或渠道不能用</h3>
@@ -702,7 +700,7 @@ body.embedded .footer{display:none}
 <h3>换了一台电脑，怎样带上聊天</h3>
 <p>先在原电脑按 <a href="#optional">第 12 章</a> 备份，再在新电脑的 <strong>设置 → 数据与存储</strong> 中选择恢复。恢复完成后即可看到原项目和历史。</p>
 <h3>需要反馈一个问题</h3>
-<p>截下出问题的界面，写清楚“点了哪个按钮、出现了什么、希望得到什么”。版本信息在 <strong>设置 → 帮助与关于</strong>。</p>
+<p>截下出问题的界面，写清楚“点了哪个按钮、出现了什么、希望得到什么”。版本信息在 <strong>设置 → 帮助与关于</strong>；同一页的 <strong>GitHub 仓库</strong>（https://github.com/384615666/zhongshuo ）可以提交问题，<strong>产品主页</strong>（https://zhongshuo.lsjx.xyz ）有功能说明和界面示例。</p>
 </main></div>
 <footer class="footer">本手册可离线阅读 · 浏览器 Ctrl + P 可打印或另存为 PDF</footer>
 </body>

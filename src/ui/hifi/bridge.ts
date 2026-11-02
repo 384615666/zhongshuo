@@ -1,5 +1,6 @@
 import {userFacingSystemText} from '../../contracts/userFacingText.ts';
 import {isRuntimeMetadataRead,RUNTIME_METADATA_RECEIPT_DEADLINE_MS} from '../../contracts/runtimeMetadataDeadline.ts';
+import type { AppLinkTarget } from '../appLinks.ts';
 /**
  * 正式命令桥（H1 首包，第四十七轮修订）：类型化包装 `window.zs.command`（preload
  * contextBridge——与既有 renderer 同一窄接口，不复制绕过规则的实现）。
@@ -42,6 +43,29 @@ export function dataBridge(): ZsDataBridge {
 /** 打开导出目录（窄权限：exports/ 白名单外的路径由 main 拒绝）。 */
 export async function openExportDir(dir: string): Promise<string> {
   return bridge().openPath(dir);
+}
+
+/**
+ * 外部链接（R157）：设置页「操作手册 / GitHub / 主页」。renderer 只提交枚举目标，
+ * main 侧（zs:open-app-link）按 appLinks 白名单解析：manual=随包手册文件，
+ * github/homepage=写死的 https——不接受任意 URL/路径。
+ */
+export type { AppLinkTarget };
+
+export interface ZsAppLinksBridge {
+  open(target: AppLinkTarget): Promise<{ ok: boolean; error?: string }>;
+}
+
+/** 打开操作手册 / GitHub / 主页：返回 main 的 {ok,error}（失败原因由页面 toast）；
+ * 桥缺失（非正常启动）时抛中文可读错误。 */
+export async function openAppLink(target: AppLinkTarget): Promise<{ ok: boolean; error?: string }> {
+  const api = (window as unknown as { zsAppLinks?: ZsAppLinksBridge }).zsAppLinks;
+  if (api == null || typeof api.open !== 'function') {
+    throw new Error('外部链接入口不可用，请重新打开众说');
+  }
+  const result = await api.open(target);
+  if (result == null) return { ok: false, error: '系统未返回结果' };
+  return result.ok === true ? { ok: true } : { ok: false, error: typeof result.error === 'string' && result.error.length > 0 ? result.error : '系统未返回原因' };
 }
 
 export interface BridgeOk<T> { status: 'ok'; data: T }

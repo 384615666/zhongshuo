@@ -47,7 +47,7 @@ it('clears settled task blockers and rejects older pool/thread projections in bo
     }}});
     const entry=join(dir,'entry.ts'),bundle=join(dir,'bundle.mjs');
     writeFileSync(entry,`export * as loader from ${JSON.stringify(resolve('src/ui/hifi/loader.ts').replaceAll('\\','/'))};export * as store from ${JSON.stringify(resolve('src/ui/hifi/data/store.ts').replaceAll('\\','/'))};export * as hints from ${JSON.stringify(resolve('src/ui/hifi/lib/taskRunHint.ts').replaceAll('\\','/'))};`);
-    await build({entryPoints:[entry],bundle:true,platform:'browser',format:'esm',outfile:bundle});
+    await build({entryPoints:[entry],bundle:true,platform:'browser',format:'esm',loader:{'.png':'dataurl'},outfile:bundle});
     type Snapshot={executionBlocker:TaskExecutionBlocker|null};
     const {loader,store,hints}=await import(pathToFileURL(bundle).href) as {
       loader:{openProjectByPath(path:string):Promise<void>;loadRoomPool(id:string):Promise<void>;loadThread(id:string):Promise<void>};

@@ -1585,178 +1585,59 @@ button.composer-file-token-open:hover {
 }
 
 /* ============================================================
-   应用设置：左导航树 + 右内容区（第十五批重构；第十六批收窄为纯应用级）
+   应用设置（R157 单页）：启动 / 外观 / 通知 / AI / 数据 / 帮助 自上而下排在一页，
+   不再有左侧分区菜单；`?section=` 只负责滚动到对应段落（深链兼容）。
    ============================================================ */
 
-.settings-layout {
+.settings-single {
   /**
-   * 正文宽度在这里定义，`.settings-body` 取它（同一个变量，避免两处各写一个数就对不上）。
-   * 见 `.settings-body` 与 §2.1 的例外条款。
+   * 单页正文宽度：与项目设置的 `.pset`、归档卡同一量级（§2.1），窄窗自动缩到可用宽度。
+   * 原来正文被 200px 左导航挤窄；单页后直接给它整列宽度，但仍不铺满超宽窗口。
    */
-  /**
-   * 正文宽度**随窗口增长**（2026-09-26 用户反馈："全屏模型下，左右留空有点多"）。
-   *
-   * 原来固定 880px：1920 宽窗口下主内容区有 1668px，正文仍只占 880，两侧各空 ~300px。
-   * 现在下限 880（普通窗口的阅读宽度，也是实测最稳的一档），上限 1040（再宽一行的中文说明就拉成
-   * 八十多字，读起来累）。中间用 vw 过渡 —— 主侧栏是固定 246px，所以 56vw 约等于"主内容区的 62%"。
-   * 注意它只是**上限**：可用宽度不足时列宽照旧收缩（窄窗不会溢出）。
-   */
-  --settings-body-max: clamp(880px, 56vw, 1040px);
-  --settings-nav-w: 200px;
-  --settings-gap: 22px;
-  display: grid;
-  grid-template-columns: var(--settings-nav-w) minmax(0, 1fr);
-  gap: var(--settings-gap);
-  align-items: start;
-  /**
-   * 居中与最大宽度（§2.1，第二十八批）：
-   * 参照物是项目设置的 `.pset { max-width: 920px }` —— 应用设置此前**没有任何宽度约束**，
-   * 1440px 窗口下正文横跨整个主内容区，一行开关配一整屏宽的白卡。
-   *
-   * max-width 取「导航 + 间距 + 正文」的和：这样**看得见的内容**（导航到正文右缘）
-   * 在主内容区里正好居中，而不是"容器居中了但正文右边缘还空一大块"。
-   * 数值来自六档窗口实测（1920/1600/1440/1280/1100/900），见施工报告。
-   */
-  max-width: calc(var(--settings-nav-w) + var(--settings-gap) + var(--settings-body-max));
+  max-width: 900px;
   margin-inline: auto;
-}
-
-/* 常规设置正文的最大宽度（见 `.settings-body` 与 §2.1 的例外条款） */
-
-/* 嵌入的归档管理：日期/项目分组卡片按内容占宽 */
-/**
- * 归档管理筛选行（§2.3）：搜索框与项目下拉**同高同宽基准**。
- * 原实现搜索框很窄、项目下拉拉满全宽，同一行控件宽度不统一；窄窗下允许换行。
- */
-.archive-filters .archive-filter-search {
-  flex: 0 1 260px;
-  min-width: 170px;
-}
-.archive-filters .archive-filter-project,
-.archive-filters > .select-wrap {
-  flex: 0 0 auto;
-  width: 180px;
-  min-width: 140px;
-  max-width: 100%;
-}
-@media (max-width: 620px) {
-  .archive-filters .archive-filter-search,
-  .archive-filters .archive-filter-project,
-  .archive-filters > .select-wrap {
-    flex: 1 1 100%;
-    width: auto;
-  }
-}
-
-/* 左栏：分区导航。粘住顶部，内容长了也不用滚回去点分区 */
-.settings-nav {
-  position: sticky;
-  /**
-   * 贴合位 = 页面顶部留白（`--page-top-gap`，定义在 `.page` 上）。
-   *
-   * 原先是 `top: 0`：左栏自然位置比滚动容器内容盒低 20px，于是**一开始滚动它就往上跳 20px**
-   * 才吸住 —— 用户看到的是"滚动正文时左边目录跟着一起滚"（实测视口 top 58 → 38）。
-   * 对齐之后滚动全程停在原位（实测 58 → 58）。
-   */
-  top: var(--page-top-gap, 20px);
   display: flex;
   flex-direction: column;
+  gap: 18px;
+}
+
+/* 页头：标题 + 设置搜索（搜索仍按项定位到具体段落里的那一行） */
+.settings-head {
+  display: flex;
+  align-items: flex-start;
   gap: 16px;
-  align-self: start;
+  flex-wrap: wrap;
 }
-.settings-nav-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.settings-nav-label {
-  padding: 0 8px 4px;
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text-3);
-}
-/* 项目选择器紧贴"当前项目"分组标题 */
-.settings-nav-project {
-  display: block;
-  padding: 0 0 6px;
-}
-.settings-nav-project .select {
-  width: 100%;
-  height: 30px;
-  min-height: 30px;
-  padding: 0 8px;
-  font-size: var(--fs-12);
-}
-/* 导航项：整行可点，选中态有底色 + 左侧强调条，位置感明确 */
-.settings-nav-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-2);
-  font-size: var(--fs-13);
-  text-align: left;
-  cursor: pointer;
-}
-.settings-nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.settings-nav-item.on {
-  /* 选中态统一：主题 --bg-surface 垫底渐变（规范 §2.0/§8 迁移专项） */
-  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
-     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
-  background-color: var(--bg-surface);
-  background-image: var(--grad-soft);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-.settings-nav-item.on::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
-  background: var(--accent);
-}
-.settings-nav-text {
-  flex: 1;
+.settings-head-text {
+  flex: 1 1 340px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.settings-nav-foot {
-  padding: 8px;
-  font-size: var(--fs-11);
-  line-height: 1.6;
-  color: var(--text-3);
-  border-top: 1px solid var(--border);
+.settings-head .settings-search {
+  flex: 0 1 300px;
+  min-width: 220px;
+  margin: 0;
 }
 
-.settings-body {
-  /**
-   * 常规设置正文的最大宽度（§2.1）：与项目设置的 `.pset { max-width: 920px }` 同量级，
-   * 窄窗下自动缩到可用宽度 —— 控件换行，标签不挤压。
-   * 表格、日志、运行记录、错误码表按 §2.1 的例外条款不受它约束（标 `.settings-wide`）。
-   */
-  min-width: 0;
-  max-width: var(--settings-body-max);
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+/* 段落：自带锚点（深链 / 搜索定位），段与段之间用发丝线分开 */
+.settings-section {
+  scroll-margin-top: 12px;
+}
+.settings-section + .settings-section {
+  padding-top: 26px;
+  border-top: 1px solid var(--border);
 }
 
 /**
  * 宽表 / 长内容例外（§2.1）：表格与日志**保留自身横向滚动**，
  * 不为了对齐而压缩正文，也不为了让正文变宽把表格挤成不可读。
  */
-.settings-body .settings-wide {
+.settings-wide {
   overflow-x: auto;
 }
 
@@ -1782,7 +1663,7 @@ button.composer-file-token-open:hover {
   line-height: 1.6;
 }
 
-/* 设计依据折叠块：编号与"为什么这么设计"收在这里，正文不出现 */
+/* 折叠块（投递记录等技术明细收在这里，正文不出现） */
 .settings-why {
   margin-top: 12px;
   border-top: 1px solid var(--border);
@@ -1829,111 +1710,31 @@ button.composer-file-token-open:hover {
   font-weight: 400;
 }
 
-/* 窄窗：左栏导航改为横向排布，避免把内容挤成一条缝。
-   阈值 980px（第二十八批从 860 上调）：主内容区还要减去主侧栏约 250px，
-   所以"视口 900 时正文只剩 374px"，行内说明被挤成多行 —— 此时改单列，
-   正文拿到整个主内容区宽度（实测 900 档：单列后正文 606px）。 */
-@media (max-width: 980px) {
-  .settings-layout {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-  .settings-nav {
-    position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
-  }
-  .settings-nav-group {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
-    width: 100%;
+/* 窄窗：搜索框独占一行，标题与搜索不再互相挤压 */
+@media (max-width: 720px) {
+  .settings-head .settings-search {
+    flex: 1 1 100%;
     min-width: 0;
   }
-  .settings-nav-label {
-    display: none;
-  }
-  .settings-nav-item {
-    flex: 0 0 auto;
-    width: auto;
-    white-space: nowrap;
-  }
-  .settings-nav-project {
-    padding: 0;
-  }
-  .settings-nav-project .select {
-    width: 140px;
-  }
-  .settings-nav-item.on::before {
-    display: none;
-  }
-  .settings-nav-foot {
-    display: none;
-  }
-  /* 单列时导航变成横向流：搜索框占满一整行，不然只剩一百多像素 */
-  .settings-search {
-    flex: 1 1 100%;
-  }
 }
 
-
-/* The manual owns the reading area; the surrounding settings page does not scroll. */
-.page.settings-guide-page {
-  display: flex;
-  padding-bottom: 0;
-  overflow: hidden;
-}
-.settings-layout.settings-guide-layout {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  min-width: 0;
-  margin-block: 0;
-  padding-top: var(--page-top-gap);
-  grid-template-rows: minmax(0, 1fr);
-  align-items: stretch;
-}
-.settings-guide-layout > .settings-nav {
-  position: static;
-  min-width: 0;
-  min-height: 0;
-  max-height: 100%;
-  overflow-y: auto;
-}
-.settings-guide-layout > .settings-body {
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-.settings-guide {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
-.settings-guide iframe {
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  border: 0;
-  background: var(--bg-surface);
-}
-@media (max-width: 980px) {
-  .settings-layout.settings-guide-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 14px;
+/**
+ * 窄窗的设置行：改为上下排（名称在上、控件在下）。
+ * 行本身是 flex（名称 flex:1 + 控件 flex:none）；窗口很窄时控件的最小宽度会把名称
+ * 挤成一列竖排文字（640 档实测）。单页设置里这一列本来就窄，所以在这一页单独放开。
+ */
+@media (max-width: 760px) {
+  .settings-sections .pset-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
   }
-  .settings-guide-layout > .settings-nav {
-    overflow: visible;
+  .settings-sections .pset-row-control,
+  .settings-sections .pset-row-control.wide {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
-
 .method-chip {
   display: inline-flex;
   align-items: center;

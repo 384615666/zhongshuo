@@ -69,7 +69,7 @@ async function runVerifier(){
  fs.writeFileSync(path.join(fixture,'harness.tsx'),harness.replaceAll('__ROOT__',root.replaceAll('\\','/')));
  fs.writeFileSync(path.join(fixture,'index.html'),'<!doctype html><meta charset="utf-8"><div id="root"></div><script src="harness.js"></script>');
  fs.writeFileSync(path.join(fixture,'main.cjs'),main);
- await require('esbuild').build({entryPoints:[path.join(fixture,'harness.tsx')],bundle:true,platform:'browser',format:'iife',jsx:'automatic',outfile:path.join(fixture,'harness.js'),define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
+ await require('esbuild').build({entryPoints:[path.join(fixture,'harness.tsx')],bundle:true,platform:'browser',format:'iife',jsx:'automatic',loader:{'.png':'dataurl'},outfile:path.join(fixture,'harness.js'),define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
  const result=spawnSync(require('electron'),[path.join(fixture,'main.cjs')],{cwd:root,env,windowsHide:true,encoding:'utf8',timeout:20000});
  const line=(result.stdout||'').split('\n').find(s=>s.startsWith('R108_RESULT '));

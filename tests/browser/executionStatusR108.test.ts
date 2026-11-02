@@ -641,6 +641,7 @@ requestAnimationFrame(() => requestAnimationFrame(() => {
       platform: 'browser',
       format: 'esm',
       jsx: 'automatic',
+      loader: { '.png': 'dataurl' },
       outfile: bundlePath,
       absWorkingDir: process.cwd(),
       nodePaths: [resolve('node_modules')],

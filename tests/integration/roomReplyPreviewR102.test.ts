@@ -13,6 +13,12 @@ it('keeps original latest replies and authoritative counts current in cold/cache
   const dir=mkdtempSync(join(tmpdir(),'zs-r102-pool-replies-')),project=join(dir,'project');mkdirSync(project);
   const db=openDatabase(join(dir,'state.sqlite'));
   const methods:string[]=[];
+  /**
+   * 头像回填是成员装载后的后台读取（loader 的 `void backfillDefaultMemberAvatars(...)`），
+   * 它会在装载完成后异步补一次 `app.appearance.get`；与本用例要核对的「房间池只发
+   * room.pool」无关，统计时排除这条后台读，不放松对房间池请求的断言。
+   */
+  const poolMethods=()=>methods.filter(method=>method!=='app.appearance.get');
   const raw=(method:string,params:unknown)=>{
     methods.push(method);
     return dispatchDaemonCommand({db,appDataDir:dir,localUserId:'u_local',interruptTurn:async()=>{}},
@@ -28,7 +34,7 @@ it('keeps original latest replies and authoritative counts current in cold/cache
     const other=(await cmd<{room:{id:string}}>('room.create',{projectId,name:'切走的房间'})).room.id;
     const entry=join(dir,'entry.ts'),bundle=join(dir,'bundle.mjs');
     writeFileSync(entry,`export * as loader from ${JSON.stringify(resolve('src/ui/hifi/loader.ts').replaceAll('\\','/'))};export * as store from ${JSON.stringify(resolve('src/ui/hifi/data/store.ts').replaceAll('\\','/'))};export * as selectors from ${JSON.stringify(resolve('src/ui/hifi/data/selectors.ts').replaceAll('\\','/'))};`);
-    await build({entryPoints:[entry],bundle:true,platform:'browser',format:'esm',outfile:bundle});
+    await build({entryPoints:[entry],bundle:true,platform:'browser',format:'esm',loader:{'.png':'dataurl'},outfile:bundle});
     vi.stubGlobal('window',{zs:{command:async(env:{method:string;params:unknown})=>{
       const result=await raw(env.method,env.params);
       if(pauseHistory&&env.method==='thread.history'){pauseHistory=false;captured=true;await new Promise<void>(done=>{release=done;});}
@@ -59,7 +65,7 @@ it('keeps original latest replies and authoritative counts current in cold/cache
       expect(preview.map(m=>m.authorId)).toEqual([member,member]);
     };
     append(1);append(2);methods.length=0;
-    await loader.loadRoomPool(room.id);expect(methods).toEqual(['room.pool']);check(2);
+    await loader.loadRoomPool(room.id);expect(poolMethods()).toEqual(['room.pool']);check(2);
     expect(store.getState().threadEntities[sent.threadId]).toBeUndefined();
     append(1,empty);append(2,empty);await loader.loadThread(empty.threadId);check(2,empty.threadId); // older pool has recentReplies:[]
     await loader.loadThread(sent.threadId);
@@ -69,7 +75,7 @@ it('keeps original latest replies and authoritative counts current in cold/cache
     pauseHistory=true;const stale=loader.loadThread(sent.threadId);await vi.waitFor(()=>expect(captured).toBe(true));
     for(let n=8;n<=10;n++)append(n);
     db.prepare("UPDATE tasks SET status='DONE' WHERE id=?").run(sent.taskId);
-    methods.length=0;await loader.loadRoomPool(room.id);expect(methods).toEqual(['room.pool']);check(10);
+    methods.length=0;await loader.loadRoomPool(room.id);expect(poolMethods()).toEqual(['room.pool']);check(10);
     release!();await stale;expect(store.getState().threadMessages[sent.threadId]).toHaveLength(7);check(10);
     await loader.loadThread(sent.threadId);check(10);
     append(11);append(12);await loader.loadThread(sent.threadId);check(12); // newer thread beats the older pool total and preview

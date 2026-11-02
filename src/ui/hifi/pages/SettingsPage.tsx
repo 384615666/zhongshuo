@@ -1,23 +1,22 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
- * 应用设置：既有设置导航 + 搜索，操作手册单独分区。
+ * 应用设置（单页）：启动、外观、通知、AI、数据与关于，全部在同一页自上而下排开，
+ * 不再有左侧分区菜单。`?section=` 仍然可用——它现在只负责滚动到对应段落（深链兼容）。
  *
- * 已接命令的设置读写并回读核对（app.settings /
- * 主题 / runtime 绑定 / 数据与草稿存储 / 远程监听事实 / BUILD 身份）；通知静音使用真实
- * thread_subscriptions 并回读。后端没有的能力在原型位置**禁用并说明**（托盘/自启、配对码、
- * MCP 接入），不用模拟值冒充实际值。
+ * 已接命令的设置读写并回读核对（app.settings / 主题 / runtime 绑定 / 数据与草稿存储 / BUILD
+ * 身份）；通知静音使用真实 thread_subscriptions 并回读，桌面通知总开关使用 app.settings 并回读。
+ * 操作手册与项目链接交给主进程用系统浏览器打开（见 bridge.openAppLink），应用内不再嵌入手册。
  * 项目设置独立于 /project/:id/settings（原归属保持——本页只放应用级）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
 import { SettingsRow, ReadOnlyRow, DetailFold } from '../components/SettingsRow';
-import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, importLegacySnapshot } from '../data/store';
+import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, importLegacySnapshot, setNotificationsEnabled } from '../data/store';
 import { rescanLegacyImport } from '../loader';
-import { bridge, command, dataBridge, type DataOperationStatus } from '../bridge';
+import { bridge, command, dataBridge, openAppLink, type AppLinkTarget, type DataOperationStatus } from '../bridge';
 import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
-import { isExternalDeepLink } from '../lib/deepLink';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
 import { ExecutionConcurrencyPanel } from '../components/ExecutionConcurrencyPanel';
 import { runtimeModelDisplayName } from '../lib/format';
@@ -29,57 +28,61 @@ import {
 } from '../../../contracts/callBudget';
 import {
   TASK_NOTIFICATION_COMMANDS,
+  TASK_NOTIFICATIONS_ENABLED_SETTING_KEY,
+  parseTaskNotificationsEnabledSetting,
+  serializeTaskNotificationsEnabledSetting,
   taskNotificationPollResultSchema,
   type TaskNotificationAttemptView,
   type TaskNotificationPollResult,
 } from '../../../contracts/taskNotifications';
 
 export type AppSettingsSection =
-  | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'guide' | 'help';
+  | 'general' | 'appearance' | 'notifications' | 'runtime' | 'data' | 'help';
 
-/** 旧写法 → 现分区（§3.4 深链兼容）。 */
+/** 旧写法 → 现分区（深链兼容；手册与连接设备已并入其它段落）。 */
 const SECTION_ALIASES: Record<string, AppSettingsSection> = {
   general: 'general', appearance: 'appearance', notifications: 'notifications',
-  runtime: 'runtime', connections: 'connections', data: 'data', guide: 'guide', manual: 'guide', help: 'help',
-  app: 'general', lan: 'connections', archive: 'data', archived: 'data', diagnostics: 'help', errors: 'help',
+  runtime: 'runtime', data: 'data', help: 'help',
+  guide: 'help', manual: 'help', diagnostics: 'help', errors: 'help',
+  connections: 'general', lan: 'general', app: 'general', archive: 'data', archived: 'data',
 };
 
 export function appSectionOf(raw: string | undefined): AppSettingsSection {
   return (raw && SECTION_ALIASES[raw]) || 'general';
 }
 
-type NavItem = { key: AppSettingsSection; label: string; icon: string; hint: string };
+type SettingsSectionKey = AppSettingsSection;
 
-const NAV: NavItem[] = [
-  { key: 'general', label: '通用', icon: 'settings', hint: '启动与打开位置' },
-  { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
-  { key: 'notifications', label: '通知', icon: 'bell', hint: '管理桌面通知静音' },
-  { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: '同时运行的 AI、调用预算、模型与权限' },
-  { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
-  { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
-  { key: 'guide', label: '操作手册', icon: 'file-text', hint: '完整使用说明' },
-  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '版本与诊断' },
+const SECTIONS: Array<{ key: SettingsSectionKey; title: string }> = [
+  { key: 'general', title: '通用' },
+  { key: 'appearance', title: '外观' },
+  { key: 'notifications', title: '通知' },
+  { key: 'runtime', title: 'AI 设置' },
+  { key: 'data', title: '数据与存储' },
+  { key: 'help', title: '帮助与关于' },
 ];
 
 /** Search only real actions shown on this page. */
-type SearchEntry = { section: AppSettingsSection; label: string; keywords: string; match: string };
+type SearchEntry = { section: SettingsSectionKey; label: string; keywords: string; match: string };
 const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
   { section: 'appearance', label: '主题', keywords: '外观 主题 深色 浅色 暗色', match: 'appearance-theme' },
   { section: 'appearance', label: '显示头像', keywords: '头像 显示 图片', match: 'appearance-avatars' },
   { section: 'appearance', label: '设置我的头像', keywords: '我的头像 个人头像 上传 更换 恢复默认 图片', match: 'appearance-avatar-images' },
-  { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
+  { section: 'notifications', label: '桌面通知开关', keywords: '通知 桌面 弹窗 提醒 开关 关闭 开启', match: 'notification-desktop' },
+  { section: 'notifications', label: '对话串通知静音', keywords: '通知 静音 对话串 完成 验收 输入', match: '线程通知静音' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用预算 调用次数 次数预算 启用 开启 关闭 上限 callBudget budget DIRECT AUTO DELIBERATE', match: 'call-budget' },
   { section: 'runtime', label: '同时运行的 AI', keywords: '并发 并行 同时 运行 全局 每项目 同渠道 上限 concurrency', match: 'execution-concurrency' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
-  { section: 'connections', label: '远程访问状态', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
   { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
   { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
   { section: 'data', label: '草稿保存与重试', keywords: '草稿 保存 锁定 重试', match: '草稿保存' },
   { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
   { section: 'data', label: '归档管理', keywords: '归档 项目 房间 恢复历史', match: '归档管理' },
   { section: 'data', label: '已移除的项目', keywords: '移除 项目 重新关联', match: '已移除的项目' },
-  { section: 'guide', label: '操作手册', keywords: '帮助 文档 使用 教程 手册', match: 'user-guide' },
+  { section: 'help', label: '操作手册', keywords: '帮助 文档 使用 教程 手册 浏览器 离线', match: 'open-manual' },
+  { section: 'help', label: 'GitHub 仓库', keywords: 'github 源码 仓库 反馈 开源', match: 'open-github' },
+  { section: 'help', label: '产品主页', keywords: '主页 官网 网站 介绍 首页', match: 'open-homepage' },
   { section: 'help', label: '版本与构建身份', keywords: '版本 构建 build 关于', match: '版本与构建' },
 ];
 
@@ -98,40 +101,69 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
   );
 }
 
-import { Modal, Select, Switch, Tag } from '../components/ui';
+/** 单页里的一个段落：自带锚点，深链与搜索都用它定位。 */
+function SectionShell({ section, title, sub, children }: {
+  section: SettingsSectionKey;
+  title: string;
+  sub: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="settings-section"
+      id={`settings-section-${section}`}
+      data-settings-section={section}
+      aria-label={title}
+    >
+      <SectionHead title={title} sub={sub} />
+      {children}
+    </section>
+  );
+}
+
+import { Switch, Tag } from '../components/ui';
 import { AvatarPicker } from '../components/AvatarPicker';
+
+function scrollToSection(section: SettingsSectionKey): void {
+  const el = document.getElementById(`settings-section-${section}`);
+  if (el == null) return;
+  el.scrollIntoView({ block: 'start', behavior: 'auto' });
+}
 
 export function SettingsPage({ query }: { query?: Record<string, string> }) {
   const q = query ?? {};
   const section = appSectionOf(q.section);
   const [search, setSearch] = useState('');
   const [jumpTo, setJumpTo] = useState<string | null>(null);
-  const navRef = useRef<HTMLElement>(null);
-  const go = (next: AppSettingsSection) => navigate(`/settings?section=${next}`, { replace: true });
+  const results = useMemo(() => searchAppSettings(search), [search]);
+
+  // 深链（侧栏「设置」、托盘「设置」、标题栏「帮助」）只负责滚到对应段落。
   useEffect(() => {
-    if (section !== 'guide' || search.trim()) return;
-    const reveal = () => navRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    reveal();
-    window.addEventListener('resize', reveal);
-    return () => window.removeEventListener('resize', reveal);
-  }, [section, search]);
+    if (search.trim() || jumpTo != null) return;
+    const frame = window.requestAnimationFrame(() => scrollToSection(section));
+    return () => window.cancelAnimationFrame(frame);
+  }, [section, search, jumpTo]);
+
   useEffect(() => {
-    if (!jumpTo || section === 'guide') return;
+    if (jumpTo == null) return;
     const el = findByLabel(jumpTo);
-    if (!el) return;
+    if (el == null) return;
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el.classList.add('settings-jump-flash');
     const t = window.setTimeout(() => el.classList.remove('settings-jump-flash'), 1800);
     return () => window.clearTimeout(t);
-  }, [jumpTo, section]);
-  const results = useMemo(() => searchAppSettings(search), [search]);
+  }, [jumpTo]);
 
   return (
     <div className="main">
-      <div className={`page${section === 'guide' ? ' settings-guide-page' : ''}`}>
-        <div className={`settings-layout${section === 'guide' ? ' settings-guide-layout' : ''}`}>
-          <nav ref={navRef} className="settings-nav" aria-label="设置分区">
-            <div className="settings-search">
+      <div className="page settings-page">
+        <div className="settings-single">
+          <header className="settings-head">
+            <div className="settings-head-text">
+              <div className="page-title">设置</div>
+              <div className="page-sub">启动、外观、通知、AI、数据与关于都在这一页；改动会即时保存并回读确认。</div>
+            </div>
+            <div className="settings-search" role="search">
               <div className="row tight">
                 <Icon name="search" size={13} className="faint" />
                 <input
@@ -148,53 +180,35 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
                 ) : null}
               </div>
             </div>
-            {search.trim() ? (
-              <div className="settings-search-results" role="list">
-                {results.length === 0 ? (
-                  <div className="small faint" style={{ padding: '4px 8px' }}>
-                    没找到匹配的设置项，请换个关键词。
-                  </div>
-                ) : (
-                  results.map((r) => (
-                    <button
-                      key={`${r.section}-${r.match}`}
-                      className="settings-search-hit"
-                      role="listitem"
-                      onClick={() => { setJumpTo(r.match); go(r.section); setSearch(''); }}
-                    >
-                      <span className="settings-search-hit-label">{r.label}</span>
-                      <span className="small faint">{NAV.find((n) => n.key === r.section)?.label}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            ) : (
-              <div className="settings-nav-group">
-                <div className="settings-nav-label">应用</div>
-                {NAV.map((it) => (
+          </header>
+          {search.trim() ? (
+            <div className="settings-search-results" role="list">
+              {results.length === 0 ? (
+                <div className="small faint" style={{ padding: '4px 8px' }}>
+                  没找到匹配的设置项，请换个关键词。
+                </div>
+              ) : (
+                results.map((r) => (
                   <button
-                    key={it.key}
-                    className={`settings-nav-item${section === it.key ? ' on' : ''}`}
-                    onClick={() => go(it.key)}
-                    title={it.hint}
-                    aria-current={section === it.key ? 'page' : undefined}
+                    key={`${r.section}-${r.match}`}
+                    className="settings-search-hit"
+                    role="listitem"
+                    onClick={() => { setJumpTo(r.match); setSearch(''); }}
                   >
-                    <Icon name={it.icon} size={14} />
-                    <span className="settings-nav-text">{it.label}</span>
+                    <span className="settings-search-hit-label">{r.label}</span>
+                    <span className="small faint">{SECTIONS.find((s) => s.key === r.section)?.title}</span>
                   </button>
-                ))}
-              </div>
-            )}
-          </nav>
-          <div className="settings-body">
-            {section === 'general' ? <SectionGeneral /> : null}
-            {section === 'appearance' ? <SectionAppearance /> : null}
-            {section === 'notifications' ? <SectionNotifications /> : null}
-            {section === 'runtime' ? <SectionRuntime /> : null}
-            {section === 'connections' ? <SectionConnections /> : null}
-            {section === 'data' ? <SectionData /> : null}
-            {section === 'guide' ? <SectionGuide /> : null}
-            {section === 'help' ? <SectionHelp /> : null}
+                ))
+              )}
+            </div>
+          ) : null}
+          <div className="settings-sections">
+            <SectionGeneral />
+            <SectionAppearance />
+            <SectionNotifications />
+            <SectionRuntime />
+            <SectionData />
+            <SectionHelp />
           </div>
         </div>
       </div>
@@ -205,7 +219,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
 function findByLabel(text: string): HTMLElement | null {
   const exact = Array.from(document.querySelectorAll<HTMLElement>('[data-settings-row]')).find(el=>el.dataset.settingsRow===text);
   if(exact)return exact;
-  const all = document.querySelectorAll<HTMLElement>('.settings-body .row, .settings-body .pset-row, .settings-body .settings-row, .settings-body label');
+  const all = document.querySelectorAll<HTMLElement>('.settings-sections .row, .settings-sections .pset-row, .settings-sections .settings-row, .settings-sections label');
   for (const el of all) {
     if ((el.textContent ?? '').includes(text)) return el;
   }
@@ -219,7 +233,6 @@ function SectionGeneral() {
   const [autoOpenSaved, setAutoOpenSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
-  const [deepLinkInput, setDeepLinkInput] = useState('');
   const genRef = useRef(0);
   const reload = useCallback(async () => {
     const gen = ++genRef.current;
@@ -246,19 +259,11 @@ function SectionGeneral() {
     } catch (e) { toast(`保存失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(false); }
   };
-  const openDeepLink = async () => {
-    const { openExternalDeepLink } = await import('../loader');
-    const raw = deepLinkInput.trim();
-    if (!isExternalDeepLink(raw)) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
-    try { await openExternalDeepLink(raw); toast('已定位', 'success'); }
-    catch (e) { toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
-  };
   return (
-    <div>
-      <SectionHead title="通用" sub={<>整个软件的启动与界面行为。<span className="faint">想改某个项目：侧栏项目行 ⋯ → 项目设置。</span></>} />
-      <div className="card" style={{ marginBottom: 14 }}>
+    <SectionShell section="general" title="通用" sub={<>整个软件的启动与界面行为。<span className="faint">想改某个项目：侧栏项目行 ⋯ → 项目设置。</span></>}>
+      <div className="card">
         <div className="card-title">启动</div>
-        <SettingsRow label="启动时打开的项目" hint="选择后保存；下次打开众说时回到这个项目" wide control={
+        <SettingsRow id="启动时打开的项目" label="启动时打开的项目" hint="选择后保存；下次打开众说时回到这个项目" wide control={
           <div className="row tight" style={{ minWidth: 260 }}>
             <input className="input sm" style={{ minWidth: 200 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\项目\我的项目" />
             <button className="btn sm" onClick={() => { void bridge().pickFolder().then((dir) => { if (dir != null) setAutoOpen(dir); }); }}>选择文件夹</button>
@@ -267,18 +272,7 @@ function SectionGeneral() {
         } />
         {readError != null ? <div className="panel warning">启动项目设置读取失败：{userFacingSystemText(readError ?? '')}；保存已暂停，避免用未知旧值覆盖。<button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
       </div>
-      <div className="card">
-        <div className="card-title">打开一个定位链接</div>
-        <DetailFold summary="需要从链接打开任务或消息时">
-          <SettingsRow label="定位链接" hint="粘贴复制来的定位链接，打开对应任务或消息" wide control={
-            <div className="row tight" style={{ minWidth: 260 }}>
-              <input className="input sm" style={{ minWidth: 200 }} placeholder="粘贴定位链接" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
-              <button className="btn sm" onClick={() => void openDeepLink()}>打开</button>
-            </div>
-          } />
-        </DetailFold>
-      </div>
-    </div>
+    </SectionShell>
   );
 }
 
@@ -317,8 +311,7 @@ function SectionAppearance() {
     }
   }, []);
   return (
-    <div>
-      <SectionHead title="外观" sub={<>主题、头像显示与个人图片（只在本机生效）。</>} />
+    <SectionShell section="appearance" title="外观" sub={<>主题、头像显示与个人图片（只在本机生效）。</>}>
       <SettingsRow id="appearance-theme" label="主题" hint="浅色 / 深色">
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
@@ -342,7 +335,7 @@ function SectionAppearance() {
         />
         <div className="small faint" style={{ marginTop: 6 }}>聊天里你自己那一侧显示这张；AI 成员的头像在「成员管理 → AI 设置」里选。</div>
       </div>
-    </div>
+    </SectionShell>
   );
 }
 
@@ -369,6 +362,98 @@ export function notificationMuteReadBackMatches(
   expected: boolean,
 ): boolean {
   return items.find((item) => item.threadId === threadId)?.muted === expected;
+}
+
+/** 桌面通知总开关：写入 app.settings 并严格回读；未设置等于开启。 */
+export function desktopNotificationsWrite(enabled: boolean): {
+  key: typeof TASK_NOTIFICATIONS_ENABLED_SETTING_KEY;
+  value: 'true' | 'false';
+} {
+  return { key: TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, value: serializeTaskNotificationsEnabledSetting(enabled) };
+}
+
+export function desktopNotificationsReadBackMatches(raw: string | null | undefined, expected: boolean): boolean {
+  return parseTaskNotificationsEnabledSetting(raw) === expected;
+}
+
+export function DesktopNotificationsRow() {
+  const enabled = useStore((s) => s.notificationsEnabled);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const gen = useRef(0);
+
+  const reload = useCallback(async () => {
+    const current = ++gen.current;
+    setLoading(true);
+    try {
+      const result = await command<{ values: Record<string, string | null> }>('app.settings.get', {
+        keys: [TASK_NOTIFICATIONS_ENABLED_SETTING_KEY],
+      });
+      if (current !== gen.current) return;
+      setNotificationsEnabled(parseTaskNotificationsEnabledSetting(result.values[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]));
+      setReadError(null);
+    } catch (error) {
+      if (current !== gen.current) return;
+      setReadError((error as Error).message);
+    } finally {
+      if (current === gen.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void reload(); return () => { gen.current += 1; }; }, [reload]);
+
+  const save = async (next: boolean) => {
+    const write = desktopNotificationsWrite(next);
+    setBusy(true);
+    try {
+      await command('app.settings.set', write);
+      const result = await command<{ values: Record<string, string | null> }>('app.settings.get', { keys: [write.key] });
+      const raw = result.values[write.key];
+      if (!desktopNotificationsReadBackMatches(raw, next)) {
+        const message = '保存后的通知开关与所选状态不一致，请重新读取后再试。';
+        setReadError(message);
+        toast(message, 'error');
+        return;
+      }
+      setNotificationsEnabled(next);
+      setReadError(null);
+      recordWrite('app.settings.set', `桌面通知 = ${next ? '开启' : '关闭'}（已回读核对）`);
+      toast(next ? '桌面通知已开启，之后的任务提醒会弹出' : '桌面通知已关闭，任务与未读仍会保留', 'success');
+    } catch (error) {
+      toast(`通知开关保存失败：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = loading ? '读取中…' : readError != null ? '无法确认设置' : enabled ? '已开启' : '已关闭';
+  return (
+    <div data-zs-notification-master="1" data-zs-notification-enabled={enabled ? 'true' : 'false'}>
+      <SettingsRow
+        id="notification-desktop"
+        label="桌面通知"
+        hint="关闭后，任务完成、需要处理、等待输入或待验收时不再弹出系统通知；任务与未读照常保留。"
+        control={(
+          <div className="col" style={{ alignItems: 'flex-end', gap: 5 }}>
+            <Switch
+              checked={enabled}
+              disabled={loading || busy || readError != null}
+              label={enabled ? '已开启' : '已关闭'}
+              onChange={(next) => void save(next)}
+            />
+            <span className="small faint" data-zs-notification-status={status}>{status}</span>
+          </div>
+        )}
+      />
+      {readError != null ? (
+        <div className="panel warning" data-zs-notification-read-error="1">
+          暂时无法确认通知设置：{userFacingSystemText(readError ?? '')}
+          <button className="btn sm" onClick={() => void reload()}>重试读取</button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function SectionNotifications() {
@@ -441,38 +526,38 @@ export function SectionNotifications() {
       }
       setItems(readBack.items);
       recordWrite(write.method, `${titles[item.taskId ?? ''] ?? item.threadId.slice(0, 12)} → ${muted ? '静音' : '通知'}（已回读）`);
-      toast(muted ? '该线程已静音；任务仍会保留，系统通知不再弹出' : '该线程已恢复系统通知', 'success');
+      toast(muted ? '该对话串已静音；任务仍会保留，系统通知不再弹出' : '该对话串已恢复系统通知', 'success');
     } catch (writeError) {
-      toast(`线程通知设置保存失败：${userFacingSystemText((writeError as Error).message ?? '')}`, 'error');
+      toast(`对话串通知设置保存失败：${userFacingSystemText((writeError as Error).message ?? '')}`, 'error');
     } finally {
       setBusy(null);
     }
   };
 
   return (
-    <div>
-      <SectionHead title="通知" sub={<>按对话串管理桌面通知与静音，投递记录可在下方查看。</>} />
-      <div className="panel info">
-        任务完成、需要处理、等待输入或待验收时会发送系统通知。静音某个线程后，它的任务和未读仍保留，只是不再弹出桌面通知。
+    <SectionShell section="notifications" title="通知" sub={<>桌面通知的总开关，以及按对话串的静音设置。</>}>
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-title">桌面通知</div>
+        <DesktopNotificationsRow />
       </div>
       <div className="card" data-zs-notification-settings="1">
         <div className="card-title">对话串通知</div>
-        {loading ? <div className="small faint" style={{ padding: '10px 14px' }}>正在读取真实线程静音状态…</div> : null}
+        {loading ? <div className="small faint" style={{ padding: '10px 14px' }}>正在读取对话串通知…</div> : null}
         {error != null ? (
           <div className="panel warning" style={{ margin: 12 }}>
-            线程通知设置读取失败：{userFacingSystemText(error ?? '')}
+            对话串通知读取失败：{userFacingSystemText(error ?? '')}
             <button className="btn sm" onClick={() => void reload()}>重试读取</button>
           </div>
         ) : null}
         {!loading && error == null && items.length === 0 ? (
           <div className="small faint" style={{ padding: '10px 14px' }}>
-            还没有设置过对话串通知。可在对话串右上角菜单中设置静音，再到这里统一管理。
+            暂无单独设置的对话串。
           </div>
         ) : null}
         {items.map((item) => (
           <SettingsRow
             key={item.threadId}
-            label={titles[item.taskId ?? ''] ?? `线程 ${item.threadId.slice(0, 12)}`}
+            label={titles[item.taskId ?? ''] ?? `对话串 ${item.threadId.slice(0, 12)}`}
             hint={`${item.followed ? '已关注' : '未关注'} · 项目 ${item.projectId.slice(0, 12)}`}
           >
             <Switch
@@ -485,9 +570,9 @@ export function SectionNotifications() {
         ))}
       </div>
       <div className="card" style={{ marginTop: 14 }} data-zs-notification-delivery="1">
-        <div className="card-title">桌面投递状态</div>
+        <div className="card-title">投递记录</div>
         {deliveryError != null ? (
-          <div className="panel warning" style={{ margin: 12 }}>投递状态读取失败：{userFacingSystemText(deliveryError ?? '')}</div>
+          <div className="panel warning" style={{ margin: 12 }}>投递记录读取失败：{userFacingSystemText(deliveryError ?? '')}</div>
         ) : delivery == null ? (
           <div className="small faint" style={{ padding: '10px 14px' }}>正在读取桌面投递记录…</div>
         ) : (
@@ -518,7 +603,7 @@ export function SectionNotifications() {
           </>
         )}
       </div>
-    </div>
+    </SectionShell>
   );
 }
 
@@ -660,11 +745,9 @@ function SectionRuntime() {
   const membersAll = useStore((s) => s.members);
   const members = useMemo(() => membersAll.filter((m) => m.principalType === 'agent'), [membersAll]);
   const runtimes = useStore((s) => s.memberRuntimes);
-  const guard = useStore((s) => s.dispatchGuard);
   const projectId = useStore((s) => s.activeProjectId);
   return (
-    <div>
-      <SectionHead title="AI 设置" sub={<>管理同时运行的 AI、调用预算，以及成员使用的程序、模型和权限。</>} />
+    <SectionShell section="runtime" title="AI 设置" sub={<>管理同时运行的 AI、调用预算，以及成员使用的程序、模型和权限。</>}>
       <CallBudgetSettingsRow />
       <ExecutionConcurrencyPanel />
       {members.map((m) => {
@@ -682,157 +765,7 @@ function SectionRuntime() {
         );
       })}
       {members.length === 0 ? <div className="panel info">还没有 AI 成员。打开项目后，在成员页添加 AI。</div> : null}
-      <DetailFold summary="运行环境详情">
-        <SettingsRow label="本机运行状态" hint="本机当前能否发送真实任务">
-          <div className="row tight">
-            <Tag tone={guard?.fakeAllowed === false ? 'neutral' : 'warning'} icon={guard?.fakeAllowed === false ? 'check-circle' : 'alert-triangle'}>
-              {guard == null ? '读取中…' : guard.fakeAllowed ? '当前为演练环境' : '日常运行'}
-            </Tag>
-          </div>
-        </SettingsRow>
-      </DetailFold>
-    </div>
-  );
-}
-
-/* ============================================================ 分区：连接与设备 ============================================================ */
-
-interface RemoteCfg {
-  enabled: boolean; listenHost: string; port: number; allowLan: boolean;
-  running?: boolean; address?: string; fingerprint?: string; caFingerprint?: string;
-  certNotAfter?: number; lanSelfCheck?: { ok: boolean; detail?: string; error?: string } | null;
-  note: string;
-}
-interface RemoteDevice { deviceId: string; deviceName: string; createdAt: number; lastSeenAt: number | null; revokedAt: number | null }
-interface PairCode { pairingId: string; code: string; expiresAt: number; address: string | null; fingerprint: string | null }
-
-function SectionConnections() {
-  const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
-  const [identityErr, setIdentityErr] = useState<string | null>(null);
-  const [remote, setRemote] = useState<RemoteCfg | null>(null);
-  const [remoteErr, setRemoteErr] = useState<string | null>(null);
-  const [host, setHost] = useState('127.0.0.1');
-  const [port, setPort] = useState('0');
-  const [configDirty, setConfigDirty] = useState(false);
-  const configDirtyRef = useRef(false);
-  const [devices, setDevices] = useState<RemoteDevice[] | null>(null);
-  const [devicesErr, setDevicesErr] = useState<string | null>(null);
-  const [pair, setPair] = useState<PairCode | null>(null);
-  const [revoke, setRevoke] = useState<RemoteDevice | null>(null);
-  const [busy, setBusy] = useState(false);
-  const readSeq = useRef(0);
-  const readRemote = useCallback(async (syncDraft = false): Promise<RemoteCfg | null> => {
-    const seq = ++readSeq.current;
-    const [cfgResult, devicesResult] = await Promise.allSettled([
-      command<RemoteCfg>('remote.config.get', {}),
-      command<{ devices: RemoteDevice[] }>('remote.devices.list', {}),
-    ]);
-    if (seq !== readSeq.current) return null;
-    if (cfgResult.status === 'fulfilled') {
-      setRemote(cfgResult.value); setRemoteErr(null);
-      if (syncDraft && !configDirtyRef.current) { setHost(cfgResult.value.listenHost); setPort(String(cfgResult.value.port)); setConfigDirty(false); }
-    } else setRemoteErr((cfgResult.reason as Error).message);
-    if (devicesResult.status === 'fulfilled') { setDevices(devicesResult.value.devices); setDevicesErr(null); }
-    else setDevicesErr((devicesResult.reason as Error).message);
-    return cfgResult.status === 'fulfilled' ? cfgResult.value : null;
-  }, []);
-  useEffect(() => {
-    let done = false;
-    void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch((e: unknown) => { if (!done) setIdentityErr((e as Error).message); });
-    void readRemote(true);
-    return () => { done = true; readSeq.current += 1; };
-  }, [readRemote]);
-  const applyRemote = async (enabled: boolean) => {
-    const requestedPort = Number(port);
-    if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) { toast('端口须为 0–65535 整数（0=自动选择）', 'warn'); return; }
-    setBusy(true);
-    try {
-      await command('remote.config.set', { enabled, listenHost: enabled ? host : '127.0.0.1', port: requestedPort, allowLan: enabled && host === '0.0.0.0' });
-      configDirtyRef.current = false;
-      setConfigDirty(false);
-      const applied = await readRemote(true);
-      setPair(null);
-      if (applied == null || applied.enabled !== enabled || applied.listenHost !== (enabled ? host : '127.0.0.1') || applied.port !== requestedPort || applied.running !== enabled) {
-        toast('远程访问状态尚未确认，请刷新后再操作', 'warn');
-      } else toast(enabled ? '远程访问已启用' : '远程访问已停用', 'success');
-    } catch (e) { toast(`远程配置失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); void readRemote(); }
-    finally { setBusy(false); }
-  };
-  const createPair = async () => {
-    setBusy(true); setPair(null);
-    try { setPair(await command<PairCode>('remote.pairing.create', {})); }
-    catch (e) { toast(`配对码创建失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
-    finally { setBusy(false); }
-  };
-  const revokeDevice = async () => {
-    if (revoke == null) return;
-    setBusy(true);
-    try {
-      await command('remote.device.revoke', { deviceId: revoke.deviceId });
-      setRevoke(null);
-      await readRemote();
-      toast('设备已吊销（该设备的凭据与连接立即失效）', 'success');
-    } catch (e) { toast(`吊销失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
-    finally { setBusy(false); }
-  };
-  return (
-    <div>
-      <SectionHead title="连接与设备" sub={<>允许你在自己的其它设备上继续使用众说。默认关闭。</>} />
-      <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-title">本机与远程访问</div>
-      <SettingsRow label="远程访问" hint="保存后会重新读取实际状态" valueWrap>
-        {remoteErr != null ? <Tag tone="danger">读取失败：{remoteErr.slice(0, 60)}</Tag> : remote == null ? <span className="faint small">读取中…</span> : (
-          <div className="small" style={{ lineHeight: 1.7 }}>
-            <div>配置：{remote.enabled ? '启用' : '停用'} · {remote.listenHost}:{remote.port} · {remote.allowLan ? '局域网' : '仅本机'}</div>
-            <div>实际：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
-            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'small'} style={{ color: remote.lanSelfCheck.ok ? undefined : 'var(--danger)' }}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${userFacingSystemText(remote.lanSelfCheck.error ?? remote.lanSelfCheck.detail ?? '?')}）`}</div> : null}
-            {configDirty ? <div className="small faint">下方有未应用的编辑</div> : null}
-          </div>
-        )}
-      </SettingsRow>
-      <SettingsRow label="连接范围" hint="仅本机最安全；同一局域网可在手机或平板上打开" wide control={
-        <div className="row tight wrap">
-          <Select size="sm" ariaLabel="远程监听范围" value={host} disabled={busy} onChange={(v) => { setHost(v); setConfigDirty(true); configDirtyRef.current = true; }} options={[{ value: '127.0.0.1', label: '仅本机' }, { value: '0.0.0.0', label: '局域网' }]} />
-          <input className="input sm" type="number" min={0} max={65535} step={1} value={port} disabled={busy} aria-label="远程监听端口" style={{ width: 110 }} onChange={(e) => { setPort(e.target.value); setConfigDirty(true); configDirtyRef.current = true; }} />
-          <button className="btn sm" disabled={busy || remote == null} onClick={() => void applyRemote(true)}>启用/应用</button>
-          <button className="btn sm" disabled={busy || remote == null || !remote.enabled} onClick={() => void applyRemote(false)}>停用</button>
-          <button className="btn sm" disabled={busy} onClick={() => void readRemote(!configDirty)}>刷新事实</button>
-        </div>
-      } />
-      </div>
-      <DetailFold summary="本机身份与证书详情">
-        <ReadOnlyRow label="本机用户" value={identityErr != null ? `读取失败：${userFacingSystemText(identityErr ?? '')}` : identity?.localUserId ?? '（读取中…）'} />
-        <ReadOnlyRow label="当前文件位置" value={identityErr != null ? `读取失败：${userFacingSystemText(identityErr ?? '')}` : identity?.appDataDir ?? '（读取中…）'} />
-        {remote?.fingerprint != null ? <ReadOnlyRow label="服务证书 SHA-256" value={remote.fingerprint} /> : null}
-        {remote?.caFingerprint != null ? <ReadOnlyRow label="信任根 SHA-256" value={remote.caFingerprint} /> : null}
-      </DetailFold>
-      <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-title">配对与设备</div>
-      <SettingsRow label="生成配对码" hint="仅本机可信入口；一次有效、5 分钟过期。配对码只显示这一次，不写入诊断或日志。" wide control={
-        <div>
-          <button className="btn sm" disabled={busy || remote?.running !== true} onClick={() => void createPair()}>生成配对码</button>
-          {pair != null ? <div className="panel warning" style={{ marginTop: 6 }}>
-            <div>配对 ID：<span className="mono">{pair.pairingId}</span> · 配对码：<strong className="mono">{pair.code}</strong></div>
-            <div>有效至 {new Date(pair.expiresAt).toLocaleTimeString()} · 地址 {pair.address ?? '监听已停止'}</div>
-            {pair.fingerprint != null ? <div className="mono small" style={{ overflowWrap: 'anywhere' }}>服务证书 SHA-256：{pair.fingerprint}</div> : null}
-          </div> : null}
-        </div>
-      } />
-      <SettingsRow label="已配对设备" hint="吊销后该设备的凭据、会话和事件流立即失效" wide control={
-        <div className="col" style={{ gap: 6 }}>
-          {devicesErr != null ? <div className="panel warning">读取失败：{userFacingSystemText(devicesErr ?? '')}</div> : devices == null ? <span className="small faint">读取中…</span> : devices.length === 0 ? <span className="small faint">暂无设备</span> : devices.map((d) => (
-            <div key={d.deviceId} className="row tight wrap small">
-              <span>{d.deviceName} · <span className="mono">{d.deviceId.slice(0, 12)}…</span> · {d.revokedAt != null ? '已吊销' : `最近 ${d.lastSeenAt != null ? new Date(d.lastSeenAt).toLocaleString() : '未见'}`}</span>
-              {d.revokedAt == null ? <button className="btn sm" disabled={busy} onClick={() => setRevoke(d)}>吊销</button> : null}
-            </div>
-          ))}
-        </div>
-      } />
-      </div>
-      {revoke != null ? <Modal size="sm" title={`吊销设备「${revoke.deviceName}」`} onClose={() => setRevoke(null)} footer={<><div className="spacer" /><button className="btn" onClick={() => setRevoke(null)}>取消</button><button className="btn danger" disabled={busy} onClick={() => void revokeDevice()}>确认吊销</button></>}>
-        吊销会让这台设备当前连接立即失效；需要再次访问时须重新配对。
-      </Modal> : null}
-    </div>
+    </SectionShell>
   );
 }
 
@@ -888,20 +821,19 @@ function SectionData() {
     } finally { setImportBusy(null); }
   };
   return (
-    <div>
-      <SectionHead title="数据与存储" sub={<>数据位置、草稿保存与清理。</>} />
+    <SectionShell section="data" title="数据与存储" sub={<>数据位置、草稿保存与清理。</>}>
       <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '（读取中…）'} />
       <div className="card" style={{ marginBottom: 14 }} data-zs-data-guide="1">
         <div className="card-title">备份全部数据与使用已有数据</div>
         <div className="small muted" style={{padding:'0 14px 8px',lineHeight:1.7}}>
           备份会完整保留对话、附件、草稿、本地账号资料和设置。请像保管自己的文件一样妥善保管备份。
         </div>
-        <SettingsRow label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
+        <SettingsRow id="备份全部数据" label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
           <button className="btn primary sm" disabled={dataOpBusy != null} data-zs-data-backup="1" onClick={() => void startDataOp('backup')}>
             <Icon name="download" size={13} /> {dataOpBusy === 'backup' ? '正在准备…' : '备份全部数据'}
           </button>
         } />
-        <SettingsRow label="使用已有数据或从备份恢复" hint="选择旧包、数据文件夹或完整备份，再选择新副本保存位置；验证成功后才切换" control={
+        <SettingsRow id="使用已有数据" label="使用已有数据或从备份恢复" hint="选择旧包、数据文件夹或完整备份，再选择新副本保存位置；验证成功后才切换" control={
           <button className="btn sm" disabled={dataOpBusy != null} data-zs-data-import="1" onClick={() => void startDataOp('import')}>
             <Icon name="folder" size={13} /> {dataOpBusy === 'import' ? '正在准备…' : '选择已有数据'}
           </button>
@@ -919,7 +851,7 @@ function SectionData() {
           </div>
         } />
       </div>
-      <SettingsRow label="草稿保存" hint="草稿和未确认发送的保存状态（刷新或崩溃后仍保留；普通草稿 24 小时过期）">
+      <SettingsRow id="草稿保存" label="草稿保存" hint="草稿和未确认发送的保存状态（刷新或崩溃后仍保留；普通草稿 24 小时过期）">
         <div className="small" style={{ lineHeight: 1.7 }}>
           {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
           {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定（草稿已保留、不会被覆盖；发送暂不可用）</Tag> : null}
@@ -930,7 +862,7 @@ function SectionData() {
       {draftPersist.recoveryNote != null ? (
         <div className="small faint" style={{ padding: '0 14px 6px' }} data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div>
       ) : null}
-      <SettingsRow label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）">
+      <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）">
         <div className="row tight">
           <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试保存</button>
           <button className="btn sm" onClick={clearDrafts}>清理本地草稿</button>
@@ -984,47 +916,61 @@ function SectionData() {
       <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目">
         <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
       </SettingsRow>
-    </div>
+    </SectionShell>
   );
 }
 
 /* ============================================================ 分区：帮助与关于 ============================================================ */
 
-function SectionGuide() {
-  const theme = useStore(s => s.ui.theme);
-  const frame = useRef<HTMLIFrameElement>(null);
-  const syncTheme = useCallback(() => {
-    const doc = frame.current?.contentDocument;
-    if (doc) doc.documentElement.dataset.theme = theme;
-  }, [theme]);
-  useEffect(syncTheme, [syncTheme]);
-  return (
-    <section className="settings-guide" data-settings-row="user-guide" aria-label="操作手册">
-      <iframe ref={frame} title="众说操作手册" src="user-guide/index.html" sandbox="allow-same-origin" onLoad={syncTheme} />
-    </section>
-  );
-}
+const APP_LINKS: Array<{ target: AppLinkTarget; row: string; label: string; hint: string; action: string }> = [
+  { target: 'manual', row: 'open-manual', label: '操作手册', hint: '用系统默认浏览器打开随程序附带的离线手册（与当前版本一致）', action: '打开手册' },
+  { target: 'github', row: 'open-github', label: 'GitHub 仓库', hint: 'https://github.com/384615666/zhongshuo', action: '打开 GitHub' },
+  { target: 'homepage', row: 'open-homepage', label: '产品主页', hint: 'https://zhongshuo.lsjx.xyz', action: '打开主页' },
+];
 
 function SectionHelp() {
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
+  const [linkBusy, setLinkBusy] = useState<AppLinkTarget | null>(null);
   useEffect(() => {
     let done = false;
     void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch(() => { /* 不显示 */ });
     return () => { done = true; };
   }, []);
+  const open = async (target: AppLinkTarget, label: string) => {
+    setLinkBusy(target);
+    try {
+      const result = await openAppLink(target);
+      if (!result.ok) toast(`没能打开${label}：${userFacingSystemText(result.error ?? '系统未返回原因')}`, 'error');
+    } catch (error) {
+      toast(`没能打开${label}：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
+    } finally {
+      setLinkBusy(null);
+    }
+  };
   return (
-    <div>
-      <SectionHead title="帮助与关于" sub={<>版本与诊断。</>} />
-      <LocalDiagnostics />
-      <ReadOnlyRow label="应用" value="众说 · 本地多成员协作工作台" />
-      <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />
-      <DetailFold summary="本机诊断详情">
-        <div className="mono faint small" style={{ lineHeight: 1.8 }}>
-          <div>本机用户 ID：{identity?.localUserId ?? '?'}</div>
-          <div>本地偏好键：zs.hifi.persist.{identity ? `${identity.appDataDir}|${identity.localUserId}` : '?'}</div>
-        </div>
-      </DetailFold>
-      <div className="small faint" style={{ padding: '6px 14px' }}>遇到问题把上面诊断信息与操作步骤一起反馈即可；不自动上传任何数据。</div>
-    </div>
+    <SectionShell section="help" title="帮助与关于" sub={<>操作手册、项目链接、版本与诊断。</>}>
+      <div className="card" style={{ marginBottom: 14 }} data-zs-app-links="1">
+        <div className="card-title">手册与项目链接</div>
+        {APP_LINKS.map((link) => (
+          <SettingsRow
+            key={link.target}
+            id={link.row}
+            label={link.label}
+            hint={link.hint}
+            control={(
+              <button className="btn sm" data-zs-open-link={link.target} disabled={linkBusy != null} onClick={() => void open(link.target, link.label)}>
+                <Icon name="external-link" size={13} /> {linkBusy === link.target ? '正在打开…' : link.action}
+              </button>
+            )}
+          />
+        ))}
+      </div>
+      <div className="card">
+        <div className="card-title">版本与诊断</div>
+        <LocalDiagnostics />
+        <ReadOnlyRow id="版本与构建" label="应用" value="众说 · 本地多成员协作工作台" />
+        <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />
+      </div>
+    </SectionShell>
   );
 }

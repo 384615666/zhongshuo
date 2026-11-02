@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import {
   TASK_NOTIFICATION_COMMANDS,
+  TASK_NOTIFICATIONS_ENABLED_SETTING_KEY,
   type TaskNotificationClick,
 } from '../../src/contracts/taskNotifications.ts';
 import {
@@ -11,6 +12,9 @@ import {
   TaskNotificationController,
 } from '../../src/ui/hifi/components/TaskNotificationController.tsx';
 import {
+  DesktopNotificationsRow,
+  desktopNotificationsReadBackMatches,
+  desktopNotificationsWrite,
   notificationMuteReadBackMatches,
   notificationMuteWrite,
   SectionNotifications,
@@ -115,16 +119,43 @@ describe('R108 settings use real thread subscriptions', () => {
 
   it('renders a discoverable real notification settings section instead of prototype preferences', () => {
     const section = renderToStaticMarkup(createElement(SectionNotifications));
-    expect(section).toContain('按对话串管理桌面通知与静音');
+    expect(section).toContain('桌面通知的总开关，以及按对话串的静音设置');
     expect(section).not.toContain('thread_subscriptions');
-    expect(section).toContain('正在读取真实线程静音状态');
+    expect(section).toContain('正在读取对话串通知…');
     expect(section).toContain('data-zs-notification-settings="1"');
-    expect(section).toContain('正在读取桌面投递记录');
+    expect(section).toContain('正在读取桌面投递记录…');
+    // R157：开发过程中的操作提示不再出现在用户界面里。
+    expect(section).not.toContain('还没有设置过对话串通知');
+    expect(section).not.toContain('可在对话串右上角菜单中设置静音');
 
+    // R157：设置改成单页——同一页里既有通知段也有帮助段，没有左侧分区菜单。
     const settings = renderToStaticMarkup(createElement(SettingsPage, {
       query: { section: 'notifications' },
     }));
-    expect(settings).toContain('通知');
-    expect(settings).toContain('aria-current="page"');
+    expect(settings).toContain('data-settings-section="notifications"');
+    expect(settings).toContain('data-settings-section="help"');
+    expect(settings).not.toContain('settings-nav');
+    expect(settings).not.toContain('aria-current="page"');
+  });
+
+  it('writes the desktop notification master switch through app.settings and requires exact read-back', () => {
+    expect(desktopNotificationsWrite(false)).toEqual({
+      key: TASK_NOTIFICATIONS_ENABLED_SETTING_KEY,
+      value: 'false',
+    });
+    expect(desktopNotificationsWrite(true)).toEqual({
+      key: TASK_NOTIFICATIONS_ENABLED_SETTING_KEY,
+      value: 'true',
+    });
+    // 未设置(null)等于开启：不能把「没设置过」读成关闭。
+    expect(desktopNotificationsReadBackMatches(null, true)).toBe(true);
+    expect(desktopNotificationsReadBackMatches(null, false)).toBe(false);
+    expect(desktopNotificationsReadBackMatches('false', false)).toBe(true);
+    expect(desktopNotificationsReadBackMatches('true', false)).toBe(false);
+
+    const row = renderToStaticMarkup(createElement(DesktopNotificationsRow));
+    expect(row).toContain('data-zs-notification-master="1"');
+    expect(row).toContain('data-zs-notification-enabled="true"');
+    expect(row).toContain('role="switch"');
   });
 });

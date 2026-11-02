@@ -21,7 +21,7 @@ describe('R78 cold pool and thread projections contain authoritative task facts'
     const cmd=async(method:string,params:unknown)=>{const r=await raw(method,params);expect(r.ok,JSON.stringify(r.error)).toBe(true);return r.data as Record<string,unknown>;};
     const entry=join(root,'entry.ts'); const output=join(root,'bundle.mjs');
     writeFileSync(entry,`export * as loader from ${JSON.stringify(resolve('src/ui/hifi/loader.ts').replaceAll('\\','/'))}; export * as store from ${JSON.stringify(resolve('src/ui/hifi/data/store.ts').replaceAll('\\','/'))};`);
-    await build({entryPoints:[entry],bundle:true,platform:'browser',format:'esm',outfile:output});
+    await build({entryPoints:[entry],bundle:true,platform:'browser',format:'esm',loader:{'.png':'dataurl'},outfile:output});
     vi.stubGlobal('window',{zs:{command:(env:{method:string;params:unknown})=>raw(env.method,env.params)}});
     const {loader,store}=await import(pathToFileURL(output).href) as {loader:{openProjectByPath(path:string):Promise<unknown>;refreshRooms():Promise<void>;loadRoomPool(id:string):Promise<void>;loadThread(id:string,options:{markRead:boolean}):Promise<void>};store:{getState():{activeProjectId:string;projects:Array<{id:string;revision:number}>;tasks:Array<{id:string;ownerMemberId?:string;revision:number}>;threadTasks:Record<string,{activeRun:{id:string;status:string}|null}>;runs:unknown[];taskDeliveries:unknown[]}}};
     const adapter=new FakeRuntimeAdapter({turnScriptSequencer:()=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:TASK_COMPLETE_SCHEMA_VERSION,resultKey:randomUUID(),changeSummary:'完成',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}]});

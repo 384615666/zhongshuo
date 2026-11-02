@@ -832,6 +832,7 @@ async function runVerifier() {
     platform: 'browser',
     format: 'iife',
     jsx: 'automatic',
+    loader: { '.png': 'dataurl' },
     sourcemap: false,
     logLevel: 'silent',
     define: { 'process.env.NODE_ENV': '"production"' },

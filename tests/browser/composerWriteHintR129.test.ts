@@ -98,7 +98,7 @@ app.whenReady().then(async()=>{
 });
 setTimeout(()=>app.exit(3),30000);
 `);
-    await build({ entryPoints: [join(fixture, 'harness.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', outfile: join(fixture, 'harness.js'), define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
+    await build({ entryPoints: [join(fixture, 'harness.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', loader: { '.png': 'dataurl' }, outfile: join(fixture, 'harness.js'), define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
     const result = spawnSync(resolve('node_modules/electron/dist/electron.exe'), [join(fixture, 'main.cjs')], { cwd: root, env, windowsHide: true, encoding: 'utf8', timeout: 35000 });

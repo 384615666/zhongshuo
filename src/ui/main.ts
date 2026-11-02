@@ -24,6 +24,9 @@ import { installedDaemonPipe, installedDesktopConfiguration } from './installedD
 import { WindowsTrayLifecycle, type TrayMenuFacts, type TrayProjectFacts } from './windowsTray.ts';
 import { isRuntimeMetadataRead, RUNTIME_METADATA_PIPE_DEADLINE_MS } from '../contracts/runtimeMetadataDeadline.ts';
 import { registerEditContextMenu } from './editContextMenu.ts';
+// 外部链接解析（R157）：只引类型（编译期擦除）；运行时按需 import——主进程启动依赖不新增
+// 顶层模块（与 zs:openPath 里 `await import('electron')` 同法；esbuild 打包时内联）。
+import type { AppLinkTarget } from './appLinks.ts';
 
 const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
 const installedDesktop = existsSync(join(appRoot, 'installed-desktop.json'));
@@ -659,6 +662,33 @@ let dataOperationStarting = false;
     const { shell } = await import('electron');
     shell.showItemInFolder(join(resolved, '.'));
     return resolved;
+  });
+  // 外部链接（R157）：设置页「操作手册 / GitHub / 主页」。renderer 只提交枚举目标，解析/白名单
+  // 全在 resolveAppLink（appLinks.ts）：manual=随包 renderer/user-guide/index.html（先 existsSync
+  // 校验，缺失如实返回错误，不回退外网）；github/homepage=写死的 https。**不接受任意 URL/路径**。
+  ipcMain.handle('zs:open-app-link', async (event, target: unknown) => {
+    assertTrustedSender(event);
+    if (typeof target !== 'string' || target.length === 0) throw new Error('外部链接目标无效');
+    const { resolveAppLink } = await import('./appLinks.ts');
+    const link = resolveAppLink(target as AppLinkTarget, rendererRoot); // 非枚举值在此抛错
+    const { shell } = await import('electron');
+    if (link.kind === 'file') {
+      if (!existsSync(link.path)) return { ok: false, error: `操作手册文件缺失：${link.path}` };
+      // shell.openPath：空串=成功；非空=系统返回的错误信息（如实转给界面，不吞）。
+      try {
+        const error = await shell.openPath(link.path);
+        return error.length === 0 ? { ok: true } : { ok: false, error };
+      } catch (cause) {
+        return { ok: false, error: `系统未能打开操作手册：${cause instanceof Error ? cause.message : String(cause)}` };
+      }
+    }
+    // 打开失败（如无默认浏览器）同样按 ok:false 回执——界面在行内显示原因，不抛未处理拒绝。
+    try {
+      await shell.openExternal(link.url);
+      return { ok: true };
+    } catch (cause) {
+      return { ok: false, error: `系统未能打开链接：${cause instanceof Error ? cause.message : String(cause)}` };
+    }
   });
   ipcMain.handle('zs:pickFolder', async (event) => {
     assertTrustedSender(event);

@@ -21,6 +21,7 @@ import { coordinationRoster,coordinationRoomMembers, freezeCoordinationScope, re
 import {readThreadMembers,persistThreadMember,readThreadProgress,readDmProgress} from './threadMembers.ts';
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
 import { CALL_BUDGET_ENABLED_SETTING_KEY, type CallBudgetMode, type FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
+import { TASK_NOTIFICATIONS_ENABLED_SETTING_KEY } from '../contracts/taskNotifications.ts';
 import { callBudgetSnapshotObject, freezeTaskCallBudget, parsePersistedCallBudgetSnapshot, resolveNewCallBudget, supportsCallBudgetSnapshots } from './callBudget.ts';
 import {DaemonCommandError} from './commandError.ts';
 import {selectThreadRecipients,assertThreadTaskReady,enqueueThreadReply,createTaskForRecordThread} from './threadReplies.ts';
@@ -4985,7 +4986,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
-        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY])).min(1) }).parse(env.params);
+        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY])).min(1) }).parse(env.params);
         const values: Record<string, string | null> = {};
         for (const key of params.keys) {
           const row = deps.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(`app:setting:${key}`) as { value: string } | undefined;
@@ -4995,13 +4996,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'app.settings.set': {
         const params = z.strictObject({
-          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY]),
+          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]),
           value: z.string().min(1).max(600),
         }).parse(env.params);
         const result = run(() => {
           const allowed: Record<string, string[]> = {
             'repoStatus.visible': ['true', 'false'],
             [CALL_BUDGET_ENABLED_SETTING_KEY]: ['true', 'false'],
+            [TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]: ['true', 'false'],
           };
           if (allowed[params.key] != null && !allowed[params.key]!.includes(params.value)) {
             throw new DaemonCommandError('VALIDATION_INVALID', `设置 ${params.key} 不接受值 ${params.value}（允许：${allowed[params.key]!.join('/')}）`);

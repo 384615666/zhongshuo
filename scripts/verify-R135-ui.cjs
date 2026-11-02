@@ -144,7 +144,7 @@ async function runVerifier() {
   fs.mkdirSync(out, { recursive: true });
   for (const file of ['ui-error-R135.txt', 'result-R135.json']) fs.rmSync(path.join(out, file), { force: true });
   fs.writeFileSync(path.join(out, 'harness-R135.tsx'), renderer);
-  await require('esbuild').build({ entryPoints: [path.join(out, 'harness-R135.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, outfile: path.join(out, 'harness-R135.js'), logLevel: 'silent' });
+  await require('esbuild').build({ entryPoints: [path.join(out, 'harness-R135.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', loader: { '.png': 'dataurl' }, define: { 'process.env.NODE_ENV': '"production"' }, outfile: path.join(out, 'harness-R135.js'), logLevel: 'silent' });
   fs.writeFileSync(path.join(out, 'index-R135.html'), '<!doctype html><meta charset="utf-8"><title>R135 UI regression</title><link rel="stylesheet" href="harness-R135.css"><style>body{padding:48px;background:#f5f8fc}#root{max-width:1120px;margin:120px auto 0}.composer{position:relative;margin-top:100px}</style><div class="app-body"><div id="root"></div></div><script src="harness-R135.js"></script>');
   fs.writeFileSync(path.join(out, 'main-R135.cjs'), String.raw`
 const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');

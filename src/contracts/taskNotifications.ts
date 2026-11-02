@@ -17,6 +17,27 @@ export const TASK_NOTIFICATION_IPC = {
   click: 'zs:task-notification.click',
 } as const;
 
+/**
+ * 桌面通知总开关（app.settings 稳定键；值为字符串 true/false）。
+ * 未设置等价于开启——保持通知一直以来的默认行为；关闭只影响通知的呈现，
+ * 不删除历史投递记录（健康统计照常真实）。
+ */
+export const TASK_NOTIFICATIONS_ENABLED_SETTING_KEY = 'ui.taskNotifications.enabled' as const;
+
+export type TaskNotificationsEnabledSettingValue = 'true' | 'false';
+
+/** 缺省/空值均表示开启；非法存储值显式报错，不猜测成关闭而静默丢通知。 */
+export function parseTaskNotificationsEnabledSetting(value: string | null | undefined): boolean {
+  if (value == null || value === '') return true;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new TypeError(`桌面通知开关只接受 true/false，读到：${value}`);
+}
+
+export function serializeTaskNotificationsEnabledSetting(enabled: boolean): TaskNotificationsEnabledSettingValue {
+  return enabled ? 'true' : 'false';
+}
+
 export const taskNotificationIdSchema = z.string().regex(/^ntf_[a-f0-9]{32}$/);
 
 export const taskNotificationKindSchema = z.enum([

@@ -127,7 +127,7 @@ async function runVerifier() {
     const p = fixture.projects[0];
     const config = { sourceRoot: root, projectId: p.id, projectPath: p.path, memberIds: p.members, rooms: p.rooms };
     fs.writeFileSync(path.join(out, 'harness.tsx'), renderer.replace('__CONFIG__', JSON.stringify(config)));
-    await build({ entryPoints: [path.join(out, 'harness.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, outfile: path.join(out, 'harness.js'), logLevel: 'silent' });
+    await build({ entryPoints: [path.join(out, 'harness.tsx')], bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', loader: { '.png': 'dataurl' }, define: { 'process.env.NODE_ENV': '"production"' }, outfile: path.join(out, 'harness.js'), logLevel: 'silent' });
     fs.writeFileSync(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><title>R134 Composer 同名成员验证</title><link rel="stylesheet" href="harness.css"><style>body{padding:48px;background:#f5f8fc}#root{max-width:1120px;margin:360px auto 0}.composer{position:relative}</style><div class="app-body"><div id="root"></div></div><script src="harness.js"></script>');
     fs.writeFileSync(path.join(out, 'main.cjs'), String.raw`
 const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');

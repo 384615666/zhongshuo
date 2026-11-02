@@ -31,7 +31,7 @@ window.r154={
 async function runVerifier(config){
  const out=path.join(root,'dist/r154-member-failure-ui',`${Date.now()}-${process.pid}`);fs.mkdirSync(out,{recursive:true});
  fs.writeFileSync(path.join(out,'entry.tsx'),renderer.replace('__CONFIG__',JSON.stringify(config)));
- await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
+ await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',loader:{'.png':'dataurl'},logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
  fs.writeFileSync(path.join(out,'app.css'),['tokens.css','base.css','components.css','preview.css','titlebar.css','h1-overrides.css'].map(f=>fs.readFileSync(path.join(root,'src/ui/hifi/styles',f),'utf8')).join('\n'));
  fs.writeFileSync(path.join(out,'index.html'),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><div class="app" id="root"></div><script type="module" src="ui.mjs"></script>');
  fs.writeFileSync(path.join(out,'main.cjs'),String.raw`

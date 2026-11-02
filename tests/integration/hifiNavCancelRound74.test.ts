@@ -45,7 +45,7 @@ import * as store from ${JSON.stringify(storePath)};
 import * as navIntent from ${JSON.stringify(navIntentPath)};
 export { loader, store, navIntent };
 `, 'utf8');
-  await build({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'browser', outfile: bundlePath, sourcemap: false, loader: { '.tsx': 'tsx', '.ts': 'ts' } });
+  await build({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'browser', outfile: bundlePath, sourcemap: false, loader: { '.tsx': 'tsx', '.ts': 'ts', '.png': 'dataurl' } });
 }
 
 interface NavIntentLike { cancelled: boolean }

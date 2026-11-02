@@ -60,7 +60,7 @@ export { loader, store };
     outfile: bundlePath,
     sourcemap: false,
     logLevel: 'silent',
-    loader: { '.tsx': 'tsx', '.ts': 'ts' },
+    loader: { '.tsx': 'tsx', '.ts': 'ts', '.png': 'dataurl' },
   });
 }
 

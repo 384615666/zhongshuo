@@ -2,6 +2,22 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-02：设置单页化、通知总开关与外部链接（0.1.3-beta.10）
+
+用户要求把应用设置整合成一页（通用/外观/通知等不再作为独立菜单）、隐藏「打开一个定位链接」与整段「连接与设备」、通知加开关、去掉 AI 设置里的本机运行状态详情、操作手册改为外部打开 HTML、帮助与关于加 GitHub 与主页、清掉开发过程文案，最后打包发版。
+
+- **单页设置**：六个分区自上而下排在同一页（`.settings-single`/`.settings-section`），左侧分区菜单移除；页头保留搜索（命中滚动到具体行并高亮）；`?section=` 深链改为滚动定位（`guide/manual→help`、`connections/lan→general`）；正文宽 900px 居中，≤760px 时设置行改上下排。
+- **隐藏/删除**：通用里的「打开一个定位链接」整块移除；「连接与设备」整段从界面移除（后端命令保留）；AI 设置不再显示「运行环境详情 → 本机运行状态」。
+- **桌面通知总开关**：新增 `ui.taskNotifications.enabled`（app.settings 白名单，未设置=开启）。关闭时 daemon 在下一次 poll 把 pending 全部转 suppressed（`last_error='桌面通知已关闭'`）并返回空 items，游标照常推进，**重开不补发旧通知**；渲染层按 store 投影决定是否 `show`，关闭时只轮询不弹窗。
+- **外部链接**：新增 `zs:open-app-link` 窄 IPC（`assertTrustedSender` → 枚举 `manual|github|homepage` → `resolveAppLink` 白名单）；手册固定指向随包 `renderer/user-guide/index.html`（先校验存在，缺失如实报错不回退外网），GitHub/主页写死 https；设置页「帮助与关于」新增手册与项目链接卡片，应用内不再嵌 iframe。
+- **文案**：通知空态改「暂无单独设置的对话串。」，删除「还没有设置过对话串通知…」；帮助段删除内部偏好键/本机用户 ID；通知读取态改用户可读措辞；R149 护栏补本轮点名字面量。
+- **测试**：新增 `settingsSinglePageR157`(7)、`appLinksR157`(16)、`notificationSwitchR157`(6)；改造 R152 设置布局校验（7 档窗口、深链滚动、手册桥调用）与 R153 并发面板校验（单页不再卸载面板）；为 15 个旧测试/校验脚本补 `.png` loader（头像功能引入的 esbuild 缺口），`roomReplyPreviewR102` 排除后台头像读取。
+- **手册**：第 11/14 章与托盘说明改写，重采集 `13/14/15/18/23` 五张并新增 `24-settings-help-dark`，删除已不存在的 `24-settings-guide-dark`；`user-guide-scenes.js` 同步。
+
+**验证**：完整回归 356 文件 **3220 通过 / 7 失败 / 10 预期失败 / 16 跳过**；7 项失败全在本机未跟踪的 R130 混沌夹具（缺旧目录历史包数据），跟踪测试 0 失败。hifi 类型通过、根类型仅既有 13 条未跟踪夹具错误、lint 相对 HEAD 新增 0、`build:ui` 成功、手册截图全部命中并目视。详见 [R157](../reviews/r157-settings-single-page-20261102.md)。
+
+**交付**：版本 0.1.3-beta.10（Windows `0.1.3.10`）；安装包与验证结果见 R157 与 implementation-status。
+
 ## 2026-11-02：恢复入口按需显示与一键继续
 
 用户最终选择只要“一键继续”，成功后自动清空。恢复入口现在只在确有恢复事项时显示，普通排队/已处理历史不显示；弹窗批量按父任务去重继续任务和队列，未完成撤销先通过既有命令续跑，冲突保留具体提示。提交成功自动关闭弹窗并即时刷新隐藏入口，部分失败只保留剩余项，同号重试/批量与单条互斥/关闭后后台提交均覆盖。补 pendingRelease 的真实 taskId，修正只有 FAILED/retained 时无法载入任务的遗漏。聊天、文件与历史保留，无清空按钮。
@@ -126,6 +142,9 @@ beta.2已交付：clean程序源码89d6135/BUILD bld_30574674228982a6，659hash�
 
 V78：desktop-daily-win-v78-r142-runtime-config-20261101，clean源码e2d7a10339366ada5055372d688f8f77700d7853、BUILD bld_df3992438fc6001d。622hash/ZIP652 CRC通过/220454707字节，SHA256 57eb7184c493a8d8f1ebc3d2cbaf1179de62d48602346cdc2808078ee857637d。包内实际Electron/daemon14项/正常退出0通过，沿用数据入口与V77相同；正常退出旧版后start-existing-data.vbs。R141脚本不打入包，不修改Magpie或其他CLI配置，不新增推理。
 
+## 2026-11-01：R141 正常任务 MCP/Skill 正式验收（四渠道真实调用）
+
+补齐 R140 排队的缺口：四渠道在正常（完整权限）任务中「实际调用 MCP 工具、实际使用 Skill、核对结果与任务状态」。驱动复用 R138/R139 模式（源码内生产 daemon+受管桥+隔离 IPC，台账上限 1）；MCP=本地零依赖 stdio 服务器（每调用新鲜 nonce+JSONL 台账），Skill=令牌仅在正文。结果四渠道全过：Claude（ToolSearch→Skill→mcp 工具→StructuredOutput）、Codex（mcpToolCall+PowerShell 读技能文件）、Harness（mcp 工具+skill 工具，用户真实模型）、Pi（read 技能+codemode 关闭直出工具）；nonce/令牌回传、tool.started/completed 落库（UI 展示源）、resultKey 链、幂等重放、受管停机全保持。真实 turn 共 10（4 通过+4 任务成功但断言过严+2 过程失败），prepare/config-check 零推理；本机配置零残留（九项还原核查全过）。**关键发现：zhongshuo profile 的 cordis.patch.yml 由 Magpie 写入 llm-pi-ai/agent-default-model 行（=渠道 19 模型来源），整文件替换会断渠道（INVALID_MODEL，请求前拒绝零副作用）；正确姿势=追加。Pi mcp.json 无 exposure 默认 codemode。** 见[R141](../reviews/r141-mcp-skill-20261101.md)。证据 dist/r141-mcp-skill/；仅本地不推送。
 
 
 ## 2026-11-01：R140 恢复检查过滤已解决的历史中断
@@ -196,6 +215,11 @@ V71：desktop-daily-win-v71-r134-message-repairs-20261031，clean源码1059a4441
 
 V70：desktop-daily-win-v70-r132-thread-feedback-20261030，clean源码cd1525b019b2340a25230bd0620f670ca3169aa1，BUILD bld_cb97c8eba0dcbb86。615程序hash一致、ZIP648文件CRC通过/220837918字节，SHA256 e94b5186977f8c1132dfa923e75c1dc95861bc6dc49b60c012c22f05d4a5e281。实际包内Electron/daemon、14章19图/新说明/原界面/正常退出通过；开发Electron加载包内代码25项复验通过(横幅17ms)，0真实业务调用。首次封装Electron忽略夹具入口未产报告作为验收方式失败保留并正常退出。沿用数据入口与V69字节相同；用户正常退出旧版后start-existing-data.vbs。实现/交付两提交发布公开main，凭据扫描与远端核对证据在dist/r132-feedback；测试证据在dist/r132-source/dist/r132-feedback。
 
+## 2026-10-30：R131 全源码对抗审计 + 动态盲区混沌（仅测试，未改产品）
+
+用户认为 R130 覆盖太窄，要求更大规模扫描。本轮 7 路并行只读源码审计（约 9,300 万 token、约 270 文件全文：daemon 协议/存储迁移/worker 生命周期/renderer 线程/预览+主进程/adapter+contracts/远程入口）+ 主会话动态实证（R130 §7.1 盲区：远程 HTTP 活体、极端缩放、病态文件名）+ 高危项逐条亲核。报告见 [R131](../reviews/r131-full-adversarial-20261030.md)。
+
+**新确认约 57 项：2 high、约 19 medium、约 30 low、6 质量**。High：①R131-A01 Claude 适配器对形状错误 JSON 输出无校验无 catch+daemon 无 uncaughtException 兜底→一行畸形输出杀 daemon（动态实证）；②git 参数选项注入：branch:"-f" 静默销毁未提交改动且回报成功、remote 被当 git 选项解析（动态实证；"任意执行"两形态未复现已如实降级）。动态实证另有：跨身份 rename/archive 他人私信、/cmd 60/150MB body 无上限坐实、/pair 尝试先落库后限速无清理、病态文件名 12/14 接受。修正三处误报：uploadText/readFull 无上限属 R120 用户拍板设计（注释过期记 low）、localhost 白名单属设计、存储流 P0 执行链降级。另发现 R130 helper 有 13 个 tsc 错误（当时 vitest 全绿掩盖）。新增 6 个测试/脚本文件未提交；0 真实模型调用、包只读、无孤儿。
 
 
 ## 2026-10-30：R130 V69 交付包暴力/异常操作对抗测试（仅测试，未改产品）

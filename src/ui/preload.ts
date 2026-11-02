@@ -4,6 +4,7 @@
  * 不能拉起 runtime。
  */
 import { contextBridge, ipcRenderer } from 'electron';
+import type { AppLinkTarget } from './appLinks.ts';
 
 contextBridge.exposeInMainWorld('zs', {
   command: (envelope: unknown): Promise<unknown> => ipcRenderer.invoke('zs:command', envelope),
@@ -72,4 +73,14 @@ contextBridge.exposeInMainWorld('zsData', {
   start: (action: 'backup'|'import'): Promise<{ ok: boolean; cancelled?: boolean; jobId?: string; action?: string }> =>
     ipcRenderer.invoke('zs:data.start', action),
   status: (): Promise<unknown> => ipcRenderer.invoke('zs:data.status'),
+});
+
+/**
+ * 外部链接窄桥（R157）：设置页「操作手册 / GitHub / 主页」——renderer 只提交枚举目标，
+ * 解析与白名单在 main（zs:open-app-link）：manual=随包手册文件，其余=写死的 https。
+ * **不接受任意 URL/路径**（传非枚举值由 main 拒绝）。
+ */
+contextBridge.exposeInMainWorld('zsAppLinks', {
+  open: (target: AppLinkTarget): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('zs:open-app-link', target),
 });

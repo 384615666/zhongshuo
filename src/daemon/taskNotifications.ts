@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { pendingAutomaticRecovery } from './automaticRecovery.ts';
 import {
+  TASK_NOTIFICATIONS_ENABLED_SETTING_KEY,
   taskNotificationAckParamsSchema,
   taskNotificationClaimParamsSchema,
   taskNotificationDeliverySchema,
@@ -386,6 +387,33 @@ function suppressMuted(db: ZhongshuoDatabase, viewerId: string): void {
   ).run(viewerId, viewerId);
 }
 
+/**
+ * 读取桌面通知总开关（daemon_state 的 app:setting:ui.taskNotifications.enabled）。
+ * 这里刻意**只把字面量 'false' 视为关闭**：未设置、空值以及任何其他值都按开启处理，
+ * 既保持通知默认开启的历史行为，也避免一次写坏的值静默关掉用户的通知。
+ * （contracts 的 parse 会对非法值抛错，供设置页读回时显式暴露问题。）
+ */
+function taskNotificationsEnabled(db: ZhongshuoDatabase): boolean {
+  const row = db.prepare('SELECT value FROM daemon_state WHERE key = ?')
+    .get(`app:setting:${TASK_NOTIFICATIONS_ENABLED_SETTING_KEY}`) as { value: string } | undefined;
+  return row?.value !== 'false';
+}
+
+/**
+ * 总开关关闭时，把该 viewer 当前所有 pending 就地标记为 suppressed 并返回 true。
+ * 关闭期间产生的通知**不得留成 pending**：否则重新开启后的下一次 poll 会把关闭
+ * 期间的旧通知补发出来。health/recentAttempts 不参与抑制，照常真实读取。
+ */
+function suppressAllWhenNotificationsDisabled(db: ZhongshuoDatabase, viewerId: string): boolean {
+  if (taskNotificationsEnabled(db)) return false;
+  db.prepare(
+    `UPDATE task_notifications
+     SET delivery_state = 'suppressed', claimed_at = NULL, last_error = '桌面通知已关闭'
+     WHERE viewer_id = ? AND delivery_state = 'pending'`,
+  ).run(viewerId);
+  return true;
+}
+
 function classifyUnconfirmedAttempts(db: ZhongshuoDatabase, now: number): void {
   db.prepare(
     `UPDATE task_notifications
@@ -421,11 +449,14 @@ export function pollTaskNotifications(
   const scannedThroughSeq = ingestDomainEvents(db, viewerId, now);
   classifyUnconfirmedAttempts(db, now);
   suppressMuted(db, viewerId);
-  const rows = db.prepare(
+  // ingest 与静音抑制之后再按总开关抑制：关闭期间新产生的通知在这里当场落地为
+  // suppressed，本次及之后的 poll 都不会返回它们，重新开启也不会补发。
+  const notificationsDisabled = suppressAllWhenNotificationsDisabled(db, viewerId);
+  const rows = (notificationsDisabled ? [] : db.prepare(
     `SELECT notification_id FROM task_notifications
      WHERE viewer_id = ? AND delivery_state = 'pending'
      ORDER BY source_event_seq LIMIT ?`,
-  ).all(viewerId, params.limit + 1) as Array<{ notification_id: string }>;
+  ).all(viewerId, params.limit + 1)) as Array<{ notification_id: string }>;
   const items = rows.slice(0, params.limit).map((row) => ({ notificationId: row.notification_id }));
   const healthRows = db.prepare(
     `SELECT

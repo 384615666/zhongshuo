@@ -199,7 +199,8 @@ setTimeout(()=>app.exit(3),30000);
       platform: 'browser',
       format: 'iife',
       jsx: 'automatic',
-      outfile: join(fixture, 'harness.js'),
+      loader: { '.png': 'dataurl' },
+outfile: join(fixture, 'harness.js'),
       define: { 'process.env.NODE_ENV': '"production"' },
       logLevel: 'silent',
     });

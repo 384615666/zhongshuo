@@ -34,7 +34,7 @@ async function buildHifiBundle(): Promise<void> {
 import * as store from ${q(join(repoRoot, 'src/ui/hifi/data/store.ts').replaceAll(chr92slash(), '/'))};
 export { loader, store };
 `, 'utf8');
-  await build({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'browser', outfile: bundlePath, sourcemap: false, loader: { '.tsx': 'tsx', '.ts': 'ts' } });
+  await build({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'browser', outfile: bundlePath, sourcemap: false, loader: { '.tsx': 'tsx', '.ts': 'ts', '.png': 'dataurl' } });
 }
 
 interface LoaderApi {

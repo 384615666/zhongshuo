@@ -46,7 +46,7 @@ it('hydrates live child facts in the cold room pool without opening a thread or 
     await cmd('room.update', { roomId: room.id, expectedRevision: room.revision, coordinatorMemberId: members[0] });
     const entry = join(dir, 'entry.ts'), bundle = join(dir, 'bundle.mjs');
     writeFileSync(entry, `export * as loader from ${JSON.stringify(resolve('src/ui/hifi/loader.ts').replaceAll('\\', '/'))}; export * as store from ${JSON.stringify(resolve('src/ui/hifi/data/store.ts').replaceAll('\\', '/'))};`);
-    await build({ entryPoints: [entry], bundle: true, platform: 'browser', format: 'esm', outfile: bundle });
+    await build({ entryPoints: [entry], bundle: true, platform: 'browser', format: 'esm', loader: { '.png': 'dataurl' }, outfile: bundle });
     vi.stubGlobal('window', { zs: { command: (env: { method: string; params: unknown }) => raw(env.method, env.params) } });
     const { loader, store } = await import(pathToFileURL(bundle).href) as {
       loader: { openProjectByPath(path: string): Promise<void>; loadRoomPool(roomId: string): Promise<void> };

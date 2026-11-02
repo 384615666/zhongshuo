@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   TASK_NOTIFICATION_COMMANDS,
   taskNotificationClickSchema,
@@ -7,7 +7,7 @@ import {
   type TaskNotificationClick,
 } from '../../../contracts/taskNotifications.ts';
 import { command } from '../bridge';
-import { toast } from '../shell';
+import { toast, useStore } from '../shell';
 
 interface TaskNotificationRendererBridge {
   show: (notificationId: string) => Promise<unknown>;
@@ -57,6 +57,10 @@ export async function openTaskNotificationClick(
  * replay duplicates.
  */
 export function TaskNotificationController({ intervalMs = 4_000 }: { intervalMs?: number }) {
+  const enabled = useStore((s) => s.notificationsEnabled);
+  // 用 ref 读开关：切换开关不重建定时器，也不打断正在进行的轮询。
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   useEffect(() => {
     let stopped = false;
     let inFlight = false;
@@ -67,7 +71,13 @@ export function TaskNotificationController({ intervalMs = 4_000 }: { intervalMs?
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        await showNextTaskNotification(bridge);
+        if (enabledRef.current) {
+          await showNextTaskNotification(bridge);
+        } else {
+          // 关闭时仍然轮询：daemon 借这次轮询推进事件游标并把关闭期间的通知标记为
+          // 已抑制（不会留成 pending），重新开启后不会补发旧通知。这里绝不调用 show。
+          await command(TASK_NOTIFICATION_COMMANDS.poll, { limit: 1 });
+        }
       } catch {
         // Connection/command failures are already visible through the existing
         // connection state; retry on the next quiet interval.
