@@ -38,9 +38,19 @@ export interface RecoveryTask {
   binding:TaskContinuationBinding;
   executionStatus?:TaskExecutionStatus|null;
 }
+function recoveryContinuation(status:TaskExecutionStatus):TaskContinuationBinding|undefined{
+  const direct=status.actions.find(action=>action.kind==='continue');
+  if(direct)return direct.binding;
+  // Ordinary interrupted runs keep their existing retry action contract. The
+  // recovery panel still continues them with the same authoritative source.
+  const retry=status.phase==='UNKNOWN'?status.actions.find(action=>action.kind==='retry'):undefined;
+  if(retry?.kind==='retry'&&'sourceRunId' in retry.binding&&retry.binding.sourceRunId&&!retry.binding.formatRepair)
+    return {taskId:retry.binding.taskId,sourceRunId:retry.binding.sourceRunId,
+      expectedTaskRevision:retry.binding.expectedTaskRevision,expectedStopGeneration:retry.binding.expectedStopGeneration};
+}
 export function canContinueRecoveryTask(item:RecoveryTask):boolean {
   if(['DONE','CANCELLED'].includes(item.task.status))return false;
-  if(item.executionStatus)return item.executionStatus.actions.some(action=>action.kind==='continue');
+  if(item.executionStatus)return recoveryContinuation(item.executionStatus)!=null;
   // Compatibility with older task readers that did not return a projection.
   return true;
 }
@@ -57,8 +67,8 @@ export async function loadRecoveryTasks(ids:readonly string[],read:ReadTask=id=>
       const value=await get(id);
       if(value.task.id!==id)throw Error('返回的任务不匹配，请刷新后重试。');
       if(value.task.parent_task_id){id=value.task.parent_task_id;continue;}
-      const continuation=value.executionStatus?.actions.find(action=>action.kind==='continue');
-      return {task:value.task,executionStatus:value.executionStatus,binding:continuation?.binding??{taskId:id,
+      const continuation=value.executionStatus?recoveryContinuation(value.executionStatus):undefined;
+      return {task:value.task,executionStatus:value.executionStatus,binding:continuation??{taskId:id,
         ...(value.task.revision!=null?{expectedTaskRevision:value.task.revision}:{}),
         ...(value.task.stop_generation!=null?{expectedStopGeneration:value.task.stop_generation}:{})}} satisfies RecoveryTask;
     }

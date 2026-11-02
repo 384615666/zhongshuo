@@ -1,11 +1,22 @@
 import {describe,expect,it} from 'vitest';
 import {dispatchBlockedFixture} from '../fixtures/dispatchBlockedR154.ts';
 import {readTaskExecutionStatus} from '../../src/daemon/executionStatus.ts';
-import {loadRecoveryTasks} from '../../src/ui/hifi/lib/recovery';
+import {loadRecoveryTasks,canContinueRecoveryTask} from '../../src/ui/hifi/lib/recovery';
 import {taskContinuationFailure} from '../../src/ui/hifi/lib/checkPreviousReply';
 import {userFacingSystemText} from '../../src/contracts/userFacingText';
 
 describe('R169 user-facing continuation feedback and binding',()=>{
+  it('also permits one-click continuation of an ordinary interrupted run through its existing retry action',async()=>{
+    const {db}=dispatchBlockedFixture();
+    try{
+      db.exec("UPDATE workflow_runs SET status='INTERRUPTED' WHERE id='parent-current'");
+      const status=readTaskExecutionStatus(db,'parent')!;
+      expect(status.actions.some(action=>action.kind==='retry')).toBe(true);
+      const tasks=await loadRecoveryTasks(['parent'],async()=>({task:{id:'parent',title:'原任务',status:'ACTIVE',revision:0,stop_generation:0},executionStatus:status}));
+      expect(tasks[0]?.binding.sourceRunId).toBe('parent-current');
+      expect(canContinueRecoveryTask(tasks[0]!)).toBe(true);
+    }finally{db.close();}
+  });
   it('preserves the authoritative source binding when loading a recovered root',async()=>{
     const {db,event}=dispatchBlockedFixture();
     try{
