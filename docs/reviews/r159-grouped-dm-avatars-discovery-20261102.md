@@ -19,8 +19,17 @@
 - `node scripts/verify-dm-project-r159.cjs`：14/14，真实 App/loader/组件、隔离 Chromium 原生点击，覆盖仅可见项目、分组加号、四类日期、四渠道默认图、一键与连点、跨项目目标、未知回执同号重试、关闭后不抢导航、3440 成员/任务卡左缘与 900 无横向溢出。证据 `dist/r159-dm-project/1793608647898/`，四张截图已目视。
 - hifi 类型及跟踪主工程 + 新 R159 测试类型通过；原未跟踪 R130 夹具不纳入发布验证。改动相对 HEAD 的 lint 新增 0（`dist/r159-lint-delta.json`）。
 - 手册重拍 `dist/user-guide-capture/run-76cf4789/`，进程 exit0、两个编号均命中。旧截图脚本仅 close 会隐藏到托盘而挂住，已改为调用正式 daemon.shutdown 后 close；早期自有 QA 进程后台正常停机后清理，未操作用户进程。
-- build:ui / pack-daemon 通过。完整跟踪回归 351 文件（349 通过 / 2 跳过）：3134 通过、3 预期失败、16 跳过，0 非预期失败，434.17 秒，exit0（`dist/r159-tracked-tests.log`）。最后追加非当前项目成员选择器的默认图补齐，14 项窗口验证再次通过；最终包按补丁后源码重新构建，不宣称补丁后重跑全量。包内检查将按最终镜像回填。
+- build:ui / pack-daemon 通过。完整跟踪回归 351 文件（349 通过 / 2 跳过）：3134 通过、3 预期失败、16 跳过，0 非预期失败，434.17 秒，exit0（`dist/r159-tracked-tests.log`）。最后追加非当前项目成员选择器的默认图补齐，定向 76 项与 14 项窗口验证再次通过；最终包按补丁后源码重新构建，不宣称补丁后重跑全量。
+- 最终安装镜像隔离验证 25/25，直接运行包内 EXE、正式 IPC 与原生点击：版本、单页设置/通知/外链、头像持久化、可见项目分组、从 A 项目为 B 项目一键创建且归属正确、切换后分组保留、正常停机 exit0。证据 `dist/r159-delivery/package-qa-cd1c4522/`；未使用真实模型。
 
 ## 交付流程
 
 沿用用户本会话已明确要求的推送、打包并安装测试流程，版本为 0.1.3-beta.12（Windows 0.1.3.12），数据结构仍为 61。先隔离验证，再正常退出旧版、备份、覆盖安装并打开。未复用用户数据做夹具，未发送真实模型请求；源码只选本轮文件，保留已有未跟踪内容。
+
+已推送公开 main 并完成本机覆盖安装，程序保持打开可供用户测试。本次未创建 GitHub Release。
+
+- 程序冻结源码 `423218f3f7e19f41762d2bb0c75c87bfd6da5f53`，clean；BUILD `bld_985a4885b2aefc75`。干净 worktree 构建，665 个 payload 文件逐一 hash 验证通过，随包版本资源为众说 / 0.1.3-beta.12。之后的交付文档提交不改变包内程序身份。
+- 安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.12-x64.exe`，160070906 字节，SHA256 `33661f3d325e2f2a4561d083e41d3216dd9d9968b8a2ab044bd934f682fb64c4`，同目录含 `.sha256` 与 `.release.json`。最终镜像 `dist/r159-source/dist/windows-installer/0.1.3-beta.12/image-DhOY7s`。
+- 安装前确认用户程序及 daemon 已关闭，完整备份 4484 文件、265428664 字节并逐文件 hash 一致；原库 integrity_check=ok / schema61。备份留在本机 ignored `dist/r159-delivery/pre-upgrade-backup-1793608840827/`，不提交或上传运行数据。
+- 静默覆盖安装 exit0，HKCU 显示 beta.12，实际安装目录 665 文件 hash 全过；启动前原数据库与备份 SHA256 完全相同。启动后仍用原数据根，正式 IPC 健康，activeTurns=0，原库 integrity_check=ok / schema61；projects/rooms/tasks/workflow_runs/agent_turns/messages/real_calls 分别为 3/3/3/3/3/6/3，与新备份一致。默认头像按本次要求自动补齐；没有重放任务或新增真实模型调用。
+- 原生窗口确认三项目私信分组及正确默认头像已显示，安装后截图 `dist/r159-delivery/installed-dm.png`；安装与启动核对分别记录于同目录 `installation-result.json` / `installed-startup-result.json`。
