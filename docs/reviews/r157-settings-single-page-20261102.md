@@ -58,5 +58,5 @@
 - 程序源码 `fb26a2e` clean（dirty=false），安装镜像 BUILD `bld_5f6885bf512d64a`、665 文件清单全部核对（脚本内 `verifyManifest` 逐文件 hash）；随包 `Zhongshuo.exe` 版本资源回读 ProductName/FileDescription=众说、FileVersion=`0.1.3-beta.10`、OriginalFilename=`Zhongshuo.exe`。
 - **包内隔离验证 18/18 通过**（`dist/r157/package-qa-*`，独立数据目录、假运行时、不装注册表）：包内 EXE 启动、boot ready/连接在线、使用指定数据根且忽略继承根、版本 `0.1.3-beta.10`、设置页为单页（无侧栏菜单、六段有序）、旧入口（连接与设备/打开一个定位链接/本机运行状态）不出现、通知总开关存在、手册/GitHub/主页三个入口与 `zsAppLinks` 桥存在、GitHub 与主页地址可见、通知开关关闭/开启均回读一致、`?section=help` 滚动到帮助段、正常停机 exit 0 且 daemon 已停止。
 - 本轮**未**执行静默安装/卸载：安装器模板本轮未改，静默安装会改写用户当前 beta.9 的 HKCU 卸载登记与快捷方式，故只对安装镜像做上述包内验证；用户按正常流程从托盘退出旧版后覆盖安装。
-- 已推送公开 `main` 并发布 GitHub Release `v0.1.3-beta.10`（见 release 页）。
+- 已推送公开 main 并发布 GitHub Release（latest）：https://github.com/384615666/zhongshuo/releases/tag/v0.1.3-beta.10 。
 

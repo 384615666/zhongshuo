@@ -16,7 +16,7 @@
 
 **验证**：完整回归 356 文件 **3220 通过 / 7 失败 / 10 预期失败 / 16 跳过**；7 项失败全在本机未跟踪的 R130 混沌夹具（缺旧目录历史包数据），跟踪测试 0 失败。hifi 类型通过、根类型仅既有 13 条未跟踪夹具错误、lint 相对 HEAD 新增 0、`build:ui` 成功、手册截图全部命中并目视。详见 [R157](../reviews/r157-settings-single-page-20261102.md)。
 
-**交付**：版本 0.1.3-beta.10（Windows `0.1.3.10`）。安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.10-x64.exe`，160,106,495 字节，SHA256 `18197ed8948e7205df5c2ebe1e2505b2a6b3279e151d104e5e4d809d316fe069`，程序源码 `fb26a2e` clean，安装镜像 BUILD `bld_5f6885bf512d64a`/665 文件 hash 全过，随包 EXE 版本资源回读为众说/0.1.3-beta.10。包内隔离验证 **18/18** 通过（独立数据根、假运行时、单页设置/通知开关/三个外链/深链滚动/正常停机 exit 0）。本轮未做静默安装（模板未改，安装会改写用户 beta.9 的 HKCU 登记与快捷方式），由用户从托盘退出旧版后覆盖安装。已推送公开 main 并发布 GitHub Release `v0.1.3-beta.10`。
+**交付**：版本 0.1.3-beta.10（Windows `0.1.3.10`）。安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.10-x64.exe`，160,106,495 字节，SHA256 `18197ed8948e7205df5c2ebe1e2505b2a6b3279e151d104e5e4d809d316fe069`，程序源码 `fb26a2e` clean，安装镜像 BUILD `bld_5f6885bf512d64a`/665 文件 hash 全过，随包 EXE 版本资源回读为众说/0.1.3-beta.10。包内隔离验证 **18/18** 通过（独立数据根、假运行时、单页设置/通知开关/三个外链/深链滚动/正常停机 exit 0）。本轮未做静默安装（模板未改，安装会改写用户 beta.9 的 HKCU 登记与快捷方式），由用户从托盘退出旧版后覆盖安装。已推送公开 main 并发布 GitHub Release（latest）：https://github.com/384615666/zhongshuo/releases/tag/v0.1.3-beta.10 。
 
 ## 2026-11-02：恢复入口按需显示与一键继续
 
