@@ -78,7 +78,7 @@ window.r153={calls,opened,legacy,mount,navigate,
 async function runVerifier(){
  const out=path.join(root,'dist/r153-product-navigation',`${Date.now()}-${process.pid}`);fs.mkdirSync(out,{recursive:true});
  fs.writeFileSync(path.join(out,'entry.tsx'),renderer);
- await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
+ await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',loader:{'.png':'dataurl'},logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
  fs.writeFileSync(path.join(out,'app.css'),['tokens.css','base.css','components.css','preview.css','titlebar.css','h1-overrides.css'].map(f=>fs.readFileSync(path.join(root,'src/ui/hifi/styles',f),'utf8')).join('\n'));
  fs.writeFileSync(path.join(out,'index.html'),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><div id="zs-titlebar"></div><div id="hifi-root"></div><script type="module" src="ui.mjs"></script>');
  fs.writeFileSync(path.join(out,'main.cjs'),String.raw`

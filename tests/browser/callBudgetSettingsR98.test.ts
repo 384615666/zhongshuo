@@ -26,14 +26,15 @@ describe('R98 AI 设置里的调用预算开关', () => {
     expect(html).toContain('data-zs-call-budget-setting="callBudget.enabled"');
   });
 
-  it('已有头像编辑、归档和重新关联操作可通过设置搜索找到', () => {
-    for (const query of ['我的头像', '个人头像', 'AI头像', '更换']) {
+  it('个人头像编辑、归档和重新关联操作可通过设置搜索找到', () => {
+    for (const query of ['我的头像', '个人头像', '更换']) {
       expect(searchAppSettings(query)).toContainEqual(expect.objectContaining({
         section: 'appearance', match: 'appearance-avatar-images',
       }));
     }
     const appearance = renderToStaticMarkup(createElement(SettingsPage, { query: { section: 'appearance' } }));
     expect(appearance).toContain('data-settings-row="appearance-avatar-images"');
+    expect(searchAppSettings('AI头像')).toEqual([]);
     expect(searchAppSettings('归档')).toContainEqual(expect.objectContaining({ section: 'data', match: '归档管理' }));
     expect(searchAppSettings('重新关联')).toContainEqual(expect.objectContaining({ section: 'data', match: '已移除的项目' }));
     const data = renderToStaticMarkup(createElement(SettingsPage, { query: { section: 'data' } }));
