@@ -438,6 +438,7 @@ function readResults(
 export function readTaskExecutionStatus(
   db: ZhongshuoDatabase,
   taskId: string,
+  options: { includeActions?: boolean } = {},
 ): TaskExecutionStatus | null {
   const task = db.prepare(`
     SELECT t.id,t.project_id,t.conversation_id,t.kind,t.room_id,t.conversation_thread_id,
@@ -1210,70 +1211,74 @@ export function readTaskExecutionStatus(
   }
 
   const actions: TaskExecutionAction[] = [];
-  const addAction = (action: TaskExecutionAction): void => {
-    if (!actions.some(item => item.id === action.id)) actions.push(action);
-  };
-  if (task.conversation_thread_id != null) {
-    addAction({
-      id: `navigate-thread:${task.conversation_thread_id}`,
-      kind: 'navigate',
-      label: '打开回复串',
-      target: { kind: 'thread', id: task.conversation_thread_id },
-    });
-  } else if (task.kind === 'dm_turn') {
-    addAction({
-      id: `navigate-dm:${task.conversation_id}`,
-      kind: 'navigate',
-      label: '打开私信',
-      target: { kind: 'dm', id: task.conversation_id },
-    });
-  } else if (task.room_id != null) {
-    addAction({
-      id: `navigate-room:${task.room_id}`,
-      kind: 'navigate',
-      label: '打开房间',
-      target: { kind: 'room', id: task.room_id },
-    });
+  // Lists consume execution facts only. Action eligibility walks the complete
+  // task tree and history and belongs to the task detail/action surfaces.
+  if(options.includeActions!==false){
+    const addAction = (action: TaskExecutionAction): void => {
+      if (!actions.some(item => item.id === action.id)) actions.push(action);
+    };
+    if (task.conversation_thread_id != null) {
+      addAction({
+        id: `navigate-thread:${task.conversation_thread_id}`,
+        kind: 'navigate',
+        label: '打开回复串',
+        target: { kind: 'thread', id: task.conversation_thread_id },
+      });
+    } else if (task.kind === 'dm_turn') {
+      addAction({
+        id: `navigate-dm:${task.conversation_id}`,
+        kind: 'navigate',
+        label: '打开私信',
+        target: { kind: 'dm', id: task.conversation_id },
+      });
+    } else if (task.room_id != null) {
+      addAction({
+        id: `navigate-room:${task.room_id}`,
+        kind: 'navigate',
+        label: '打开房间',
+        target: { kind: 'room', id: task.room_id },
+      });
+    }
+    const recoveryTurnId = unknownTurns[0]?.id ?? (blockerReason === 'unknown-turn' ? blocker?.blockingTurnId : null)
+      ?? recovery?.fact.turnId;
+    if (recoveryTurnId != null) {
+      addAction({
+        id: `continue:${task.id}:${task.revision}`,
+        kind: 'continue',
+        label: '继续任务',
+        binding:{taskId:task.id,expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation},
+      });
+    }
+    if (results.pendingReviewDelivery != null) {
+      addAction({
+        id: `review:${results.pendingReviewDelivery.id}`,
+        kind: 'review',
+        label: `验收交付 v${results.pendingReviewDelivery.revision}`,
+        target: { kind: 'delivery', id: results.pendingReviewDelivery.id },
+      });
+    } else if (results.currentDelivery != null) {
+      addAction({
+        id: `delivery:${results.currentDelivery.id}`,
+        kind: 'navigate',
+        label: `查看交付 v${results.currentDelivery.revision}`,
+        target: { kind: 'delivery', id: results.currentDelivery.id },
+      });
+    }
+    if (preDispatchFailure?.recoveryBinding != null) {
+      addAction({
+        id: `retry:${preDispatchFailure.recoveryBinding.taskId}:${preDispatchFailure.recoveryBinding.expectedTaskRevision}`,
+        kind: 'retry',
+        label: '按原请求继续',
+        binding: preDispatchFailure.recoveryBinding,
+      });
+    } else {
+      const retry=readFailedTaskRetry(db,task.id);
+      if(retry.binding)addAction({id:`retry:${task.id}:${retry.binding.sourceRunId}`,kind:'retry',
+        label:retry.formatRepair?'补交已有结果':'继续任务',binding:retry.binding});
+    }
+    const closure=readTaskClosure(db,task.id);
+    if(closure.binding)addAction({id:`close:${task.id}:${task.revision}`,kind:'close',label:'结束任务',binding:closure.binding});
   }
-  const recoveryTurnId = unknownTurns[0]?.id ?? (blockerReason === 'unknown-turn' ? blocker?.blockingTurnId : null)
-    ?? recovery?.fact.turnId;
-  if (recoveryTurnId != null) {
-    addAction({
-      id: `continue:${task.id}:${task.revision}`,
-      kind: 'continue',
-      label: '继续任务',
-      binding:{taskId:task.id,expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation},
-    });
-  }
-  if (results.pendingReviewDelivery != null) {
-    addAction({
-      id: `review:${results.pendingReviewDelivery.id}`,
-      kind: 'review',
-      label: `验收交付 v${results.pendingReviewDelivery.revision}`,
-      target: { kind: 'delivery', id: results.pendingReviewDelivery.id },
-    });
-  } else if (results.currentDelivery != null) {
-    addAction({
-      id: `delivery:${results.currentDelivery.id}`,
-      kind: 'navigate',
-      label: `查看交付 v${results.currentDelivery.revision}`,
-      target: { kind: 'delivery', id: results.currentDelivery.id },
-    });
-  }
-  if (preDispatchFailure?.recoveryBinding != null) {
-    addAction({
-      id: `retry:${preDispatchFailure.recoveryBinding.taskId}:${preDispatchFailure.recoveryBinding.expectedTaskRevision}`,
-      kind: 'retry',
-      label: '按原请求继续',
-      binding: preDispatchFailure.recoveryBinding,
-    });
-  } else {
-    const retry=readFailedTaskRetry(db,task.id);
-    if(retry.binding)addAction({id:`retry:${task.id}:${retry.binding.sourceRunId}`,kind:'retry',
-      label:retry.formatRepair?'补交已有结果':'继续任务',binding:retry.binding});
-  }
-  const closure=readTaskClosure(db,task.id);
-  if(closure.binding)addAction({id:`close:${task.id}:${task.revision}`,kind:'close',label:'结束任务',binding:closure.binding});
 
   return {
     schemaVersion: 'task-execution-status-v1',

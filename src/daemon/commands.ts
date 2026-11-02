@@ -4782,7 +4782,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>);
           const attentionIds=currentAttentionTaskIds(deps.db,blockedCandidates.map(task=>task.task_id));
           const blockedTasks=blockedCandidates.filter(task=>attentionIds.has(task.task_id))
-            .map(b=>({...b,reason:readTaskExecutionStatus(deps.db,b.task_id)?.reason.message??taskStatusReasonOf(deps.db,b.task_id)}));
+            .map(b=>({...b,reason:readTaskExecutionStatus(deps.db,b.task_id,{includeActions:false})?.reason.message??taskStatusReasonOf(deps.db,b.task_id)}));
           // 待确认提醒触发（REM-8）：确认入口由此可达；他人 DM 不泄露。locate（第二十六轮二）：
           // 服务端按目标实际形态构造准确深链——DM=#dm=；房间任务串=#task=；讨论串=#msg=锚。
           // notifyMuted=目标**线程**静音（提醒通知过滤——不能用未读聚合过滤代替；待办保留仅禁通知）。

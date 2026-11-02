@@ -29,7 +29,7 @@ export function currentAttentionTaskIds(db:ZhongshuoDatabase,ids:readonly string
       cursor=parent;
     }
     if(obsolete){
-      const actual=readTaskExecutionStatus(db,id);
+      const actual=readTaskExecutionStatus(db,id,{includeActions:false});
       const evidence=actual?.evidence;
       if(!actual||(!evidence?.recovery&&!evidence?.unknownTurnIds.length&&!evidence?.activeRunIds.length
         &&!evidence?.outbox&&!actual.actualPerformingMembers.length))continue;

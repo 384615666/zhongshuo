@@ -12,7 +12,7 @@ export function readProjectRoomActivity(db:ZhongshuoDatabase,projectId:string):R
   const byRoom=new Map<string,Array<RoomActivityState|undefined>>();
   for(const row of rows){
     if(!row.room_id)continue;
-    const status=readTaskExecutionStatus(db,row.id);
+    const status=readTaskExecutionStatus(db,row.id,{includeActions:false});
     if(!status)continue;
     const states=byRoom.get(row.room_id)??[];states.push(roomActivityState(status));byRoom.set(row.room_id,states);
   }
