@@ -60,5 +60,5 @@
 - 程序源码 `5f464bf` clean，安装镜像 BUILD `bld_ecb37cd98d922a0a`、667 文件清单逐 hash 核对；随包 `Zhongshuo.exe` 版本资源回读 ProductName/FileDescription=众说、FileVersion=`0.1.3-beta.16`、OriginalFilename=`Zhongshuo.exe`。
 - **包内隔离验证 14/14 通过**（`dist/r162/package-qa-*`，独立数据根、假运行时、不写注册表）：包内 EXE 启动、版本正确、私信页是 `.main` 主区且计算背景为 `rgb(255,255,255)`、设置页页头 `position: sticky`、六段有序、卡片分组 ≥10、通知开关在位、投递记录已折叠、正文「桌面通知」不再重复、`?section=help` 滚动到位、正常停机 exit 0 且 daemon 停止。
 - **开始菜单自愈实测**：手工在开始菜单放一枚 ElectronApp.lnk（目标=包内 Zhongshuo.exe），启动包内程序后被自动删除（Test-Path 由 True → False）。
-- 本轮未做静默安装（会改写用户当前 beta.14 的 HKCU 卸载登记与快捷方式），安装器 `[Code]` 的快捷方式清理逻辑由 `installerShortcutCleanupR158` 契约测试与 Inno 编译共同覆盖；用户从托盘退出旧版后覆盖安装即可。已推送公开 main 并发布 GitHub Release（latest）：https://github.com/384615666/zhongshuo/releases/tag/v0.1.3-beta.15 。
+- 本轮未做静默安装（会改写用户当前 beta.14 的 HKCU 卸载登记与快捷方式），安装器 `[Code]` 的快捷方式清理逻辑由 `installerShortcutCleanupR158` 契约测试与 Inno 编译共同覆盖；用户从托盘退出旧版后覆盖安装即可。已推送公开 main 并发布 GitHub Release（latest）：https://github.com/384615666/zhongshuo/releases/tag/v0.1.3-beta.16 。
 
