@@ -18,6 +18,8 @@ export const templateConfigSchema = z.strictObject({
     executable: z.string().trim().min(1).max(1024),
     permissionMode: z.enum(['plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']).nullable(),
     effort: z.enum(['none','minimal','low','medium','high','xhigh','max']).nullable().optional(),
+    /** 预设头像标识（如 `deepseek`）。只存标识，图在 renderer 里，daemon 不持有图片数据。 */
+    avatarPresetId: z.string().trim().min(1).max(40).optional(),
 });
 export type TemplateConfig = z.infer<typeof templateConfigSchema>;
 type Fail = (code: string, message: string) => never;
@@ -153,7 +155,7 @@ export function memberManagementCommand(db: ZhongshuoDatabase, method: string, p
         return { data: { items: rows.slice(0, limit).map(dto), nextCursor: rows.length > limit ? rows[limit - 1]!.id : null } };
     }
     if (method === 'memberTemplate.saveFromMember') {
-        const p = z.strictObject({ projectId: id, memberId: id, expectedRevision: revision, name, description }).parse(params);
+        const p = z.strictObject({ projectId: id, memberId: id, expectedRevision: revision, name, description, avatarPresetId: z.string().trim().min(1).max(40).optional() }).parse(params);
         const scope = () => { assertMemberProject(db, p.projectId, fail); memberOf(db, p.projectId, p.memberId, fail); };
         scope();
         return run(() => {
@@ -170,7 +172,7 @@ export function memberManagementCommand(db: ZhongshuoDatabase, method: string, p
             if (binding == null)
                 fail('VALIDATION_INVALID', '此成员没有明确的 runtime 绑定；请先为成员保存配置，不能把动态全局默认冒充模板快照');
             const settings = JSON.parse(binding.settings_json) as Record<string, unknown>;
-            const config = templateConfigSchema.parse({ kind: binding.kind, executable: binding.executable, model: settings.model ?? null, permissionMode: settings.permissionMode ?? null,...(settings.effort?{effort:settings.effort}:{}) });
+            const config = templateConfigSchema.parse({ kind: binding.kind, executable: binding.executable, model: settings.model ?? null, permissionMode: settings.permissionMode ?? null,...(settings.effort?{effort:settings.effort}:{}),...(p.avatarPresetId?{avatarPresetId:p.avatarPresetId}:{}) });
             configGuard(config, fail);
             const templateId = `mt_${randomUUID()}`, now = Date.now();
             db.prepare('INSERT INTO member_templates (id,name,description,config_json,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(templateId, p.name, p.description, JSON.stringify(config), now, now);

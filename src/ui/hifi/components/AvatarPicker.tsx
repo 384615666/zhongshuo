@@ -20,6 +20,7 @@ export function AvatarPicker({
   subject,
   value,
   disabled,
+  allowCustom = true,
   onChange,
 }: {
   name: string;
@@ -28,6 +29,8 @@ export function AvatarPicker({
   subject?: string;
   value: string | null;
   disabled?: boolean;
+  /** 模板只存预设标识、不存图片，所以模板表单要关掉自定义上传。 */
+  allowCustom?: boolean;
   onChange: (dataUrl: string | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -126,7 +129,8 @@ export function AvatarPicker({
             event.currentTarget.value = '';
           }}
         />
-        <button type="button" className="btn sm" disabled={busy} onClick={() => inputRef.current?.click()}>
+        <button type="button" className="btn sm" disabled={busy} onClick={() => inputRef.current?.click()}
+          style={allowCustom ? undefined : { display: 'none' }}>
           <Icon name="upload" size={12} /> {reading ? '读取中…' : '上传自定义'}
         </button>
         <button
@@ -139,7 +143,11 @@ export function AvatarPicker({
           <Icon name="trash" size={12} /> 恢复默认
         </button>
       </div>
-      <div className="field-hint">PNG、JPEG 或 WebP，≤ 384 KiB。点已选中的预置图可取消选择。</div>
+      <div className="field-hint">
+        {allowCustom
+          ? 'PNG、JPEG 或 WebP，≤ 384 KiB。点已选中的预置图可取消选择。'
+          : '模板只保存预设头像；上传的图片属于具体成员，不会写进模板。点已选中的预置图可取消选择。'}
+      </div>
     </div>
   );
 }

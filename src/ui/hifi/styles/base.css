@@ -1074,11 +1074,25 @@ code, pre, .mono {
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.grid-auto { grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); }
+.grid-auto { grid-template-columns: repeat(auto-fit, minmax(272px, 1fr)); }
 
 @media (max-width: 1180px) {
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/**
+ * 带鱼屏（≥1700px）：固定列数的网格在大屏上会把每张卡片拉得过宽，
+ * 右侧还留一大片空白（用户 2026-11-02 反馈「很多界面没有适配带鱼屏」）。
+ * 这里在超宽屏改用自适应列数，卡片保持可读宽度、空间被真正用上。
+ */
+@media (min-width: 1700px) {
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .grid-4 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .grid-auto { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  /* 超宽屏多给一点边距，正文不要贴到屏幕边缘。 */
+  .page { padding-inline: 40px; }
 }
 
 /* ============================================================

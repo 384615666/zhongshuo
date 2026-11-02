@@ -8,8 +8,11 @@ import {RuntimeModel} from './RuntimeModel';
 import {RuntimeEffort} from './RuntimeEffort';
 import { runtimePermissionHint, runtimePermissionOptions } from '../lib/runtimePermissions';
 import { RuntimeChannelHelp } from './RuntimeChannelHelp';
+import { AvatarPicker } from './AvatarPicker';
+import { defaultAiAvatarPreset, findAvatarPreset, presetForDataUrl } from '../data/avatarPresets';
+import { saveAvatar } from '../data/memberAvatar';
 import { refreshDms, refreshMembers,refreshRooms } from '../loader';
-import { getState, useStore } from '../shell';
+import { getState, toast, useStore } from '../shell';
 import { useFormGuard } from '../lib/useFormGuard';
 export { useFormGuard } from '../lib/useFormGuard';
 import { memberWrite, pendingMemberWrites, memberWriteState, memberWriteStorageError, type MemberWrite } from '../data/memberWrites';
@@ -26,6 +29,8 @@ export interface ConfigTemplate {
         executable: string;
         permissionMode: string | null;
         effort?:string|null;
+        /** 预设头像标识；模板只存标识，图片在 renderer 里。 */
+        avatarPresetId?: string;
     };
 }
 export async function refreshMemberIdentity(projectId: string) {
@@ -40,21 +45,20 @@ export async function refreshMemberIdentity(projectId: string) {
 function useWriteForm(scope: string, projectId?: string) {
   const guard=useFormGuard(projectId);
   const [busy,setBusy]=useState(false),[committed,setCommitted]=useState(false),[error,setError]=useState<string|null>(null);
-  const pending=useRef(false),readBack=useRef<((isCurrent:()=>boolean)=>void|Promise<void>)|null>(null);
-  const retryRead=async()=>{
+  const pending=useRef(false),readBack=useRef<((isCurrent:()=>boolean,data?:unknown)=>void|Promise<void>)|null>(null);  const retryRead=async()=>{
     if(pending.current||!guard.valid()||!readBack.current)return;
     pending.current=true;setBusy(true);setError(null);
     try{await readBack.current(guard.valid);}catch(e){if(guard.valid())setError(`已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}。只重试读取，不会重新创建或修改。`);}
     finally{pending.current=false;if(guard.alive.current)setBusy(false);}
   };
-  const save=async(method:string,params:Record<string,unknown>,done:(isCurrent:()=>boolean)=>void|Promise<void>)=>{
+  const save=async(method:string,params:Record<string,unknown>,done:(isCurrent:()=>boolean,data?:unknown)=>void|Promise<void>)=>{
     if(pending.current||committed||!guard.valid())return;
     pending.current=true;setBusy(true);setError(null);
     const result=await memberWrite(scope,method,params);
     if(guard.valid()){
       if(result.status==='ok'){
         setCommitted(true);readBack.current=done;
-        try{await done(guard.valid);}catch(e){if(guard.valid())setError(`已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}。只重试读取，不会重新创建或修改。`);}
+        try{await done(guard.valid,result.data);}catch(e){if(guard.valid())setError(`已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}。只重试读取，不会重新创建或修改。`);}
       }else setError(result.status==='unknown'?`结果未知：${userFacingSystemText(result.error ?? '')}。原操作请求已保留，可在成员页「未知成员操作」中重试。`:`${result.code}：${userFacingSystemText(result.error ?? '')}。输入已保留。`);
     }
     pending.current=false;if(guard.alive.current)setBusy(false);
@@ -85,10 +89,14 @@ export function SaveMemberTemplateModal({ projectId, member, onClose, onSaved }:
     onSaved: () => void | Promise<void>;
 }) {
     const [name, setName] = useState(`${member.displayName} 配置`.slice(0, 60)), [desc, setDesc] = useState(member.description ?? '');
+    const savedAvatars = useStore((s) => s.ui.avatars ?? {});
+    const [avatar, setAvatar] = useState<string | null>(() => savedAvatars[`member:${member.id}`] ?? null);
+    const avatarPreset = presetForDataUrl(avatar);
     const f = useWriteForm(`memberTemplate.saveFromMember:${projectId}:${member.id}`, projectId);
-    return <Modal title={`保存配置模板 · ${member.displayName}`} size="md" onClose={onClose} subtitle="保存此成员当前的渠道、模型和权限设置；不包含账号、会话和任务" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.saveFromMember', { projectId, memberId: member.id, expectedRevision: member.revision, name, description: desc }, onSaved)}>保存模板</button></>}>
+    return <Modal title={`保存配置模板 · ${member.displayName}`} size="md" onClose={onClose} subtitle="保存此成员当前的渠道、模型和权限设置；不包含账号、会话和任务" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.saveFromMember', { projectId, memberId: member.id, expectedRevision: member.revision, name, description: desc, ...(avatarPreset ? { avatarPresetId: avatarPreset.id } : {}) }, onSaved)}>保存模板</button></>}>
     {f.invalid ? <div className="panel warning">目标已切换，表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
+    <AvatarPicker name={member.displayName} color="var(--neutral)" value={avatar} disabled={f.busy || f.committed} allowCustom={false} onChange={setAvatar}/>
     <div className="panel info">创建新成员时会使用这里的设置；之后修改模板只影响新建的成员。</div>
   </Modal>;
 }
@@ -98,11 +106,13 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     onSaved: () => void | Promise<void>;
 }) {
     const [form, setForm] = useState(t);
+    const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? null);
+    const avatarPreset = presetForDataUrl(avatar);
     const projectId=useStore(s=>s.activeProjectId);
     const f = useWriteForm(`memberTemplate.update:${t.id}`);
     const fake = useStore(s => s.dispatchGuard?.fakeAllowed === true);
     const config = (patch: Partial<ConfigTemplate['config']>) => setForm(s => ({ ...s, config: { ...s.config, ...patch } }));
-    return <Modal title={`编辑模板 · ${t.name}`} size="md" onClose={onClose} subtitle="保存只影响后续创建，已有成员继续使用独立配置" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-edit-save disabled={f.busy || f.invalid || f.committed || !form.name.trim()} onClick={() => void f.save('memberTemplate.update', { templateId: t.id, expectedRevision: t.revision, name: form.name, description: form.description, enabled: form.enabled, config: {...form.config,executable:form.config.executable.trim()||runtimeExecutable(form.config.kind)} }, onSaved)}>保存模板</button></>}>
+    return <Modal title={`编辑模板 · ${t.name}`} size="md" onClose={onClose} subtitle="保存只影响后续创建，已有成员继续使用独立配置" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-edit-save disabled={f.busy || f.invalid || f.committed || !form.name.trim()} onClick={() => void f.save('memberTemplate.update', { templateId: t.id, expectedRevision: t.revision, name: form.name, description: form.description, enabled: form.enabled, config: {...form.config,executable:form.config.executable.trim()||runtimeExecutable(form.config.kind), ...(avatarPreset?{avatarPresetId:avatarPreset.id}:{avatarPresetId:undefined})} }, onSaved)}>保存模板</button></>}>
     <FormFeedback state={f}/>{f.invalid ? <div className="panel warning">页面已切换，表单作废。</div> : null}
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} maxLength={60} value={form.name} onChange={e => setForm(s => ({ ...s, name: e.target.value }))}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={form.description} onChange={e => setForm(s => ({ ...s, description: e.target.value }))}/></label>
     <label className="field"><span className="field-label">模板状态</span><Select disabled={f.busy||f.committed} value={form.enabled ? 'enabled' : 'disabled'} ariaLabel="模板状态" options={[{ value: 'enabled', label: '启用 · 可创建' }, { value: 'disabled', label: '停用 · 已有成员不变' }]} onChange={v => setForm(s => ({ ...s, enabled: v === 'enabled' }))}/></label>
@@ -112,6 +122,7 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
     {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}（打开项目后可选）</div>}
     <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">{runtimePermissionHint(form.config.kind)}</div>
+    <AvatarPicker name={form.name} color="var(--neutral)" value={avatar} disabled={f.busy||f.committed} allowCustom={false} onChange={setAvatar}/>
   </Modal>;
 }
 export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {
@@ -122,10 +133,12 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
 }) {
     const project = useStore(s => s.projects.find(p => p.id === projectId));
     const [name, setName] = useState(t.name), [desc, setDesc] = useState(t.description);
+    const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? defaultAiAvatarPreset().dataUrl);
     const f = useWriteForm(`memberTemplate.createMember:${projectId}:${t.id}`, projectId);
-    return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name}`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent) => { await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
+    return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name}`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent, data) => { const memberId = (data as { memberId?: string } | undefined)?.memberId; if (memberId != null) { try { await saveAvatar(`member:${memberId}`, avatar); } catch (error) { toast(`成员已创建，但头像未保存：${userFacingSystemText((error as Error).message ?? '')}`, 'error'); } } await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
     {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">成员名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-member-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">成员说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
+    <AvatarPicker name={name} color="var(--neutral)" value={avatar} disabled={f.busy||f.committed} allowCustom onChange={setAvatar}/>
     <div className="panel">{t.config.kind} · {t.config.model ?? '模型由渠道默认'} · 保存权限 {t.config.permissionMode ?? '未指定'}<br />程序：{t.config.executable}<br />创建后不会自动开始任务，也不成为协调者；加入未归档房间只影响之后派发。</div>
     <RuntimeChannelHelp kind={t.config.kind}/>
   </Modal>;
