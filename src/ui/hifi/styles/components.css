@@ -3685,3 +3685,11 @@ button.composer-file-token-open:hover {
 }
 .cs-refs-title { font-size: var(--fs-11); color: var(--text-3); margin-bottom: 4px; }
 .cs-refs .kv { font-size: var(--fs-11); color: var(--text-3); }
+.dm-project-head { display:flex; align-items:center; gap:4px; padding:8px 8px 4px; }
+.dm-project-toggle { display:flex; align-items:center; gap:6px; flex:1; min-width:0; padding:3px 4px; border:0; background:transparent; cursor:pointer; text-align:left; font-weight:600; }
+.dm-project-toggle > .icon { flex:none; }
+.dm-row-heading { display:flex; align-items:baseline; gap:8px; }
+.dm-row-heading > .truncate { flex:1; min-width:0; }
+.dm-row-heading > time { flex:none; font-variant-numeric:tabular-nums; }
+.dm-row > .nav-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none; }
+.dm-archived-toggle { display:flex; align-items:center; gap:6px; width:100%; padding:8px 12px; border:0; background:transparent; color:var(--text-3); cursor:pointer; font-size:12px; }

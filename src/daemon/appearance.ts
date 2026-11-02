@@ -10,6 +10,7 @@ export interface AppearanceState {
 
 const SHOW_KEY='appearance:show-avatars';
 const AVATAR_PREFIX='appearance:avatar:';
+const AVATAR_CHOICE_PREFIX='appearance:avatar-choice:';
 
 function decodeImage(dataUrl:string):{mime:string;bytes:Buffer}|null{
   const match=/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(dataUrl);
@@ -49,11 +50,26 @@ export function writeShowAvatars(db:ZhongshuoDatabase,show:boolean,now=Date.now(
 
 export function writeAvatar(db:ZhongshuoDatabase,subject:string,dataUrl:string|null,now=Date.now()):void{
   if(!validAvatarSubject(db,subject))throw Error('头像对象不存在');
+  if(dataUrl!=null&&decodeImage(dataUrl)==null)throw Error('头像只接受有效的 PNG、JPEG 或 WebP 图片');
+  db.prepare('INSERT INTO daemon_state (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
+    .run(`${AVATAR_CHOICE_PREFIX}${subject}`,'explicit',now);
   if(dataUrl==null){
     db.prepare('DELETE FROM daemon_state WHERE key=?').run(`${AVATAR_PREFIX}${subject}`);
     return;
   }
   if(decodeImage(dataUrl)==null)throw Error('头像只接受有效的 PNG、JPEG 或 WebP 图片');
+  db.prepare('INSERT INTO daemon_state (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
+    .run(`${AVATAR_PREFIX}${subject}`,dataUrl,now);
+}
+
+/** Compare the original image and explicit-choice marker in the command transaction.
+ * An automatic correction must never overwrite a concurrent manual selection. */
+export function writeDefaultAvatar(db:ZhongshuoDatabase,subject:string,dataUrl:string,expectedDataUrl:string|null,now=Date.now()):void{
+  if(!/^member:m_default_(claude|codex|deepseek-harness|pi)_/.test(subject)||!validAvatarSubject(db,subject))throw Error('默认头像对象不存在');
+  if(decodeImage(dataUrl)==null)throw Error('默认头像图片无效');
+  if(db.prepare('SELECT 1 FROM daemon_state WHERE key=?').get(`${AVATAR_CHOICE_PREFIX}${subject}`))return;
+  const current=db.prepare('SELECT value FROM daemon_state WHERE key=?').get(`${AVATAR_PREFIX}${subject}`) as {value:string}|undefined;
+  if((current?.value??null)!==expectedDataUrl)return;
   db.prepare('INSERT INTO daemon_state (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
     .run(`${AVATAR_PREFIX}${subject}`,dataUrl,now);
 }

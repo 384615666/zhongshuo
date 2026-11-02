@@ -44,10 +44,16 @@ export function findAvatarPreset(id: string): AvatarPreset | undefined {
   return AVATAR_PRESETS.find((preset) => preset.id === id);
 }
 
-export function defaultAiAvatarPreset(): AvatarPreset {
-  const preset = findAvatarPreset(DEFAULT_AI_AVATAR_PRESET_ID) ?? AVATAR_PRESETS[0];
+export function defaultAiAvatarPreset(kind?: string): AvatarPreset {
+  const id = kind === 'claude' || kind === 'codex' || kind === 'pi' ? kind : DEFAULT_AI_AVATAR_PRESET_ID;
+  const preset = findAvatarPreset(id) ?? AVATAR_PRESETS[0];
   if (preset == null) throw Error('预设头像清单为空');
   return preset;
+}
+
+export function defaultMemberAvatarPreset(memberId: string): AvatarPreset | undefined {
+  const kind = /^m_default_(claude|codex|deepseek-harness|pi)_/.exec(memberId)?.[1];
+  return kind ? defaultAiAvatarPreset(kind) : undefined;
 }
 
 /** 当前 dataUrl 对应哪张预设（不是预设=用户上传的图）。 */

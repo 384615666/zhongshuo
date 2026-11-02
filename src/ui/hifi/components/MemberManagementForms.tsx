@@ -133,7 +133,7 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
 }) {
     const project = useStore(s => s.projects.find(p => p.id === projectId));
     const [name, setName] = useState(t.name), [desc, setDesc] = useState(t.description);
-    const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? defaultAiAvatarPreset().dataUrl);
+    const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? defaultAiAvatarPreset(t.config.kind).dataUrl);
     const f = useWriteForm(`memberTemplate.createMember:${projectId}:${t.id}`, projectId);
     return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name}`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent, data) => { const memberId = (data as { memberId?: string } | undefined)?.memberId; if (memberId != null) { try { await saveAvatar(`member:${memberId}`, avatar); } catch (error) { toast(`成员已创建，但头像未保存：${userFacingSystemText((error as Error).message ?? '')}`, 'error'); } } await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
     {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>

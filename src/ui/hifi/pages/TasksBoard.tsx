@@ -100,7 +100,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
 
   return (
     <div className="main">
-      <div className="page">
+      <div className="page tasks-board-page">
         <div className="page-filters">
           <label className="field inline">
             <span className="field-label">范围</span>

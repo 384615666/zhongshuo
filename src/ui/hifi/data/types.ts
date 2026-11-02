@@ -1208,6 +1208,8 @@ export interface DmConversation {
   threadId: string;
   createdAt: number;
   lastMessageAt: number;
+  /** Last final AI reply; null when this conversation has no reply yet. */
+  lastReplyAt?: number | null;
   archivedAt?: number;
   unread: number;
   /** 是否置顶（CH-06：自己可见的排序偏好） */

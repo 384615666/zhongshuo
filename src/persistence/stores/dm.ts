@@ -55,6 +55,8 @@ export interface DmConversationSummary {
   archivedAt: number | null;
   revision: number;
   lastMessageSeq: number;
+  lastMessageAt: number | null;
+  lastReplyAt: number | null;
   lastReadSeq: number;
   unread: number;
   /** 会话执行态：idle=无活动 run；running=活动 dm_turn；queued=有排队消息；paused=停止后队列挂起；
@@ -210,8 +212,10 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       };
     });
     const lastMsg = db.prepare(
-      `SELECT body_json FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT 1`,
-    ).get(row.id) as { body_json: string } | undefined;
+      `SELECT body_json,created_at FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT 1`,
+    ).get(row.id) as { body_json: string; created_at: number } | undefined;
+    const lastReply = db.prepare(`SELECT MAX(created_at) at FROM messages
+      WHERE conversation_id=? AND author_type='agent' AND status='final'`).get(row.id) as {at:number|null};
     let lastMessagePreview: string | null = null;
     if (lastMsg != null) {
       try {
@@ -233,6 +237,8 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       archivedAt: row.archived_at,
       revision: row.revision,
       lastMessageSeq: row.last_message_seq,
+      lastMessageAt: lastMsg?.created_at ?? null,
+      lastReplyAt: lastReply.at,
       lastReadSeq: read?.last_read_seq ?? 0,
       unread: Math.max(0, row.last_message_seq - (read?.last_read_seq ?? 0)),
       execState: paused ? 'paused' : activeRow != null ? 'running' : freshPending > 0 ? 'queued' : interrupted.length > 0 ? 'interrupted' : 'idle',
@@ -247,7 +253,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       reworkPending: reworkDerived != null && reworkTaskRow != null ? { taskId: reworkTaskRow.taskId, deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued } : null,
     });
   }
-  return out;
+  return out.sort((a,b)=>(b.lastReplyAt??b.lastMessageAt??0)-(a.lastReplyAt??a.lastMessageAt??0));
 }
 
 /** Read only the persisted cause already shown by recovery/diagnostics. Never

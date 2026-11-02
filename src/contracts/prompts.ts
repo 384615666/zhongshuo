@@ -340,11 +340,13 @@ export const turnBundleEnvelopeSchema = z.strictObject({
       allowedPurposes:z.array(z.enum(['ask','review','implement','reply'])).max(4),replyToMemberId:z.string().nullable()}),
   ]),
   /**
-   * 文件发现（第七轮：按既有授权合同）：程序侧提供的**项目范围文件清单**——§13.4 项目源码
+   * 历史信封兼容字段（新请求不再自动生成）：程序侧提供的**项目范围文件清单**——§13.4 项目源码
    * 默认可读（同项目共享，含其他任务 applied 修改），§6.3 默认排除 VCS 内部/依赖缓存/构建
    * 产物/常见凭据（命名清单制，不按 "." 前缀一刀切）；条数上限、截断/扫描破口如实标注。
    * 两模式一致规则；清单只声明输入过滤范围，不构成 runtime 文件沙箱认证（§6.2）。
    */
+  /** Program-owned working directory; file discovery is performed by the runtime on demand. */
+  projectDirectory: z.string().min(1).optional(),
   fileDiscovery: z.strictObject({
     policy: z.literal('authorized-listing'),
     files: z.array(z.string().min(1)),
@@ -439,6 +441,9 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   lines.push(`${USER_CASE_FACT_RULE}answer 只说本轮核验结论、实质纠正和影响交付的问题；详细复算留在已有文档。hash、字节数通常由程序保留，仅内容不一致或用户明确要求时在正文提。返工时 answer 先说本轮实际修改；核对后无需修改则简短确认，不重述整份旧方案。`);
   lines.push('确需用户确认或补充且无法自行核实时，把具体问题、建议方案与影响填入 userQuestion，同时在 answer 保留已完成结果；无问题用 null。先完成不依赖答复的工作；需要答复的步骤会等待确认，独立同伴步骤可继续。不要仅为已授权工作、任意分歧或可自行查证的信息提问；有问题不得用 replyDisposition=none。');
   lines.push('responseKind 与 replyDisposition 必填，各选一个枚举值：普通交流、问候、简单问答或澄清用 conversation，实质工作成果用 work。仅没有待答问题、新证据和未完成工作且不需要可见回复时，用 conversation + none，answer/changeSummary=""、document=null、所有数组为空，不发确认语；仍提交完整内部对象。none 不可用于工作交付、计划或交接。普通对话不需要工具或验证，相关数组为空；短问候、孤立数字或“测试”直接简短回应，document=null，不自行扩成文件审计、hash、政策或输入一致性报告。answer 由你自然撰写，保留影响结果的条件与分歧，不固定点数，不向用户讲内部协议。未执行的验证用 {item,reason}，真实文件与执行过的验证按实际填写；没有就留空。');
+  if (envelope.projectDirectory != null) {
+    lines.push(projectDirectoryInstruction(envelope.projectDirectory));
+  }
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
     lines.push(`项目工作目录内可按相对路径直接读取的文件（§13.4 项目源码默认可读；排除 VCS 内部/依赖缓存/构建产物/常见凭据；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
@@ -613,4 +618,9 @@ export function scanSensitivePatterns(text: string): SensitivityHit[] {
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** Describe where to work without scanning or embedding unrelated project paths. */
+export function projectDirectoryInstruction(rootPath: string): string {
+  return `项目工作目录：${rootPath}\n仅在任务需要时，使用运行时实际提供的列目录、搜索和读取工具查找相关文件；无需文件的问候或简单问答直接回复。遵守本轮实际文件权限，按需读取相关资料，不自动遍历整个项目。`;
 }

@@ -32,6 +32,9 @@ app.on('browser-window-created',(_event,win)=>{
    }
    fs.writeFileSync(path.join(__dirname,'capture-result.json'),JSON.stringify({ok:true,results},null,2));
   }catch(error){console.error(error);await win.webContents.capturePage().then(image=>fs.writeFileSync(path.join(__dirname,'error.png'),image.toPNG()));fs.writeFileSync(path.join(__dirname,'capture-result.json'),JSON.stringify({ok:false,error:String(error),results},null,2));}
+  try{
+   await win.webContents.executeJavaScript("window.zs.command({protocolVersion:1,commandId:crypto.randomUUID(),method:'daemon.shutdown',params:{}})");
+  }catch(error){console.error('Guide shutdown:',error);}
   win.close();
  });
 });

@@ -17,6 +17,7 @@ import {
 } from '../lib/format';
 import type { Consensus, ErrorCode, RunStatus, TaskStatus, TurnStatus } from '../data/types';
 import { useStore } from '../data/store';
+import { defaultMemberAvatarPreset } from '../data/avatarPresets';
 
 /* ---------------- 状态标签 ---------------- */
 
@@ -184,7 +185,7 @@ export function Avatar({
   const initials = (name.replace(/[^\p{L}\p{N}]/gu, '')[0] ?? '?').toUpperCase();
   const label = ordinal && ordinal > 1 ? `${initials}${ordinal}` : initials;
   const bg = color ?? 'var(--neutral)';
-  const image=subject==null?undefined:avatars[subject];
+  const image=subject==null?undefined:avatars[subject] ?? (subject.startsWith('member:')?defaultMemberAvatarPreset(subject.slice(7))?.dataUrl:undefined);
   const dotColor =
     state === 'running' ? 'var(--info)'
       : state === 'idle' ? 'var(--success)'

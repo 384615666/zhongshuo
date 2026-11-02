@@ -11,7 +11,7 @@
  * 预算（E12）：派发前核对 stageAvailableTurns；尾部派发先占用 S/Q；
  * 结算/未启动取消退款走同一套账（budget_json 单一真源）；耗尽后不再调用模型。
  */
-import { projectScopedFileListing } from './fileDiscovery.ts';
+import { projectDirectoryInstruction } from '../contracts/prompts.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -2034,22 +2034,17 @@ function renderStageBody(
   const objective=task.objective?.trim();
   const distinctObjective=objective&&objective!==rootText.trim()?`\n目标：${objective}`:'';
   const distinctRequest=requestText&&requestText.trim()!==rootText.trim()?`\n本次回复串研讨请求：${requestText}`:'';
-  const base = `任务：${task.title}${distinctObjective}\n原始请求：${rootText}${distinctRequest}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
+  const projectRootRow = db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.project_id) as { canonical_path: string } | undefined;
+  const base = `${projectRootRow?projectDirectoryInstruction(projectRootRow.canonical_path)+'\n\n':''}任务：${task.title}${distinctObjective}\n原始请求：${rootText}${distinctRequest}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
   const memberNames = new Map(
     (db.prepare('SELECT id, display_name FROM project_members WHERE project_id = ?').all(task.project_id) as Array<{ id: string; display_name: string }>)
       .map((member) => [member.id, member.display_name]),
   );
   const memberName = (memberId: string): string => memberNames.get(memberId) ?? memberId;
   if (step.stage === 'IND') {
-    // 隔离：不含任何他人草稿（此刻也不读取）。文件发现=项目范围清单（两模式一致规则，第七轮
-    // §13.4/§6.3：项目源码默认可读+命名排除；修复 C 组「文件名不可发现+工具面认知差」；
-    // 清单只含项目根内文件，生成失败不阻断）。
-    const projectRootRow = db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.project_id) as { canonical_path: string } | undefined;
-    const listing = projectRootRow != null ? projectScopedFileListing(projectRootRow.canonical_path) : null;
-    const listingBlock = listing != null
-      ? `\n\n【文件发现（项目范围清单，程序侧提供）】可直接按相对路径读取的文件（排除 VCS 内部/依赖缓存/构建产物/常见凭据；${listing.files.length} 项${listing.truncated ? '，达上限已截断' : ''}）：\n${listing.files.join('\n')}\n清单完整性：${listing.integrityNote}`
-      : '';
-    return `${base}${listingBlock}\n\n你是独立分析成员（${step.memberId}）。请独立完成首轮分析。`;
+    // Independent input contains the working directory and explicit materials,
+    // without peer drafts or an automatic recursive file listing.
+    return `${base}\n\n你是独立分析成员（${step.memberId}）。请独立完成首轮分析。`;
   }
   if (step.stage === 'CR') {
     // 冻结清单约束：只读 CROSS_REVIEW 冻结版本中的他人 canonical 初稿

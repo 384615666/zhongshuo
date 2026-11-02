@@ -56,7 +56,7 @@ import { readExecutionBlocker, readTaskDetails, readTaskHistory, taskRunBelongsT
 import { turnDeadlineFromConfig } from './turnDeadline.ts';
 import { messageFileChanges } from './messageFileChanges.ts';
 import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus, templateConfigSchema, configGuard } from './memberManagement.ts';
-import {readAppearance,writeAvatar,writeShowAvatars} from './appearance.ts';
+import {readAppearance,writeAvatar,writeDefaultAvatar,writeShowAvatars} from './appearance.ts';
 import { discoverLocalMemberDefaults, ensureDefaultMembers, type DefaultMemberCandidate } from './defaultMembers.ts';
 import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
@@ -5043,12 +5043,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           avatar:z.strictObject({
             subject:z.string().min(1).max(140),
             dataUrl:z.string().nullable(),
+            defaultIfUnchanged:z.strictObject({dataUrl:z.string().nullable()}).optional(),
           }).optional(),
         }).refine(value=>value.showAvatars!==undefined||value.avatar!==undefined,{message:'至少提供一项外观设置'}).parse(env.params);
         const result=run(()=>{
           if(params.showAvatars!==undefined)writeShowAvatars(deps.db,params.showAvatars);
           if(params.avatar!==undefined){
-            try{writeAvatar(deps.db,params.avatar.subject,params.avatar.dataUrl);}
+            try{
+              if(params.avatar.defaultIfUnchanged){
+                if(params.avatar.dataUrl==null)throw Error('默认头像不能为空');
+                writeDefaultAvatar(deps.db,params.avatar.subject,params.avatar.dataUrl,params.avatar.defaultIfUnchanged.dataUrl);
+              }else writeAvatar(deps.db,params.avatar.subject,params.avatar.dataUrl);
+            }
             catch(error){throw new DaemonCommandError('VALIDATION_INVALID',error instanceof Error?error.message:'头像保存失败');}
           }
           return{...readAppearance(deps.db),updatedAt:Date.now()};

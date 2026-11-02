@@ -2,7 +2,7 @@
  * 头像选择器：预置头像九宫格 + 上传自定义图片 + 恢复默认。
  *
  * 用在「成员管理 → AI 设置」「添加 AI」以及三个模板弹窗里。选中值就是 data URL
- * （`app.appearance.set` 的 `avatar.dataUrl`），`null` 表示回到默认首字母头像。
+ * （`app.appearance.set` 的 `avatar.dataUrl`），`null` 表示回到默认头像。
  *
  * 预置图走 esbuild 的 dataurl loader，`AVATAR_PRESETS[].dataUrl` 本身就是可直接落库的
  * data URL，所以"选预置"和"传自定义"在下游是同一条路径。
@@ -120,7 +120,7 @@ export function AvatarPicker({
           className="btn ghost sm"
           disabled={busy || value == null}
           onClick={() => onChange(null)}
-          title={value == null ? '当前已是默认头像' : '恢复默认首字母头像'}
+          title={value == null ? '当前已是默认头像' : '恢复默认头像'}
         >
           <Icon name="trash" size={12} /> 恢复默认
         </button>

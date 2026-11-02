@@ -20,11 +20,12 @@ import type { BridgeOutcome } from './bridge';
 import {stageOutbound,updateSendReference,settleOutbound, setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, advanceThreadReadWatermark, rollbackThreadReadWatermark, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
 import { backfillDefaultMemberAvatars } from './data/defaultMemberAvatars';
+import { sortDmConversations } from './lib/dmList';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
 import type {TaskExecutionBlocker} from '../../contracts/executionBlockers.ts';
 import type {MessageFileChange} from '../../contracts/messageFileChanges.ts';
-import type { CollaborationStage, CurrentRunBudget, DeliveryFact, DocumentView, FormalAttachmentSummary, Message, Task, Thread, ThreadCard } from './data/types';
+import type { CollaborationStage, CurrentRunBudget, DeliveryFact, DmConversation, DocumentView, FormalAttachmentSummary, Message, Task, Thread, ThreadCard } from './data/types';
 import { deriveDeliberateMaxTurns } from '../../contracts/deliberation.ts';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 import { currentNavSeq, match, navigate, parseQuery, pathOf } from './lib/router';
@@ -38,7 +39,7 @@ interface RegistryItem { id: string; displayName: string; rootPath: string; cano
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;runtimeAvailable?:boolean;description?:string;revision?:number }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; lastMessageSeq?: number; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?:{maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; preDispatchFailure?:PreDispatchFailureProjection|null; executionStatus?:TaskExecutionStatus|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
-interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerMemberId?: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
+interface ConvListData { conversations: Array<{ executionStatus?:TaskExecutionStatus|null; conversationId: string; peerMemberId?: string; peerDisplayName?: string; createdAt?: number; lastMessageAt?: number | null; lastReplyAt?: number | null; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 export interface HistoryMessage { repairLineage?:MessageRepairLineage|null; id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[]; progress?: ThreadVisibleProgress[] }
 interface FileChangeCarrier { fileChanges?: MessageFileChange[] }
@@ -1148,17 +1149,23 @@ export async function toggleSavedMessage(m: { id: string; body: string }, projec
   }
 }
 
-export async function refreshDms(projectIdArg?: string): Promise<void> {  const gen = getState().loadGen;
-  const projectId = projectIdArg ?? getState().activeProjectId;
-  if (projectId === '') return;
-  const data = await command<ConvListData>('conversation.list', { projectId });
-  if (!stillCurrent(gen, projectId)) return;
-  setState((prev) => ({
-    ...prev,
-    dms: (data.conversations ?? []).map((c) => ({
+const dmIndexTickets = new Map<string,number>();
+
+/** Read a project-owned list without switching focus or marking it as read. */
+export async function loadDmProjectIndex(projectId: string): Promise<void> {
+  if (!projectId) return;
+  const gen = getState().loadGen;
+  const ticket = (dmIndexTickets.get(projectId) ?? 0) + 1;
+  dmIndexTickets.set(projectId, ticket);
+  setState(state => ({...state,dmProjectIndexes:{...state.dmProjectIndexes,
+    [projectId]:{status:'loading',items:state.dmProjectIndexes[projectId]?.items ?? state.dms.filter(dm=>dm.projectId===projectId)}}}));
+  try {
+    const data = await command<ConvListData>('conversation.list', {projectId});
+    if (dmIndexTickets.get(projectId) !== ticket) return;
+    const items: DmConversation[] = sortDmConversations((data.conversations ?? []).map((c) => ({
       id: c.conversationId, projectId: c.projectId ?? projectId,
       peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.unread ?? 0,
-      memberIds: c.peerMemberId ? [c.peerMemberId] : [], threadId: '', createdAt: 0, lastMessageAt: 0,
+      memberIds: c.peerMemberId ? [c.peerMemberId] : [], threadId: '', createdAt: c.createdAt ?? 0, lastMessageAt: c.lastMessageAt ?? 0, lastReplyAt: c.lastReplyAt ?? null,
       executionStatus:c.executionStatus??null,
       execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? undefined, lastMessagePreview: c.lastMessagePreview ?? '',
       // r56 H4 操作面投影：revision CAS/停止三重绑定/中断恢复/待验收/排队数。
@@ -1167,8 +1174,31 @@ export async function refreshDms(projectIdArg?: string): Promise<void> {  const 
       interruptedTasks: c.interruptedTasks ?? [], pendingReview: c.pendingReview ?? null,
       reworkPending: c.reworkPending ?? null,
       queuedCount: c.queuedCount ?? 0, stopPending: c.stopPending ?? false,
-    })),
-  }));
+    })));
+    setState(state => ({...state,
+      ...(stillCurrent(gen,projectId) ? {dms:items} : {}),
+      dmProjectIndexes:{...state.dmProjectIndexes,[projectId]:{status:'ready',items}},
+    }));
+    const peers=[...new Set(items.flatMap(dm=>dm.memberIds))].map(id=>({id,principalType:'agent'}));
+    void backfillDefaultMemberAvatars(peers,getState().ui.avatars??{});
+  } catch (error) {
+    if (dmIndexTickets.get(projectId) === ticket) setState(state => ({...state,dmProjectIndexes:{...state.dmProjectIndexes,
+      [projectId]:{status:'error',items:state.dmProjectIndexes[projectId]?.items ?? [],error:(error as Error).message}}}));
+    throw error;
+  }
+}
+
+export async function refreshDms(projectIdArg?: string): Promise<void> {
+  await loadDmProjectIndex(projectIdArg ?? getState().activeProjectId);
+}
+
+/** Route handoff is synchronous; late project refreshes never navigate. */
+export function openDmConversation(projectId: string, conversationId: string): void {
+  if (!getState().projects.some(project=>project.id===projectId&&project.removedAt==null)) return;
+  void switchFocusProject(projectId,{expand:false}).catch((error:unknown)=>{
+    if(getState().activeProjectId===projectId)toast(`项目读取失败：${(error as Error).message}`,'error');
+  });
+  navigate(`/dm/${conversationId}`);
 }
 
 /* ---------- 快照装载（读失败≠空态：保留旧快照+readErrors） ---------- */
@@ -2159,10 +2189,13 @@ export async function sendDmMessage(commandId: string, conversationId: string, b
   return sendEnvelope(buildDmEnvelope(commandId, conversationId, body, intent));
 }
 
-export async function createDm(memberId: string): Promise<string> {
-  const s = getState();
-  const r = await command<{ conversationId: string }>('conversation.create', { projectId: s.activeProjectId, peerMemberId: memberId });
-  await refreshDms();
+export async function createDm(memberId: string, projectId = getState().activeProjectId, commandId: string = crypto.randomUUID()): Promise<string> {
+  const result = await sendCommand<{conversationId:string}>(commandId,'conversation.create',{projectId,peerMemberId:memberId});
+  if(result.status!=='ok')throw Object.assign(Error(result.status==='unknown'?`创建请求尚未收到回执，请点击同一成员重试。${result.error}`:result.error),{outcome:result.status});
+  const r=result.data;
+  // The conversation already exists. A list-read failure must not invite a
+  // second create; the group retains its explicit read error and retry action.
+  await refreshDms(projectId).catch(()=>{});
   return r.conversationId;
 }
 

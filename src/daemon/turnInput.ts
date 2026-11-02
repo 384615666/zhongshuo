@@ -96,7 +96,6 @@ import {
   turnBundleEnvelopeSchema,
 } from '../contracts/prompts.ts';
 import type { TurnBundleEnvelope } from '../contracts/prompts.ts';
-import { projectScopedFileListing } from './fileDiscovery.ts';
 import { filterContextScope } from '../domain/isolation/contextFilter.ts';
 
 function detailMarkdownOfBody(body: unknown): string | null {
@@ -194,7 +193,7 @@ export interface AssembledTurnInput {
   coordinationNote?: string;
   coordination?:{phase:'planning'|'child'|'integration';runId:string|null;role:string};
   communicationContract?:TurnBundleEnvelope['communicationContract'];
-  /** DELIBERATE only needs attachment/permission assembly here; its IND owns discovery. */
+  /** Legacy caller flag; project discovery is now always performed on demand. */
   skipFileDiscovery?: boolean;
   writeAccess?: ReturnType<typeof effectiveTaskWriteAccess>;
   task: AssemblyTaskRef;
@@ -346,7 +345,6 @@ function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRo
   }
 
   const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
-  const fileDiscovery = projectRoot != null && !input.skipFileDiscovery ? projectScopedFileListing(projectRoot) : null;
 
   // 必要材料 2：本线程获准历史（§13.1-6：当前 root message、线程回复）。
   const history = (task.inputThreadMessageSeq==null?db
@@ -450,8 +448,7 @@ function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRo
       truncated: historyTruncated,
       messages: historyTexts,
     },
-    // 文件发现（经授权清单，第六轮）：项目根存在时注入；生成失败不加键（不阻断派发）。
-    ...(fileDiscovery != null ? { fileDiscovery } : {}),
+    ...(projectRoot != null ? { projectDirectory: projectRoot } : {}),
     // 附注（仅在存在时加键——显式 undefined 会改变 canonicalJson 键集；非附注轮的信封
     // 必须与既有 hash 完全一致）：格式修复轮 / 返工反馈（RT-25：关联被退回的交付版本）。
     ...(() => {
@@ -625,6 +622,7 @@ function assembleDmTurn(input: AssembledTurnInput, missingCaches?: DocAttachment
   });
   const rawRemaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
   const remaining = input.budget.callBudget?.enforcement === 'disabled' ? Math.max(0, rawRemaining) : rawRemaining;
+  const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
   const envelope: TurnBundleEnvelope = {
     executionScopeKey:JSON.stringify([task.projectId,task.conversationId,null,input.identity.member.id]),
     roleMemory:readRoleMemory(db,{projectId:task.projectId,memberId:input.identity.member.id,conversationId:task.conversationId}),
@@ -656,6 +654,7 @@ function assembleDmTurn(input: AssembledTurnInput, missingCaches?: DocAttachment
       userConstraints: [],
     },
     baseline: null,
+    ...(projectRoot != null ? { projectDirectory: projectRoot } : {}),
     materials: history.map((m) => ({
       ref: m.id,
       reason: m.id === root.id ? '用户本次消息' : '本会话历史（audience 推导——续接上文）',

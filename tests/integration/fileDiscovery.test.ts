@@ -125,8 +125,8 @@ describe('项目范围授权清单（§13.4 项目源码默认可读 + §6.3 命
   });
 });
 
-describe('两模式输入链路一致（DIRECT 信封 + DELIB IND 首轮）', () => {
-  it('DIRECT：bundle 文本含清单分节；信封 hash 覆盖该事实', async () => {
+describe('两模式按需发现（DIRECT 信封 + DELIB IND 首轮）', () => {
+  it('DIRECT：只提供工作目录，不注入无关文件名；信封 hash 覆盖工作目录', async () => {
     const dir = makeProjectDir('p2');
     writeFileSync(join(dir, 'logs-app-week.log'), 'x', 'utf8');
     const db = openDatabase(':memory:');
@@ -143,16 +143,19 @@ describe('两模式输入链路一致（DIRECT 信封 + DELIB IND 首轮）', ()
     await new DispatchWorker({ db, adapter, leaseOwner: 'w-fd', appDataDir: join(tmpRoot, 'appdata') }).runOnce();
     expect(adapter.startTurnLog).toHaveLength(1);
     const text = adapter.startTurnLog[0]!.text;
-    expect(text).toContain('文件发现（项目范围清单，程序侧提供）');
-    expect(text).toContain('logs-app-week.log');
-    expect(text).toContain('清单完整性');
+    expect(text).not.toContain('文件发现（项目范围清单，程序侧提供）');
+    expect(text).toContain(dir);
+    expect(text).toContain('按需读取相关资料');
+    expect(text).not.toContain('logs-app-week.log');
+    expect(text).not.toContain('清单完整性');
     const env = JSON.parse((db.prepare('SELECT included_refs_json FROM context_bundles').get() as { included_refs_json: string }).included_refs_json);
-    expect(env.fileDiscovery).toMatchObject({ policy: 'authorized-listing', truncated: false });
+    expect(env.fileDiscovery).toBeUndefined();
+    expect(env.projectDirectory).toBe(dir);
     await adapter.closeAllSessions();
     db.close();
   }, 15_000);
 
-  it('DELIB：IND 输入含清单（分析入口一致规则）', async () => {
+  it('DELIB：IND 同样只提供工作目录与按需发现说明', async () => {
     const dir = makeProjectDir('p3');
     writeFileSync(join(dir, 'data.txt'), 'y', 'utf8');
     const db = openDatabase(':memory:');
@@ -169,8 +172,10 @@ describe('两模式输入链路一致（DIRECT 信封 + DELIB IND 首轮）', ()
     await worker.runOnce(); // IND 派发
     expect(adapter.startTurnLog.length).toBeGreaterThanOrEqual(1);
     const indText = adapter.startTurnLog[0]!.text;
-    expect(indText).toContain('文件发现（项目范围清单，程序侧提供）');
-    expect(indText).toContain('data.txt');
+    expect(indText).not.toContain('文件发现（项目范围清单，程序侧提供）');
+    expect(indText).toContain(dir);
+    expect(indText).toContain('按需读取相关资料');
+    expect(indText).not.toContain('data.txt');
     await adapter.closeAllSessions();
     db.close();
   }, 20_000);

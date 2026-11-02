@@ -219,7 +219,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
 
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-members="hifi">
-      <div className="page">
+      <div className="page members-page">
         {/* 筛选行：项目与顶栏同源，名称/说明搜索不改变任何成员状态。 */}
         <UnknownMemberOperations/>
         <div className="page-filters">
@@ -514,8 +514,9 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   const [desc, setDesc] = useState('');
   const [runtime,setRuntime]=useState({kind:'claude' as RealRuntimeKind,model:'',executable:runtimeExecutable('claude'),permissionMode:'bypassPermissions',effort:''});
   const [useAsDefault,setUseAsDefault]=useState(true);
-  // 新建 AI 默认就给 DeepSeek 娘那张预置头像——用户可以在这里改掉。
-  const [avatar,setAvatar]=useState<string | null>(()=>defaultAiAvatarPreset().dataUrl);
+  // 跟随所选渠道，用户明确选图后保留其选择。
+  const avatarTouched=useRef(false);
+  const [avatar,setAvatar]=useState<string | null>(()=>defaultAiAvatarPreset('claude').dataUrl);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rooms = useStore((s) => s.rooms);
@@ -536,7 +537,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
       // 成员已创建，头像单独写；写失败只提示，不让已经建好的成员变成"添加未确认"。
       try {
         await saveAvatar(`member:${r.memberId}`, avatar);
-        recordWrite('app.appearance.set', `新成员「${name.trim()}」头像${avatar == null ? '使用默认首字母' : '已设置'}`);
+        recordWrite('app.appearance.set', `新成员「${name.trim()}」头像${avatar == null ? '使用默认头像' : '已设置'}`);
       } catch (avatarError) {
         toast(`成员已创建，但头像未保存：${userFacingSystemText((avatarError as Error).message ?? '')}`, 'error');
       }
@@ -574,14 +575,14 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
           <input className="input" value={desc} placeholder="例如 实现与重构，偏好直接给结论" onChange={(e) => setDesc(e.target.value)} />
           <div className="field-hint">出现在成员卡与 @ 选择里，帮模型判断该找谁。</div>
         </div>
-        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind=>setRuntime(f=>({...f,kind:kind as RealRuntimeKind,model:'',executable:runtimeExecutable(kind),effort:''}))} options={[...RUNTIME_CHANNELS]}/></label>
+        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind=>{setRuntime(f=>({...f,kind:kind as RealRuntimeKind,model:'',executable:runtimeExecutable(kind),effort:''}));if(!avatarTouched.current)setAvatar(defaultAiAvatarPreset(kind).dataUrl);}} options={[...RUNTIME_CHANNELS]}/></label>
         <RuntimeChannelHelp kind={runtime.kind}/>
         <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model=>setRuntime(f=>({...f,model,effort:''}))}/>
         <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort=>setRuntime(f=>({...f,effort}))}/>
         <AvatarPicker
           value={avatar}
           disabled={busy}
-          onChange={setAvatar}
+          onChange={value=>{avatarTouched.current=true;setAvatar(value);}}
         />
         <label className="row tight"><input type="checkbox" checked={useAsDefault} disabled={busy} onChange={e=>setUseAsDefault(e.target.checked)}/>在没有可用协调者的房间中，默认由它接收消息</label>
         <details><summary>高级：执行程序与权限</summary>

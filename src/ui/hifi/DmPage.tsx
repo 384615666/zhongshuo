@@ -21,14 +21,16 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Avatar, Menu, MenuItem, Modal, Tag, memberColor } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
-import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, type ReviewSnapshot } from './loader';
+import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, loadDmProjectIndex, openDmConversation, type ReviewSnapshot } from './loader';
 import {
   openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown,
   addConversationQuoteToDraft,
 } from './data/store';
 import type { ConversationQuote } from './data/store';
 import { command, openExportDir } from './bridge';
-import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
+import { pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
+import { dmActivityAt, dmListTime, sortDmConversations, visibleDmProjects } from './lib/dmList';
+import type { DmConversation } from './data/types';
 import { useElementWidth } from './lib/useElementWidth';
 import { SIDEBAR_WIDTH } from './lib/layout';
 import { audienceAllows, resourceOf } from './lib/resource';
@@ -56,8 +58,8 @@ export function DmPage() {
   const membersAll = useStore((s) => s.members);
   const historyMap = useStore((s) => s.dmHistory);
   const st = useStore((x) => x);
-  const members = useMemo(() => membersAll.filter((m) => m.principalType === 'agent'), [membersAll]);
-  const activeId = path.startsWith('/dm/') ? path.slice('/dm/'.length) : dms[0]?.id ?? '';
+  const members = useMemo(() => membersAll.filter((m) => m.principalType === 'agent' && m.projectId === projectId), [membersAll,projectId]);
+  const activeId = path.startsWith('/dm/') ? path.slice('/dm/'.length) : (dms.find(dm=>dm.archivedAt==null)??dms[0])?.id ?? '';
   const active = useMemo(() => dms.find((d) => d.id === activeId), [dms, activeId]);
   const msgs = historyMap[activeId] ?? EMPTY;
   const latestReadableAgentId = useMemo(() => latestReadableAgentMessageId(msgs), [msgs]);
@@ -83,8 +85,20 @@ export function DmPage() {
   const [busy, setBusy] = useState<string | null>(null);
   /** ⋯ 菜单与新建私聊弹窗锚点（R66 P5：操作收进菜单，头部不铺满按钮）。 */
   const [opsAt, setOpsAt] = useState<{ x: number; y: number } | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  const [createFor, setCreateFor] = useState<string|null>(null);
+  const [showArchived, setShowArchived] = useState<Record<string,boolean>>({});
+  const [collapsedProjects,setCollapsedProjects] = useState<string[]>([]);
+  const [listNow,setListNow] = useState(Date.now);
+  const visibleProjects=useMemo(()=>visibleDmProjects(st),[st.projects,st.visibleProjectIds,st.pinnedProjectIds]);
+  const visibleIds=visibleProjects.map(project=>project.id).join('|');
+  const groups=useMemo(()=>visibleProjects.map((project,index)=>{
+    const entry=st.dmProjectIndexes[project.id];
+    const items=sortDmConversations(entry?.items??dmsAll.filter(dm=>dm.projectId===project.id));
+    return {project,index,entry,daily:items.filter(dm=>dm.archivedAt==null),archived:items.filter(dm=>dm.archivedAt!=null),
+      latest:items.filter(dm=>dm.archivedAt==null).reduce((latest,dm)=>Math.max(latest,dmActivityAt(dm)),0)};
+  }).sort((a,b)=>b.latest-a.latest||a.index-b.index),[visibleProjects,st.dmProjectIndexes,dmsAll]);
+  useEffect(()=>{const timer=window.setInterval(()=>setListNow(Date.now()),60_000);return()=>window.clearInterval(timer);},[]);
+  useEffect(()=>{void Promise.allSettled(visibleIds.split('|').filter(Boolean).map(loadDmProjectIndex));},[visibleIds]);
   const [recordsFor,setRecordsFor]=useState<string|null>(null);
   const [acceptedRetry, setAcceptedRetry] = useState<string | null>(null);
   const failedReadGen = useRef(0);
@@ -155,11 +169,11 @@ export function DmPage() {
       const box = listRef.current;
       const nearBottom = box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true;
       if (activeId !== '') void loadDmHistory(activeId, { markRead: nearBottom });
-      void refreshDms();
+      void Promise.allSettled(visibleIds.split('|').filter(Boolean).map(loadDmProjectIndex));
       if (active?.id != null) void readFailedTasks(active.id, active.projectId);
     }, 5000);
     return () => { window.clearInterval(t); };
-  }, [activeId, active?.projectId]);
+  }, [activeId, active?.projectId,visibleIds]);
 
   /* ---------- 布局解析（原型 §17.9：320 列表 / 440 对话 / 480 预览；先收列表再单区） ---------- */
   const workspace = useElementWidth<HTMLDivElement>('.app-body');
@@ -200,8 +214,6 @@ export function DmPage() {
     }
   }, [dmAutoHideKey, st.preview.hidden, st.preview.tabs, st.resources]);
 
-  const dailyDms = useMemo(() => dms.filter((d) => d.archivedAt == null), [dms]);
-  const archivedDms = useMemo(() => dms.filter((d) => d.archivedAt != null), [dms]);
 
   /** ── 头部正式操作（每项取打开时的目标快照+提交前重核当前归属；失败如实）。 ── */
   const reloadAll = async () => { await refreshDms(); if (activeId !== '') await loadDmHistory(activeId); if (active?.id != null) await readFailedTasks(active.id, active.projectId); };
@@ -405,73 +417,37 @@ export function DmPage() {
               <Icon name="message-square" size={15} className="faint" />
               <span className="pool-title">私信</span>
               <div className="spacer" />
-              <button
-                className="btn sm primary"
-                aria-label="新建私信"
-                title="选择一位 AI 开始新的私信"
-                onClick={() => setCreateOpen(true)}
-              >
-                <Icon name="plus" size={12} />
-              </button>
             </div>
             <div className="dm-list" style={{ flex: 1, minHeight: 0, overflow: 'auto' }} data-zs-dm-list="hifi">
-              {dailyDms.length === 0 ? (
-                <div className="small faint" style={{ padding: 14 }} data-testid="dm-empty">
-                  还没有私聊。点右上角 + 新建一个。
-                </div>
-              ) : null}
-              {dailyDms.map((d) => {
-                const peer = membersAll.find((m) => m.id === d.memberIds[0]);
-                return (
-                  <button
-                    key={d.id}
-                    className={`dm-row${d.id === activeId ? ' on' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 12px', border: 'none', background: d.id === activeId ? 'var(--bg-surface-2,#f1f5f9)' : 'transparent', cursor: 'pointer', textAlign: 'left' }}
-                    title={d.title !== '' ? d.title : `${d.peerDisplayName ?? '成员'} 的一对一私信`}
-                    onClick={() => navigate(`/dm/${d.id}`)}
-                  >
-                    <Avatar name={peer?.displayName ?? d.peerDisplayName ?? '成员'} color={d.memberIds[0] ? memberColor(d.memberIds[0]) : undefined} size={22} round subject={d.memberIds[0] ? `member:${d.memberIds[0]}` : undefined} />
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, fontWeight: d.unread > 0 ? 600 : 400 }}>
-                        {d.title != null && d.title.length > 0 ? d.title : d.peerDisplayName ?? '成员'}
-                      </span>
-                      <span className="small faint" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                        {d.lastMessagePreview ?? '（暂无消息）'}
-                      </span>
-                    </span>
-                    {d.unread > 0 ? <Tag tone="info" icon="message-square">{d.unread}</Tag> : null}
-                    {d.execState === 'running' || d.execState === 'queued' ? <span className="nav-dot" title={EXEC_TEXT[d.execState ?? 'idle'] ?? ''} style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--accent,#2563eb)', flex: 'none' }} /> : null}
-                  </button>
-                );
-              })}
-              {archivedDms.length > 0 ? (
-                <>
-                  <button
-                    className="dm-archived-toggle"
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '8px 12px', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-3)', fontSize: 12 }}
-                    onClick={() => setShowArchived((v) => !v)}
-                    title="归档的私聊只读，可取消归档"
-                  >
-                    <Icon name={showArchived ? 'chevron-down' : 'chevron-right'} size={12} />
-                    <Icon name="archive" size={12} />
-                    已归档 {archivedDms.length}
-                  </button>
-                  {showArchived ? archivedDms.map((d) => (
-                    <button
-                      key={d.id}
-                      className={`dm-row${d.id === activeId ? ' on' : ''}`}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 12px', border: 'none', background: d.id === activeId ? 'var(--bg-surface-2,#f1f5f9)' : 'transparent', cursor: 'pointer', textAlign: 'left', opacity: 0.72 }}
-                      onClick={() => navigate(`/dm/${d.id}`)}
-                    >
-                      <Icon name="archive" size={13} className="faint" />
-                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5 }}>
-                        {d.title != null && d.title.length > 0 ? d.title : d.peerDisplayName ?? '成员'}
-                      </span>
-                      <Tag tone="neutral">已归档</Tag>
+              {groups.length===0?<div className="small faint" style={{padding:14}}>请先在侧栏显示一个项目。</div>:null}
+              {groups.map(({project,entry,daily,archived})=>{
+                const collapsed=collapsedProjects.includes(project.id);
+                return <section key={project.id} data-zs-dm-project={project.id}>
+                  <div className="dm-project-head">
+                    <button className="dm-project-toggle" aria-expanded={!collapsed} onClick={()=>setCollapsedProjects(ids=>collapsed?ids.filter(id=>id!==project.id):[...ids,project.id])}>
+                      <Icon name={collapsed?'chevron-right':'chevron-down'} size={12}/><Icon name="folder" size={13}/>
+                      <span className="truncate">{project.displayName}</span><span className="small faint">{daily.length}</span>
                     </button>
-                  )) : null}
-                </>
-              ) : null}
+                    <button className="btn sm ghost" aria-label={`在「${project.displayName}」中新建私信`} title={`在「${project.displayName}」中新建私信`}
+                      disabled={project.archivedAt!=null} onClick={()=>setCreateFor(project.id)}><Icon name="plus" size={13}/></button>
+                  </div>
+                  {!collapsed?<>
+                    {entry?.status==='error'?<div className="small warning" role="alert" style={{padding:'4px 12px'}}>
+                      私信读取失败：{userFacingSystemText(entry.error??'')}<button className="btn sm ghost" onClick={()=>{void loadDmProjectIndex(project.id).catch(()=>{});}}>重试</button>
+                    </div>:null}
+                    {daily.length===0?<div className="small faint" style={{padding:'5px 14px 10px'}} data-zs-dm-empty={project.id}>
+                      {entry?.status==='loading'?'正在读取私信…':entry?.status==='error'?'暂时无法读取私信。':'暂无私信，点击项目右侧 + 添加。'}
+                    </div>:null}
+                    {daily.map(dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>)}
+                    {archived.length>0?<>
+                      <button className="dm-archived-toggle" onClick={()=>setShowArchived(current=>({...current,[project.id]:!current[project.id]}))}>
+                        <Icon name={showArchived[project.id]?'chevron-down':'chevron-right'} size={12}/><Icon name="archive" size={12}/>已归档 {archived.length}
+                      </button>
+                      {showArchived[project.id]?archived.map(dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>):null}
+                    </>:null}
+                  </>:null}
+                </section>;
+              })}
             </div>
           </div>
         ) : null}
@@ -753,63 +729,60 @@ export function DmPage() {
 
       {/* 新建私聊（1 对 1：选一位成员——正式 conversation.create）。 */}
       {active&&recordsFor===active.id?<DmTaskRecords projectId={active.projectId} conversationId={active.id} onClose={()=>setRecordsFor(null)} retryBusy={busy!=null} acceptedRetry={acceptedRetry} onRetry={failedView.conversationId===active.id?async detail=>{if(detail.task.projectId!==active.projectId||detail.task.conversationId!==active.id||!detail.latestRunId)return;await doRetryFailed({taskId:detail.task.id,title:detail.task.title,taskRevision:detail.task.revision,stopGeneration:detail.task.stopGeneration,latestRunId:detail.latestRunId,...detail.failedRetry});}:undefined}/>:null}
-      {createOpen ? (
-        <CreateDmModal members={members} onClose={() => setCreateOpen(false)} onCreated={(cid) => { setCreateOpen(false); navigate(`/dm/${cid}`); }} />
+      {createFor ? (
+        <CreateDmModal key={createFor} projectId={createFor} onClose={() => setCreateFor(null)} onCreated={(cid) => { const owner=createFor;setCreateFor(null);openDmConversation(owner,cid); }} />
       ) : null}
     </div>
   );
 }
 
-function CreateDmModal({ members, onClose, onCreated }: {
-  members: Array<{ id: string; displayName: string; model?: string }>;
-  onClose: () => void;
-  onCreated: (conversationId: string) => void;
-}) {
-  const [picked, setPicked] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  return (
-    <Modal
-      size="md"
-      title="新建私聊"
-      onClose={onClose}
-      footer={
-        <>
-          <span className="small faint">{picked == null ? '请选择一位成员' : `将与 ${members.find((m) => m.id === picked)?.displayName ?? '?'} 创建私聊`}</span>
-          <div className="spacer" />
-          <button className="btn" onClick={onClose}>取消</button>
-          <button
-            className="btn primary"
-            disabled={picked == null || busy}
-            onClick={() => {
-              if (picked == null) return;
-              setBusy(true);
-              void createDm(picked)
-                .then((cid) => onCreated(cid))
-                .catch((e: unknown) => { toast(`新建私信失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); setBusy(false); });
-            }}
-          >
-            <Icon name="plus" size={12} /> {busy ? '创建中…' : '创建'}
-          </button>
-        </>
-      }
-    >
-      {members.length === 0 ? (
-        <div className="panel info">本项目还没有 Agent 成员——先在「成员管理」确认成员存在。</div>
-      ) : (
-        <div className="col" style={{ gap: 6 }}>
-          {members.map((m) => (
-            <label key={m.id} className={`wpolicy${picked === m.id ? ' on' : ''}`} style={{ padding: '8px 10px', cursor: 'pointer' }}>
-              <input type="radio" name="dm-member" checked={picked === m.id} onChange={() => setPicked(m.id)} />
-              <div className="row tight" style={{ flex: 1 }}>
-                <Avatar name={m.displayName} color={memberColor(m.id)} size={22} round subject={`member:${m.id}`} />
-                <span className="strong">{m.displayName}</span>
-                <div className="spacer" />
-                {m.model != null ? <span className="small faint">{m.model}</span> : null}
-              </div>
-            </label>
-          ))}
-        </div>
-      )}
-    </Modal>
-  );
+function DmListRow({dm,selected,now,onSelect}:{dm:DmConversation;selected:boolean;now:number;onSelect:()=>void}) {
+  const at=dmActivityAt(dm),time=dmListTime(at,now);
+  return <button className={`dm-row${selected?' on':''}`} data-zs-dm-id={dm.id} onClick={onSelect}
+    style={{display:'flex',alignItems:'center',gap:8,width:'100%',padding:'8px 12px',border:'none',background:selected?'var(--bg-surface-2,#f1f5f9)':'transparent',cursor:'pointer',textAlign:'left',opacity:dm.archivedAt?0.72:1}}>
+    <Avatar name={dm.peerDisplayName??'成员'} color={dm.memberIds[0]?memberColor(dm.memberIds[0]):undefined} size={22} round subject={dm.memberIds[0]?`member:${dm.memberIds[0]}`:undefined}/>
+    <span style={{flex:1,minWidth:0}}>
+      <span className="dm-row-heading"><span className="truncate" style={{fontSize:12.5,fontWeight:dm.unread>0?600:400}}>{dm.title||dm.peerDisplayName||'成员'}</span>
+        {time?<time className="small faint" dateTime={new Date(at).toISOString()} title={new Date(at).toLocaleString()}>{time}</time>:null}</span>
+      <span className="small faint truncate" style={{display:'block',marginTop:1}}>{dm.lastMessagePreview||'（暂无消息）'}</span>
+    </span>
+    {dm.unread>0?<Tag tone="info">{dm.unread}</Tag>:null}
+    {dm.execState==='running'||dm.execState==='queued'?<span className="nav-dot" title={EXEC_TEXT[dm.execState]}/>:null}
+  </button>;
+}
+
+function CreateDmModal({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(conversationId:string)=>void}) {
+  const [members,setMembers]=useState<Array<{id:string;displayName:string;enabled:boolean}>|null>(null);
+  const [error,setError]=useState<string|null>(null);
+  const [busy,setBusy]=useState<string|null>(null);
+  const submitting=useRef(false),alive=useRef(true);
+  const attempt=useRef<{memberId:string;commandId:string}|null>(null);
+  useEffect(()=>{
+    alive.current=true;
+    void command<{items:Array<{id:string;displayName:string;enabled:boolean;principalType:string}>}>('member.list',{projectId})
+      .then(result=>{if(alive.current)setMembers(result.items.filter(member=>member.principalType==='agent'));})
+      .catch((reason:unknown)=>{if(alive.current)setError((reason as Error).message);});
+    return()=>{alive.current=false;};
+  },[projectId]);
+  const choose=async(memberId:string)=>{
+    if(submitting.current)return;
+    submitting.current=true;setBusy(memberId);setError(null);
+    const seq=currentNavSeq();
+    try{
+      if(attempt.current?.memberId!==memberId)attempt.current={memberId,commandId:crypto.randomUUID()};
+      const conversationId=await createDm(memberId,projectId,attempt.current.commandId);
+      if(alive.current&&currentNavSeq()===seq)onCreated(conversationId);
+    }catch(reason){if((reason as {outcome?:string}).outcome==='failed')attempt.current=null;if(alive.current){setError(userFacingSystemText((reason as Error).message));setBusy(null);submitting.current=false;}}
+  };
+  return <Modal size="md" title="选择成员开始私信" onClose={onClose} footer={<><div className="spacer"/><button className="btn" onClick={onClose}>取消</button></>}>
+    {error?<div className="panel warning" role="alert">{error}</div>:null}
+    {members==null&&!error?<div className="small faint">正在读取成员…</div>:null}
+    {members?.length===0?<div className="panel info">本项目还没有 AI 成员，请先到成员管理添加。</div>:null}
+    <div className="col" style={{gap:6}}>{members?.map(member=><button type="button" key={member.id} className="wpolicy" data-zs-create-dm-member={member.id}
+      disabled={busy!=null||!member.enabled} onClick={()=>{void choose(member.id);}} style={{padding:'8px 10px',textAlign:'left'}}>
+      <Avatar name={member.displayName} color={memberColor(member.id)} size={22} round subject={`member:${member.id}`}/>
+      <span className="strong">{member.displayName}</span><div className="spacer"/>
+      <span className="small faint">{busy===member.id?'正在打开…':!member.enabled?'已停用':'开始私信'}</span>
+    </button>)}</div>
+  </Modal>;
 }
