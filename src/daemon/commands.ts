@@ -36,7 +36,7 @@ import {
   releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate, reworkPendingOf,
 } from '../persistence/stores/dm.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
-import {continueInterruptedTask} from './taskContinuation.ts';
+import {continueInterruptedTask,unstartedContinuationKey} from './taskContinuation.ts';
 import {readInterruptedTasks} from './recoveryTasks.ts';
 import { ensureDefaultProject, openProject, relocateProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
@@ -5617,15 +5617,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               // a fresh intent; never reopen the old row or replay a real turn.
               const unstarted=(env.method==='task.continue'||params.expectedRunStatus==='INTERRUPTED')&&!params.formatRepair
                 &&params.expectedTaskRevision===task.revision&&params.expectedStopGeneration===task.stop_generation
-                &&deps.db.prepare(`SELECT 1 FROM outbox o JOIN domain_events e
-                  ON e.task_id=? AND e.kind='task.redispatchEnqueued'
-                    AND json_extract(e.payload_json,'$.dispatchKey')=o.dispatch_key
-                    AND json_extract(e.payload_json,'$.sourceRunId')=?
-                  JOIN workflow_runs source ON source.id=? AND source.task_id=e.task_id AND source.status='INTERRUPTED'
-                  WHERE o.dispatch_key=? AND o.status='done' AND o.turn_id IS NULL
-                    AND NOT EXISTS(SELECT 1 FROM agent_turns a WHERE a.dispatch_key=o.dispatch_key)
-                    AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.dispatch_identity=o.dispatch_key)
-                  LIMIT 1`).get(task.id,sourceRunId,sourceRunId,dispatchKey)!=null;
+                &&unstartedContinuationKey(deps.db,task.id,sourceRunId)===dispatchKey;
               if(!unstarted)throw new DaemonCommandError('STALE_REVISION', `源执行（run ${sourceRunId.slice(0, 14)}…）的恢复派发已完成：不重复派发——若任务在此后再次中断，以新中断执行发起恢复（新意图）`);
               replacesUnstartedDispatchKey=dispatchKey;
               dispatchKey=`task:${task.id}:redispatch:unstarted_${randomUUID()}`;

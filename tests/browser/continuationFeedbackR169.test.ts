@@ -7,9 +7,11 @@ import {userFacingSystemText} from '../../src/contracts/userFacingText';
 
 describe('R169 user-facing continuation feedback and binding',()=>{
   it('preserves the authoritative source binding when loading a recovered root',async()=>{
-    const {db}=dispatchBlockedFixture();
+    const {db,event}=dispatchBlockedFixture();
     try{
       db.exec("UPDATE workflow_runs SET status='INTERRUPTED' WHERE id='parent-current'");
+      db.exec("INSERT INTO outbox(dispatch_key,status) VALUES('task:parent:redispatch:parent-current','done')");
+      event('parent',null,'task.redispatchEnqueued',{sourceRunId:'parent-current',dispatchKey:'task:parent:redispatch:parent-current'});
       const status=readTaskExecutionStatus(db,'parent')!;
       const tasks=await loadRecoveryTasks(['parent'],async()=>({task:{id:'parent',title:'原任务',status:'ACTIVE',revision:0,stop_generation:0},executionStatus:status}));
       expect(tasks[0]?.binding).toEqual({taskId:'parent',sourceRunId:'parent-current',expectedTaskRevision:0,expectedStopGeneration:0});

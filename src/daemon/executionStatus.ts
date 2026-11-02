@@ -20,6 +20,7 @@ import { readDmProgress, readThreadProgress } from './threadMembers.ts';
 import {readFailedTaskRetry} from './taskRetry.ts';
 import {readTaskClosure} from './taskClosure.ts';
 import {selectCompletedDaemonStop} from './stopHistory.ts';
+import {unstartedContinuationKey} from './taskContinuation.ts';
 
 interface TaskRow {
   id: string;
@@ -1274,7 +1275,8 @@ export function readTaskExecutionStatus(
     } else {
       const retry=readFailedTaskRetry(db,task.id);
       if(retry.binding){
-        if(phase==='UNKNOWN'&&!retry.formatRepair&&!actions.some(action=>action.kind==='continue')){
+        if(phase==='UNKNOWN'&&!retry.formatRepair&&!actions.some(action=>action.kind==='continue')
+          &&unstartedContinuationKey(db,task.id,retry.binding.sourceRunId)){
           addAction({id:`continue:${task.id}:${task.revision}`,kind:'continue',label:'继续任务',binding:{taskId:task.id,
             sourceRunId:retry.binding.sourceRunId,expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation}});
         }else if(!actions.some(action=>action.kind==='continue'))addAction({id:`retry:${task.id}:${retry.binding.sourceRunId}`,kind:'retry',

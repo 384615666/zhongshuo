@@ -2,6 +2,21 @@ import {randomUUID} from 'node:crypto';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import {appendDomainEvent} from '../persistence/events.ts';
 
+/** Durable proof that a previous continuation was consumed before any model or
+ * coordination execution was created. A done queue flag alone is insufficient. */
+export function unstartedContinuationKey(db:ZhongshuoDatabase,taskId:string,sourceRunId:string):string|undefined{
+  const key=`task:${taskId}:redispatch:${sourceRunId}`;
+  return db.prepare(`SELECT 1 FROM outbox o JOIN domain_events e
+    ON e.task_id=? AND e.kind='task.redispatchEnqueued'
+      AND json_extract(e.payload_json,'$.dispatchKey')=o.dispatch_key
+      AND json_extract(e.payload_json,'$.sourceRunId')=?
+    JOIN workflow_runs source ON source.id=? AND source.task_id=e.task_id AND source.status='INTERRUPTED'
+    WHERE o.dispatch_key=? AND o.status='done' AND o.turn_id IS NULL
+      AND NOT EXISTS(SELECT 1 FROM agent_turns a WHERE a.dispatch_key=o.dispatch_key)
+      AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.dispatch_identity=o.dispatch_key)
+    LIMIT 1`).get(taskId,sourceRunId,sourceRunId,key)!=null?key:undefined;
+}
+
 /** Called inside the accepted user command's transaction. Continuing is the
  * user's decision to move past an interruption, not a claim of successful work
  * or proof that an old OS process exited. Never changes a currently active turn.
