@@ -4,7 +4,8 @@ import type {TaskExecutionAction,TaskExecutionStatus} from '../../../contracts/e
 import {ExecutionStatus,taskExecutionNeedsReview} from './ExecutionStatus';
 import {sendCommand} from '../bridge';
 import {loadRoomPool,refreshDms,refreshThreadTask,openExternalDeepLink} from '../loader';
-import {continueTask} from '../lib/checkPreviousReply';
+import {continueTask,taskContinuationFailure} from '../lib/checkPreviousReply';
+import {notifyRecoveryChanged,refreshRecoveryViews} from '../lib/recovery';
 import {navigate} from '../lib/router';
 
 /** Bind the shared factual view to existing local actions; rendering never dispatches. */
@@ -23,7 +24,11 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
       if(action.kind==='continue'||action.kind==='recover'){
         const binding=action.kind==='continue'?action.binding:{taskId:status.taskId,expectedTaskRevision:status.evidence.taskRevision,expectedStopGeneration:status.evidence.stopGeneration};
         const result=await continueTask(binding);
-        if(result.status!=='ok')throw Error(result.status==='unknown'?`继续请求尚未收到回执，可重试。${result.error}`:result.error);
+        notifyRecoveryChanged();
+        if(result.status!=='ok'){
+          if(result.status==='failed')await refreshRecoveryViews(status.scope.projectId);
+          throw Error(taskContinuationFailure(result));
+        }
         await Promise.allSettled([...(status.scope.roomId?[loadRoomPool(status.scope.roomId)]:[refreshDms(status.scope.projectId)]),...(status.scope.threadId?[refreshThreadTask(status.scope.threadId)]:[])]);
         return;
       }
@@ -45,7 +50,11 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
           ...(action.binding.sourceRunId!=null?{sourceRunId:action.binding.sourceRunId,expectedRunStatus:action.binding.expectedRunStatus,
             ...(action.binding.formatRepair?{formatRepair:true,useCurrentExecutionSnapshot:true}:{})}:{}),
         });
-        if(result.status!=='ok'){if(result.status==='failed')pending.current=null;throw Error(result.error);}
+        notifyRecoveryChanged();
+        if(result.status!=='ok'){
+          if(result.status==='failed'){pending.current=null;await refreshRecoveryViews(status.scope.projectId);}
+          throw Error(taskContinuationFailure(result));
+        }
         pending.current=null;
         await Promise.allSettled([...(status.scope.roomId?[loadRoomPool(status.scope.roomId)]:[refreshDms(status.scope.projectId)]),...(status.scope.threadId?[refreshThreadTask(status.scope.threadId)]:[])]);
         return;
@@ -53,7 +62,11 @@ export function TaskExecutionStatusView({status,density='compact',hideThreadNavi
       const target=action.target;
       if(target.kind==='recovery'){
         const result=await continueTask({taskId:status.taskId,expectedTaskRevision:status.evidence.taskRevision,expectedStopGeneration:status.evidence.stopGeneration});
-        if(result.status!=='ok')throw Error(result.error);
+        notifyRecoveryChanged();
+        if(result.status!=='ok'){
+          if(result.status==='failed')await refreshRecoveryViews(status.scope.projectId);
+          throw Error(taskContinuationFailure(result));
+        }
         await Promise.allSettled([...(status.scope.roomId?[loadRoomPool(status.scope.roomId)]:[refreshDms(status.scope.projectId)]),...(status.scope.threadId?[refreshThreadTask(status.scope.threadId)]:[])]);
       }
       else if(target.kind==='thread')navigate(`/thread/${target.id}`);

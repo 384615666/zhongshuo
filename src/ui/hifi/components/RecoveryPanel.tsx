@@ -5,7 +5,7 @@ import {command} from '../bridge';
 import {toast} from '../shell';
 import {recordWrite} from '../data/store';
 import {openExternalDeepLink} from '../loader';
-import {continueTask,previousReplyStillHeld} from '../lib/checkPreviousReply';
+import {continueTask,taskContinuationFailure,previousReplyStillHeld} from '../lib/checkPreviousReply';
 import {canContinueRecoveryTask,loadRecoveryTasks,notifyRecoveryChanged,refreshRecoveryViews,type RecoveryStatus,type RecoveryTask,type RecoveryTarget} from '../lib/recovery';
 import {ContinueTaskButton} from './ContinueTaskButton';
 
@@ -23,7 +23,8 @@ export function RecoveryPanel({onClose,target}:{onClose:()=>void;origin?:'startu
       if(gen!==generation.current)return;
       setData(value);
       const ids=[...value.unknownTurns.filter(turn=>previousReplyStillHeld(value,turn.id)).map(turn=>turn.taskId),
-        ...value.interruptedRuns.map(run=>run.task_id),...value.pendingRelease.map(item=>item.taskId??value.unknownTurns.find(turn=>turn.id===item.turnId)?.taskId),
+        ...value.interruptedRuns.map(run=>run.task_id),...(value.interruptedTasks??[]).map(task=>task.taskId),
+        ...value.pendingRelease.map(item=>item.taskId??value.unknownTurns.find(turn=>turn.id===item.turnId)?.taskId),
         target?.requestTaskId??target?.taskId].filter((id):id is string=>!!id);
       const list=await loadRecoveryTasks(ids);
       if(gen===generation.current)setTasks(list);
@@ -77,7 +78,7 @@ export function RecoveryPanel({onClose,target}:{onClose:()=>void;origin?:'startu
       if(!failures.length){
         for(const item of continuable)await perform(item.task.title,async()=>{
           const result=await continueTask(item.binding);
-          if(result.status!=='ok')throw Error(result.status==='unknown'?`继续请求尚未收到回执，可重试。${result.error}`:result.error);
+          if(result.status!=='ok')throw Error(taskContinuationFailure(result));
           recordWrite('task.continue',`批量继续：${item.task.title}`);
         });
         if(data.gateHeld)await perform('排队消息',async()=>{
@@ -122,7 +123,7 @@ export function RecoveryPanel({onClose,target}:{onClose:()=>void;origin?:'startu
             const isFocused=target?.requestTaskId===item.task.id||target?.taskId===item.task.id;
             return <div key={item.task.id} ref={isFocused?focused:undefined} className="card tight" data-zs-recovery-task={item.task.id} data-zs-recovery-focused={isFocused?'1':undefined} style={{marginTop:index?8:0}}>
               <strong>{item.task.title}</strong>
-              <div className="small" style={{marginTop:5}}>{done?item.task.status==='CANCELLED'?'任务已取消，已有记录可查看。':'任务已完成，已有结果可查看。':ongoing?phase==='STOPPING'?'任务正在停止。':'任务已在处理中。':'已有回复和文件保留，可以继续任务。'}</div>
+              <div className="small" style={{marginTop:5}}>{done?item.task.status==='CANCELLED'?'任务已取消，已有记录可查看。':'任务已完成，已有结果可查看。':ongoing?phase==='STOPPING'?'任务正在停止。':'任务已在处理中。':canContinue?'已有回复和文件保留，可以继续任务。':'执行状态尚待确认，可查看任务详情。'}</div>
               <div className="row tight wrap" style={{marginTop:8}}>
                 {canContinue?<ContinueTaskButton key={JSON.stringify(item.binding)} binding={item.binding} projectId={item.task.project_id} disabled={busy!=null} canSubmit={()=>!actionBusy.current} onBusyChange={value=>{actionBusy.current=value;setBusy(value?item.task.id:null);}} onContinued={()=>void reload()}/>:null}
                 <button className="btn ghost sm" onClick={()=>locate(item.task.id)}>查看任务</button>

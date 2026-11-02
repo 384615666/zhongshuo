@@ -37,6 +37,7 @@ import {
 } from '../persistence/stores/dm.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import {continueInterruptedTask} from './taskContinuation.ts';
+import {readInterruptedTasks} from './recoveryTasks.ts';
 import { ensureDefaultProject, openProject, relocateProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
 import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch.ts';
@@ -2291,6 +2292,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             pendingDispatchCount: pending.length,
             pendingDispatchKeys: pending.map((p) => p.dispatch_key),
             interruptedRuns: interrupted,
+            interruptedTasks: readInterruptedTasks(deps.db,deps.localUserId),
             unknownTurns,
             processRegistry,
             pendingRelease,
@@ -5591,7 +5593,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const sourceRunId = params.formatRepair === true
             ? null
             : params.sourceRunId ?? ((deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string } | undefined)?.id ?? null);
-          const dispatchKey = params.formatRepair === true
+          let dispatchKey = params.formatRepair === true
             ? `task:${params.taskId}:repair:${(deps.db.prepare(`SELECT source_turn_id FROM format_repair_workitems WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`).get(params.taskId) as { source_turn_id: string }).source_turn_id}` // 按逻辑输出版本化——同任务多轮修复不撞唯一键
             : sourceRunId != null ? `task:${params.taskId}:redispatch:${sourceRunId}`
               : params.analysisOnly||deps.db.prepare("SELECT 1 FROM tasks WHERE id=? AND kind='dm_turn'").get(params.taskId)
@@ -5604,12 +5606,29 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (pendingIntent != null) {
             throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', `该任务已有在途恢复派发（${pendingIntent.dispatch_key}）：不重复入队——同源重试等待队列消化，新中断以新源执行发起新意图`);
           }
+          let replacesUnstartedDispatchKey:string|undefined;
           if (sourceRunId != null) {
             const priorDone = deps.db
               .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status = 'done'`)
               .get(dispatchKey) as { c: number };
             if (priorDone.c > 0) {
-              throw new DaemonCommandError('STALE_REVISION', `源执行（run ${sourceRunId.slice(0, 14)}…）的恢复派发已完成：不重复派发——若任务在此后再次中断，以新中断执行发起恢复（新意图）`);
+              // A consumed queue row can have been rejected before creating an
+              // execution. Only an explicit, current user continuation may make
+              // a fresh intent; never reopen the old row or replay a real turn.
+              const unstarted=(env.method==='task.continue'||params.expectedRunStatus==='INTERRUPTED')&&!params.formatRepair
+                &&params.expectedTaskRevision===task.revision&&params.expectedStopGeneration===task.stop_generation
+                &&deps.db.prepare(`SELECT 1 FROM outbox o JOIN domain_events e
+                  ON e.task_id=? AND e.kind='task.redispatchEnqueued'
+                    AND json_extract(e.payload_json,'$.dispatchKey')=o.dispatch_key
+                    AND json_extract(e.payload_json,'$.sourceRunId')=?
+                  JOIN workflow_runs source ON source.id=? AND source.task_id=e.task_id AND source.status='INTERRUPTED'
+                  WHERE o.dispatch_key=? AND o.status='done' AND o.turn_id IS NULL
+                    AND NOT EXISTS(SELECT 1 FROM agent_turns a WHERE a.dispatch_key=o.dispatch_key)
+                    AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.dispatch_identity=o.dispatch_key)
+                  LIMIT 1`).get(task.id,sourceRunId,sourceRunId,dispatchKey)!=null;
+              if(!unstarted)throw new DaemonCommandError('STALE_REVISION', `源执行（run ${sourceRunId.slice(0, 14)}…）的恢复派发已完成：不重复派发——若任务在此后再次中断，以新中断执行发起恢复（新意图）`);
+              replacesUnstartedDispatchKey=dispatchKey;
+              dispatchKey=`task:${task.id}:redispatch:unstarted_${randomUUID()}`;
             }
           }
           // 提交前重查（review-r39 §2：可恢复性判定与提交同事务重查——formatRepair 长流程后
@@ -5627,6 +5646,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             kind: 'task.redispatchEnqueued',
             createdAt: Date.now(),
             payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true, sourceRunId, dispatchKey,
+              ...(replacesUnstartedDispatchKey?{replacesUnstartedDispatchKey}:{}),
               ...(!params.formatRepair||params.useCurrentExecutionSnapshot?{execution:snapshotRedispatchExecution(deps.db,params.taskId,{analysisOnly:params.analysisOnly})}:{}),
               ...(params.analysisOnly?{analysisOnly:true}:{}),
               ...(params.useCurrentExecutionSnapshot?{useCurrentExecutionSnapshot:true}:{}) },

@@ -1,6 +1,6 @@
 import {useRef,useState} from 'react';
 import {userFacingSystemText} from '../../../contracts/userFacingText';
-import {continueTask,type TaskContinuationBinding} from '../lib/checkPreviousReply';
+import {continueTask,taskContinuationFailure,type TaskContinuationBinding} from '../lib/checkPreviousReply';
 import {notifyRecoveryChanged,refreshRecoveryViews} from '../lib/recovery';
 import {recordWrite} from '../data/store';
 
@@ -12,7 +12,10 @@ export function ContinueTaskButton({binding,projectId,className='btn sm',onConti
     active.current=true;setBusy(true);setError(null);onBusyChange?.(true);
     try{
       const result=await continueTask(binding);
-      if(result.status!=='ok')throw Error(result.status==='unknown'?`继续请求尚未收到回执，可重试。${result.error}`:result.error);
+      if(result.status!=='ok'){
+        if(result.status==='failed'){notifyRecoveryChanged();await refreshRecoveryViews(projectId);}
+        throw Error(taskContinuationFailure(result));
+      }
       recordWrite('task.continue','已提交继续任务');setDone(true);notifyRecoveryChanged();
       await refreshRecoveryViews(projectId);onContinued?.();
     }catch(reason){setError(userFacingSystemText(reason instanceof Error?reason.message:String(reason)));}

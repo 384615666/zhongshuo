@@ -12,6 +12,7 @@ export function notifyRecoveryChanged():void {
 export interface RecoveryStatus {
   gateHeld:boolean;pendingDispatchCount:number;
   interruptedRuns:Array<{id:string;task_id:string;status:string}>;
+  interruptedTasks?:Array<{taskId:string}>;
   unknownTurns:Array<{id:string;taskId:string;protectionReleased?:boolean}>;
   pendingRelease:Array<{turnId:string;taskId?:string}>;
   heldLeases:Array<{owner_turn_id:string}>;
@@ -39,7 +40,7 @@ export interface RecoveryTask {
 }
 export function canContinueRecoveryTask(item:RecoveryTask):boolean {
   if(['DONE','CANCELLED'].includes(item.task.status))return false;
-  if(item.executionStatus?.actions.some(action=>action.kind==='continue'))return true;
+  if(item.executionStatus)return item.executionStatus.actions.some(action=>action.kind==='continue');
   return !['RUNNING','STOPPING','QUEUED','WAITING_FOR_PEER','WAITING_FOR_USER'].includes(item.executionStatus?.phase??'');
 }
 type ReadTask=(taskId:string)=>Promise<{task:RecoveryTaskFact;executionStatus?:TaskExecutionStatus|null}>;
@@ -55,7 +56,8 @@ export async function loadRecoveryTasks(ids:readonly string[],read:ReadTask=id=>
       const value=await get(id);
       if(value.task.id!==id)throw Error('返回的任务不匹配，请刷新后重试。');
       if(value.task.parent_task_id){id=value.task.parent_task_id;continue;}
-      return {task:value.task,executionStatus:value.executionStatus,binding:{taskId:id,
+      const continuation=value.executionStatus?.actions.find(action=>action.kind==='continue');
+      return {task:value.task,executionStatus:value.executionStatus,binding:continuation?.binding??{taskId:id,
         ...(value.task.revision!=null?{expectedTaskRevision:value.task.revision}:{}),
         ...(value.task.stop_generation!=null?{expectedStopGeneration:value.task.stop_generation}:{})}} satisfies RecoveryTask;
     }

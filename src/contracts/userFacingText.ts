@@ -1,6 +1,8 @@
 /** Presentation for program-generated status and errors only. Never apply this
  * to user/AI messages, files, tool output, or raw diagnostic payloads. */
 export function userFacingSystemText(value:string):string {
+  if (/源执行[\s\S]*恢复派发已完成/.test(value)) return '这次继续请求已处理，请刷新查看任务的最新进展。';
+  if (/该任务已有在途恢复派发/.test(value)) return '已有继续请求在处理中，请稍候查看任务进展。';
   if (/protection_state\s*=\s*['"]?retained\b/i.test(value)) return '上次执行尚未确认结束。请点击“检查中断”查看具体成员和程序检查结果，解除占用后再继续。';
   let text=value
     .replace(/（[^（）]*(?:§\s*\d|(?:RT|DEV|AT|ADR)-\d|开工契约|终结规则)[^（）]*）/g,'')

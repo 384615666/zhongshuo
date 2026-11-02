@@ -209,7 +209,7 @@ export type TaskExecutionAction =
       id:string;
       kind:'continue';
       label:string;
-      binding:{taskId:string;expectedTaskRevision:number;expectedStopGeneration:number};
+      binding:{taskId:string;expectedTaskRevision:number;expectedStopGeneration:number;sourceRunId?:string};
     }
   | {
       id: string;

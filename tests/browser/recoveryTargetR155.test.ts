@@ -24,11 +24,14 @@ describe('R156 direct continuation and recovery navigation',()=>{
       expect(status.actions).toContainEqual(expect.objectContaining({kind:'continue',label:'继续任务',binding:{taskId:'parent',expectedTaskRevision:status.evidence.taskRevision,expectedStopGeneration:status.evidence.stopGeneration}}));
       expect(db.prepare('SELECT total_changes() n').get()).toEqual(before);
       event('child','child-run','recovery.protectionReleased',{released:true},'held-turn');
-      db.exec("UPDATE agent_turns SET protection_state='released' WHERE id='held-turn'; INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,status) VALUES('live-run','parent','conv','thread','DIRECT','RUNNING'); INSERT INTO agent_turns(id,run_id,conversation_id,thread_id,member_id,stage_key,status) VALUES('live-turn','live-run','conv','thread','owner','DIRECT','RUNNING')");
+      db.exec("UPDATE agent_turns SET protection_state='released' WHERE id='held-turn'; UPDATE workflow_runs SET status='INTERRUPTED' WHERE id='parent-current'");
+      const orphaned=readTaskExecutionStatus(db,'parent')!;
+      expect(orphaned).toMatchObject({phase:'UNKNOWN',reason:{code:'NO_EXECUTION_EVIDENCE'}});
+      db.exec("INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,status) VALUES('live-run','parent','conv','thread','DIRECT','RUNNING'); INSERT INTO agent_turns(id,run_id,conversation_id,thread_id,member_id,stage_key,status) VALUES('live-turn','live-run','conv','thread','owner','DIRECT','RUNNING')");
       const ongoing=readTaskExecutionStatus(db,'parent')!;
       expect(ongoing.phase).toBe('RUNNING');
       expect(ongoing.actions.some(action=>action.kind==='continue')).toBe(false);
-      config={status,ongoing};
+      config={status,ongoing,orphaned};
     } finally {db.close();}
     const result=await helper.default.runVerifier(config);
     expect(result.checks.filter(check=>!check.ok),result.evidence).toEqual([]);

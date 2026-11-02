@@ -1273,8 +1273,13 @@ export function readTaskExecutionStatus(
       });
     } else {
       const retry=readFailedTaskRetry(db,task.id);
-      if(retry.binding)addAction({id:`retry:${task.id}:${retry.binding.sourceRunId}`,kind:'retry',
-        label:retry.formatRepair?'补交已有结果':'继续任务',binding:retry.binding});
+      if(retry.binding){
+        if(phase==='UNKNOWN'&&!retry.formatRepair&&!actions.some(action=>action.kind==='continue')){
+          addAction({id:`continue:${task.id}:${task.revision}`,kind:'continue',label:'继续任务',binding:{taskId:task.id,
+            sourceRunId:retry.binding.sourceRunId,expectedTaskRevision:task.revision,expectedStopGeneration:task.stop_generation}});
+        }else if(!actions.some(action=>action.kind==='continue'))addAction({id:`retry:${task.id}:${retry.binding.sourceRunId}`,kind:'retry',
+          label:retry.formatRepair?'补交已有结果':'继续任务',binding:retry.binding});
+      }
     }
     const closure=readTaskClosure(db,task.id);
     if(closure.binding)addAction({id:`close:${task.id}:${task.revision}`,kind:'close',label:'结束任务',binding:closure.binding});

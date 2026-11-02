@@ -10,11 +10,11 @@ import {requestRecoveryOpen,OPEN_RECOVERY_EVENT} from '../../../src/ui/hifi/lib/
 import * as store from '../../../src/ui/hifi/data/store.ts';
 const config=__CONFIG__,calls=[],events=[];
 let revision=config.status.evidence.taskRevision,view='interrupted',outcome='delay',finish,continued=false,history=false,empty=false,gate=false,taskError=false;
-const success=data=>({ok:true,data}),failure=message=>({ok:false,error:{code:'SYNTHETIC_REJECTED',message}});
+const success=data=>({ok:true,data}),failure=(message,code='SYNTHETIC_REJECTED')=>({ok:false,error:{code,message}});
 window.addEventListener(OPEN_RECOVERY_EVENT,event=>events.push(event.detail));
 function status(){
  if(view==='ongoing')return config.ongoing;
- const value=structuredClone(config.status);value.evidence.taskRevision=revision;
+ const value=structuredClone(view==='task-only'?config.orphaned:config.status);value.evidence.taskRevision=revision;
  value.actions=value.actions.map(action=>action.kind==='continue'?{...action,binding:{...action.binding,expectedTaskRevision:revision}}:action);
  if(continued){value.phase='QUEUED';value.actions=value.actions.filter(action=>action.kind!=='continue');}
  return value;
@@ -22,7 +22,7 @@ function status(){
 window.zs={command:async env=>{
  calls.push(structuredClone(env));
  if(env.method==='app.appearance.get')return success({showAvatars:true,avatars:{}});
- if(env.method==='recovery.status')return success({gateHeld:gate,pendingDispatchCount:gate?2:0,pendingDispatchKeys:[],unknownTurns:empty?[]:[{id:'held-turn',taskId:'child',protectionReleased:history},{id:'other-turn',taskId:'old-child',protectionReleased:history}],pendingRelease:empty||history?[]:[{turnId:'held-turn',taskId:'child'}],interruptedRuns:empty||history?[]:[{id:'child-run',task_id:'child',status:'INTERRUPTED'}],heldLeases:[],activeUndos:[],stopRecord:null});
+ if(env.method==='recovery.status')return success({gateHeld:gate,pendingDispatchCount:gate?2:0,pendingDispatchKeys:[],unknownTurns:empty||view==='task-only'?[]:[{id:'held-turn',taskId:'child',protectionReleased:history},{id:'other-turn',taskId:'old-child',protectionReleased:history}],pendingRelease:empty||history||view==='task-only'?[]:[{turnId:'held-turn',taskId:'child'}],interruptedRuns:empty||history||view==='task-only'?[]:[{id:'child-run',task_id:'child',status:'INTERRUPTED'}],interruptedTasks:view==='task-only'&&!continued?[{taskId:'parent'}]:[],heldLeases:[],activeUndos:[],stopRecord:null});
  if(env.method==='task.get'){
   if(taskError)return failure('原任务暂时无法读取，请刷新重试');
   const id=env.params.taskId;
@@ -30,6 +30,7 @@ window.zs={command:async env=>{
   return success({task:{id,title:id==='parent'?'原父任务：完成测试文件':'Pi 子任务',status:'BLOCKED',project_id:'p',parent_task_id:id==='parent'?null:'parent',revision,stop_generation:config.status.evidence.stopGeneration},executionStatus:id==='parent'?status():undefined});
  }
  if(env.method==='task.continue'){
+  if(outcome==='stale')return failure('源执行（run run_private）的恢复派发已完成：不重复派发——新意图','STALE_REVISION');
   if(outcome==='error')return failure('任务仍在执行，请稍后继续');
   if(outcome==='unknown')throw Error('连接已中断');
   if(outcome==='delay')await new Promise(resolve=>{finish=resolve;});
@@ -50,7 +51,7 @@ render();
 window.r156={calls,events,open:target=>requestRecoveryOpen(target),finish:()=>{finish?.();finish=undefined;},outcome:value=>{outcome=value;},
  scenario:value=>{view=value;continued=false;revision++;history=value==='history';empty=value==='empty'||value==='queue';gate=value==='queue';taskError=value==='task-error';render();},
  boot:value=>store.setState(s=>({...s,boot:value})),
- snapshot:()=>({text:document.body.innerText,hash:location.hash,calls:calls.map(c=>({commandId:c.commandId,method:c.method,params:c.params})),events:events.slice(),pending:!!finish,modal:!!document.querySelector('[data-zs-recovery]'),tasks:[...document.querySelectorAll('[data-zs-recovery-task]')].map(card=>card.dataset.zsRecoveryTask),attention:document.querySelector('[data-zs-recovery-attention]')?.dataset.zsRecoveryAttention,forms:document.querySelectorAll('[data-zs-recovery] textarea,[data-zs-recovery] input,[data-zs-recovery] select').length})};
+ snapshot:()=>({sourceRunId:config.orphaned.evidence.latestRun.id,text:document.body.innerText,hash:location.hash,calls:calls.map(c=>({commandId:c.commandId,method:c.method,params:c.params})),events:events.slice(),pending:!!finish,modal:!!document.querySelector('[data-zs-recovery]'),tasks:[...document.querySelectorAll('[data-zs-recovery-task]')].map(card=>card.dataset.zsRecoveryTask),attention:document.querySelector('[data-zs-recovery-attention]')?.dataset.zsRecoveryAttention,forms:document.querySelectorAll('[data-zs-recovery] textarea,[data-zs-recovery] input,[data-zs-recovery] select').length})};
 `;
 async function runVerifier(config){
  const out=path.join(root,'dist/r156-direct-continue-ui',`${Date.now()}-${process.pid}`);fs.mkdirSync(out,{recursive:true});
@@ -111,6 +112,15 @@ try{
  await close();await js('r156.boot("pending");r156.scenario("queue")');await open();s=await snap();const queueBefore=s.calls.filter(c=>c.method==='dispatch.resume').length;
  check('queue-is-not-resumed-on-open',queueBefore===0,s.calls);await click('继续处理排队消息');await until('r156.snapshot().calls.some(c=>c.method==="dispatch.resume")','queue continue');s=await snap();
  check('explicit-queue-continue-retains-confirmation-contract',s.calls.filter(c=>c.method==='dispatch.resume').length===1&&s.calls.find(c=>c.method==='dispatch.resume').params.confirm===true,s.calls);
+ await close();await js('r156.scenario("task-only");r156.boot("ready");r156.outcome("stale")');await open();s=await snap();
+ check('task-level-interruption-is-visible-and-marked-without-old-turn-or-run-reminders',JSON.stringify(s.tasks)==='["parent"]'&&s.attention==='1'&&!s.text.includes('没有需要恢复的任务'),s);
+ const beforeStale=s.calls.length;await js('document.querySelector("[data-zs-execution-action=continue]").click()');await until('document.body.innerText.includes("任务状态已变化")','friendly stale feedback');s=await snap();
+ check('technical-stale-diagnostic-is-replaced-with-readable-feedback-and-refreshed',!s.text.includes('run_private')&&!s.text.includes('恢复派发')&&!s.text.includes('新意图')&&s.calls.slice(beforeStale).some(c=>c.method==='room.list'||c.method==='room.pool'),s);
+ check('orphaned-task-continue-binds-the-current-source',s.calls.filter(c=>c.method==='task.continue').at(-1).params.sourceRunId===s.sourceRunId,s.calls.filter(c=>c.method==='task.continue').at(-1));
+ await capture('05-task-level-interruption-friendly-feedback');
+ await js('r156.outcome("accepted")');await click('一键继续');await until('!r156.snapshot().modal','task-level recovery completed');s=await snap();
+ check('task-level-interruption-can-use-one-click-batch-continuation',s.calls.filter(c=>c.method==='task.continue').at(-1).params.sourceRunId===s.sourceRunId&&!s.modal,s);
+ await open();s=await snap();check('task-level-interruption-clears-only-after-new-queue-facts',s.tasks.length===0&&s.text.includes('没有需要恢复的任务'),s);
  await close();await js('r156.scenario("task-error")');await open();s=await snap();
  check('unreadable-task-is-an-honest-error-without-guessed-continue',s.text.includes('原任务暂时无法读取')&&!await js('document.querySelector("[data-zs-recovery] [data-zs-continue-task]")'),s.text);
  check('all-scenarios-avoid-old-check-commands-and-models',!s.calls.some(c=>/recovery\.(inspect|reconcile|releaseProtection|probeProcess)|message.submit|turn.start/.test(c.method)),s.calls);

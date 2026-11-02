@@ -299,6 +299,7 @@ export default function App() {
           for (const x of r.pendingRelease) entities.push(`release:${x.turnId}`);
           for (const x of r.activeUndos) entities.push(`undo:${x.id}`);
           for (const x of r.interruptedRuns) entities.push(`run:${x.id}`);
+          for (const x of r.interruptedTasks??[]) entities.push(`task:${x.taskId}`);
           const signature = [...entities].sort().join('|');
           const realAttention = entities.length > 0;
           // 首次成功快照：固定启动签名（此后同一运行内不再重判 startup）。
