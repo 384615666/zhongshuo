@@ -3686,6 +3686,19 @@ button.composer-file-token-open:hover {
 .cs-refs-title { font-size: var(--fs-11); color: var(--text-3); margin-bottom: 4px; }
 .cs-refs .kv { font-size: var(--fs-11); color: var(--text-3); }
 .dm-project-head { display:flex; align-items:center; gap:4px; padding:8px 8px 4px; }
+.conversation-nav-row { position:relative; display:flex; align-items:center; min-width:0; }
+.conversation-nav-row > .side-item,
+.conversation-nav-row > .dm-row { flex:1; min-width:0; padding-right:30px !important; }
+.conversation-nav-row > .conversation-more { position:absolute; right:3px; top:50%; transform:translateY(-50%); }
+.conversation-nav-row:hover > .conversation-more,
+.conversation-nav-row:focus-within > .conversation-more { opacity:1; }
+.conversation-nav-row:hover .side-marks,
+.conversation-nav-row:focus-within .side-marks { visibility:hidden; }
+.conversation-nav-label { display:flex; flex-direction:column; flex:1; min-width:0; text-align:left; }
+.pin-project-label { display:block; color:var(--text-3); font-size:var(--fs-11); font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+.conversation-pins { margin-bottom:10px; }
+.dm-row-shell .dm-row { width:100%; text-align:left; background:transparent; }
+.conversation-pins .side-heading { padding-top:8px; }
 .dm-project-toggle { display:flex; align-items:center; gap:6px; flex:1; min-width:0; padding:3px 4px; border:0; background:transparent; cursor:pointer; text-align:left; font-weight:600; }
 .dm-project-toggle > .icon { flex:none; }
 .dm-row-heading { display:flex; align-items:baseline; gap:8px; }

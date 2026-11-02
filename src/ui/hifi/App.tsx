@@ -7,7 +7,8 @@ import {TaskNotificationController} from './components/TaskNotificationControlle
  */
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
-import { NavTaskMark, NavUnreadDot } from './components/NavMarks';
+import { NavUnreadDot } from './components/NavMarks';
+import {RoomNavItem} from './components/RoomNavItem';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms, pickAndOpenFolder } from './shell';
@@ -18,7 +19,7 @@ import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
-import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom, openSidebarProject } from './loader';
+import { openExternalDeepLink, loadSidebarRooms, openSidebarProject } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
 import { MemberDetailPage } from './pages/MemberDetailPage';
@@ -26,7 +27,7 @@ import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
-import { dmUnreadTotal, navTaskStateOfRoom, roomUnread } from './data/selectors';
+import { dmUnreadTotal } from './data/selectors';
 import { RoomPage, CreateRoomModal } from './pages/Room';
 import { FilesGitPage } from './pages/pages-misc';
 import { SettingsPage } from './pages/SettingsPage';
@@ -223,7 +224,7 @@ export default function App() {
   useEffect(() => {
     if (s.boot !== 'ready') return;
     for (const candidate of s.projects) {
-      if (!s.expandedProjectIds.includes(candidate.id)) continue;
+      if (!s.expandedProjectIds.includes(candidate.id)&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.projectId===candidate.id)) continue;
       if (s.sidebarRoomIndexes[candidate.id] != null || sidebarRoomRequests.current.has(candidate.id)) continue;
       sidebarRoomRequests.current.add(candidate.id);
       void loadSidebarRooms(candidate.id)
@@ -232,7 +233,7 @@ export default function App() {
           sidebarRoomRequests.current.delete(candidate.id);
         });
     }
-  }, [s.boot, s.projects, s.expandedProjectIds, s.sidebarRoomIndexes]);
+  }, [s.boot, s.projects, s.expandedProjectIds, s.sidebarRoomIndexes,s.navigationPins]);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
 
@@ -350,6 +351,11 @@ export default function App() {
   /** 房间路由匹配（项目路径形态 + 换装期旧 /room/:id）。 */
   const roomMatch = path.match(/^\/project\/([^/]+)\/room\/([^/]+)$/);
   const activeRoomId = roomMatch?.[2] ?? (path.startsWith('/room/') ? path.slice('/room/'.length) : undefined);
+  const pinnedRooms=s.navigationPins.filter(pin=>{
+    if(pin.kind!=='room'||!s.projects.some(project=>project.id===pin.projectId&&project.removedAt==null&&project.archivedAt==null))return false;
+    const index=s.sidebarRoomIndexes[pin.projectId],room=index?.rooms.find(room=>room.id===pin.itemId);
+    return room?.archivedAt==null&&(index?.status!=='ready'||room!=null);
+  });
 
   const navActive = {
     library: path === '/library',
@@ -425,6 +431,15 @@ export default function App() {
               </button>
             </div>
             <div className="sidebar-scroll">
+              {pinnedRooms.length>0?<section className="conversation-pins" data-zs-pinned-rooms="1" aria-label="置顶房间">
+                <div className="side-heading">置顶</div>
+                {pinnedRooms.map(pin=>{
+                  const owner=s.projects.find(project=>project.id===pin.projectId&&project.removedAt==null&&project.archivedAt==null);
+                  const index=s.sidebarRoomIndexes[pin.projectId],room=index?.rooms.find(room=>room.id===pin.itemId);
+                  if(!owner||room?.archivedAt!=null||(index?.status==='ready'&&!room))return null;
+                  return <RoomNavItem key={pin.itemId} projectId={pin.projectId} roomId={pin.itemId} name={room?.name??pin.label} active={pin.itemId===activeRoomId} projectName={owner.displayName}/>;
+                })}
+              </section>:null}
               <div className="side-heading">项目</div>
               {project == null ? (
                 <div className="side-empty">
@@ -508,25 +523,7 @@ export default function App() {
                       {expanded && roomIndex?.status === 'ready' && rooms.length === 0 ? (
                         <div className="side-empty small">暂无房间</div>
                       ) : null}
-                      {expanded ? rooms.filter((r) => r.archivedAt == null).map((room) => {
-                        const rState = navTaskStateOfRoom(s, room.id);
-                        const rUnread = roomUnread(s, room.id);
-                        return (
-                          <button
-                            key={room.id}
-                            className={`side-item sub${room.id === activeRoomId ? ' active' : ''}`}
-                            onClick={() => { void openSidebarRoom(p.id, room.id); }}
-                          >
-                            {rState.state ? (
-                              <NavTaskMark summary={rState} where={room.name} size={12} />
-                            ) : (
-                              <span className="side-icon-slot" aria-hidden="true" />
-                            )}
-                            <span className="side-item-label" title={room.name}>{room.name}</span>
-                            <span className="side-marks"><NavUnreadDot count={rUnread} where={room.name} /></span>
-                          </button>
-                        );
-                      }) : null}
+                      {expanded ? rooms.filter((r) => r.archivedAt == null&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.itemId===r.id)).map(room=><RoomNavItem key={room.id} projectId={p.id} roomId={room.id} name={room.name} active={room.id===activeRoomId}/>) : null}
                     </div>
                   );
                 });

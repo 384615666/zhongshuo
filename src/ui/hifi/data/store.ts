@@ -1,4 +1,5 @@
 import type {TaskExecutionStatus} from '../../../contracts/executionStatus.ts';
+import type {NavigationPin} from '../../../contracts/navigationPins';
 import type {RecoveredSendLocation} from '../../../contracts/sendRecovery.ts';
 /**
  * 正式侧状态层（H1 首包，第四十七轮修订）：**替换原型种子 store 的真实实现**。
@@ -53,6 +54,8 @@ export interface ThreadTaskDetail {
 
 /** 正式侧扩展状态（挂在 AppState 之上的真实投影层）。 */
 export interface HifiExtension {
+  navigationPins: NavigationPin[];
+  navigationPinBusy: Record<string,boolean>;
   /** Conversation lists are cached by their owning project, independently of focus. */
   dmProjectIndexes: Record<string,{status:'loading'|'ready'|'error';items:AppState['dms'];error?:string}>;
   /** Per-project server room indexes; never inferred from the active roster. */
@@ -170,7 +173,7 @@ function makeEmptyState(): HifiState {
     preview: { tabs: [], hidden: true, maximized: false, contextChangedSinceOpen: false },
     ui: { theme: 'light', activeRoomId: '', showAvatars: true, avatars: {}, writeLog: [] },
     // —— 正式侧扩展 ——
-    loadGen: 0, sidebarRoomIndexes: {}, dmProjectIndexes: {},
+    loadGen: 0, sidebarRoomIndexes: {}, dmProjectIndexes: {}, navigationPins:[],navigationPinBusy:{},
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
     readErrors: {}, pendingSends: {}, lastSendReferences:{}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,

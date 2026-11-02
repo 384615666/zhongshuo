@@ -1,4 +1,5 @@
 import type {TaskExecutionStatus} from '../../contracts/executionStatus.ts';
+import type {NavigationPin} from '../../contracts/navigationPins';
 import type {MessageRepairLineage} from '../../contracts/repairLineage.ts';
 import {sendRequestPayloadHash} from '../../contracts/sendRecovery.ts';
 import type {SendLookupResult,RecoveredSendLocation} from '../../contracts/sendRecovery.ts';
@@ -472,8 +473,11 @@ export async function bootRemembered(): Promise<void> {
 /** R65：服务端导航偏好（navigation_preferences by viewer+client）→ 本地状态合并。
  * 服务端无行=null（保持本地/默认）；无效 id（已移除项目）被过滤；active 不在有效集则忽略。 */
 export async function applyServerNavPrefs(): Promise<void> {
+  const {applyNavigationPins,navigationPinGeneration}=await import('./data/navigationPins');
+  const pinGeneration=navigationPinGeneration();
   try {
-    const r = await command<{ prefs: { activeProjectId: string | null; visibleProjectIds: string[]; expandedProjectIds: string[]; pinnedProjectIds: string[]; fileGitTabs: Record<string, string>; revision: number } | null }>('navigation.get', { clientId: 'desktop-hifi' });
+    const r = await command<{pins?:NavigationPin[]; prefs: { activeProjectId: string | null; visibleProjectIds: string[]; expandedProjectIds: string[]; pinnedProjectIds: string[]; fileGitTabs: Record<string, string>; revision: number } | null }>('navigation.get', { clientId: 'desktop-hifi' });
+    applyNavigationPins(r.pins,pinGeneration);
     if (r.prefs == null) {
       // 无偏好行=全量可见（原型/board.view 同口径）：注册表里的日常项目默认进侧栏（首个展开）。
       setState((s) => (s.visibleProjectIds.length > 0 ? s : {

@@ -68,10 +68,16 @@ export function projectReadOnlyReason(s: AppState, projectId: string): string | 
 }
 
 /** 私信未读（统一入口用）：只算未归档会话与未归档项目 */
-export function dmUnreadTotal(s: AppState & Partial<Pick<HifiState,'dmProjectIndexes'>>): number {
+export function dmUnreadTotal(s: AppState & Partial<Pick<HifiState,'dmProjectIndexes'|'navigationPins'>>): number {
+  const visible=new Set([...s.pinnedProjectIds,...s.visibleProjectIds]);
   const dms=s.dmProjectIndexes
     ? [...new Set([...s.pinnedProjectIds,...s.visibleProjectIds])].flatMap(id=>s.dmProjectIndexes?.[id]?.items??s.dms.filter(dm=>dm.projectId===id))
     :s.dms;
+  if(s.dmProjectIndexes)for(const pin of s.navigationPins??[]){
+    if(pin.kind!=='dm'||visible.has(pin.projectId))continue;
+    const dm=s.dmProjectIndexes[pin.projectId]?.items.find(dm=>dm.id===pin.itemId);
+    if(dm&&!dms.some(item=>item.id===dm.id))dms.push(dm);
+  }
   return dms
     .filter((d) => !d.archivedAt && !isProjectArchived(s.projects.find((p) => p.id === d.projectId) ?? {})
       && !isProjectRemoved(s.projects.find((p) => p.id === d.projectId) ?? {}))

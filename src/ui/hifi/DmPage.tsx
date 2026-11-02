@@ -19,6 +19,9 @@ import { latestReadableAgentMessageId, MessageView } from './components/MessageV
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
+import {useConversationPinMenu} from './components/ConversationPinMenu';
+import {setConversationPinned} from './data/navigationPins';
+import type {NavigationPin} from '../../contracts/navigationPins';
 import { Avatar, Menu, MenuItem, Modal, Tag, memberColor } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState, getState } from './shell';
 import { backfillDefaultMemberAvatars } from './data/defaultMemberAvatars';
@@ -92,6 +95,13 @@ export function DmPage() {
   const [listNow,setListNow] = useState(Date.now);
   const visibleProjects=useMemo(()=>visibleDmProjects(st),[st.projects,st.visibleProjectIds,st.pinnedProjectIds]);
   const visibleIds=visibleProjects.map(project=>project.id).join('|');
+  const pinnedDms=st.navigationPins.filter(pin=>{
+    if(pin.kind!=='dm'||!st.projects.some(project=>project.id===pin.projectId&&project.removedAt==null&&project.archivedAt==null))return false;
+    const entry=st.dmProjectIndexes[pin.projectId],dm=entry?.items.find(dm=>dm.id===pin.itemId);
+    return dm?.archivedAt==null&&(entry?.status!=='ready'||dm!=null);
+  });
+  const pinnedDmIds=new Set(pinnedDms.map(pin=>pin.itemId));
+  const requestedIds=[...new Set([...visibleIds.split('|').filter(Boolean),...pinnedDms.map(pin=>pin.projectId)])].join('|');
   const groups=useMemo(()=>visibleProjects.map((project,index)=>{
     const entry=st.dmProjectIndexes[project.id];
     const items=sortDmConversations(entry?.items??dmsAll.filter(dm=>dm.projectId===project.id));
@@ -99,7 +109,7 @@ export function DmPage() {
       latest:items.filter(dm=>dm.archivedAt==null).reduce((latest,dm)=>Math.max(latest,dmActivityAt(dm)),0)};
   }).sort((a,b)=>b.latest-a.latest||a.index-b.index),[visibleProjects,st.dmProjectIndexes,dmsAll]);
   useEffect(()=>{const timer=window.setInterval(()=>setListNow(Date.now()),60_000);return()=>window.clearInterval(timer);},[]);
-  useEffect(()=>{void Promise.allSettled(visibleIds.split('|').filter(Boolean).map(loadDmProjectIndex));},[visibleIds]);
+  useEffect(()=>{void Promise.allSettled(requestedIds.split('|').filter(Boolean).map(loadDmProjectIndex));},[requestedIds]);
   const [recordsFor,setRecordsFor]=useState<string|null>(null);
   const [acceptedRetry, setAcceptedRetry] = useState<string | null>(null);
   const failedReadGen = useRef(0);
@@ -170,11 +180,11 @@ export function DmPage() {
       const box = listRef.current;
       const nearBottom = box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true;
       if (activeId !== '') void loadDmHistory(activeId, { markRead: nearBottom });
-      void Promise.allSettled(visibleIds.split('|').filter(Boolean).map(loadDmProjectIndex));
+      void Promise.allSettled(requestedIds.split('|').filter(Boolean).map(loadDmProjectIndex));
       if (active?.id != null) void readFailedTasks(active.id, active.projectId);
     }, 5000);
     return () => { window.clearInterval(t); };
-  }, [activeId, active?.projectId,visibleIds]);
+  }, [activeId, active?.projectId,requestedIds]);
 
   /* ---------- 布局解析（原型 §17.9：320 列表 / 440 对话 / 480 预览；先收列表再单区） ---------- */
   const workspace = useElementWidth<HTMLDivElement>('.app-body');
@@ -420,9 +430,19 @@ export function DmPage() {
               <div className="spacer" />
             </div>
             <div className="dm-list" style={{ flex: 1, minHeight: 0, overflow: 'auto' }} data-zs-dm-list="hifi">
+              {pinnedDms.length>0?<section className="conversation-pins" data-zs-pinned-dms="1" aria-label="置顶私信">
+                <div className="side-heading">置顶</div>
+                {pinnedDms.map(pin=>{
+                  const project=st.projects.find(project=>project.id===pin.projectId)!;
+                  const entry=st.dmProjectIndexes[pin.projectId],dm=entry?.items.find(dm=>dm.id===pin.itemId);
+                  return dm?<DmListRow key={pin.itemId} dm={dm} selected={dm.id===activeId} now={listNow} projectName={project.displayName} onSelect={()=>openDmConversation(pin.projectId,pin.itemId)}/>
+                    :<DmPinPlaceholder key={pin.itemId} pin={pin} projectName={project.displayName} error={entry?.status==='error'}/>;
+                })}
+              </section>:null}
               {groups.length===0?<div className="small faint" style={{padding:14}}>请先在侧栏显示一个项目。</div>:null}
               {groups.map(({project,entry,daily,archived})=>{
                 const collapsed=collapsedProjects.includes(project.id);
+                const regular=daily.filter(dm=>!pinnedDmIds.has(dm.id));
                 return <section key={project.id} data-zs-dm-project={project.id}>
                   <div className="dm-project-head">
                     <button className="dm-project-toggle" aria-expanded={!collapsed} onClick={()=>setCollapsedProjects(ids=>collapsed?ids.filter(id=>id!==project.id):[...ids,project.id])}>
@@ -439,7 +459,8 @@ export function DmPage() {
                     {daily.length===0?<div className="small faint" style={{padding:'5px 14px 10px'}} data-zs-dm-empty={project.id}>
                       {entry?.status==='loading'?'正在读取私信…':entry?.status==='error'?'暂时无法读取私信。':'暂无私信，点击项目右侧 + 添加。'}
                     </div>:null}
-                    {daily.map(dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>)}
+                    {daily.length>0&&regular.length===0?<div className="small faint" style={{padding:'5px 14px 10px'}}>私信已在置顶区显示。</div>:null}
+                    {regular.map(dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>)}
                     {archived.length>0?<>
                       <button className="dm-archived-toggle" onClick={()=>setShowArchived(current=>({...current,[project.id]:!current[project.id]}))}>
                         <Icon name={showArchived[project.id]?'chevron-down':'chevron-right'} size={12}/><Icon name="archive" size={12}/>已归档 {archived.length}
@@ -482,7 +503,7 @@ export function DmPage() {
                     ) : null}
                     <button
                       className="icon-btn sm"
-                      title="会话操作（重命名 / 归档 / 导出会话记录 / 任务记录）"
+                      title="会话操作（置顶 / 重命名 / 归档 / 导出会话记录 / 任务记录）"
                       aria-haspopup="menu"
                       data-zs-dm-ops="hifi"
                       onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setOpsAt({ x: r.right - 260, y: r.bottom + 4 }); }}
@@ -712,6 +733,7 @@ export function DmPage() {
       {/* 会话操作与任务记录。 */}
       {opsAt != null ? (
         <Menu anchor={opsAt} onClose={() => setOpsAt(null)}>
+          {active?<MenuItem icon="pin" disabled={st.navigationPinBusy[`dm:${active.id}`]||(active.archivedAt!=null&&!st.navigationPins.some(pin=>pin.kind==='dm'&&pin.itemId===active.id))} onClick={()=>{setOpsAt(null);void setConversationPinned({kind:'dm',projectId:active.projectId,itemId:active.id},!st.navigationPins.some(pin=>pin.kind==='dm'&&pin.itemId===active.id));}}>{st.navigationPins.some(pin=>pin.kind==='dm'&&pin.itemId===active.id)?'取消置顶':'置顶私信'}</MenuItem>:null}
           <div className="menu-label">{dmTitle} · 会话操作</div>
           <MenuItem icon="edit" title="重命名私信" onClick={() => { setRenameText(active?.title ?? ''); setRenaming({ conversationId: activeId, revision: active?.revision ?? 0 }); setOpsAt(null); }}>重命名…</MenuItem>
           {active?.archivedAt != null ? (
@@ -737,19 +759,30 @@ export function DmPage() {
   );
 }
 
-function DmListRow({dm,selected,now,onSelect}:{dm:DmConversation;selected:boolean;now:number;onSelect:()=>void}) {
+function DmListRow({dm,selected,now,onSelect,projectName}:{dm:DmConversation;selected:boolean;now:number;onSelect:()=>void;projectName?:string}) {
   const at=dmActivityAt(dm),time=dmListTime(at,now);
-  return <button className={`dm-row${selected?' on':''}`} data-zs-dm-id={dm.id} onClick={onSelect}
+  const pin=useConversationPinMenu({kind:'dm',projectId:dm.projectId,itemId:dm.id},dm.title||dm.peerDisplayName||'成员',dm.archivedAt!=null);
+  return <div className="conversation-nav-row dm-row-shell" onContextMenu={pin.onContextMenu}><button className={`dm-row${selected?' on':''}`} data-zs-dm-id={dm.id} onClick={onSelect}
     style={{display:'flex',alignItems:'center',gap:8,width:'100%',padding:'8px 12px',border:'none',background:selected?'var(--bg-surface-2,#f1f5f9)':'transparent',cursor:'pointer',textAlign:'left',opacity:dm.archivedAt?0.72:1}}>
     <Avatar name={dm.peerDisplayName??'成员'} color={dm.memberIds[0]?memberColor(dm.memberIds[0]):undefined} size={22} round subject={dm.memberIds[0]?`member:${dm.memberIds[0]}`:undefined}/>
     <span style={{flex:1,minWidth:0}}>
       <span className="dm-row-heading"><span className="truncate" style={{fontSize:12.5,fontWeight:dm.unread>0?600:400}}>{dm.title||dm.peerDisplayName||'成员'}</span>
         {time?<time className="small faint" dateTime={new Date(at).toISOString()} title={new Date(at).toLocaleString()}>{time}</time>:null}</span>
       <span className="small faint truncate" style={{display:'block',marginTop:1}}>{dm.lastMessagePreview||'（暂无消息）'}</span>
+      {projectName?<span className="pin-project-label">{projectName}</span>:null}
     </span>
     {dm.unread>0?<Tag tone="info">{dm.unread}</Tag>:null}
     {dm.execState==='running'||dm.execState==='queued'?<span className="nav-dot" title={EXEC_TEXT[dm.execState]}/>:null}
-  </button>;
+  </button>{pin.button}{pin.menu}</div>;
+}
+
+function DmPinPlaceholder({pin,projectName,error}:{pin:NavigationPin;projectName:string;error:boolean}){
+  const menu=useConversationPinMenu(pin,pin.label);
+  return <div className="conversation-nav-row dm-row-shell" onContextMenu={menu.onContextMenu}>
+    <button className="dm-row" onClick={()=>openDmConversation(pin.projectId,pin.itemId)}><Icon name="message-square" size={14}/><span className="conversation-nav-label"><span className="truncate">{pin.label}</span><span className="pin-project-label">{projectName}</span></span></button>
+    {error?<button className="btn ghost sm" title="重新读取置顶私信" onClick={()=>{void loadDmProjectIndex(pin.projectId).catch(()=>{});}}>重试</button>:null}
+    {menu.button}{menu.menu}
+  </div>;
 }
 
 function CreateDmModal({projectId,onClose,onCreated}:{projectId:string;onClose:()=>void;onCreated:(conversationId:string)=>void}) {

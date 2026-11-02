@@ -24,6 +24,7 @@ import { CALL_BUDGET_ENABLED_SETTING_KEY, type CallBudgetMode, type FrozenCallBu
 import { TASK_NOTIFICATIONS_ENABLED_SETTING_KEY } from '../contracts/taskNotifications.ts';
 import { callBudgetSnapshotObject, freezeTaskCallBudget, parsePersistedCallBudgetSnapshot, resolveNewCallBudget, supportsCallBudgetSnapshots } from './callBudget.ts';
 import {DaemonCommandError} from './commandError.ts';
+import {assertNavigationPinAvailable,readNavigationPins,writeNavigationPin} from './navigationPins.ts';
 import {selectThreadRecipients,assertThreadTaskReady,enqueueThreadReply,createTaskForRecordThread} from './threadReplies.ts';
 export {DaemonCommandError} from './commandError.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
@@ -1235,12 +1236,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const row = deps.db.prepare('SELECT active_project_id, visible_project_ids_json, expanded_project_ids_json, pinned_project_ids_json, file_git_tabs_json, revision FROM navigation_preferences WHERE viewer_id = ? AND client_id = ?').get(deps.localUserId, params.clientId) as
           | { active_project_id: string | null; visible_project_ids_json: string; expanded_project_ids_json: string; pinned_project_ids_json: string | null; file_git_tabs_json: string | null; revision: number }
           | undefined;
-        if (row == null) return withCommandId({ ok: true, data: { prefs: null } });
+        const pins=readNavigationPins(deps.db,deps.localUserId,params.clientId);
+        if (row == null) return withCommandId({ ok: true, data: { prefs: null, pins } });
         const parseIds = (raw: string | null): string[] => {
           if (raw == null) return [];
           try { const a = JSON.parse(raw); return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
         };
-        return withCommandId({ ok: true, data: { prefs: {
+        return withCommandId({ ok: true, data: { pins, prefs: {
           activeProjectId: row.active_project_id,
           visibleProjectIds: parseIds(row.visible_project_ids_json),
           expandedProjectIds: parseIds(row.expanded_project_ids_json),
@@ -1248,6 +1250,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           fileGitTabs: (() => { try { const o = row.file_git_tabs_json == null ? null : JSON.parse(row.file_git_tabs_json); return o != null && typeof o === 'object' ? o as Record<string, string> : {}; } catch { return {}; } })(),
           revision: row.revision,
         } } });
+      }
+      case 'navigation.pin': {
+        if(deps.remoteAudit)throw new DaemonCommandError('FORBIDDEN','置顶偏好请在本机修改');
+        const params=z.strictObject({clientId:z.string().min(1).max(120),kind:z.enum(['room','dm']),projectId:z.string().min(1),itemId:z.string().min(1),pinned:z.boolean()}).parse(env.params);
+        const result=run(()=>({pin:writeNavigationPin(deps.db,deps.localUserId,params.clientId,params,params.pinned)}),()=>{if(params.pinned)assertNavigationPinAvailable(deps.db,deps.localUserId,params);});
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
       }
       case 'navigation.set': {
         // R65：服务端导航偏好写入（upsert by viewer+client；json 字段白名单校验——只收 string 数组
