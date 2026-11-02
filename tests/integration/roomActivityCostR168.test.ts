@@ -14,7 +14,10 @@ function fixture(){
 }
 function measure(db:ZhongshuoDatabase){
   const original=db.prepare;let calls=0;
-  db.prepare=function(sql:string){const stmt=original.call(db,sql);for(const name of ['get','all'] as const){const read=stmt[name].bind(stmt);stmt[name]=((...args:unknown[])=>{calls++;return read(...args);}) as typeof stmt[typeof name];}return stmt;} as typeof db.prepare;
+  db.prepare=function(sql:string){return new Proxy(original.call(db,sql),{get(target,name){
+    const value=Reflect.get(target,name,target);
+    return typeof value==='function'?(...args:unknown[])=>{if(name==='get'||name==='all')calls++;return Reflect.apply(value,target,args);}:value;
+  }});} as typeof db.prepare;
   try{return{summary:readProjectRoomActivity(db,'p'),queries:calls};}finally{db.prepare=original;}
 }
 describe('R168 room summaries avoid task action eligibility scans',()=>{
