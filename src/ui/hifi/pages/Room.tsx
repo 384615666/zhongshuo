@@ -167,8 +167,6 @@ export function RoomPage({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection,setSettingsSection]=useState<'general'|'members'|'archive'>('general');
   /** 房间「⋯」菜单锚点（房间设置/成员/归档统一入口） */
-  const [roomMenuAnchor, setRoomMenuAnchor] = useState<{ x: number; y: number } | null>(null);
-
   // 所有 Hook 必须在任何 early return 之前调用（rules-of-hooks）。
   // 宽度 Hook 必须始终早于 if (!room) 的提前返回调用；否则房间删除时
   // Hook 数量变化会直接触发 React 的 Rendered fewer hooks 错误。
@@ -558,87 +556,12 @@ export function RoomPage({
           ...(twoRegion ? contextFlex : {}),
         }}
       >
-        <div className="pool-head" style={{ padding: '12px 18px 0' }}>
-          <span className="pool-title">{room.name}</span>
+        {/* R167：房间头与页签合并成一行——只改这一行，窗口栏与其它页面不动。 */}
+        <div className="pool-head pool-head--merged">
           {room.archivedAt || ownerReadOnly ? (
             <Tag tone="neutral" icon="archive">{room.archivedAt ? '已归档 · 只读' : ownerReadOnly}</Tag>
           ) : null}
-          {/**
-           * 人数入口直接定位成员与协调者；通用设置仍经右侧菜单进入。
-           */}
-          <button
-            type="button"
-            className="pool-info"
-            title={`查看房间成员与协调者：${memberLabel(coord)}，${room.memberIds.length} 名成员`}
-            aria-haspopup="dialog"
-            onClick={() => {setRoomMenuAnchor(null);setSettingsSection('members');setSettingsOpen(true);}}
-          >
-            <Icon name="users" size={11} />
-            {memberLabel(coord)} · {room.memberIds.length} 名成员
-          </button>
-          <div className="spacer" />
-          {/**
-           * 收起预览后的重开入口放在房间头部（原先浮在右下角，会压住输入区的
-           * 发送按钮 —— 用户截图反馈）。它属于"这个房间当前收着一份文件"的状态，
-           * 放头部与未读/房间 ⋯ 同排；窄窗只留图标 + 计数，避免挤掉右侧操作。
-           */}
-          <PreviewReopenButton compact={narrow} />
-          {unread > 0 ? (
-            <Tag tone="info" icon="message-square">{unread} 条未读</Tag>
-          ) : null}
-          {/**
-           * 房间 ⋯：房间设置、成员、归档/取消归档都在这里，能力一个不少。
-           * 归档房的「取消归档」是唯一出口（§25.6），必须在 ⋯ 里保留可见名称，
-           * 不能只留一个"更多"图标把它埋掉。
-           */}
-          <button
-            type="button"
-            className="icon-btn sm"
-            title="房间操作：房间信息、成员、归档"
-            aria-label="房间操作"
-            aria-haspopup="menu"
-            onClick={(e) => setRoomMenuAnchor(anchorFromElement(e.currentTarget))}
-          >
-            <Icon name="more-horizontal" size={15} />
-          </button>
-        </div>
-
-        {roomMenuAnchor ? (
-          <Menu anchor={roomMenuAnchor} onClose={() => setRoomMenuAnchor(null)}>
-            <div className="menu-label">房间「{room.name}」</div>
-            <MenuItem
-              icon="settings"
-              title="改房间名称、成员与协调者"
-              onClick={() => { setRoomMenuAnchor(null);setSettingsSection('general'); setSettingsOpen(true); }}
-            >
-              房间设置
-            </MenuItem>
-            {room.archivedAt ? (
-              <MenuItem
-                icon="refresh"
-                title="取消归档后可继续发任务；旧的排队任务不会自动重新发送"
-                onClick={() => {
-                  setRoomMenuAnchor(null);
-                  void roomArchiveReal(room.id, room.revision, 'unarchive').then((r) => {
-                    toast(r.ok ? '已取消归档' : `取消归档失败：${userFacingSystemText(r.error ?? '')}`, r.ok ? 'success' : 'error');
-                  });
-                }}
-              >
-                取消归档
-              </MenuItem>
-            ) : (
-              <MenuItem
-                icon="archive"
-                title="进入房间设置里的归档区块；存在活跃任务时会被阻止"
-                onClick={() => { setRoomMenuAnchor(null);setSettingsSection('archive'); setSettingsOpen(true); }}
-              >
-                归档房间
-              </MenuItem>
-            )}
-          </Menu>
-        ) : null}
-
-        <div className="thread-tabs" style={{ marginTop: 8 }}>
+          <div className="thread-tabs">
           <button className={`thread-tab${roomTab === 'chat' ? ' on' : ''}`} onClick={() => setRoomTab('chat')}>
             <Icon name="message-square" size={13} /> 对话池
           </button>
@@ -649,6 +572,22 @@ export function RoomPage({
             <Icon name="file-text" size={13} /> 文件
           </button>
         </div>
+          <div className="spacer" />
+          <PreviewReopenButton compact={narrow} />
+          {unread > 0 ? (
+            <Tag tone="info" icon="message-square">{unread} 条未读</Tag>
+          ) : null}
+          <button
+            type="button"
+            className="pool-info"
+            title={`查看房间成员与协调者：${memberLabel(coord)}，${room.memberIds.length} 名成员`}
+            aria-haspopup="dialog"
+            onClick={() => {setSettingsSection('members');setSettingsOpen(true);}}
+          >
+            <Icon name="users" size={11} />
+            {memberLabel(coord)} · {room.memberIds.length} 名成员
+          </button>
+                </div>
 
         {roomTab === 'chat' ? <RoomPool roomId={room.id} threadId={threadId} onOpenSettings={() => {setSettingsSection('members');setSettingsOpen(true);}} onOpenResource={openResource} /> : null}
         {roomTab === 'tasks' ? <RoomTasks roomId={room.id} /> : null}

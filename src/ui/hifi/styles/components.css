@@ -3774,3 +3774,49 @@ button.composer-file-token-open:hover {
 .dm-row-heading > time { flex:none; font-variant-numeric:tabular-nums; }
 .dm-row > .nav-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none; }
 .dm-archived-toggle { display:flex; align-items:center; gap:6px; width:100%; padding:8px 12px; border:0; background:transparent; color:var(--text-3); cursor:pointer; font-size:12px; }
+
+/* ============================================================
+   R167：房间头与页签行合并成一行（只影响房间页，窗口栏不动）
+   见 docs/design-proposals/titlebar-r158.md「方案 B」
+   ============================================================ */
+.pool-head--merged {
+  height: 42px;
+  padding: 0 18px;
+  gap: 10px;
+}
+.pool-head--merged .pool-title {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pool-head--merged .thread-tabs {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  flex: none;
+}
+.pool-head--merged .thread-tab {
+  height: 28px;
+}
+
+@media (max-width: 1080px) {
+  .pool-head--merged {
+    padding: 0 14px;
+    gap: 8px;
+  }
+  .pool-head--merged .pool-title { max-width: 20%; }
+  .pool-head--merged .pool-info {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 960px) {
+  .pool-head--merged .thread-tab { padding: 0 8px; }
+  .pool-head--merged .tag { display: none; }
+}
