@@ -39,6 +39,7 @@ import {RUNTIME_CHANNELS} from '__ROOT__/src/contracts/runtimeKinds.ts';
 
 const channel=__CHANNEL__;
 const checks=[],calls=[];
+const avatars={};
 const root=createRoot(document.getElementById('root'));
 const member={id:'m1',displayName:'审查者',principalType:'agent',enabled:true,revision:4};
 let revision=0,saved=0;
@@ -60,6 +61,8 @@ window.zs={command:async envelope=>{
   const {method,params}=envelope;calls.push({method,params});
   let data;
   switch(method){
+    case 'app.appearance.set':if(params.avatar){const {subject,dataUrl}=params.avatar;if(dataUrl==null)delete avatars[subject];else avatars[subject]=dataUrl;}data={saved:true};break;
+    case 'app.appearance.get':data={showAvatars:true,avatars:{...avatars}};break;
     case 'member.list': data={items:[member]};break;
     case 'member.discoverDefaults':data={created:[],existing:[{displayName:channel.label}],skipped:[],notes:['fixture: 未找到其他 CLI']};break;
     case 'member.runtime':data=info;break;
@@ -159,7 +162,7 @@ window.run=async()=>{
   check('template creation describes actual program and channel setup',text().includes('程序：'+channel.executable)&&channel.help.every(copy=>text().includes(copy)));
   document.querySelector('[data-zs-template-create-save]').click();await until(()=>saved===4);
   check('template creates independent member from authoritative snapshot',last('memberTemplate.createMember').templateId==='t1'&&last('memberTemplate.createMember').expectedRevision===7);
-  const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|setRuntime|discoverDefaults)|memberTemplate\.(list|update|saveFromMember|createMember)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;
+  const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|setRuntime|discoverDefaults)|memberTemplate\.(list|update|saveFromMember|createMember)|app\.appearance\.(get|set)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;
   check('only metadata reads and member configuration writes: '+calls.filter(c=>!allowed.test(c.method)).map(c=>c.method).join(','),calls.every(c=>allowed.test(c.method)));
   return{ok:checks.every(c=>c.ok),checks};
 };
