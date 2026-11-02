@@ -3689,9 +3689,14 @@ button.composer-file-token-open:hover {
 .conversation-nav-row { position:relative; display:flex; align-items:center; min-width:0; }
 .conversation-nav-row > .side-item,
 .conversation-nav-row > .dm-row { flex:1; min-width:0; padding-right:30px !important; }
-.conversation-nav-row > .conversation-more { position:absolute; right:3px; top:50%; transform:translateY(-50%); }
-.conversation-nav-row:hover > .conversation-more,
-.conversation-nav-row:focus-within > .conversation-more { opacity:1; }
+.conversation-nav-row > .conversation-pin { position:absolute; right:3px; top:50%; transform:translateY(-50%); }
+.conversation-nav-row:hover > .conversation-pin,
+.conversation-nav-row:focus-within > .conversation-pin,
+.conversation-nav-row > .conversation-pin.is-pinned { opacity:1; }
+.conversation-pin.is-pinned { color:var(--accent-text); }
+.conversation-show-more { border:0; background:transparent; color:var(--text-3); font:inherit; font-size:var(--fs-12); cursor:pointer; text-align:left; text-decoration:none; padding:6px 12px; border-radius:var(--r-sm); }
+.conversation-show-more.room-more { padding-left:36px; }
+.conversation-show-more:hover { color:var(--text-1); background:var(--bg-hover); }
 .conversation-nav-row:hover .side-marks,
 .conversation-nav-row:focus-within .side-marks { visibility:hidden; }
 .conversation-nav-label { display:flex; flex-direction:column; flex:1; min-width:0; text-align:left; }

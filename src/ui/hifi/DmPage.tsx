@@ -19,8 +19,8 @@ import { latestReadableAgentMessageId, MessageView } from './components/MessageV
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
-import {useConversationPinMenu} from './components/ConversationPinMenu';
-import {setConversationPinned} from './data/navigationPins';
+import {ConversationPinButton} from './components/ConversationPinButton';
+import {ProjectConversationList} from './components/ProjectConversationList';
 import type {NavigationPin} from '../../contracts/navigationPins';
 import { Avatar, Menu, MenuItem, Modal, Tag, memberColor } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState, getState } from './shell';
@@ -460,12 +460,16 @@ export function DmPage() {
                       {entry?.status==='loading'?'正在读取私信…':entry?.status==='error'?'暂时无法读取私信。':'暂无私信，点击项目右侧 + 添加。'}
                     </div>:null}
                     {daily.length>0&&regular.length===0?<div className="small faint" style={{padding:'5px 14px 10px'}}>私信已在置顶区显示。</div>:null}
-                    {regular.map(dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>)}
+                    <ProjectConversationList projectId={project.id} kind="dm" items={regular}>
+                      {dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>}
+                    </ProjectConversationList>
                     {archived.length>0?<>
                       <button className="dm-archived-toggle" onClick={()=>setShowArchived(current=>({...current,[project.id]:!current[project.id]}))}>
                         <Icon name={showArchived[project.id]?'chevron-down':'chevron-right'} size={12}/><Icon name="archive" size={12}/>已归档 {archived.length}
                       </button>
-                      {showArchived[project.id]?archived.map(dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>):null}
+                      {showArchived[project.id]?<ProjectConversationList projectId={project.id} kind="dm-archive" items={archived}>
+                        {dm=><DmListRow key={dm.id} dm={dm} selected={dm.id===activeId} now={listNow} onSelect={()=>openDmConversation(project.id,dm.id)}/>}
+                      </ProjectConversationList>:null}
                     </>:null}
                   </>:null}
                 </section>;
@@ -503,7 +507,7 @@ export function DmPage() {
                     ) : null}
                     <button
                       className="icon-btn sm"
-                      title="会话操作（置顶 / 重命名 / 归档 / 导出会话记录 / 任务记录）"
+                      title="会话操作（重命名 / 归档 / 导出会话记录 / 任务记录）"
                       aria-haspopup="menu"
                       data-zs-dm-ops="hifi"
                       onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setOpsAt({ x: r.right - 260, y: r.bottom + 4 }); }}
@@ -733,7 +737,6 @@ export function DmPage() {
       {/* 会话操作与任务记录。 */}
       {opsAt != null ? (
         <Menu anchor={opsAt} onClose={() => setOpsAt(null)}>
-          {active?<MenuItem icon="pin" disabled={st.navigationPinBusy[`dm:${active.id}`]||(active.archivedAt!=null&&!st.navigationPins.some(pin=>pin.kind==='dm'&&pin.itemId===active.id))} onClick={()=>{setOpsAt(null);void setConversationPinned({kind:'dm',projectId:active.projectId,itemId:active.id},!st.navigationPins.some(pin=>pin.kind==='dm'&&pin.itemId===active.id));}}>{st.navigationPins.some(pin=>pin.kind==='dm'&&pin.itemId===active.id)?'取消置顶':'置顶私信'}</MenuItem>:null}
           <div className="menu-label">{dmTitle} · 会话操作</div>
           <MenuItem icon="edit" title="重命名私信" onClick={() => { setRenameText(active?.title ?? ''); setRenaming({ conversationId: activeId, revision: active?.revision ?? 0 }); setOpsAt(null); }}>重命名…</MenuItem>
           {active?.archivedAt != null ? (
@@ -761,8 +764,7 @@ export function DmPage() {
 
 function DmListRow({dm,selected,now,onSelect,projectName}:{dm:DmConversation;selected:boolean;now:number;onSelect:()=>void;projectName?:string}) {
   const at=dmActivityAt(dm),time=dmListTime(at,now);
-  const pin=useConversationPinMenu({kind:'dm',projectId:dm.projectId,itemId:dm.id},dm.title||dm.peerDisplayName||'成员',dm.archivedAt!=null);
-  return <div className="conversation-nav-row dm-row-shell" onContextMenu={pin.onContextMenu}><button className={`dm-row${selected?' on':''}`} data-zs-dm-id={dm.id} onClick={onSelect}
+  return <div className="conversation-nav-row dm-row-shell"><button className={`dm-row${selected?' on':''}`} data-zs-dm-id={dm.id} onClick={onSelect}
     style={{display:'flex',alignItems:'center',gap:8,width:'100%',padding:'8px 12px',border:'none',background:selected?'var(--bg-surface-2,#f1f5f9)':'transparent',cursor:'pointer',textAlign:'left',opacity:dm.archivedAt?0.72:1}}>
     <Avatar name={dm.peerDisplayName??'成员'} color={dm.memberIds[0]?memberColor(dm.memberIds[0]):undefined} size={22} round subject={dm.memberIds[0]?`member:${dm.memberIds[0]}`:undefined}/>
     <span style={{flex:1,minWidth:0}}>
@@ -773,15 +775,14 @@ function DmListRow({dm,selected,now,onSelect,projectName}:{dm:DmConversation;sel
     </span>
     {dm.unread>0?<Tag tone="info">{dm.unread}</Tag>:null}
     {dm.execState==='running'||dm.execState==='queued'?<span className="nav-dot" title={EXEC_TEXT[dm.execState]}/>:null}
-  </button>{pin.button}{pin.menu}</div>;
+  </button><ConversationPinButton target={{kind:'dm',projectId:dm.projectId,itemId:dm.id}} label={dm.title||dm.peerDisplayName||'成员'} disabled={dm.archivedAt!=null}/></div>;
 }
 
 function DmPinPlaceholder({pin,projectName,error}:{pin:NavigationPin;projectName:string;error:boolean}){
-  const menu=useConversationPinMenu(pin,pin.label);
-  return <div className="conversation-nav-row dm-row-shell" onContextMenu={menu.onContextMenu}>
+  return <div className="conversation-nav-row dm-row-shell">
     <button className="dm-row" onClick={()=>openDmConversation(pin.projectId,pin.itemId)}><Icon name="message-square" size={14}/><span className="conversation-nav-label"><span className="truncate">{pin.label}</span><span className="pin-project-label">{projectName}</span></span></button>
     {error?<button className="btn ghost sm" title="重新读取置顶私信" onClick={()=>{void loadDmProjectIndex(pin.projectId).catch(()=>{});}}>重试</button>:null}
-    {menu.button}{menu.menu}
+    <ConversationPinButton target={pin} label={pin.label}/>
   </div>;
 }
 

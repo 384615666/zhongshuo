@@ -9,6 +9,7 @@ import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
 import { NavUnreadDot } from './components/NavMarks';
 import {RoomNavItem} from './components/RoomNavItem';
+import {ProjectConversationList} from './components/ProjectConversationList';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms, pickAndOpenFolder } from './shell';
@@ -523,7 +524,9 @@ export default function App() {
                       {expanded && roomIndex?.status === 'ready' && rooms.length === 0 ? (
                         <div className="side-empty small">暂无房间</div>
                       ) : null}
-                      {expanded ? rooms.filter((r) => r.archivedAt == null&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.itemId===r.id)).map(room=><RoomNavItem key={room.id} projectId={p.id} roomId={room.id} name={room.name} active={room.id===activeRoomId}/>) : null}
+                      {expanded ? <ProjectConversationList projectId={p.id} kind="room" items={rooms.filter(r=>r.archivedAt==null&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.itemId===r.id))}>
+                        {room=><RoomNavItem key={room.id} projectId={p.id} roomId={room.id} name={room.name} active={room.id===activeRoomId}/>}
+                      </ProjectConversationList> : null}
                     </div>
                   );
                 });
