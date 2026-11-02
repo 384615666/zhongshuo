@@ -33,7 +33,7 @@ window.zs={command:async env=>{
   if(outcome==='error')return failure('任务仍在执行，请稍后继续');
   if(outcome==='unknown')throw Error('连接已中断');
   if(outcome==='delay')await new Promise(resolve=>{finish=resolve;});
-  continued=true;render();return success({enqueued:true,dispatchKey:'task:'+env.params.taskId+':continue'});
+  continued=true;history=true;render();return success({enqueued:true,dispatchKey:'task:'+env.params.taskId+':continue'});
  }
  if(env.method==='dispatch.resume'){gate=false;return success({});}
  if(env.method==='conversation.list')return success({conversations:[]});
@@ -56,7 +56,7 @@ async function runVerifier(config){
  const out=path.join(root,'dist/r156-direct-continue-ui',`${Date.now()}-${process.pid}`);fs.mkdirSync(out,{recursive:true});
  fs.mkdirSync(path.join(out,'assets'));fs.copyFileSync(path.join(root,'logo.png'),path.join(out,'assets/logo.png'));
  fs.writeFileSync(path.join(out,'entry.tsx'),renderer.replace('__CONFIG__',JSON.stringify(config)));
- await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
+ await require('esbuild').build({entryPoints:[path.join(out,'entry.tsx')],outfile:path.join(out,'ui.mjs'),bundle:true,platform:'browser',format:'esm',jsx:'automatic',loader:{'.png':'dataurl'},logLevel:'silent',define:{'process.env.NODE_ENV':'"production"'}});
  fs.writeFileSync(path.join(out,'app.css'),['tokens.css','base.css','components.css','preview.css','titlebar.css','h1-overrides.css'].map(file=>fs.readFileSync(path.join(root,'src/ui/hifi/styles',file),'utf8')).join('\n'));
  fs.writeFileSync(path.join(out,'index.html'),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><div class="app" id="root"></div><script type="module" src="ui.mjs"></script>');
  fs.writeFileSync(path.join(out,'main.cjs'),String.raw`
@@ -96,7 +96,9 @@ try{
  await capture('02-recovery-root-task-1280');
  const count=s.calls.filter(c=>c.method==='task.continue').length;await js('(()=>{r156.outcome("delay");const b=document.querySelector("[data-zs-recovery] [data-zs-continue-task=parent]");b.click();b.click();})()');await until('r156.snapshot().pending','panel continuation');s=await snap();
  check('panel-direct-single-click-continues-root-once',s.calls.filter(c=>c.method==='task.continue').length===count+1&&s.calls.filter(c=>c.method==='task.continue').at(-1).params.taskId==='parent',s.calls);
- await js('r156.finish()');await until('document.querySelector("[data-zs-recovery]").innerText.includes("任务已在处理中")','panel refresh');await capture('03-continued-task-1280');
+ await js('r156.finish()');await until('document.querySelector("[data-zs-recovery]").innerText.includes("没有需要恢复的任务")','resolved task removed');
+ check('accepted-task-leaves-recovery-list',!(await snap()).tasks.length,await snap());
+ await js('r156.open({taskId:"parent"})');await until('document.querySelector("[data-zs-recovery]").innerText.includes("任务已在处理中")','explicit task target');await capture('03-continued-task-1280');
  await click('查看任务');await until('location.hash==="#/thread/thread?tab=task"&&!r156.snapshot().modal','root formal route');s=await snap();
  check('view-task-uses-formal-root-route',s.calls.some(c=>c.method==='deepLink.resolve'&&c.params.hash==='#task=parent'),s.hash);
  await js('location.hash="#/welcome";r156.scenario("ongoing")');await pause(40);s=await snap();const before=writes(s).length;
@@ -105,7 +107,7 @@ try{
  check('recovery-preserves-active-task-with-only-view',s.text.includes('任务已在处理中')&&!await js('document.querySelector("[data-zs-recovery] [data-zs-continue-task]")')&&writes(s).length===before,s.text);
  win.setSize(3440,1440);await capture('04-active-task-preserved-3440',true);win.setSize(1280,900);await close();
  await js('r156.scenario("history");r156.boot("ready")');await open();s=await snap();
- check('released-unknown-history-does-not-reappear-as-attention',s.tasks.length===0&&s.attention==='0'&&s.text.includes('没有需要恢复的任务'),s);
+ check('released-unknown-history-does-not-reappear-as-attention',s.tasks.length===0&&s.attention===undefined&&s.text.includes('没有需要恢复的任务'),s);
  await close();await js('r156.boot("pending");r156.scenario("queue")');await open();s=await snap();const queueBefore=s.calls.filter(c=>c.method==='dispatch.resume').length;
  check('queue-is-not-resumed-on-open',queueBefore===0,s.calls);await click('继续处理排队消息');await until('r156.snapshot().calls.some(c=>c.method==="dispatch.resume")','queue continue');s=await snap();
  check('explicit-queue-continue-retains-confirmation-contract',s.calls.filter(c=>c.method==='dispatch.resume').length===1&&s.calls.find(c=>c.method==='dispatch.resume').params.confirm===true,s.calls);

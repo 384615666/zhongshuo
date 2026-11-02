@@ -15,7 +15,7 @@ import { getState, setAppearanceState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
-import { OPEN_RECOVERY_EVENT, type RecoveryTarget } from './lib/recovery';
+import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom } from './loader';
 import { DmPage } from './DmPage';
@@ -185,7 +185,6 @@ export default function App() {
   const [recoveryAttention, setRecoveryAttention] = useState(false);
   // Recovery stays manual: startup and later interruptions only mark the sidebar.
   const [recoveryOrigin, setRecoveryOrigin] = useState<'startup' | 'runtime' | null>(null);
-  const [pendingWaitCount, setPendingWaitCount] = useState(0);
   useEffect(() => {
     const openRecovery = (event: Event): void => {
       setRecoveryTarget((event as CustomEvent<{ target?: RecoveryTarget }>).detail?.target);
@@ -258,11 +257,13 @@ export default function App() {
   useEffect(() => {
     if (s.boot !== 'ready') return;
     let cancelled = false;
+    let checkGeneration = 0;
     const check = () => {
       if (cancelled || document.body.classList.contains('legacy-on')) return;
-      void command<{ gateHeld: boolean; unknownTurns: Array<{ id: string;protectionReleased?:boolean }>; pendingRelease: Array<{ turnId: string }>; activeUndos: Array<{ id: string }>; interruptedRuns: Array<{ id: string }>; pendingDispatchCount: number }>('recovery.status', {})
+      const generation = ++checkGeneration;
+      void command<RecoveryStatus>('recovery.status', {})
         .then((r) => {
-          if (cancelled) return;
+          if (cancelled || generation !== checkGeneration) return;
           const entities: string[] = [];
           if (r.gateHeld) entities.push('gate:held');
           for (const x of r.unknownTurns) if(x.protectionReleased!==true)entities.push(`turn:${x.id}`);
@@ -275,7 +276,6 @@ export default function App() {
           const isFirstSnapshot = startupSignatureRef.current == null;
           if (isFirstSnapshot) startupSignatureRef.current = new Set(entities);
           setRecoveryAttention(realAttention);
-          setPendingWaitCount(!realAttention && r.pendingDispatchCount > 0 ? r.pendingDispatchCount : 0);
           if (realAttention) {
             const startupSet = startupSignatureRef.current ?? new Set<string>();
             const allFromStartup = entities.every((e) => startupSet.has(e));
@@ -300,8 +300,9 @@ export default function App() {
         .catch(() => { /* 读取失败不冒充 */ });
     };
     check();
+    window.addEventListener(RECOVERY_CHANGED_EVENT, check);
     const t = window.setInterval(check, 30_000);
-    return () => { cancelled = true; window.clearInterval(t); };
+    return () => { cancelled = true; window.clearInterval(t); window.removeEventListener(RECOVERY_CHANGED_EVENT, check); };
   }, [s.boot]);
 
   // 外部深链族（#dm=/#task=/#delivery=/#msg=）规范化
@@ -530,23 +531,18 @@ export default function App() {
               </button>
             </div>
             <div className="sidebar-foot">
-              <button
-                className={`side-item${recoveryAttention ? ' zs-recovery-attention' : ''}`}
-                title={recoveryAttention
-                  ? recoveryOrigin === 'runtime'
+              {recoveryAttention ? <button
+                className="side-item zs-recovery-attention"
+                title={recoveryOrigin === 'runtime'
                     ? `恢复任务：有新的中断任务，可继续`
-                    : `恢复任务：查看可继续的任务`
-                  : pendingWaitCount > 0
-                    ? `恢复任务：${pendingWaitCount} 条请求正在排队等待派发（非故障）`
-                    : '恢复任务：查看可继续的任务'}
-                data-zs-recovery-attention={recoveryAttention ? '1' : '0'}
+                    : `恢复任务：查看可继续的任务`}
+                data-zs-recovery-attention="1"
                 onClick={() => setRecoveryOpen(true)}
               >
                 <Icon name="shield" size={14} />
                 <span className="side-item-label">恢复任务</span>
-                {recoveryAttention ? <span className="side-marks"><span className="nav-dot" title={recoveryOrigin === 'runtime' ? '本次运行新出现' : '启动时已有'} style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span> : null}
-                {!recoveryAttention && pendingWaitCount > 0 ? <span className="side-marks"><span className="nav-dot" title="普通排队（非故障）" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--text-4,#98a0ad)', display: 'inline-block' }} /></span> : null}
-              </button>
+                <span className="side-marks"><span className="nav-dot" title={recoveryOrigin === 'runtime' ? '本次运行新出现' : '启动时已有'} style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span>
+              </button> : null}
               <button
                 className={`side-item${navActive.pending ? ' active' : ''}`}
                 title="查看需要你处理的事项"

@@ -2247,10 +2247,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 「预算已处置、保护待解除」遗留保护（第四十一轮 §2：以 protection_state='retained'
         // 为准——无租约的人工退款保留项不再从恢复中心消失；leaseCount 如实分列）。
         const pendingRelease = deps.db.prepare(
-          `SELECT t.id AS turnId, t.budget_mark AS budgetMark, t.status AS turnStatus, t.protection_state AS protectionState,
+          `SELECT t.id AS turnId, r.task_id AS taskId, t.budget_mark AS budgetMark, t.status AS turnStatus, t.protection_state AS protectionState,
                   (SELECT count(*) FROM workspace_leases l WHERE l.owner_turn_id = t.id AND l.status != 'released') AS leaseCount,
                   (SELECT p.result FROM recovery_exit_probes p WHERE p.turn_id = t.id ORDER BY p.observed_at DESC LIMIT 1) AS lastProbeResult
-           FROM agent_turns t
+           FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id
            WHERE t.protection_state = 'retained'`,
         ).all();
         return withCommandId({

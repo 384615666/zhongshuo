@@ -19,7 +19,7 @@ interface RecoveryStatus {
   pendingDispatchKeys: string[];
   interruptedRuns: Array<{ id: string; task_id: string; status: string }>;
   unknownTurns: Array<{ id: string; runId: string; taskId: string; status: string; protectionReleased: boolean }>;
-  pendingRelease: Array<{ turnId: string; budgetMark: string | null; turnStatus: string; protectionState: string; leaseCount: number }>;
+  pendingRelease: Array<{ turnId: string; taskId: string; budgetMark: string | null; turnStatus: string; protectionState: string; leaseCount: number }>;
   activeUndos: Array<{ id: string; changeSetId: string; status: string }>;
   heldLeases: Array<{ lock_domain: string; owner_turn_id: string; status: string }>;
   stopRecord: { phase: string; drainPending: boolean } | null;
@@ -203,7 +203,7 @@ describe('R140 interruption filtering leaves independent recovery facts visible'
     const before = snapshot(f.db);
     const result = await f.status();
     expect(result.unknownTurns).toEqual([{ id: unknown, runId: oldRun, taskId, stageKey: 'direct.work', status: 'UNKNOWN', protectionReleased: false }]);
-    expect(result.pendingRelease).toEqual([{ turnId: retained, budgetMark: 'refunded', turnStatus: 'FAILED', protectionState: 'retained', leaseCount: 0, lastProbeResult: null }]);
+    expect(result.pendingRelease).toEqual([{ turnId: retained, taskId, budgetMark: 'refunded', turnStatus: 'FAILED', protectionState: 'retained', leaseCount: 0, lastProbeResult: null }]);
     expect(result.heldLeases).toEqual([{ lock_domain: f.root, owner_turn_id: unknown, status: 'expired', heartbeat_at: 100 }]);
     expect(snapshot(f.db)).toEqual(before);
     expect(result.interruptedRuns).toEqual([]);

@@ -5,6 +5,18 @@ import type {TaskExecutionStatus} from '../../../contracts/executionStatus';
 import type {TaskContinuationBinding} from './checkPreviousReply';
 
 export const OPEN_RECOVERY_EVENT = 'zs:open-recovery';
+export const RECOVERY_CHANGED_EVENT = 'zs:recovery-changed';
+export function notifyRecoveryChanged():void {
+  if(typeof window!=='undefined')window.dispatchEvent(new Event(RECOVERY_CHANGED_EVENT));
+}
+export interface RecoveryStatus {
+  gateHeld:boolean;pendingDispatchCount:number;
+  interruptedRuns:Array<{id:string;task_id:string;status:string}>;
+  unknownTurns:Array<{id:string;taskId:string;protectionReleased?:boolean}>;
+  pendingRelease:Array<{turnId:string;taskId?:string}>;
+  heldLeases:Array<{owner_turn_id:string}>;
+  activeUndos:Array<{id:string;changeSetId:string;status:string}>;
+}
 export interface RecoveryTarget {
   turnId?: string;
   taskId?: string;
@@ -24,6 +36,11 @@ export interface RecoveryTask {
   task:RecoveryTaskFact;
   binding:TaskContinuationBinding;
   executionStatus?:TaskExecutionStatus|null;
+}
+export function canContinueRecoveryTask(item:RecoveryTask):boolean {
+  if(['DONE','CANCELLED'].includes(item.task.status))return false;
+  if(item.executionStatus?.actions.some(action=>action.kind==='continue'))return true;
+  return !['RUNNING','STOPPING','QUEUED','WAITING_FOR_PEER','WAITING_FOR_USER'].includes(item.executionStatus?.phase??'');
 }
 type ReadTask=(taskId:string)=>Promise<{task:RecoveryTaskFact;executionStatus?:TaskExecutionStatus|null}>;
 /** Resolve each affected task to its actual root and combine sibling interruptions. */
