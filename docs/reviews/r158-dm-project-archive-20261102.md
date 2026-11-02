@@ -28,4 +28,18 @@
 
 ## beta.11 构建与安装准备
 
-用户随后明确授权「推送打包安装给我测试」。版本更新为 0.1.3-beta.11 / Windows 0.1.3.11，按当前源码冻结构建；沿用数据结构 61。已通过的产品完整回归不重复运行，追加版本与安装包验证。实际安装结果将在完成后回填。
+用户随后明确授权「推送打包安装给我测试」。版本更新为 0.1.3-beta.11 / Windows 0.1.3.11，按当前源码冻结构建；沿用数据结构 61。已通过的产品完整回归不重复运行，追加版本与安装包验证。构建与实际安装均已完成，结果如下。
+
+
+## beta.11 实际交付
+
+- 源码提交 `5f9c28531ca9a25e0a68431db908672b8112f27f` 已推送公开 `main`。从独立干净 worktree `dist/r158-source` 构建，未纳入既有未跟踪夹具。
+- 安装器 `dist/installers/Zhongshuo-Setup-0.1.3-beta.11-x64.exe`：160,100,067 字节，SHA256 `b50d373614e2489f3c1174863aaf3b840943b6f109c8e45bc7fc1a10f98c4139`，附 `.sha256` 与 `.release.json`。
+- 安装镜像 BUILD `bld_1959944f73bcdd45` / dirty=false / 665 文件逐项 hash 一致；随包 EXE 的产品、文件说明与原始文件名为众说 / 众说 / Zhongshuo.exe，版本为 0.1.3-beta.11。
+- 追加版本测试 3/3，包内隔离验证 20/20：保留上一版设置/通知/外链/停机验证，新增正式私信接口返回对端身份、包内列表正确渲染保存的成员头像；仅记录消息，0 模型调用。证据 `dist/r158-delivery/package-qa-063b92ad/result.json`。
+- 本机旧版无活动轮次，经正式 `daemon.shutdown` + 窗口关闭正常退出；`desktop-shutdown.json` 确认 complete=true、exitCode=0、forceKilled=false。托盘退出的手动操作提示后来已撤回为无需操作，没有等待用户再次授权，也未强杀用户程序。
+- 退出后完整本地备份 4455 文件、255,577,055 字节，逐文件 hash 核对通过。备份及所有运行数据仅留 ignored 的 `dist/r158-delivery/`，不提交、不进入安装包。备份数据库 integrity_check=ok、schema=61。
+- 当前用户安装器正常退出 0，覆盖原程序目录；安装后 665 文件 hash 全部与镜像一致，注册表 DisplayVersion=0.1.3-beta.11。启动新版前数据库原件字节 hash 与备份时一致，安装未改写数据库。
+- 新版已从正常安装入口打开；后台健康、仍使用原数据根、schema=61，数据库 integrity_check=ok。聊天、项目、房间、任务、运行、轮次和调用行数与备份一致，0 新增真实调用。原生界面打开私信、点击项目名后仍停留私信页。
+- 前一轮运行期间观察到的 SQLITE_CORRUPT，在本次正常关闭后的备份及新版运行库中均未复现。没有执行数据库修复、导入、迁移或改写任务状态；不推测旧异常的根因。没有代替用户归档实际项目。
+- 本机证据：`dist/r158-delivery/payload-verification.json`、`pre-upgrade-backup.json`、`installation-result.json`、`installed-startup-result.json`、`install.log`。此次只推送源码与交付文档，未创建 GitHub Release。
