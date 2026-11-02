@@ -49,6 +49,7 @@ import { requestStop } from './stopFlow.ts';
 import {readPreDispatchFailure,unstartedPreparationCounts} from './preDispatchFailure.ts';
 import {readTaskExecutionStatus} from './executionStatus.ts';
 import {readProjectRoomActivity} from './roomActivity.ts';
+import {currentAttentionTaskIds} from './taskAttention.ts';
 import {isRetryRunStatus} from '../contracts/taskRecovery.ts';
 import {taskClosureParamsSchema} from '../contracts/taskClosure.ts';
 import {closeIdleTask} from './taskClosure.ts';
@@ -4772,14 +4773,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           // 阻塞任务（第二十三轮三：如实列出——可见≠审批：不并入待验收，处理入口=线程本身；
           // 不把所有 BLOCKED 都当人工审批，授权请求（WAITING_APPROVAL）等其余未覆盖项见
           // continuation 登记范围）。
-          const blockedTasks = (deps.db.prepare(
+          const blockedCandidates = (deps.db.prepare(
             `SELECT t.id AS task_id, t.kind AS task_kind, t.title, t.conversation_id, c.kind AS conversation_kind
              FROM tasks t JOIN conversations c ON c.id = t.conversation_id
              WHERE t.project_id = ? AND t.status = 'BLOCKED'
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY t.rowid`,
-          ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>)
-            .map((b) => ({ ...b, reason: taskStatusReasonOf(deps.db, b.task_id) }));
+          ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>);
+          const attentionIds=currentAttentionTaskIds(deps.db,blockedCandidates.map(task=>task.task_id));
+          const blockedTasks=blockedCandidates.filter(task=>attentionIds.has(task.task_id))
+            .map(b=>({...b,reason:readTaskExecutionStatus(deps.db,b.task_id)?.reason.message??taskStatusReasonOf(deps.db,b.task_id)}));
           // 待确认提醒触发（REM-8）：确认入口由此可达；他人 DM 不泄露。locate（第二十六轮二）：
           // 服务端按目标实际形态构造准确深链——DM=#dm=；房间任务串=#task=；讨论串=#msg=锚。
           // notifyMuted=目标**线程**静音（提醒通知过滤——不能用未读聚合过滤代替；待办保留仅禁通知）。

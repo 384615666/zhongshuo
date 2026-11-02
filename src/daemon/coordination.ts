@@ -469,7 +469,19 @@ export function acceptCoordinationPlan(db: ZhongshuoDatabase, taskId: string, ru
 
 function finalHandoff(db: ZhongshuoDatabase, taskId: string) {
   const row=db.prepare(`SELECT d.id,d.revision,d.manifest_hash,d.run_id,d.artifact_refs_json,d.change_set_refs_json,t.owner_member_id FROM tasks t JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?`).get(taskId) as {id:string;revision:number;manifest_hash:string;run_id:string;artifact_refs_json:string;change_set_refs_json:string;owner_member_id:string}|undefined;
-  if(!row) return null;
+  if(!row){
+    // A successful conversation has a real answer but intentionally no file
+    // delivery. Bind only the latest successful turn's saved final message.
+    const reply=db.prepare(`SELECT r.id run_id,a.id turn_id,a.member_id owner_member_id,m.id message_id,m.body_json
+      FROM tasks t JOIN workflow_runs r ON r.task_id=t.id JOIN agent_turns a ON a.run_id=r.id
+      JOIN messages m ON m.id=COALESCE((SELECT value FROM daemon_state WHERE key='final-message:'||a.id),'msg_'||a.id||'_final_result')
+      WHERE t.id=? AND t.status='DONE' AND t.response_kind='conversation' AND r.status='SUCCEEDED' AND a.status='SUCCEEDED'
+        AND r.id=(SELECT id FROM workflow_runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1)
+        AND m.task_id=t.id AND m.project_id=t.project_id AND m.conversation_id=t.conversation_id
+        AND m.author_type='agent' AND m.author_id=a.member_id AND m.status='final'
+      ORDER BY a.rowid DESC LIMIT 1`).get(taskId) as {run_id:string;turn_id:string;owner_member_id:string;message_id:string;body_json:string}|undefined;
+    return reply?{kind:'conversation' as const,run_id:reply.run_id,turn_id:reply.turn_id,owner_member_id:reply.owner_member_id,message_id:reply.message_id,files:[],final:JSON.parse(reply.body_json) as unknown}:null;
+  }
   const final=db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq DESC LIMIT 1").get(taskId) as {body_json:string}|undefined;
   const root=(db.prepare('SELECT p.canonical_path FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=?').get(taskId) as {canonical_path:string}).canonical_path;
   const changes=deliveryFilesForHandoff(db,taskId,row.run_id,JSON.parse(row.change_set_refs_json) as string[]);
@@ -534,7 +546,10 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     const steps=db.prepare(`SELECT s.*,t.status,t.current_delivery_id,t.response_kind FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(run.run_id) as {step_key:string;child_task_id:string;status:string;handoff_json:string|null;current_delivery_id:string|null;response_kind:string|null}[];
     for(const step of steps)if(step.status==='DONE'){
       const saved=JSON.parse(step.handoff_json??'{}') as {output?:unknown};
-      if(!saved.output){step.handoff_json=JSON.stringify({...saved,output:finalHandoff(db,step.child_task_id)});db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(step.handoff_json,run.run_id,step.step_key);}
+      if(!saved.output||step.response_kind==='conversation'&&!step.current_delivery_id){
+        const updated=JSON.stringify({...saved,output:finalHandoff(db,step.child_task_id)});
+        if(updated!==step.handoff_json){step.handoff_json=updated;db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(updated,run.run_id,step.step_key);}
+      }
     }
     if(isBroadcastRun(db,run.run_id)){
       // One failed recipient must not cancel the other already accepted recipients.
@@ -699,8 +714,11 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       return;
     }
     const allDelivered=steps.every(s=>s.status==='DONE'&&s.current_delivery_id);
+    const latestParentRun=db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(parent.id) as {id:string}|undefined;
+    const conversationReady=latestParentRun?.id===run.run_id&&steps.length>0&&steps.every(s=>s.status==='DONE'&&(s.current_delivery_id
+      ||s.response_kind==='conversation'&&JSON.parse(s.handoff_json??'{}').output!=null));
     const deferredReady=deferredHandoffs&&steps.every(s=>s.status==='DONE');
-    if(allDelivered||deferredReady||explicitWorkReady) {
+    if(allDelivered||conversationReady||deferredReady||explicitWorkReady) {
       const root=(db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(parent.project_id) as {canonical_path:string}).canonical_path;
       verifyHandoffFiles({files:managedHandoffFiles(db,run.run_id)},root);
       const queued=db.prepare("UPDATE coordination_runs SET state='integrating' WHERE run_id=? AND state='running' AND integration_run_id IS NULL").run(run.run_id);
