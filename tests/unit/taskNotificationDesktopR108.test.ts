@@ -238,6 +238,8 @@ describe('R108 preload and main wiring', () => {
     expect(source).toContain("const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ??");
     expect(source).toContain("installedDesktop ? 'com.zhongshuo.desktop.app' : 'com.zhongshuo.desktop.portable'");
     expect(source).toContain('app.setAppUserModelId(desktopAppId)');
-    expect(source).toContain('win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchDisplayName:');
+    expect(source).toContain('win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,');
+    expect(source).toContain('relaunchCommand:windowsRelaunchCommand(process.execPath,installedDesktop?baseDataRoot:undefined)');
+    expect(source).toContain("relaunchDisplayName:'众说'");
   });
 });

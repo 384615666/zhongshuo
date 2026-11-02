@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WindowsTrayLifecycle } from '../../src/ui/windowsTray.ts';
 import * as runtimeMetadataDeadline from '../../src/contracts/runtimeMetadataDeadline.ts';
 import * as editContextMenu from '../../src/ui/editContextMenu.ts';
+import * as windowsAppIdentity from '../../src/ui/windowsAppIdentity.ts';
 
 // Exercise the actual main module with native process/OS boundaries replaced.
 // Transpilation stays in memory: no app bundle, native process or data is created.
@@ -24,7 +25,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
   const nativeQuit = vi.fn();
   const event = () => ({ defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
   const app = Object.assign(new EventEmitter(), {
-    setAppUserModelId: vi.fn(), setPath: vi.fn(), getPath: () => 'C:/fixture', getVersion: () => '9.9.9',
+    setName:vi.fn(), setAppUserModelId: vi.fn(), setPath: vi.fn(), getPath: () => 'C:/fixture', getVersion: () => '9.9.9',
     requestSingleInstanceLock: vi.fn(() => options.singleInstance !== false),
     commandLine: { appendSwitch: vi.fn() }, whenReady: () => Promise.resolve(),
     quit: vi.fn(() => {
@@ -98,6 +99,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
     powerMonitor: new EventEmitter(), screen: { getAllDisplays: () => [], getPrimaryDisplay: () => ({ id: 1 }) },
   };
   const mocks: Record<string, unknown> = {
+    './windowsAppIdentity.ts':windowsAppIdentity,
     './editContextMenu.ts': editContextMenu,
     '../contracts/runtimeMetadataDeadline.ts': runtimeMetadataDeadline,
     electron, 'node:path': path, 'node:crypto': crypto, 'node:url': url,
@@ -110,7 +112,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
       },
       writeFileSync: (file: string, data: string) => writes.set(file, data),
     },
-    'node:child_process': { spawn },
+    'node:child_process': { spawn,spawnSync:vi.fn(()=>({status:0})) },
     './windowsTray.ts': { WindowsTrayLifecycle },
     './connectionMonitor.ts': { ConnectionMonitor: class {
       start = vi.fn(); connected = vi.fn(); dispose = vi.fn(); suspend = vi.fn(); resume = vi.fn();
@@ -127,7 +129,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
       installedDesktopConfiguration: (_args: unknown, env: unknown) => ({ dataRoot: 'C:/fixture', env }), installedDaemonPipe: () => 'fixture-pipe',
     },
   };
-  const proc = { env: { ZS_RUNTIME: 'fake', ZS_ALLOW_FAKE: '1', ZS_APP_DATA: 'C:/fixture' }, argv: ['electron'], platform: 'win32', pid: 123, stderr: { write: vi.fn() } };
+  const proc = { env: { ZS_RUNTIME: 'fake', ZS_ALLOW_FAKE: '1', ZS_APP_DATA: 'C:/fixture' }, argv: ['electron'],execPath:'C:/fixture/Zhongshuo.exe', platform: 'win32', pid: 123, stderr: { write: vi.fn() } };
   runInNewContext(mainCode, {
     require: (name: string) => { if (!(name in mocks)) throw Error(`Unexpected dependency ${name}`); return mocks[name]; },
     __dirname: 'C:/fixture/dist/ui', exports: {}, process: proc, URL, Buffer, AbortController, performance,

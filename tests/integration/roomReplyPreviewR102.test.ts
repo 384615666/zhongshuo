@@ -16,7 +16,7 @@ it('keeps original latest replies and authoritative counts current in cold/cache
   /**
    * 头像回填是成员装载后的后台读取（loader 的 `void backfillDefaultMemberAvatars(...)`），
    * 它会在装载完成后异步补一次 `app.appearance.get`；与本用例要核对的「房间池只发
-   * room.pool」无关，统计时排除这条后台读，不放松对房间池请求的断言。
+   * room.pool + room.list（侧栏执行态）」无关，统计时排除这条后台读；仍禁止打开串或读取历史。
    */
   const poolMethods=()=>methods.filter(method=>method!=='app.appearance.get');
   const raw=(method:string,params:unknown)=>{
@@ -65,7 +65,7 @@ it('keeps original latest replies and authoritative counts current in cold/cache
       expect(preview.map(m=>m.authorId)).toEqual([member,member]);
     };
     append(1);append(2);methods.length=0;
-    await loader.loadRoomPool(room.id);expect(poolMethods()).toEqual(['room.pool']);check(2);
+    await loader.loadRoomPool(room.id);expect(poolMethods()).toEqual(['room.pool','room.list']);check(2);
     expect(store.getState().threadEntities[sent.threadId]).toBeUndefined();
     append(1,empty);append(2,empty);await loader.loadThread(empty.threadId);check(2,empty.threadId); // older pool has recentReplies:[]
     await loader.loadThread(sent.threadId);
@@ -75,7 +75,7 @@ it('keeps original latest replies and authoritative counts current in cold/cache
     pauseHistory=true;const stale=loader.loadThread(sent.threadId);await vi.waitFor(()=>expect(captured).toBe(true));
     for(let n=8;n<=10;n++)append(n);
     db.prepare("UPDATE tasks SET status='DONE' WHERE id=?").run(sent.taskId);
-    methods.length=0;await loader.loadRoomPool(room.id);expect(poolMethods()).toEqual(['room.pool']);check(10);
+    methods.length=0;await loader.loadRoomPool(room.id);expect(poolMethods()).toEqual(['room.pool','room.list']);check(10);
     release!();await stale;expect(store.getState().threadMessages[sent.threadId]).toHaveLength(7);check(10);
     await loader.loadThread(sent.threadId);check(10);
     append(11);append(12);await loader.loadThread(sent.threadId);check(12); // newer thread beats the older pool total and preview

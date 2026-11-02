@@ -67,7 +67,7 @@ it('hydrates live child facts in the cold room pool without opening a thread or 
     expect(store.getState().threadEntities[sent.threadId]).toBeUndefined();
     methods.length = 0;
     await loader.loadRoomPool(room.id);
-    expect(methods).toEqual(['room.pool']);
+    expect(methods).toEqual(['room.pool','room.list']);
     const task = store.getState().tasks.find(item => item.id === sent.taskId)!;
     const progress = store.getState().threadProgress[sent.threadId]!.items;
     expect(task.latestRun?.status).toBe('WAITING');
