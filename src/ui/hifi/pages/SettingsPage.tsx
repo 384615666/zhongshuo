@@ -68,7 +68,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
   { section: 'appearance', label: '主题', keywords: '外观 主题 深色 浅色 暗色', match: 'appearance-theme' },
   { section: 'appearance', label: '显示头像', keywords: '头像 显示 图片', match: 'appearance-avatars' },
-  { section: 'appearance', label: '设置个人与 AI 头像', keywords: '我的头像 个人头像 AI头像 上传 更换 恢复默认 图片', match: 'appearance-avatar-images' },
+  { section: 'appearance', label: '设置我的头像', keywords: '我的头像 个人头像 上传 更换 恢复默认 图片', match: 'appearance-avatar-images' },
   { section: 'notifications', label: '线程通知静音', keywords: '通知 静音 桌面 完成 验收 输入', match: '线程通知静音' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用预算 调用次数 次数预算 启用 开启 关闭 上限 callBudget budget DIRECT AUTO DELIBERATE', match: 'call-budget' },
   { section: 'runtime', label: '同时运行的 AI', keywords: '并发 并行 同时 运行 全局 每项目 同渠道 上限 concurrency', match: 'execution-concurrency' },
@@ -99,7 +99,7 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
   );
 }
 
-import { Avatar, Modal, Select, Switch, Tag, memberColor } from '../components/ui';
+import { Avatar, Modal, Select, Switch, Tag } from '../components/ui';
 
 export function SettingsPage({ query }: { query?: Record<string, string> }) {
   const q = query ?? {};
@@ -287,8 +287,6 @@ function SectionGeneral() {
 function SectionAppearance() {
   const theme = useStore((s) => s.ui.theme);
   const showAvatars = useStore((s) => s.ui.showAvatars === true);
-  const membersAll = useStore((s) => s.members);
-  const members = useMemo(() => membersAll.filter((member) => member.principalType === 'agent'), [membersAll]);
   const [busy, setBusy] = useState<string | null>(null);
   const save = useCallback(async (key: string, patch: { showAvatars?: boolean; avatar?: { subject: string; dataUrl: string | null } }): Promise<void> => {
     setBusy(key);
@@ -335,20 +333,12 @@ function SectionAppearance() {
         />
       </SettingsRow>
       <div className="card" style={{ marginTop: 14 }} data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
-        <div className="card-title">头像</div>
-        <div className="small faint" style={{ padding: '0 14px 8px' }}>PNG、JPEG 或 WebP。预览始终可见，聊天中的头像遵循上方开关。</div>
+        <div className="card-title">我的头像</div>
+        <div className="small faint" style={{ padding: '0 14px 8px' }}>
+          PNG、JPEG 或 WebP。预览始终可见，聊天中的头像遵循上方开关。
+          AI 成员的头像在「成员管理 → AI 设置」里选，那里有预置头像也可以上传。
+        </div>
         <AppearanceAvatarRow subject="user" name="我" color="var(--m-human)" busy={busy} onSave={save} />
-        {members.map((member) => (
-          <AppearanceAvatarRow
-            key={member.id}
-            subject={`member:${member.id}`}
-            name={member.displayName}
-            color={memberColor(member.id, member.ordinal)}
-            busy={busy}
-            onSave={save}
-          />
-        ))}
-        {members.length === 0 ? <div className="small faint" style={{ padding: '8px 14px 12px' }}>当前项目还没有 AI 成员。</div> : null}
       </div>
     </div>
   );

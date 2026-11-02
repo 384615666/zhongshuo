@@ -37,7 +37,9 @@ await build({
   outfile: join(root, 'dist', 'ui', 'renderer', 'hifi', 'app.mjs'),
   sourcemap: false,
   logLevel: 'info',
-  loader: { '.tsx': 'tsx', '.ts': 'ts' },
+  // `.png` -> dataurl：预置头像以 `data:image/png;base64,...` 字符串直接进包，
+  // renderer 不需要额外静态资源路径，`app.appearance.set` 也能原样接收。
+  loader: { '.tsx': 'tsx', '.ts': 'ts', '.png': 'dataurl' },
 });
 mkdirSync(join(root, 'dist', 'ui', 'renderer', 'hifi'), { recursive: true });
 writeFileSync(

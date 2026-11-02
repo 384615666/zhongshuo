@@ -29,6 +29,9 @@ import { memberWrite } from './data/memberWrites';
 import { fullTime, runtimeModelDisplayName } from './lib/format';
 import { runtimePermissionHint, runtimePermissionOptions } from './lib/runtimePermissions';
 import { RuntimeChannelHelp } from './components/RuntimeChannelHelp';
+import { AvatarPicker } from './components/AvatarPicker';
+import { defaultAiAvatarPreset } from './data/avatarPresets';
+import { saveAvatar } from './data/memberAvatar';
 import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
 
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
@@ -406,6 +409,10 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // 头像与 AI 配置同一个弹窗保存：初始值取已存头像，没存过就是默认首字母头像。
+  const memberSubject = `member:${member.id}`;
+  const savedAvatars = useStore((s) => s.ui.avatars ?? {});
+  const [avatar, setAvatar] = useState<string | null>(() => savedAvatars[memberSubject] ?? null);
   const mounted = useRef(false);
   const savePending = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -426,6 +433,15 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
       const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
       recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}`);
       toast(`已保存 ${member.displayName} 的 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
+      // 头像与 AI 配置一起保存。头像写失败不回滚已保存的配置——如实提示，别让用户以为整单都没存。
+      if ((savedAvatars[memberSubject] ?? null) !== avatar) {
+        try {
+          await saveAvatar(memberSubject, avatar);
+          recordWrite('app.appearance.set', `${member.displayName} 头像${avatar == null ? '已恢复默认' : '已更新'}`);
+        } catch (avatarError) {
+          toast(`AI 设置已保存，但头像未保存：${userFacingSystemText((avatarError as Error).message ?? '')}`, 'error');
+        }
+      }
       if (mounted.current) await onSaved();
     } catch (e) {
       if (!formGuard.valid())return;
@@ -465,6 +481,14 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
         <RuntimeChannelHelp kind={form.kind}/>
         {form.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.kind} executable={form.executable} value={form.model} disabled={busy} onChange={model=>setForm(f=>({...f,model,effort:''}))}/>:null}
         <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
+        <AvatarPicker
+          name={member.displayName}
+          color={memberColor(member.id, undefined)}
+          subject={memberSubject}
+          value={avatar}
+          disabled={busy}
+          onChange={setAvatar}
+        />
         <details><summary>高级：执行程序与权限</summary>
         <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" placeholder="留空使用本机 CLI" value={form.executable} onChange={e=>setForm(f=>({...f,executable:e.target.value}))}/></label>
         <label className="field" title="只影响之后新建的任务；已有任务保持原权限">
@@ -493,6 +517,8 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   const [desc, setDesc] = useState('');
   const [runtime,setRuntime]=useState({kind:'claude' as RealRuntimeKind,model:'',executable:runtimeExecutable('claude'),permissionMode:'bypassPermissions',effort:''});
   const [useAsDefault,setUseAsDefault]=useState(true);
+  // 新建 AI 默认就给 DeepSeek 娘那张预置头像——用户可以在这里改掉。
+  const [avatar,setAvatar]=useState<string | null>(()=>defaultAiAvatarPreset().dataUrl);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rooms = useStore((s) => s.rooms);
@@ -510,6 +536,13 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
       const r=outcome.data;
       if(!formGuard.valid())return;
       recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间）`);
+      // 成员已创建，头像单独写；写失败只提示，不让已经建好的成员变成"添加未确认"。
+      try {
+        await saveAvatar(`member:${r.memberId}`, avatar);
+        recordWrite('app.appearance.set', `新成员「${name.trim()}」头像${avatar == null ? '使用默认首字母' : '已设置'}`);
+      } catch (avatarError) {
+        toast(`成员已创建，但头像未保存：${userFacingSystemText((avatarError as Error).message ?? '')}`, 'error');
+      }
       await onCreated(r.memberId);
     } catch (e) {
       if(formGuard.valid())setErr(`添加未确认：${userFacingSystemText((e as Error).message ?? '')}`); // 归档/移除守卫等真实原因上屏
@@ -548,6 +581,13 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
         <RuntimeChannelHelp kind={runtime.kind}/>
         <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model=>setRuntime(f=>({...f,model,effort:''}))}/>
         <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort=>setRuntime(f=>({...f,effort}))}/>
+        <AvatarPicker
+          name={name}
+          color="var(--neutral)"
+          value={avatar}
+          disabled={busy}
+          onChange={setAvatar}
+        />
         <label className="row tight"><input type="checkbox" checked={useAsDefault} disabled={busy} onChange={e=>setUseAsDefault(e.target.checked)}/>在没有可用协调者的房间中，默认由它接收消息</label>
         <details><summary>高级：执行程序与权限</summary>
           <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" disabled={busy} value={runtime.executable} placeholder="留空使用本机 CLI" onChange={e=>setRuntime(f=>({...f,executable:e.target.value}))}/></label>
