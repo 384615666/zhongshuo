@@ -44,7 +44,7 @@ window.zs={command:async env=>{
   if(!item)return fail('任务不存在');
   const terminal=['DONE','CANCELLED'].includes(item.kind),phase=item.continued?'QUEUED':item.kind==='RUNNING'?'RUNNING':terminal?item.kind:'UNKNOWN';
   return ok({task:{id,title:parent?'协作子任务':'任务 '+id,status:terminal?item.kind:'BLOCKED',project_id:'p',parent_task_id:parent,revision:item.revision,stop_generation:0},
-   executionStatus:{phase,actions:!terminal&&phase==='UNKNOWN'?[{kind:'continue'}]:[]}});
+   executionStatus:{phase,actions:!terminal&&phase==='UNKNOWN'?[{kind:'continue',binding:{taskId:id,expectedTaskRevision:item.revision,expectedStopGeneration:0}}]:[]}});
  }
  if(env.method==='task.continue'){
   const id=env.params.taskId,item=items.get(id),outcome=outcomes.get(id);
