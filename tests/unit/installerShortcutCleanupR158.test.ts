@@ -28,3 +28,27 @@ describe('R158 安装器清理早期错误快捷方式', () => {
     expect(iss).toMatch(/\{userdesktop\}\\众说";[^\n]*AppUserModelID: "com\.zhongshuo\.desktop\.app"/);
   });
 });
+
+/**
+ * 运行期自愈：安装版每次启动都会清掉同名的错误快捷方式（只在文件里确实提到本程序 exe 时），
+ * 并在窗口出现后 4 秒再复查一次；同时 setAppDetails 必须给出 relaunchCommand，
+ * 否则 Windows 拿不到完整注册、会按默认身份（ElectronApp）生成开始菜单项。
+ */
+describe('R162 运行期开始菜单自愈与身份注册', () => {
+  const main = readFileSync(resolve(root, 'src/ui/main.ts'), 'utf8');
+
+  it('安装版启动时清理同名的错误快捷方式，且判定保守', () => {
+    expect(main).toContain('function removeStaleStartMenuShortcuts');
+    expect(main).toMatch(/process\.platform !== 'win32' \|\| !installedDesktop/);
+    // 只在 .lnk 内容确实提到本程序 exe 名时才删
+    expect(main).toMatch(/!ascii\.includes\(exeName\) && !wide\.includes\(exeName\)/);
+    expect(main).toMatch(/unlinkSync\(link\)/);
+    // 启动时执行一次 + 4 秒后复查
+    expect(main).toMatch(/removeStaleStartMenuShortcuts\(\);\s*\n\s*\/\/[^\n]*\n\s*const staleShortcutTimer = setTimeout\(removeStaleStartMenuShortcuts, 4_000\)/);
+  });
+
+  it('setAppDetails 同时给出 relaunchCommand 与显示名', () => {
+    expect(main).toMatch(/relaunchCommand:\s*`"\$\{process\.execPath\}"`/);
+    expect(main).toMatch(/relaunchDisplayName:\s*'众说'/);
+  });
+});

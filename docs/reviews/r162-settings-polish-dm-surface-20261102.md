@@ -16,6 +16,9 @@
 **修复**：
 1. 本机清理：备份后删除这两枚快捷方式并 `SHChangeNotify` 刷新 → `Get-StartApps` 立刻变成「众说 / 卸载众说 / 众说操作手册」（备份在 ignored `dist/r157/startmenu-backup/`）。
 2. 产品侧防复发：安装器 `[Code]` 新增 `RemoveStaleAppShortcut`，在 `ssPostInstall` 只删除**目标确实等于 `{app}\Zhongshuo.exe`** 的 `Electron.lnk` / `ElectronApp.lnk`（先 `FileExists`、再比 `TargetPath`、删后刷新 Shell），绝不按名字盲删别的软件同名项。`众说.lnk` 继续带 `com.zhongshuo.desktop.app`。
+3. 运行期自愈：安装版每次启动执行 `removeStaleStartMenuShortcuts()`（只删文件内容确实提到本程序 exe 名的同名快捷方式），窗口出现后 4 秒再复查一次；同时 `win.setAppDetails` 补上 `relaunchCommand`——只给 `relaunchDisplayName` 时 Windows 拿不到完整注册，会按默认身份（ElectronApp）生成开始菜单项。
+
+> 复发观察：21:17 曾再次出现 `ElectronApp.lnk`（指向安装目录 exe）。因此本版同时保留「安装器清理」与「运行期自愈」两道防线，不依赖单一触发点。
 
 ## 二、私信背景色
 

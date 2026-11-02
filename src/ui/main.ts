@@ -7,7 +7,7 @@
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
 import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, Notification as ElectronNotification } from 'electron';
-import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -533,9 +533,40 @@ if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI 
   app.commandLine.appendSwitch('ignore-certificate-errors-spki-list', process.env.ZS_REMOTE_SHELL_SPKI);
 }
 
+/**
+ * R162：自愈——早期未品牌化的构建在开始菜单留下过 `Electron.lnk` / `ElectronApp.lnk`
+ * （指向本程序的 exe，但名字是 Electron）。它们带着同一个 AUMID，Windows 会把「众说」
+ * 去重成它们，用户看到的就是「开始菜单里名字还是不对」。
+ *
+ * 只删**文件里确实提到本程序 exe 名**的同名快捷方式（保守判定），且只在安装版运行；
+ * 任何异常都吞掉——这只是清理，不影响启动。
+ */
+function removeStaleStartMenuShortcuts(): void {
+  if (process.platform !== 'win32' || !installedDesktop) return;
+  try {
+    const programs = join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs');
+    if (programs.trim() === '' || !existsSync(programs)) return;
+    const exeName = process.execPath.split(/[\\/]/).pop()?.toLowerCase() ?? 'zhongshuo.exe';
+    for (const name of ['Electron', 'ElectronApp']) {
+      const link = join(programs, `${name}.lnk`);
+      if (!existsSync(link)) continue;
+      const bytes = readFileSync(link);
+      const ascii = bytes.toString('latin1').toLowerCase();
+      const wide = bytes.toString('utf16le').toLowerCase();
+      if (!ascii.includes(exeName) && !wide.includes(exeName)) continue;
+      writeFileSync(join(app.getPath('userData'), 'stale-start-menu-cleanup.log'), `${new Date().toISOString()} removed ${link}\n`, { flag: 'a' });
+      unlinkSync(link);
+    }
+  } catch { /* 清理失败不影响启动 */ }
+}
+
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance || desktopLifecycle.quitting) return;
   if (installedConfigurationError != null) throw Error(installedConfigurationError);
+  removeStaleStartMenuShortcuts();
+  // 系统有时在窗口出现后才把开始菜单项落盘：启动后再复查一次（幂等、失败忽略）。
+  const staleShortcutTimer = setTimeout(removeStaleStartMenuShortcuts, 4_000);
+  staleShortcutTimer.unref?.();
   powerMonitor.on('suspend',()=>connectionMonitor.suspend());
   powerMonitor.on('resume',()=>connectionMonitor.resume());
   app.once('will-quit',()=>connectionMonitor.dispose());
@@ -762,8 +793,14 @@ let dataOperationStarting = false;
   // The normal minimize button still calls win.minimize().
   desktopLifecycle.attachWindow(win, windowIcon);
   win.setMenu(null);
-  // Windows 任务栏/通知身份：AppId、正式图标与显示名保持一致（不沿用 Electron 默认描述）。
-  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchDisplayName:'众说'});
+  /**
+   * Windows 任务栏/通知身份：AppId、正式图标与显示名保持一致（不沿用 Electron 默认描述）。
+   *
+   * R162：必须同时给 relaunchCommand —— 只给 relaunchDisplayName 时 Windows 拿不到完整的
+   * 「重启命令」，AUMID 的显示名注册不成立，系统会按默认身份（ElectronApp）在开始菜单里
+   * 生成一条快捷方式，用户看到的就是「安装后开始菜单名字还是不对」。
+   */
+  if(process.platform==='win32'&&existsSync(desktopIcon))win.setAppDetails({appId:desktopAppId,appIconPath:desktopIcon,appIconIndex:0,relaunchCommand:`"${process.execPath}"`,relaunchDisplayName:'众说'});
   const disposeTaskNotificationIpc = registerTaskNotificationIpc({
     ipcMain,
     assertTrustedSender,
