@@ -19,6 +19,7 @@ import { historyScope, historyWindow, readHistoryOnce, recordHistoryPage } from 
 import type { BridgeOutcome } from './bridge';
 import {stageOutbound,updateSendReference,settleOutbound, setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, advanceThreadReadWatermark, rollbackThreadReadWatermark, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
+import { backfillDefaultMemberAvatars } from './data/defaultMemberAvatars';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
 import type {TaskExecutionBlocker} from '../../contracts/executionBlockers.ts';
@@ -1036,14 +1037,14 @@ export async function refreshMembers(projectIdArg?: string): Promise<void> {
       setState((prev) => ({ ...prev, memberRuntimes: map, dispatchGuard: rt.dispatchGuard ?? null }));
     })
     .catch(() => { if (stillCurrent(gen, projectId)) setState((prev) => ({ ...prev, dispatchGuard: prev.dispatchGuard })); });
-  setState((prev) => ({
-    ...prev,
-    members: (data.items ?? []).map((m) => ({
-      id: m.id, projectId, profileId: '', displayName: m.displayName, description:m.description,revision:m.revision, enabled: m.enabled,runtimeAvailable:m.runtimeAvailable,
-      principalType: m.principalType,
-      workState: 'unknown' as const, workStateReason:'实时状态未提供', model: '', effort: 'medium' as const, internalSubagents: false, isCoordinatorDefault: false,
-    })),
+  const members = (data.items ?? []).map((m) => ({
+    id: m.id, projectId, profileId: '', displayName: m.displayName, description:m.description,revision:m.revision, enabled: m.enabled,runtimeAvailable:m.runtimeAvailable,
+    principalType: m.principalType,
+    workState: 'unknown' as const, workStateReason:'实时状态未提供', model: '', effort: 'medium' as const, internalSubagents: false, isCoordinatorDefault: false,
   }));
+  setState((prev) => ({ ...prev, members }));
+  // 自动创建的默认成员出生时没有头像（daemon 不持有图片数据），这里补一次 DeepSeek 预设。
+  void backfillDefaultMemberAvatars(members, getState().ui.avatars ?? {});
 }
 
 export async function refreshRooms(projectIdArg?: string): Promise<void> {

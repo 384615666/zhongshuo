@@ -1,4 +1,3 @@
-import { readAvatarFile } from '../data/avatarUpload';
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 应用设置：既有设置导航 + 搜索，操作手册单独分区。
@@ -99,7 +98,8 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
   );
 }
 
-import { Avatar, Modal, Select, Switch, Tag } from '../components/ui';
+import { Modal, Select, Switch, Tag } from '../components/ui';
+import { AvatarPicker } from '../components/AvatarPicker';
 
 export function SettingsPage({ query }: { query?: Record<string, string> }) {
   const q = query ?? {};
@@ -287,6 +287,7 @@ function SectionGeneral() {
 function SectionAppearance() {
   const theme = useStore((s) => s.ui.theme);
   const showAvatars = useStore((s) => s.ui.showAvatars === true);
+  const myAvatar = useStore((s) => s.ui.avatars?.['user'] ?? null);
   const [busy, setBusy] = useState<string | null>(null);
   const save = useCallback(async (key: string, patch: { showAvatars?: boolean; avatar?: { subject: string; dataUrl: string | null } }): Promise<void> => {
     setBusy(key);
@@ -332,64 +333,14 @@ function SectionAppearance() {
           onChange={(next) => void save('visibility', { showAvatars: next })}
         />
       </SettingsRow>
-      <div className="card" style={{ marginTop: 14 }} data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
-        <div className="card-title">我的头像</div>
-        <div className="small faint" style={{ padding: '0 14px 8px' }}>
-          PNG、JPEG 或 WebP。预览始终可见，聊天中的头像遵循上方开关。
-          AI 成员的头像在「成员管理 → AI 设置」里选，那里有预置头像也可以上传。
-        </div>
-        <AppearanceAvatarRow subject="user" name="我" color="var(--m-human)" busy={busy} onSave={save} />
-      </div>
-    </div>
-  );
-}
-
-function AppearanceAvatarRow({
-  subject,
-  name,
-  color,
-  busy,
-  onSave,
-}: {
-  subject: string;
-  name: string;
-  color: string;
-  busy: string | null;
-  onSave: (key: string, patch: { avatar: { subject: string; dataUrl: string | null } }) => Promise<void>;
-}) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const hasImage = useStore((state) => state.ui.avatars?.[subject] != null);
-  const key = `avatar:${subject}`;
-  const pick = (file: File | undefined): void => {
-    if (file == null) return;
-    void readAvatarFile(file)
-      .then((dataUrl) => onSave(key, { avatar: { subject, dataUrl } }))
-      .catch((error: unknown) => toast((error as Error).message, 'error'));
-  };
-  return (
-    <div className="row" style={{ justifyContent: 'space-between', padding: '9px 14px', borderTop: '1px solid var(--border-subtle)' }} data-zs-avatar-subject={subject}>
-      <div className="row tight" style={{ minWidth: 0 }}>
-        <Avatar name={name} color={color} size={36} round subject={subject} show />
-        <div style={{ minWidth: 0 }}>
-          <div className="strong truncate">{name}</div>
-          <div className="small faint">{subject === 'user' ? '本地用户' : 'AI 成员'}</div>
-        </div>
-      </div>
-      <div className="row tight">
-        <input
-          ref={inputRef}
-          className="hidden"
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          aria-label={`选择${name}的头像`}
-          onChange={(event) => { pick(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }}
+      <div className="card" style={{ marginTop: 14, padding: '10px 14px 14px' }} data-zs-avatar-settings="1" data-settings-row="appearance-avatar-images">
+        <div className="card-title" style={{ padding: 0 }}>我的头像</div>
+        <AvatarPicker
+          value={myAvatar}
+          disabled={busy != null}
+          onChange={(dataUrl) => void save('avatar:user', { avatar: { subject: 'user', dataUrl } })}
         />
-        <button type="button" className="btn sm" disabled={busy != null} onClick={() => inputRef.current?.click()} title={`上传${name}的头像`}>
-          <Icon name="upload" size={12} /> 选择图片
-        </button>
-        <button type="button" className="btn ghost sm" disabled={busy != null || !hasImage} onClick={() => void onSave(key, { avatar: { subject, dataUrl: null } })} title={hasImage ? `恢复${name}的默认头像` : '当前已是默认头像'}>
-          <Icon name="trash" size={12} /> 恢复默认
-        </button>
+        <div className="small faint" style={{ marginTop: 6 }}>聊天里你自己那一侧显示这张；AI 成员的头像在「成员管理 → AI 设置」里选。</div>
       </div>
     </div>
   );
