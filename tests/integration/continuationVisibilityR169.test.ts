@@ -91,8 +91,7 @@ describe('R169 deliberate continuation after a consumed, never-started dispatch'
     }finally{await adapter.closeAllSessions();}
   });
 
-  it.each(['missing-binding','stale-revision','stale-stop','ordinary-redispatch','turn','turn-without-row-link','coordination-run','missing-audit'] as const)
-    ('does not use the unstarted exception for %s',async scenario=>{
+  it.each(['missing-binding','stale-revision','stale-stop','ordinary-redispatch','turn','turn-without-row-link','coordination-run','missing-audit'] as const)('does not use the unstarted exception for %s',async scenario=>{
       const f=fixture();
       if(scenario==='turn'||scenario==='turn-without-row-link'){
         f.db.prepare(`INSERT INTO agent_turns(id,run_id,conversation_id,thread_id,member_id,stage_key,status,dispatch_key)

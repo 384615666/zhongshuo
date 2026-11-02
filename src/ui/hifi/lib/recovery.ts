@@ -41,7 +41,8 @@ export interface RecoveryTask {
 export function canContinueRecoveryTask(item:RecoveryTask):boolean {
   if(['DONE','CANCELLED'].includes(item.task.status))return false;
   if(item.executionStatus)return item.executionStatus.actions.some(action=>action.kind==='continue');
-  return !['RUNNING','STOPPING','QUEUED','WAITING_FOR_PEER','WAITING_FOR_USER'].includes(item.executionStatus?.phase??'');
+  // Compatibility with older task readers that did not return a projection.
+  return true;
 }
 type ReadTask=(taskId:string)=>Promise<{task:RecoveryTaskFact;executionStatus?:TaskExecutionStatus|null}>;
 /** Resolve each affected task to its actual root and combine sibling interruptions. */
