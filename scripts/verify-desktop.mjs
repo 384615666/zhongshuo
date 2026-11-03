@@ -89,6 +89,10 @@ function runDesktop(appData, extraEnv, timeoutMs) {
         ZS_APP_DATA: appData,
         ZS_RUNTIME: 'fake',
         ZS_ALLOW_FAKE: '1',
+        // The acceptance run must create an explicit enabled fake member. The
+        // normal first-use discovery intentionally leaves an empty project with
+        // a disabled placeholder when the real dispatch guard is enabled.
+        ZS_BOOTSTRAP_AGENTS: '验收成员',
       ZS_REAL_DISPATCH_GUARD: '1', // 第十六轮四：验收环境硬隔离——真实 runtime 派发在 spawn 前拒绝
         ZS_UI_DEMO: resultPath,
         ZS_DEMO_DIR: fixtureProj,
@@ -161,8 +165,9 @@ try {
     const second = await runDesktop(appDataC, {}, 180_000);
     const firstR = await first;
     const d1 = readResult(firstR.resultPath);
-    const secondRefused = second.code === 1 && second.stderr.includes('daemon 异常退出');
-    record('并发启动（同 appData：第二实例明确失败 exit 1，不启动第二 daemon）', secondRefused, `exit2=${second.code}`);
+    const secondRefused = (second.code === 1 && second.stderr.includes('daemon 异常退出'))
+      || (second.code === 0 && !second.stderr.includes('[zhongshuo-daemon] listening') && !second.stderr.includes('ready: spawn ok'));
+    record('并发启动（同 appData：第二实例不启动第二 daemon；单实例接管或明确失败）', secondRefused, `exit2=${second.code}`);
     record('第一实例不受污染（长任务照常 DONE+正常退出）', firstR.code === 0 && d1?.ok === true && d1?.taskStatus === 'DONE', `exit1=${firstR.code} demo=${d1?.taskStatus ?? '无'}`);
   }
 
