@@ -94,6 +94,42 @@ const scenesSource = String.raw`(() => {
         sidebarActiveAfter: textOf(q('.side-row.context-active .side-item-label')),
       };
     } },
+    { name: 'members-no-flash', run: async () => {
+      // R172 第 3/4 项：已看过的项目切回时，房间数与成员列表不应先消失再出现。
+      await until(() => qa('[data-zs-members-project]').length >= 4, '项目卡', 25000);
+      await wait(500);
+      const cardOf = (name) => qa('[data-zs-members-project]').find((el) => textOf(el).includes(name));
+      // 先访问一次「社区运营」建立缓存，再切回主项目。
+      (cardOf('社区运营') ?? qa('[data-zs-members-project]')[1]).click();
+      await until(() => /社区运营/.test(textOf(q('.members-head-name'))), '社区运营标题', 25000);
+      await until(() => qa('[data-zs-member-card]').length >= 1, '社区运营成员卡', 25000);
+      await wait(400);
+      (cardOf('读书会筹备') ?? qa('[data-zs-members-project]')[0]).click();
+      await until(() => /读书会筹备/.test(textOf(q('.members-head-name'))), '回到主项目', 25000);
+      await wait(500);
+      // 关键采样：切回已缓存的「社区运营」，每 25ms 看卡片房间数与右侧成员卡是否出现空窗。
+      let missingRoomCountFrames = 0;
+      let emptyMemberFrames = 0;
+      let loadingTextFrames = 0;
+      (cardOf('社区运营') ?? qa('[data-zs-members-project]')[1]).click();
+      const start = Date.now();
+      while (Date.now() - start < 1200) {
+        const card = cardOf('社区运营');
+        if (card == null || !/\d+\s*个房间/.test(textOf(card))) missingRoomCountFrames += 1;
+        if (qa('[data-zs-member-card]').length === 0) emptyMemberFrames += 1;
+        const body = document.body.innerText || '';
+        if (body.includes('正在装载…') || body.includes('正在读取成员')) loadingTextFrames += 1;
+        await wait(25);
+      }
+      await wait(600);
+      window.r170Extra = {
+        missingRoomCountFrames,
+        emptyMemberFrames,
+        loadingTextFrames,
+        finalMemberCards: qa('[data-zs-member-card]').length,
+        header: textOf(q('.members-head-name')),
+      };
+    } },
     { name: 'board', run: async () => {
       await go('/board?scope=all');
       await until(() => q('.page-filters'), '看板筛选');
@@ -101,17 +137,34 @@ const scenesSource = String.raw`(() => {
       await wait(900);
       window.r170Extra = { cards: qa('[data-zs-task-id]').length };
     } },
-    { name: 'board-hidden', run: async () => {
+    { name: 'board-archive', run: async () => {
       await go('/board?scope=all');
       await until(() => qa('[data-zs-task-id]').length > 0, '看板卡片');
       const remove = q('[data-zs-board-remove]');
-      if (remove == null) throw Error('没有「从看板移除」按钮');
+      if (remove == null) throw Error('没有「归档」按钮');
       remove.click();
       await wait(500);
-      const clear = q('[data-zs-board-clear-all]');
-      if (clear != null) { clear.click(); await wait(300); clear.click(); }
-      await wait(700);
-      window.r170Extra = { hidden: textOf(q('[data-zs-board-hidden]')), cards: qa('[data-zs-task-id]').length };
+      const all = q('[data-zs-board-archive-all]');
+      if (all == null) throw Error('没有「归档全部」按钮');
+      all.click(); await wait(300); all.click();
+      await wait(800);
+      window.r170Extra = {
+        cards: qa('[data-zs-task-id]').length,
+        undo: q('[data-zs-board-undo]') != null,
+        oldHiddenText: (document.body.innerText || '').includes('已隐藏'),
+        oldClearText: (document.body.innerText || '').includes('清空'),
+      };
+    } },
+    { name: 'board-undo', run: async () => {
+      const undo = q('[data-zs-board-undo]');
+      if (undo == null) throw Error('没有「撤销」按钮');
+      undo.click();
+      await wait(800);
+      window.r170Extra = {
+        cards: qa('[data-zs-task-id]').length,
+        undoGone: q('[data-zs-board-undo]') == null,
+        stillArchivedText: (document.body.innerText || '').includes('已隐藏'),
+      };
     } },
     { name: 'settings', run: async () => {
       await go('/settings');

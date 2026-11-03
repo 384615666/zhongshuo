@@ -89,21 +89,38 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    * 读取失败保留同项目上次名单并如实提示（不把未知写成「没有房间」）。
    */
   const sidebarRoomIndexes = useStore((s) => s.sidebarRoomIndexes);
+  /**
+   * R172 第 3/4 项：按项目缓存**最后已知真值**——切项目时先用缓存渲染，后台读取到达后再替换。
+   * 这样已看过的项目切回时，「N 个房间」与右侧成员列表不会先消失再出现；
+   * 缓存严格按 projectId（房间名单按 projectId+roomId）隔离，绝不把别的项目数据显示到当前项目。
+   */
+  const roomCountCache = useRef(new Map<string, number>());
+  const roomsCache = useRef(new Map<string, PageRoomRow[]>());
+  const membersCache = useRef(new Map<string, MemberRow[]>());
+  const roomMembersCache = useRef(new Map<string, MemberRow[]>());
+  /** runtime 配置同样按成员缓存：切回已看过的项目时配置行不闪「正在读取配置…」。 */
+  const runtimeCache = useRef(new Map<string, RuntimeInfo>());
   const [pageRooms, setPageRooms] = useState<{ projectId: string; items: PageRoomRow[] } | null>(null);
   const [roomsErr, setRoomsErr] = useState<{ projectId: string; message: string } | null>(null);
-  const rooms = pageRooms != null && pageRooms.projectId === projectId ? pageRooms.items : EMPTY_ROOMS;
+  const rooms = pageRooms != null && pageRooms.projectId === projectId ? pageRooms.items : (roomsCache.current.get(projectId) ?? EMPTY_ROOMS);
   const roomsReady = pageRooms != null && pageRooms.projectId === projectId;
+  /** 该项目是否已经有过房间名单真值（含缓存）——用于决定是否还显示“正在读取”。 */
+  const hasRoomsTruth = roomsReady || roomsCache.current.has(projectId);
   const workload = useMemberWorkload(projectId);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [membersProjectId, setMembersProjectId] = useState<string | null>(null);
-  const membersInScope = membersProjectId === projectId ? members : null;
+  /** 本页当前项目的成员：新数据未到先用该项目上次缓存（不会显示别的项目）→ 切换不闪空列表。 */
+  const membersInScope = membersProjectId === projectId ? members : (membersCache.current.get(projectId) ?? null);
   const [roomMembers, setRoomMembers] = useState<Record<string, MemberRow[]>>({});
   const [runtimes, setRuntimes] = useState<Record<string, RuntimeInfo>>({});
   /** runtime/房间名单的逐项读取失败（r55：查询失败≠未绑定——分列如实，
    *  读失败的已有事实保留，不把 installationId=null 显示成「已绑定」）。 */
   const [runtimeErrs, setRuntimeErrs] = useState<Record<string, string>>({});
   const [roomMemberErrs, setRoomMemberErrs] = useState<Record<string, string>>({});
-  const [err, setErr] = useState<string | null>(null);
+  /** R172：错误也按项目归属，切项目首帧不会闪出别的项目的失败原因。 */
+  const [err, setErr] = useState<{ projectId: string; message: string } | null>(null);
+  /** 只显示属于当前项目的装载失败原因（别的项目失败不串到本页）。 */
+  const scopeErr = err != null && err.projectId === projectId ? err.message : null;
   const [busyId, setBusyId] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<{projectId: string; summary: string; notes: string[]} | null>(null);
@@ -126,6 +143,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         const roomData = await command<{ items: PageRoomRow[] }>('room.list', { projectId });
         if (gen !== genRef.current) return null;
         const rows = roomData.items ?? [];
+        roomsCache.current.set(projectId, rows);
+        roomCountCache.current.set(projectId, rows.length);
         setPageRooms({ projectId, items: rows });
         setRoomsErr(null);
         return rows;
@@ -138,6 +157,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
     try {
       const r = await command<{ items: MemberRow[] }>('member.list', { projectId });
       if (gen !== genRef.current) return; // 已切换——迟到响应不污染
+      membersCache.current.set(projectId, r.items);
       setMembers(r.items);
       setMembersProjectId(projectId);
       const rt: Record<string, RuntimeInfo> = {};
@@ -148,7 +168,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           const batch = await command<{ projectId: string; items: Array<{memberId:string;info?:RuntimeInfo;error?:{message:string}}> }>('member.runtimes', { projectId, memberIds: chunk.map(m => m.id) });
           if (gen !== genRef.current || batch.projectId !== projectId) return;
           for (const row of batch.items) {
-            if (row.info != null) rt[row.memberId] = row.info;
+            if (row.info != null) { rt[row.memberId] = row.info; runtimeCache.current.set(row.memberId, row.info); }
             else rtErr[row.memberId] = row.error?.message ?? '成员配置未提供';
           }
         } catch (e) {
@@ -165,16 +185,19 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       await Promise.all(roomRows.map(async (room) => {
         try {
           const rr = await command<{ items: MemberRow[] }>('member.list', { projectId, roomId: room.id });
-          if (gen === genRef.current) perRoom[room.id] = rr.items;
+          if (gen === genRef.current) {
+            perRoom[room.id] = rr.items;
+            roomMembersCache.current.set(`${projectId}:${room.id}`, rr.items);
+          }
         } catch (e) {
-          if (gen === genRef.current) roomErr[room.id] = (e as Error).message; // 房间名单失败≠装载中
+          if (gen === genRef.current) roomErr[`${projectId}:${room.id}`] = (e as Error).message; // 房间名单失败≠装载中
         }
       }));
       if (gen !== genRef.current) return;
       setRoomMembers(prev => Object.fromEntries(roomRows.flatMap(room => perRoom[room.id] != null ? [[room.id, perRoom[room.id]]] : prev[room.id] != null ? [[room.id, prev[room.id]]] : [])));
       setRoomMemberErrs(roomErr);
     } catch (e) {
-      if (gen === genRef.current) setErr((e as Error).message);
+      if (gen === genRef.current) setErr({ projectId, message: (e as Error).message });
     }
   }, [projectId]);
 
@@ -231,12 +254,23 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    *  正在刷新/读取失败时沿用**上次真实列表**的计数，避免每 5 秒刷新时数字闪没）；
    *  任何一方都没有真值就返回 null（卡片上不显示数字）。 */
   const roomCountOf = (id: string): number | null => {
-    if (id === projectId) return roomsReady ? rooms.length : null;
+    // 顺序：本项目本地 room.list 真值 → 侧栏索引 ready（同一项目通常是 active）→ 该项目上次已知值。
+    if (id === projectId && roomsReady) return rooms.length;
     const index = sidebarRoomIndexes[id];
-    if (index == null) return null;
-    if (index.status === 'ready') return index.rooms.length;
-    return index.rooms.length > 0 ? index.rooms.length : null;
+    if (index?.status === 'ready') return index.rooms.length;
+    // 侧栏索引正在刷新/失败时沿用该项目上次真实计数（不把已知数字闪没；未知仍不显示）。
+    return roomCountCache.current.get(id) ?? null;
   };
+  /** 缓存只在数据变化时写入（不在 render 里写 ref）。 */
+  useEffect(() => {
+    if (roomsReady) {
+      roomsCache.current.set(projectId, rooms);
+      roomCountCache.current.set(projectId, rooms.length);
+    }
+    for (const [id, index] of Object.entries(sidebarRoomIndexes)) {
+      if (index?.status === 'ready') roomCountCache.current.set(id, index.rooms.length);
+    }
+  }, [projectId, roomsReady, rooms, sidebarRoomIndexes]);
   /** R171：选项目=只换本页数据范围；URL 用 replace 记录（刷新/分享后仍停在本页同一项目），
    *  **不** switchFocusProject、不改变侧栏 active 高亮。 */
   const openProject = (next: string) => {
@@ -248,10 +282,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   /**
    * runtime 分列（R66 P5 修订）：查询失败 / 未绑定（有效=全局默认）/ 已绑定·安装缺失 / 正常。
    * 未绑定时同时给出**有效来源**（effective.kind——全局默认渠道），不再让「未绑定」
-   * 被读成"不会用任何渠道"。
+   * 被读成"不会用任何渠道"。R172：优先用当前读取结果，其次用该成员上次缓存。
    */
+  const runtimeOf = (memberId: string): RuntimeInfo | undefined => runtimes[memberId] ?? runtimeCache.current.get(memberId);
   const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean; effective?: string; modelId?: string } => {
-    const rt = runtimes[m.id];
+    const rt = runtimeOf(m.id);
     if (runtimeErrs[m.id] != null) return { text: '配置暂时读取失败，打开成员详情可重试', problem: true };
     if (rt == null) {
       const failure = runtimeErrs[m.id];
@@ -333,7 +368,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                 </div>
                 <div className="members-head-meta small faint">
                   {membersInScope == null
-                    ? (err != null ? '成员读取失败，可刷新重试' : projectId == null || projectId === '' ? '尚未选择项目' : '正在读取成员…')
+                    ? (scopeErr != null ? '成员读取失败，可刷新重试' : projectId == null || projectId === '' ? '尚未选择项目' : '正在读取成员…')
                     : `${membersInScope.length} 名成员`}
                 </div>
               </div>
@@ -384,10 +419,10 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             {projectId == null || projectId === '' ? (
               <div className="panel info">尚未选择项目——从左侧选择一个项目，或从侧栏项目菜单进入。</div>
             ) : null}
-            {err != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
+            {scopeErr != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(scopeErr)}（可刷新重试）</div> : null}
             {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的数据。` : '尚未取得工作量数据。'}</div> : null}
             {workload.data?.truncated ? <div className="faint small">工作量仅统计前 500 名成员。</div> : null}
-            {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
+            {membersInScope == null && scopeErr == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
             {membersInScope != null && membersInScope.length === 0 ? (
               <div className="panel info">这个项目还没有 AI。点右上角「添加 AI」，选择已有渠道和模型即可开始。</div>
@@ -426,7 +461,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     {m.principalType === 'agent' ? (
                       <div className="row tight wrap" style={{ marginTop: 10 }}>
                         <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
-                        <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimes[m.id]?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
+                        <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimeOf(m.id)?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
                         <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
                           title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
                           {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
@@ -447,10 +482,10 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             <div className="panel">
               <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
               {roomsErr?.projectId === projectId ? <div className="small" style={{ marginBottom: 8, color: 'var(--warning)' }}>房间名单读取失败：{userFacingSystemText(roomsErr.message)}（保留上次结果，可点「刷新」重试）</div> : null}
-              {!roomsReady && roomsErr?.projectId !== projectId ? <div className="faint small">正在读取本项目的房间名单…</div> : null}
+              {!hasRoomsTruth && roomsErr?.projectId !== projectId ? <div className="faint small">正在读取本项目的房间名单…</div> : null}
               {rooms.map((room) => {
-                const list = roomMembers[room.id];
-                const failure = roomMemberErrs[room.id];
+                const list = roomMembers[room.id] ?? roomMembersCache.current.get(`${projectId}:${room.id}`);
+                const failure = roomMemberErrs[`${projectId}:${room.id}`];
                 return (
                   <div key={room.id} style={{ marginTop: 8 }}>
                     <div className="row tight">
@@ -470,7 +505,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                   </div>
                 );
               })}
-              {roomsReady && rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
+              {hasRoomsTruth && rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
             </div>
           </section>
         </div>
@@ -483,7 +518,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           projectId={addFor}
           projectName={projects.find((x) => x.id === addFor)?.displayName ?? addFor}
           scopeProjectId={projectId}
-          rooms={roomsReady ? rooms : null}
+          rooms={hasRoomsTruth ? rooms : null}
           onClose={() => setAddFor(null)}
           onCreated={async () => {
             setAddFor(null);

@@ -13,7 +13,7 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
 
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { EmptyState, ErrorState, Segmented, Tag } from '../components/ui';
+import { EmptyState, ErrorState, Segmented, Select, Tag } from '../components/ui';
 import { useStore, toast, recordWrite } from '../data/store';
 import { Modal } from '../components/ui';
 import { byId, lockOfProject } from '../data/selectors';
@@ -257,23 +257,20 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
               </span>
             );
           })()}
-          <label className="field inline fg-topbar-project">
-            <select
-              className="select sm"
-              aria-label="切换项目"
-              title="切换文件页所属项目"
+          {/* R172 第 1 项：项目下拉与全站一致（共享 Select），不再用原生 select 的浏览器外观。 */}
+          <div className="field inline fg-topbar-project">
+            <Select
               value={projectId}
-              onChange={(e) => {
-                const next = e.target.value;
+              size="sm"
+              ariaLabel="切换项目"
+              title="切换文件页所属项目"
+              onChange={(next) => {
                 focusProject(next, { announce: false });
                 navigate(`/project/${next}/files?tab=${tab}`);
               }}
-            >
-              {s.projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.displayName}</option>
-              ))}
-            </select>
-          </label>
+              options={s.projects.map((p) => ({ value: p.id, label: p.displayName }))}
+            />
+          </div>
           {tab === 'git' && isGit ? (
             <div className="fg-topbar-actions">
               <button

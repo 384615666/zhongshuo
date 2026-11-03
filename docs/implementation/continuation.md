@@ -2,6 +2,14 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 2026-11-03：R173 beta.23 后四项界面修正（仅源码，未打包；等用户决定是否出 beta.24）
+
+beta.23 安装后用户反馈 4 项：①文件/Git 页右上项目下拉太丑 ②看板 ×/清空文案应叫「归档」、去掉「已隐藏 N 项」、恢复改撤销且只撤销上一个操作 ③成员页切项目左卡「N 个房间」偶尔闪 ④成员页切项目右侧成员列表闪。
+
+实现：文件页原生 `<select>` 换成全站共享 `Select`（`pages-misc.tsx` + `.fg-topbar-project` 宽度约束）；看板文案统一归档（×=归档、归档本项目、归档全部，提示如实说明只收起看板卡片、任务保留，可原对话串打开），删除所有「已隐藏 N 项」，撤销只回退最近一次归档（内存记录 taskIds，撤销后入口消失、不做恢复全部，localStorage `zs.board.hidden.v1` 结构不变），新增 `unhideTasks`、删除 `restoreAll/hiddenCount`，选择器改为 `data-zs-board-remove/-archive-project/-archive-all/-undo`；成员页新增 per-project 房间数/房间列表/成员/runtime 缓存与 per-project+room 房间名单缓存，切回已看过的项目先用缓存、后台替换；成员装载错误改 `{projectId,message}`、房间名单错误键改 `projectId:roomId`；`useMemberWorkload` 加 per-project 缓存（切回不闪「尚未读到」）。截图脚本新增 members-no-flash/board-archive/board-undo 场景并移除旧 board-hidden。未改 daemon 事实、未动用户数据、零真实模型。
+
+验证：`tsc -p tsconfig.hifi.json` 0 错；改动文件 lint 0 新增（pages-misc 仅既有未用导入）；`memberChannelsR136`+`boardView`+`boardFormalStates` 3 文件 12 项、board.view 相关 5 文件 87 项通过；截图 `node scripts/capture-r170-ui.cjs --run=r172-a` 15 场景全过：members-no-flash 采样 1.2s 的 `missingRoomCountFrames=0/emptyMemberFrames=0/loadingTextFrames=0`，board-archive 无旧「已隐藏/清空」文案且撤销可见，board-undo 卡片 4/撤销消失；全量测试 **368 文件过 / 2 未跟踪 R130 夹具失败 / 2 跳过；3337 通过 / 8 失败 / 10 预期失败 / 16 跳过**，跟踪测试 0 非预期失败。见[R173](../reviews/r173-ui-feedback-20261103.md)。**未打包安装**；若用户要 beta.24，需按既有干净 worktree 流程打包并附本版说明。
+
 ## 2026-11-03：R171 用户七项界面改进（beta.23 已出包，按用户要求打包提交，未安装）
 
 beta.22 安装后用户提出 7 项：①成员管理改私信式三段式、每个项目一张独立卡片（不再一张大卡里塞 4 条）②成员管理选中项目脱离侧栏联动 + 侧栏点项目名改回收缩房间列表 ③切项目时左卡「N 个房间」不再先闪 0 ④文件「打开」按钮四边圆角 ⑤「查看变更」与「打开」换位、打开固定最右 ⑥预览顶栏去掉「会话资源」与下载按钮 ⑦线程顶部执行横幅尽量一行。

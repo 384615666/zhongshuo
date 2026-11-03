@@ -1,11 +1,12 @@
 /**
- * 看板「从看板移除」的隐藏集合。
+ * 看板「归档」的隐藏集合（R172 用户第 2 项：界面文案统一叫「归档」，机制不变）。
  *
- * 语义（用户反馈第 4 项）：移除/清空**只影响看板卡片的显示**——不删除任务、
- * 不修改任务状态、不调用任何写命令；任务仍可在原对话串打开。
+ * 语义：归档**只影响看板卡片的显示**——不删除任务、不修改任务状态、不调用任何写命令；
+ * 任务本身保留，仍可在原对话串打开。页面上的「撤销」只回退最近一次归档操作涉及的
+ * 卡片（内存记录，刷新/重开即无撤销入口），不提供「恢复全部」。
  *
  * 存储：localStorage 键 `zs.board.hidden.v1`，结构 `{ v: 1, items: { [taskId]: at } }`，
- * `at` 是移除时间（毫秒），用于超出上限时保留最近移除的若干项。
+ * `at` 是归档时间（毫秒），用于超出上限时保留最近归档的若干项。
  * 损坏数据/超长内容/不可写的本地存储一律按空集兜底，绝不让看板因为本地数据打不开。
  */
 const STORAGE_KEY = 'zs.board.hidden.v1';
@@ -74,24 +75,18 @@ function persist(): void {
   emit();
 }
 
-/** 被隐藏的任务 ID 集合（只读快照）。 */
+/** 已归档（从看板隐藏）的任务 ID 集合（只读快照）。 */
 export function hiddenTaskIds(): Set<string> {
   load();
   return new Set(Object.keys(items));
 }
 
-/** 隐藏项总数。 */
-export function hiddenCount(): number {
-  load();
-  return Object.keys(items).length;
-}
-
-/** 从看板移除一张卡片（只隐藏，不删任务）。 */
+/** 归档一张看板卡片（只隐藏卡片，不删任务）。 */
 export function hideTask(taskId: string): void {
   hideTasks([taskId]);
 }
 
-/** 批量从看板移除（清空本项目 / 清空全部卡片用，一次写入、一次通知）。 */
+/** 批量归档看板卡片（归档本项目 / 归档全部用，一次写入、一次通知）。 */
 export function hideTasks(taskIds: readonly string[]): void {
   load();
   const at = Date.now();
@@ -104,11 +99,18 @@ export function hideTasks(taskIds: readonly string[]): void {
   if (changed) persist();
 }
 
-/** 恢复显示全部已移除的卡片。 */
-export function restoreAll(): void {
+/** 撤销归档：把这些任务移出隐藏集合（单次写入+一次通知），卡片重新出现在看板。 */
+export function unhideTasks(taskIds: readonly string[]): void {
   load();
-  items = {};
-  persist();
+  let changed = false;
+  for (const taskId of taskIds) {
+    if (taskId === '') continue;
+    if (Object.prototype.hasOwnProperty.call(items, taskId)) {
+      delete items[taskId];
+      changed = true;
+    }
+  }
+  if (changed) persist();
 }
 
 /**

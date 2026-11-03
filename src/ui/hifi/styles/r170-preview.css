@@ -65,6 +65,9 @@
   flex: none;
   gap: 0;
 }
+.fg-topbar-project .select-wrap {
+  max-width: 190px;
+}
 .fg-topbar-project .select {
   max-width: 160px;
   height: 26px;

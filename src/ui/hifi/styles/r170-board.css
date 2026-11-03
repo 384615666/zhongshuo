@@ -1,7 +1,7 @@
-/* R170 任务看板卡片重排 + 移除/清空——见 docs/implementation/r170-ui-feedback-plan.md 第 3/4 节。
+/* R170 任务看板卡片重排 + R172 归档/撤销——见 docs/implementation/r170-ui-feedback-plan.md 第 3/4 节。
    只负责看板自身版式；共享样式仍走 tokens/components/base（不在本轮改那几份）。 */
 
-/* —— 项目分区标题 + 清空本项目 —— */
+/* —— 项目分区标题 + 归档本项目 —— */
 .board-project { margin-bottom: 22px; }
 .board-project-head {
   display: flex;
@@ -21,15 +21,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.board-hidden-count {
-  font-size: var(--fs-11);
-  font-weight: 500;
-  color: var(--text-3);
-  flex: none;
-}
-.board-clear-btn { flex: none; }
+.board-archive-btn { flex: none; }
 /* 二次确认时按钮文字变长，也不要挤掉项目名或换行 */
-.board-clear-btn.danger { white-space: nowrap; }
+.board-archive-btn.danger { white-space: nowrap; }
 
 /* —— 状态分组标题：保留分组但视觉更轻（小标题 + 计数） —— */
 .board-status-group { margin-bottom: 12px; }
@@ -79,7 +73,7 @@
   gap: 5px;
   flex-wrap: wrap;
   min-width: 0;
-  /* 给右上角移除按钮让位，标签不会压到按钮下面 */
+  /* 给右上角归档按钮让位，标签不会压到按钮下面 */
   padding-right: 22px;
 }
 .board-card-title {
@@ -117,7 +111,7 @@
 }
 .board-card-sep { flex: none; color: var(--text-4); }
 
-/* —— 右上角「从看板移除」：悬停/键盘聚焦时出现，触屏常显 —— */
+/* —— 右上角「归档」：悬停/键盘聚焦时出现，触屏常显 —— */
 .board-card-remove {
   position: absolute;
   top: 6px;
@@ -134,16 +128,10 @@
   .board-card-remove { opacity: 1; }
 }
 
-/* —— 筛选栏：已隐藏 N 项 · 恢复 / 清空全部卡片 —— */
-.board-hidden-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.board-hidden-note .btn { flex: none; }
-.board-clear-all { flex: none; }
-.board-clear-all.danger { white-space: nowrap; }
+/* —— 筛选栏：撤销最近一次归档 / 归档全部 —— */
+.board-undo { flex: none; }
+.board-archive-all { flex: none; }
+.board-archive-all.danger { white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) {
   .board-card-remove { transition: none; }

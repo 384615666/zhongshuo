@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { command } from '../bridge';
 interface Workload { projectId: string; items: Array<{memberId:string;unfinishedTasks:number;activeTurns:number;unknownTurns:number}>; truncated:boolean }
 const pending = new Map<string,Promise<Workload>>();
+/** R172 第 4 项：按项目缓存最后一次工作量真值——切回看过的项目时先用缓存渲染，
+ *  不再把成员卡的工作量先闪成「尚未读到」。 */
+const cache = new Map<string,Workload>();
 function read(projectId:string) {
   const existing=pending.get(projectId);if(existing)return existing;
   const promise=command<Workload>('project.memberWorkload',{projectId}).finally(()=>{if(pending.get(projectId)===promise)pending.delete(projectId);});pending.set(projectId,promise);return promise;
@@ -14,7 +17,7 @@ export function useMemberWorkload(projectId:string) {
     let alive=true;let busy=false;let ticket=0;let queued=false;
     const visible=()=>document.visibilityState!=='hidden'&&!document.body.classList.contains('legacy-on');
     const load=()=>{if(!alive||!visible())return;if(busy){queued=true;return;}busy=true;queued=false;const id=++ticket;
-      void read(projectId).then(data=>{if(alive&&ticket===id&&visible()&&data.projectId===projectId)setState({projectId,data,error:null,updatedAt:Date.now()});},(e:unknown)=>{if(alive&&ticket===id&&visible())setState(old=>({projectId,data:old.projectId===projectId?old.data:null,updatedAt:old.projectId===projectId?old.updatedAt:null,error:e instanceof Error?e.message:String(e)}));}).finally(()=>{busy=false;if(alive&&queued&&visible())load();});};
+      void read(projectId).then(data=>{if(alive&&ticket===id&&visible()&&data.projectId===projectId){cache.set(projectId,data);setState({projectId,data,error:null,updatedAt:Date.now()});}},(e:unknown)=>{if(alive&&ticket===id&&visible())setState(old=>({projectId,data:old.projectId===projectId?old.data:null,updatedAt:old.projectId===projectId?old.updatedAt:null,error:e instanceof Error?e.message:String(e)}));}).finally(()=>{busy=false;if(alive&&queued&&visible())load();});};
     const visibility=()=>{if(visible())load();else{ticket++;queued=true;}};
     refresh.current=load;
     document.addEventListener('visibilitychange',visibility);
@@ -22,5 +25,5 @@ export function useMemberWorkload(projectId:string) {
     const timer=window.setInterval(()=>{if(!busy)load();},5000);load();
     return()=>{alive=false;ticket++;refresh.current=null;window.clearInterval(timer);observer.disconnect();document.removeEventListener('visibilitychange',visibility);};
   },[projectId]);
-  return {...(state.projectId===projectId?state:{projectId,data:null,error:null,updatedAt:null}),refresh:()=>refresh.current?.()};
+  return {...(state.projectId===projectId?state:{projectId,data:cache.get(projectId)??null,error:null,updatedAt:null}),refresh:()=>refresh.current?.()};
 }

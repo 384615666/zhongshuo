@@ -6,10 +6,12 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
  * （用任务自己的 projectId/roomId/threadId——不拿全局焦点拼链接）；操作（停止/验收/返工）
  * 在线程内按三重身份执行——看板不拖卡改状态（原型语义）。
  *
- * R170（用户反馈第 3、4 项）：卡片改为「#编号 + 状态标签 / 标题两行 / 房间·项目·原因小字」，
- * 右上角「从看板移除」；项目标题可「清空本项目」、筛选栏可「清空全部卡片」。
- * 移除/清空**只隐藏看板卡片**（localStorage `zs.board.hidden.v1`），不删任务、不改状态、
- * 不发写命令——任务仍可在原对话串打开；筛选栏提供「已隐藏 N 项 · 恢复」。
+ * R170（用户反馈第 3、4 项）：卡片改为「#编号 + 状态标签 / 标题两行 / 房间·项目·原因小字」。
+ * R172（用户第 2 项）：单卡 ×、项目「归档本项目」、筛选栏「归档全部」统一叫**归档**——
+ * 归档**只从看板收起卡片**（localStorage `zs.board.hidden.v1`），不删任务、不改状态、
+ * 不发写命令，任务本身保留、仍可在原对话串打开（不是任务归档/删除）。
+ * 界面不再显示「已隐藏 N 项」计数；归档后在筛选栏出现**撤销**，只回退最近一次归档操作
+ * （内存记录 taskIds，刷新/重开即无撤销入口），不做恢复全部。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
@@ -18,7 +20,7 @@ import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { switchFocusProject, openExternalDeepLink } from '../loader';
 import { navigate } from '../lib/router';
-import { hiddenTaskIds, hideTask, hideTasks, restoreAll, subscribe } from '../lib/boardHidden';
+import { hiddenTaskIds, hideTask, hideTasks, unhideTasks, subscribe } from '../lib/boardHidden';
 
 type BoardScope = 'project' | 'all';
 
@@ -63,12 +65,18 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const [gen, setGen] = useState(0);
   const [reading, setReading] = useState(false);
 
-  /** 本地隐藏集合（只影响看板显示）：随 CustomEvent / 其它标签页 storage 变化刷新。 */
+  /** 本地归档集合（只影响看板显示）：随 CustomEvent / 其它标签页 storage 变化刷新。 */
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => hiddenTaskIds());
   useEffect(() => subscribe(() => setHiddenIds(hiddenTaskIds())), []);
 
   /**
-   * 二次确认：第一次点击变成「确认清空…？」，3 秒内再点才执行，超时自动收回。
+   * 最近一次归档操作（仅内存，刷新/重开页面后没有撤销入口）：
+   * 单卡 ×、归档本项目、归档全部各算一次操作；撤销只恢复这一批 taskIds。
+   */
+  const [lastArchive, setLastArchive] = useState<{ taskIds: string[] } | null>(null);
+
+  /**
+   * 二次确认：第一次点击变成「确认归档…？」，3 秒内再点才执行，超时自动收回。
    * key 形如 `all` 或 `project:<projectId>`。
    */
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
@@ -137,9 +145,9 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const visibleCardsOf = (g: BoardGroup) => cardsOf(g).filter((c) => !hiddenIds.has(c.taskId));
   const totalCount = (data?.groups ?? []).reduce((n, g) => n + visibleCardsOf(g).length, 0);
   const visibleTaskIds = (data?.groups ?? []).flatMap((g) => visibleCardsOf(g).map((c) => c.taskId));
-  /** 当前范围里被移除的项数（用于「已隐藏 N 项」与空态说明；跨范围不误报）。 */
-  const hiddenInScope = (data?.groups ?? []).flatMap((g) => cardsOf(g)).filter((c) => hiddenIds.has(c.taskId)).length;
-  /* 有卡片但全被移除的项目整段不显示（避免误显示成「这个项目没有任务」）；
+  /** 当前范围里已归档的项数（只用于决定空态文案，界面不显示这个数量）。 */
+  const archivedInScope = (data?.groups ?? []).flatMap((g) => cardsOf(g)).filter((c) => hiddenIds.has(c.taskId)).length;
+  /* 有卡片但全部已归档的项目整段不显示（避免误显示成「这个项目没有任务」）；
      本来就没任务的项目仍按原逻辑显示占位说明。 */
   const sections = (data?.groups ?? [])
     .map((g) => ({ g, list: visibleCardsOf(g), all: cardsOf(g) }))
@@ -149,30 +157,37 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     if (c.threadId == null) { toast('该任务没有可打开的线程', 'warn'); return; }
     void openExternalDeepLink(c.locate).catch((e: unknown) => toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'));
   };
-  const removeCard = (c: BoardCard) => {
+  /** 单卡「归档」：直接收起这张卡片并给出撤销入口（撤销只回退这一张）。 */
+  const archiveCard = (c: BoardCard) => {
     hideTask(c.taskId);
-    toast('已从看板移除（任务本身保留）', 'info');
+    setLastArchive({ taskIds: [c.taskId] });
+    toast('已从看板归档（任务本身保留，仍可在原对话串打开）', 'info');
   };
-  const restoreHidden = () => {
-    restoreAll();
-    toast('已恢复显示全部卡片', 'info');
+  /** 「撤销」：只恢复最近一次归档操作涉及的卡片；撤销后入口消失，不做恢复全部。 */
+  const undoLastArchive = () => {
+    if (lastArchive == null) return;
+    unhideTasks(lastArchive.taskIds);
+    setLastArchive(null);
+    toast('已撤销上一次归档，卡片已放回看板（任务本身一直保留）', 'info');
   };
-  /** 「清空本项目」：二次确认后隐藏该项目当前全部卡片（不删任务）。 */
-  const clearProject = (projectId: string, taskIds: string[]) => {
+  /** 「归档本项目」：二次确认后归档该项目当前全部可见卡片（不删任务）。 */
+  const archiveProject = (projectId: string, taskIds: string[]) => {
     const key = `project:${projectId}`;
     if (confirmKey !== key) { armConfirm(key); return; }
     dropConfirm();
     if (taskIds.length === 0) return;
     hideTasks(taskIds);
-    toast(`已从看板移除 ${taskIds.length} 项（任务本身保留）`, 'info');
+    setLastArchive({ taskIds });
+    toast(`已从看板归档 ${taskIds.length} 项（任务本身保留，仍可在原对话串打开）`, 'info');
   };
-  /** 「清空全部卡片」：二次确认后隐藏当前范围内所有可见卡片（不删任务）。 */
-  const clearAllCards = () => {
+  /** 「归档全部」：二次确认后归档当前范围内所有可见卡片（不删任务）。 */
+  const archiveAllCards = () => {
     if (confirmKey !== 'all') { armConfirm('all'); return; }
     dropConfirm();
     if (visibleTaskIds.length === 0) return;
     hideTasks(visibleTaskIds);
-    toast(`已从看板移除 ${visibleTaskIds.length} 项（任务本身保留）`, 'info');
+    setLastArchive({ taskIds: visibleTaskIds });
+    toast(`已从看板归档 ${visibleTaskIds.length} 项（任务本身保留，仍可在原对话串打开）`, 'info');
   };
 
   return (
@@ -221,22 +236,27 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
             />
           </label>
           <span className="filter-note">{data == null ? '正在读取任务' : `共 ${totalCount} 项`}</span>
-          {hiddenInScope > 0 ? (
-            <span className="filter-note board-hidden-note" data-zs-board-hidden={hiddenInScope}>
-              已隐藏 {hiddenInScope} 项
-              <button type="button" className="btn ghost sm" data-zs-board-restore="1" onClick={restoreHidden}>恢复</button>
-            </span>
+          {lastArchive != null ? (
+            <button
+              type="button"
+              className="btn ghost sm board-undo"
+              data-zs-board-undo="1"
+              title="撤销上一次归档：只把那次归档的卡片放回看板；归档只影响看板显示，任务本身保留"
+              onClick={undoLastArchive}
+            >
+              撤销
+            </button>
           ) : null}
           <button className="btn ghost" disabled={reading} onClick={() => setGen((v) => v + 1)}>{reading ? '读取中…' : '刷新'}</button>
           <button
             type="button"
-            className={`btn sm board-clear-all${confirmKey === 'all' ? ' danger' : ' ghost'}`}
-            data-zs-board-clear-all="1"
+            className={`btn sm board-archive-all${confirmKey === 'all' ? ' danger' : ' ghost'}`}
+            data-zs-board-archive-all="1"
             disabled={data == null || totalCount === 0}
-            title="只从看板移除卡片，不删除任务"
-            onClick={clearAllCards}
+            title="只从看板归档这些卡片，不删除任务（任务本身保留，仍可在原对话串打开）"
+            onClick={archiveAllCards}
           >
-            {confirmKey === 'all' ? '确认清空全部卡片？' : '清空全部卡片'}
+            {confirmKey === 'all' ? '确认归档全部？' : '归档全部'}
           </button>
         </div>
 
@@ -246,21 +266,19 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
         {data == null ? (
           <div className="panel info">{err?'尚未取得这个范围的看板。':'正在读取看板…'}</div>
         ) : totalCount === 0 ? (
-          hiddenInScope > 0 ? (
+          archivedInScope > 0 ? (
             <EmptyState
-              icon="eye-off"
-              title="看板上的卡片都已移除"
-              detail={`已从看板移除 ${hiddenInScope} 项。移除只影响看板显示，任务仍可在原对话串打开。`}
-              action={<button type="button" className="btn sm" onClick={restoreHidden}>恢复显示全部卡片</button>}
+              icon="archive"
+              title="这个范围的卡片都已归档"
+              detail="归档只影响看板显示：任务本身保留，仍可在原对话串打开。"
             />
           ) : (
             <EmptyState icon="list" title="这个范围里还没有任务" detail="在对话池发布任务后，看板会显示在这里。" />
           )
         ) : (
-          sections.map(({ g, list, all }) => {
+          sections.map(({ g, list }) => {
             const project = s.projects.find((p) => p.id === g.projectId);
             const projectName = project?.displayName ?? g.displayName;
-            const hiddenInGroup = all.length - list.length;
             const armed = confirmKey === `project:${g.projectId}`;
             return (
               <div key={g.projectId} className="section board-project">
@@ -269,19 +287,18 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                     <Icon name="folder" size={14} />
                     <span className="board-project-name" title={projectName}>{projectName}</span>
                     <span className="count">{list.length} 项</span>
-                    {hiddenInGroup > 0 ? <span className="board-hidden-count">已隐藏 {hiddenInGroup}</span> : null}
                     {g.projectId === s.activeProjectId ? <Tag tone="accent">当前</Tag> : null}
                     {project?.status === 'missing' ? <Tag tone="danger">目录失效</Tag> : null}
                   </div>
                   {list.length > 0 ? (
                     <button
                       type="button"
-                      className={`btn sm board-clear-btn ${armed ? 'danger' : 'ghost'}`}
-                      data-zs-board-clear-project={g.projectId}
-                      title="只从看板移除这些卡片，不删除任务"
-                      onClick={() => clearProject(g.projectId, list.map((c) => c.taskId))}
+                      className={`btn sm board-archive-btn ${armed ? 'danger' : 'ghost'}`}
+                      data-zs-board-archive-project={g.projectId}
+                      title="只从看板归档这些卡片，不删除任务（任务本身保留，仍可在原对话串打开）"
+                      onClick={() => archiveProject(g.projectId, list.map((c) => c.taskId))}
                     >
-                      {armed ? '确认清空本项目？' : '清空本项目'}
+                      {armed ? '确认归档本项目？' : '归档本项目'}
                     </button>
                   ) : null}
                 </div>
@@ -322,9 +339,9 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                   type="button"
                                   className="icon-btn sm board-card-remove"
                                   data-zs-board-remove={c.taskId}
-                                  aria-label={c.roomTaskNumber != null ? `从看板移除 #${c.roomTaskNumber}` : '从看板移除'}
-                                  title="从看板移除（任务本身保留）"
-                                  onClick={(e) => { e.stopPropagation(); removeCard(c); }}
+                                  aria-label={c.roomTaskNumber != null ? `归档看板卡片 #${c.roomTaskNumber}` : '归档看板卡片'}
+                                  title="归档（只从看板归档，任务本身保留，仍可在原对话串打开）"
+                                  onClick={(e) => { e.stopPropagation(); archiveCard(c); }}
                                 >
                                   <Icon name="x" size={13} />
                                 </button>
