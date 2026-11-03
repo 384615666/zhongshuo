@@ -12,7 +12,7 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { Menu, MenuItem, Modal, PanelNavButton, Tag, anchorFromElement } from '../components/ui';
+import { Menu, MenuItem, Modal, PanelNavButton, anchorFromElement } from '../components/ui';
 import { useStore, getState, toast } from '../data/store';
 import {
   activatePreview, closeAllPreviews, closePreviewTab, openWorktreePreview,
@@ -549,9 +549,6 @@ export function PreviewPane({
           </button>
         ) : null}
         <span className="spacer" />
-        <Tag plain title={isWorktree ? '项目工作区文件（只读）' : isDelivery ? 'AI 交付文档' : '会话附件或成果'}>
-          {isWorktree ? '工作区只读' : isDelivery ? 'AI 交付文档' : '会话资源'}
-        </Tag>
         {canChooseReading ? (
           <button
             className="btn ghost sm preview-read"
@@ -562,15 +559,6 @@ export function PreviewPane({
             {viewMode === 'source' ? '源码' : '阅读'}
           </button>
         ) : null}
-        <button
-          className="preview-icon-btn"
-          aria-label="下载原文件"
-          title="保存当前这份文件的原件；可选择保存位置"
-          disabled={dlBusy}
-          onClick={() => void doDownloadOriginal()}
-        >
-          <Icon name="download" size={13} />
-        </button>
       </div>
 
       {newerFile && newerAttachment ? <button type="button" className="tag-btn warning preview-dirty-banner" data-zs-new-file-version={newerAttachment.artifactId}

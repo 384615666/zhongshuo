@@ -73,7 +73,26 @@ const scenesSource = String.raw`(() => {
       await go('/project/' + m.projectId + '/members');
       await until(() => q('[data-zs-members]'), '成员页');
       await until(() => qa('[data-zs-member-card]').length >= 2 || q('[data-zs-member-card]'), '成员卡');
+      await until(() => qa('[data-zs-members-project]').length >= 4, '项目卡（含夹具额外项目）', 25000);
       await wait(900);
+      window.r170Extra = { projects: qa('[data-zs-members-project]').map(textOf) };
+    } },
+    { name: 'members-switch', run: async () => {
+      await until(() => qa('[data-zs-members-project]').length >= 4, '项目卡', 25000);
+      await wait(600);
+      const before = textOf(q('.side-row.context-active .side-item-label')) || textOf(q('.side-project .side-row.context-active .side-item-label'));
+      const cards = qa('[data-zs-members-project]');
+      const target = cards.find((el) => textOf(el).includes('社区运营')) ?? cards[1];
+      target.click();
+      await until(() => /社区运营|产品手册|数据分析/.test(textOf(q('.members-head-name'))), '切换项目后的标题', 25000);
+      await wait(1200);
+      window.r170Extra = {
+        header: textOf(q('.members-head-name')),
+        members: textOf(q('.members-head-meta')),
+        projectCards: qa('[data-zs-members-project]').map(textOf),
+        sidebarActiveBefore: before,
+        sidebarActiveAfter: textOf(q('.side-row.context-active .side-item-label')),
+      };
     } },
     { name: 'board', run: async () => {
       await go('/board?scope=all');

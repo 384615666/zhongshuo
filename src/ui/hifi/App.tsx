@@ -20,7 +20,7 @@ import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
-import { openExternalDeepLink, loadSidebarRooms, openSidebarProject } from './loader';
+import { openExternalDeepLink, loadSidebarRooms } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
 import { MemberDetailPage } from './pages/MemberDetailPage';
@@ -494,9 +494,10 @@ export default function App() {
                         </button>
                         <button
                           className="side-item-label-btn"
-                          title={`切换到「${p.displayName}」${navActive.dm ? '的私信' : navActive.members ? '的成员管理' : ''} · ${p.rootPath}${p.archivedAt != null ? '（已归档·只读）' : ''}`}
+                          title={`${expanded ? '收起' : '展开'}「${p.displayName}」的房间列表 · ${p.rootPath}${p.archivedAt != null ? '（已归档·只读）' : ''}`}
+                          aria-expanded={expanded}
                           aria-current={isCurrent ? 'true' : undefined}
-                          onClick={() => openSidebarProject(p.id)}
+                          onClick={() => toggleProjectExpanded(p.id)}
                         >
                           <Icon name={p.status === 'missing' ? 'alert-triangle' : p.isGit ? 'git-branch' : 'folder'} size={13} className={p.status === 'missing' ? 'warn-icon' : 'faint'} />
                           <span className="side-item-label">{p.displayName}</span>

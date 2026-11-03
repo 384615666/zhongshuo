@@ -122,7 +122,9 @@
   align-items: stretch;
   flex: none;
 }
-.open-split > .btn {
+/* R171 第 4 项：单独的「打开」按钮四边都要圆角；只有出现右侧 ⌄ 时，
+   才把「打开」右侧与 ⌄ 左侧拍平拼成一个按钮（外轮廓仍是完整圆角）。 */
+.open-split.is-split > .btn:not(.open-split-caret) {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }

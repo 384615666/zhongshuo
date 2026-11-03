@@ -42,8 +42,10 @@ export async function refreshMemberIdentity(projectId: string) {
   }
   window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));
 }
-function useWriteForm(scope: string, projectId?: string) {
-  const guard=useFormGuard(projectId);
+function useWriteForm(scope: string, projectId?: string, scopeProjectId?: string) {
+  // R171：成员管理页可以在页内切项目（不切全局焦点）——表单绑定页内选中项目；
+  // 其它入口不传 scopeProjectId，行为与以前完全一致（按全局 activeProjectId 校验）。
+  const guard=useFormGuard(projectId,{scopeProjectId});
   const [busy,setBusy]=useState(false),[committed,setCommitted]=useState(false),[error,setError]=useState<string|null>(null);
   const pending=useRef(false),readBack=useRef<((isCurrent:()=>boolean,data?:unknown)=>void|Promise<void>)|null>(null);  const retryRead=async()=>{
     if(pending.current||!guard.valid()||!readBack.current)return;
@@ -68,22 +70,26 @@ function useWriteForm(scope: string, projectId?: string) {
 function FormFeedback({state:f}:{state:ReturnType<typeof useWriteForm>}){
   return f.error?<div className="panel warning">{userFacingSystemText(f.error ?? '')}{f.committed?<button className="btn sm" data-zs-member-readretry disabled={f.busy||f.invalid} onClick={()=>void f.retryRead()}>重试读取已提交结果</button>:null}</div>:null;
 }
-export function EditMemberModal({ projectId, member, onClose, onSaved }: {
+export function EditMemberModal({ projectId, scopeProjectId, member, onClose, onSaved }: {
     projectId: string;
+    /** R171：页内项目作用域（成员管理页用）；省略=按全局 activeProjectId 校验。 */
+    scopeProjectId?: string;
     member: MemberRow;
     onClose: () => void;
     onSaved: () => void | Promise<void>;
 }) {
     const [name, setName] = useState(member.displayName), [desc, setDesc] = useState(member.description ?? '');
-    const f = useWriteForm(`member.update:${projectId}:${member.id}`, projectId);
+    const f = useWriteForm(`member.update:${projectId}:${member.id}`, projectId, scopeProjectId);
     return <Modal title="编辑成员" size="md" onClose={onClose} subtitle="只修改名称和说明；任务与会话不受影响" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-member-edit-save={member.id} disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('member.update', { projectId, memberId: member.id, expectedRevision: member.revision, displayName: name, description: desc }, async (isCurrent) => { await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>{f.busy ? '保存中…' : '保存资料'}</button></>}>
     {f.invalid ? <div className="panel warning">目标已切换，本表单作废；关闭后重新打开。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">名称</span><input className="input" disabled={f.busy||f.committed} data-zs-member-name value={name} maxLength={60} onChange={e => setName(e.target.value)}/></label>
     <label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} data-zs-member-description value={desc} maxLength={200} onChange={e => setDesc(e.target.value)}/></label><div className="field-hint">名称 1–60 字，说明最多 200 字。</div>
   </Modal>;
 }
-export function SaveMemberTemplateModal({ projectId, member, onClose, onSaved }: {
+export function SaveMemberTemplateModal({ projectId, scopeProjectId, member, onClose, onSaved }: {
     projectId: string;
+    /** R171：页内项目作用域（成员管理页用）；省略=按全局 activeProjectId 校验。 */
+    scopeProjectId?: string;
     member: MemberRow;
     onClose: () => void;
     onSaved: () => void | Promise<void>;
@@ -92,7 +98,7 @@ export function SaveMemberTemplateModal({ projectId, member, onClose, onSaved }:
     const savedAvatars = useStore((s) => s.ui.avatars ?? {});
     const [avatar, setAvatar] = useState<string | null>(() => savedAvatars[`member:${member.id}`] ?? null);
     const avatarPreset = presetForDataUrl(avatar);
-    const f = useWriteForm(`memberTemplate.saveFromMember:${projectId}:${member.id}`, projectId);
+    const f = useWriteForm(`memberTemplate.saveFromMember:${projectId}:${member.id}`, projectId, scopeProjectId);
     return <Modal title={`保存配置模板 · ${member.displayName}`} size="md" onClose={onClose} subtitle="保存此成员当前的渠道、模型和权限设置；不包含账号、会话和任务" footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.saveFromMember', { projectId, memberId: member.id, expectedRevision: member.revision, name, description: desc, ...(avatarPreset ? { avatarPresetId: avatarPreset.id } : {}) }, onSaved)}>保存模板</button></>}>
     {f.invalid ? <div className="panel warning">目标已切换，表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
@@ -100,15 +106,18 @@ export function SaveMemberTemplateModal({ projectId, member, onClose, onSaved }:
     <div className="panel info">创建新成员时会使用这里的设置；之后修改模板只影响新建的成员。</div>
   </Modal>;
 }
-export function EditTemplateModal({ template: t, onClose, onSaved }: {
+export function EditTemplateModal({ template: t, scopeProjectId, onClose, onSaved }: {
     template: ConfigTemplate;
+    /** R171：用页内选中项目做模型/思考等级的目录上下文（不切全局焦点）；省略=全局 active 项目。 */
+    scopeProjectId?: string;
     onClose: () => void;
     onSaved: () => void | Promise<void>;
 }) {
     const [form, setForm] = useState(t);
     const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? null);
     const avatarPreset = presetForDataUrl(avatar);
-    const projectId=useStore(s=>s.activeProjectId);
+    const activeProjectId = useStore(s => s.activeProjectId);
+    const projectId = scopeProjectId ?? activeProjectId;
     const f = useWriteForm(`memberTemplate.update:${t.id}`);
     const fake = useStore(s => s.dispatchGuard?.fakeAllowed === true);
     const config = (patch: Partial<ConfigTemplate['config']>) => setForm(s => ({ ...s, config: { ...s.config, ...patch } }));
@@ -125,8 +134,10 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <AvatarPicker value={avatar} disabled={f.busy||f.committed} allowCustom={false} onChange={setAvatar}/>
   </Modal>;
 }
-export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {
+export function CreateFromTemplateModal({ projectId, scopeProjectId, template: t, onClose, onSaved }: {
     projectId: string;
+    /** R171：页内项目作用域（成员管理页用）；省略=按全局 activeProjectId 校验。 */
+    scopeProjectId?: string;
     template: ConfigTemplate;
     onClose: () => void;
     onSaved: () => void | Promise<void>;
@@ -134,7 +145,7 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
     const project = useStore(s => s.projects.find(p => p.id === projectId));
     const [name, setName] = useState(t.name), [desc, setDesc] = useState(t.description);
     const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? defaultAiAvatarPreset(t.config.kind).dataUrl);
-    const f = useWriteForm(`memberTemplate.createMember:${projectId}:${t.id}`, projectId);
+    const f = useWriteForm(`memberTemplate.createMember:${projectId}:${t.id}`, projectId, scopeProjectId);
     return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name}`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent, data) => { const memberId = (data as { memberId?: string } | undefined)?.memberId; if (memberId != null) { try { await saveAvatar(`member:${memberId}`, avatar); } catch (error) { toast(`成员已创建，但头像未保存：${userFacingSystemText((error as Error).message ?? '')}`, 'error'); } } await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
     {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">成员名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-member-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">成员说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
@@ -143,8 +154,10 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
     <RuntimeChannelHelp kind={t.config.kind}/>
   </Modal>;
 }
-export function TemplatePanel({ projectId, readOnly, onChanged }: {
+export function TemplatePanel({ projectId, scopeProjectId, readOnly, onChanged }: {
     projectId: string;
+    /** R171：页内项目作用域（成员管理页用）；省略=按全局 activeProjectId 校验。 */
+    scopeProjectId?: string;
     readOnly: boolean;
     onChanged: () => void | Promise<void>;
 }) {
@@ -178,8 +191,8 @@ export function TemplatePanel({ projectId, readOnly, onChanged }: {
     {rows === null && !error ? <div className="panel info">正在读取模板…</div> : rows?.length === 0 ? <div className="panel">暂无配置模板。先配置成员，再从该成员保存模板。</div> : null}
     <div className="grid grid-3" data-zs-template-list>{rows?.map(t => <div className="card tight" key={t.id} data-zs-template={t.id}><div className="strong">{t.name} · {t.enabled ? '启用' : '停用'}</div><div className="small faint">{t.description}</div><div className="small" style={{ marginTop: 8 }}>{t.config.kind} · {t.config.model ?? '渠道默认模型'} · {t.config.permissionMode ?? '渠道默认权限'}</div><details><summary>执行程序</summary><div className="small mono">{t.config.executable}</div></details><div className="row tight wrap" style={{ marginTop: 10 }}><button className="btn ghost sm" data-zs-template-edit={t.id} onClick={() => setEdit(t)}>编辑 / 停用</button><button className="btn primary sm" data-zs-template-create={t.id} disabled={!t.enabled || readOnly || !projectId} onClick={() => setCreate({ projectId, template: t })}>在本项目创建…</button></div></div>)}</div>
     {cursor ? <button className="btn sm" onClick={() => void load(true)}>加载更多模板</button> : null}
-    {edit ? <EditTemplateModal key={edit.id} template={edit} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null);await load(); }}/> : null}
-    {create ? <CreateFromTemplateModal key={`${create.projectId}:${create.template.id}`} projectId={create.projectId} template={create.template} onClose={() => setCreate(null)} onSaved={async () => { setCreate(null);await onChanged(); }}/> : null}
+    {edit ? <EditTemplateModal key={edit.id} template={edit} scopeProjectId={scopeProjectId} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null);await load(); }}/> : null}
+    {create ? <CreateFromTemplateModal key={`${create.projectId}:${create.template.id}`} projectId={create.projectId} scopeProjectId={scopeProjectId} template={create.template} onClose={() => setCreate(null)} onSaved={async () => { setCreate(null);await onChanged(); }}/> : null}
   </>;
 }
 export function UnknownMemberOperations() {

@@ -129,7 +129,7 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
     const canOpenWith = !hosted && relativePath != null && relativePath !== '' && projectRootOf(cardProjectId) != null;
     const disabled = primaryDisabled ?? (attachment == null && file?.changeSetId == null);
     return (
-      <span className="open-split">
+      <span className={`open-split${canOpenWith ? ' is-split' : ''}`}>
         <button type="button" className="btn sm" {...primaryAttrs} disabled={disabled} onClick={onPrimary}>打开</button>
         {canOpenWith ? (
           <button
@@ -159,8 +159,9 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
             {attachment.purpose ? <span className="small faint">{attachment.purpose}</span> : null}
             {nonFinal ? <span className="small faint" data-zs-non-final-file="1">非最终</span> : null}
           </div>
-          {openSplit(attachment, change, () => onOpen?.(attachment), { 'data-zs-attachment-open': attachment.artifactId, 'aria-label': `打开 ${attachment.filename}` }, onOpen == null)}
+          {/* R171 第 5 项：「打开」固定在最右侧；「查看变更」在它左边。 */}
           {change && hasFileDiff(change) ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file: change, mode: 'diff'})}>查看变更</button> : null}
+          {openSplit(attachment, change, () => onOpen?.(attachment), { 'data-zs-attachment-open': attachment.artifactId, 'aria-label': `打开 ${attachment.filename}` }, onOpen == null)}
         </div>;
       })}
       {changes.filter(file => file.humanFacing && file.state !== 'removed' && !suppressedCardIds?.has(file.id)).map(file => {
@@ -173,8 +174,8 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
             {sourceNote(attachment, file)}
             {nonFinal ? <span className="small faint" data-zs-non-final-file="1">非最终</span> : null}
           </div>
-          {openSplit(attachment, file, () => (hosted && attachment ? onOpen?.(attachment) : open(file)), { 'data-zs-change-open': file.id, 'data-zs-change-artifact-id': file.artifactId ?? '' })}
           {hasFileDiff(file) ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file, mode: 'diff'})}>查看变更</button> : null}
+          {openSplit(attachment, file, () => (hosted && attachment ? onOpen?.(attachment) : open(file)), { 'data-zs-change-open': file.id, 'data-zs-change-artifact-id': file.artifactId ?? '' })}
         </div>;
       })}
     </div>
@@ -183,8 +184,8 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
       <div className="message-file-change-list">{changes.map(file => <div className="message-file-change-row" key={file.id} data-zs-change-path={file.path}>
         <div className="message-document-description"><span title={file.path}>{file.path}</span><span className="small faint">{stateLabel[file.state]}</span></div>
         {counts(file)}
-        {findAttachment(file) && file.state !== 'removed' ? <button type="button" className="btn ghost sm" onClick={() => open(file)}>打开</button> : null}
         {hasFileDiff(file) ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file, mode: 'diff'})}>查看变更</button> : null}
+        {findAttachment(file) && file.state !== 'removed' ? <button type="button" className="btn ghost sm" onClick={() => open(file)}>打开</button> : null}
       </div>)}</div>
     </details> : null}
 

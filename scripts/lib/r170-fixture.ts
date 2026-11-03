@@ -2,7 +2,7 @@
  *  这样对话串里会出现带真实项目相对路径的「文件改动」卡片（打开方式 / 查看变更 / 绝对路径
  *  三个反馈点都需要这种真实数据，不能靠内存伪造）。 */
 import {mkdirSync,writeFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {openDatabase} from '../../src/persistence/db.ts';
@@ -76,7 +76,43 @@ async function main(){
   script=output('活动照片已经按环节归档，共 24 张。');
   await command('message.submit',{target:{kind:'room_root',projectId,roomId:room2.room.id,conversationId:room2Row.conversationId},body:'整理活动照片，按环节归档。',intent:'default',mentions:[{kind:'member',memberId:claude}]});
   await worker.drain();
-  const meta={projectId,roomId:room.id,conversationId:room.conversationId,otherRoomId:room2.room.id,claude,codex,chat,work,question,dm,attachmentId:uploaded.attachmentId,delivery,writtenFile:'活动安排.md'};
+  // R171：成员管理要验证「多项目独立卡片 / 切项目不联动侧栏 / 房间数不闪 0」——
+  // 额外打开 3 个演示项目（各有房间与成员），全部为本机隔离夹具，不接触用户数据。
+  const workspaceRoot = dirname(project);
+  const extraProjects: string[] = [];
+  const extras = [
+    { name: '社区运营', rooms: ['周会', '内容排期'], members: ['Claude'] },
+    { name: '产品手册', rooms: ['资料整理'], members: ['Codex'] },
+    { name: '数据分析', rooms: ['看板'], members: ['Claude', 'Codex'] },
+  ];
+  for (const extra of extras) {
+    const extraPath = join(workspaceRoot, extra.name);
+    mkdirSync(extraPath, { recursive: true });
+    writeFileSync(join(extraPath, '说明.md'), `# ${extra.name}\n\n演示用项目。\n`);
+    const opened = await command<{ project: { id: string } }>('project.open', { path: extraPath });
+    const extraProjectId = opened.project.id;
+    const created: string[] = [];
+    for (const displayName of extra.members) {
+      const member = await command<{ memberId: string }>('member.create', { projectId: extraProjectId, displayName });
+      created.push(member.memberId);
+    }
+    for (const memberId of created) await command('member.setRuntime', { memberId, kind: 'fake', permissionMode: 'bypassPermissions' });
+    const placeholderId = `m_default_${extraProjectId}_0`;
+    db.prepare('UPDATE rooms SET coordinator_member_id=?, revision=revision+1 WHERE project_id=? AND coordinator_member_id=?').run(created[0], extraProjectId, placeholderId);
+    db.prepare('DELETE FROM room_members WHERE member_id=?').run(placeholderId);
+    db.prepare('DELETE FROM project_members WHERE id=? AND project_id=?').run(placeholderId, extraProjectId);
+    const extraRooms = (await command<{ items: Array<{ id: string; revision: number }> }>('room.list', { projectId: extraProjectId })).items;
+    for (let i = 0; i < extra.rooms.length; i++) {
+      if (i === 0 && extraRooms[0] != null) {
+        const revision = (db.prepare('SELECT revision FROM rooms WHERE id=?').get(extraRooms[0].id) as { revision: number }).revision;
+        await command('room.update', { roomId: extraRooms[0].id, expectedRevision: revision, name: extra.rooms[0]!, coordinatorMemberId: created[0]! });
+      } else {
+        await command('room.create', { projectId: extraProjectId, name: extra.rooms[i]!, memberIds: created });
+      }
+    }
+    extraProjects.push(extraProjectId);
+  }
+  const meta={projectId,roomId:room.id,conversationId:room.conversationId,otherRoomId:room2.room.id,claude,codex,chat,work,question,dm,attachmentId:uploaded.attachmentId,delivery,writtenFile:'活动安排.md',extraProjectIds:extraProjects};
   writeFileSync(join(dir,'guide-fixture.json'),JSON.stringify(meta,null,2));
   console.log(JSON.stringify(meta));
 }

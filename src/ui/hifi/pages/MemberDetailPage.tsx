@@ -6,8 +6,8 @@ import { Icon } from '../components/Icon';
 import { Avatar, ErrorState, Tag, memberColor } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
-import { navigate, currentNavSeq } from '../lib/router';
-import { refreshMembers, switchFocusProject } from '../loader';
+import { navigate } from '../lib/router';
+import { refreshMembers } from '../loader';
 import { memberWrite } from '../data/memberWrites';
 import { recordWrite } from '../data/store';
 import { EditMemberModal, SaveMemberTemplateModal, UnknownMemberOperations } from '../components/MemberManagementForms';
@@ -17,9 +17,6 @@ import { runtimeModelDisplayName } from '../lib/format';
 
 export function MemberDetailPage({ projectId, memberId }: { projectId: string; memberId: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
-  const activeId = useStore((s) => s.activeProjectId);
-  const opening=useStore(s=>s.openInFlightTarget);
-  const navSequence=currentNavSeq();
   const [member, setMember] = useState<MemberRow | null>(null);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +50,11 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   }, [projectId, memberId]);
 
   useEffect(() => { mounted.current = true; setMember(null);setRuntime(null);setRuntimeError(null);setBindOpen(false);setEditOpen(false);setTemplateOpen(false);void reload(); return () => { mounted.current = false; seq.current += 1; }; }, [reload]);
-  useEffect(() => { if (project != null && activeId !== projectId && !(opening!=null&&opening.projectId!==projectId&&opening.urlSeqAtStart>=navSequence)) void switchFocusProject(projectId).catch((e: unknown) => toast(`聚焦项目失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); }, [project, projectId, activeId,opening,navSequence]);
+  /**
+   * R171 第 2 项：成员详情属于「成员管理」页内选中的项目，不再因为路由项目与侧栏
+   * 当前项目不同就切换全局焦点——否则从解耦后的成员管理页点进详情，侧栏会跟着跳。
+   * 本页数据全部按地址里的 projectId 读取；写表单按 scopeProjectId 校验。
+   */
 
   const toggle = async () => {
     if (member == null || member.principalType !== 'agent' || togglePending.current) return;
@@ -136,9 +137,9 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
           </div>
         </> : null}
       </div>
-      {member!=null&&editOpen?<EditMemberModal key={`${projectId}:${memberId}`} projectId={projectId} member={member} onClose={()=>setEditOpen(false)} onSaved={async()=>{setEditOpen(false);await reload();}}/>:null}
-      {member!=null&&templateOpen?<SaveMemberTemplateModal key={`${projectId}:${memberId}`} projectId={projectId} member={member} onClose={()=>setTemplateOpen(false)} onSaved={()=>{setTemplateOpen(false);toast('配置模板已保存；成员管理页可查看与复用','success');}}/>:null}
-      {member != null && bindOpen ? <BindRuntimeModal member={member} projectId={projectId} initial={initial} guard={guard} onClose={() => setBindOpen(false)} onSaved={async () => { if (!mounted.current) return; setBindOpen(false); await reload(); void refreshMembers(projectId).catch(() => {}); }} /> : null}
+      {member!=null&&editOpen?<EditMemberModal key={`${projectId}:${memberId}`} projectId={projectId} scopeProjectId={projectId} member={member} onClose={()=>setEditOpen(false)} onSaved={async()=>{setEditOpen(false);await reload();}}/>:null}
+      {member!=null&&templateOpen?<SaveMemberTemplateModal key={`${projectId}:${memberId}`} projectId={projectId} scopeProjectId={projectId} member={member} onClose={()=>setTemplateOpen(false)} onSaved={()=>{setTemplateOpen(false);toast('配置模板已保存；成员管理页可查看与复用','success');}}/>:null}
+      {member != null && bindOpen ? <BindRuntimeModal member={member} projectId={projectId} scopeProjectId={projectId} initial={initial} guard={guard} onClose={() => setBindOpen(false)} onSaved={async () => { if (!mounted.current) return; setBindOpen(false); await reload(); void refreshMembers(projectId).catch(() => {}); }} /> : null}
     </div>
   );
 }

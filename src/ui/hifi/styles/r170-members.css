@@ -1,7 +1,8 @@
 /* R170 成员管理（左项目卡片 / 右 AI 列表）——见 docs/implementation/r170-ui-feedback-plan.md */
 
 /* ============================================================
-   两栏骨架：左栏项目卡片（固定 236px，不缩） + 右栏当前项目内容
+   两栏骨架：左栏「项目卡列」（280px，像私信会话列表）+ 右栏当前项目内容
+   R171：左栏与右栏之间是一条细竖线（不再是一个大卡片装多个项目条目）
    ============================================================ */
 
 .members-page > .members-split {
@@ -10,9 +11,23 @@
 }
 
 .members-split {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 20px;
+}
+
+/* 列间细分隔：贯穿整段两栏内容的一条 1px 竖线（贴在 280px 左栏的右缘）。
+   用定位线而不是给左栏加 border-right：左栏是 sticky + 内容高度，border 会只画到卡片底部。 */
+.members-split::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 280px;
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
 }
 
 .members-content {
@@ -28,12 +43,12 @@
 }
 
 /* ============================================================
-   左栏：项目卡片列
+   左栏：一列独立项目卡（每项目一张卡，卡间 6-8px）
    ============================================================ */
 
 .members-projects {
   flex: none;
-  width: 236px;
+  width: 280px;
   align-self: flex-start;
   position: sticky;
   top: var(--page-top-gap);
@@ -41,10 +56,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  padding: var(--sp-2);
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  /* 右侧留出与分隔线的呼吸；左栏本身不再是「容器卡」。 */
+  padding: 0 16px 0 0;
 }
 
 .members-projects-title {
@@ -60,22 +73,23 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
 }
 
+/* 独立项目卡：像私信里的会话卡（实底 + 细边 + 圆角）。 */
 .members-project {
   display: flex;
   flex-direction: column;
   gap: 3px;
   width: 100%;
-  padding: 8px 10px;
-  /* 透明边框：选中/悬停切换背景时不跳尺寸。 */
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  background: transparent;
+  padding: 9px 11px;
+  /* 实边：悬停/选中只换底色与边框色，尺寸不跳。 */
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
   color: var(--text);
   font-size: var(--fs-12);
   text-align: left;
@@ -84,6 +98,7 @@
 
 .members-project:hover {
   background: var(--bg-hover);
+  border-color: var(--border);
 }
 
 .members-project:focus-visible {
@@ -110,14 +125,20 @@
   color: var(--accent-text);
 }
 
+/* meta 行常驻（min-height）：房间数就绪前不显示数字，但卡片高度不跳。 */
 .members-project-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+  min-height: 16px;
   font-size: var(--fs-11);
   line-height: 1.45;
   color: var(--text-3);
+}
+
+.members-project-rooms {
+  font-variant-numeric: tabular-nums;
 }
 
 .members-project-flag {
@@ -222,6 +243,11 @@
     gap: var(--sp-3);
   }
 
+  /* 竖线是桌面两栏的分隔，横排时换成条目下方的细横线。 */
+  .members-split::before {
+    display: none;
+  }
+
   .members-split > .members-projects {
     position: static;
     width: 100%;
@@ -229,6 +255,8 @@
     flex-direction: row;
     align-items: center;
     gap: var(--sp-2);
+    padding: 0 0 8px;
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .members-projects-title {

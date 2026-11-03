@@ -10,20 +10,25 @@ import { RUNTIME_CHANNELS, isRuntimeKind, runtimeExecutable, type RuntimeKind, t
  * 未绑定成员派发时回落全局默认（ZS_RUNTIME），界面分别显示 绑定渠道 / 全局默认渠道 /
  * 查询失败 / 未解析，不把「未绑定」显示成"不会用任何渠道"。
  *
- * 布局（R170）：两栏——左栏项目卡片（项目名、房间数、目录失效/已归档、当前项目高亮，
- * 点击=切项目并回成员路由），右栏=当前项目标题行（项目名+成员数+扫描/刷新/添加 AI）、
- * 搜索与状态筛选、成员卡片、模板面板、房间名单；AI 设置 从卡片进弹窗。原顶部「项目」
- * 下拉已移除（R170 用户反馈第 2 项）。R67 已接正式创建，R81 接资料编辑和独立配置模板。
- * 人的关注（阅读订阅）不属于成员管理——在「待我处理」分列（原型同判）。
+ * 布局（R170 → R171）：两栏——左栏是一列**独立项目卡**（每项目一张卡，像私信会话列表；
+ * 卡间 6-8px，与右栏之间一条细分隔），右栏=**页内选中项目**的标题行（项目名+成员数+
+ * 扫描/刷新/添加 AI）、搜索与状态筛选、成员卡片、模板面板、房间名单；AI 设置 从卡片进弹窗。
+ * 原顶部「项目」下拉已移除（R170 用户反馈第 2 项）。R67 已接正式创建，R81 接资料编辑和
+ * 独立配置模板。人的关注（阅读订阅）不属于成员管理——在「待我处理」分列（原型同判）。
+ *
+ * R171：页内 `selectedProjectId` 与左侧栏全局焦点**解耦**——点项目卡只换本页数据范围
+ * （不 switchFocusProject、不改侧栏 active 高亮）。成员/房间名单/模板/工作量都按它取数；
+ * 房间名单改用本项目自己的 `room.list`，不再依赖只属于侧栏 active 项目的全局 `store.rooms`。
+ * 左栏项目卡的「N 个房间」在真实数据就绪前**不显示数字**（不把未加载写成 0）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import {RuntimeModel} from './components/RuntimeModel';
 import {RuntimeEffort} from './components/RuntimeEffort';
 import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
-import { useStore, toast, getState } from './shell';
-import { refreshMembers,refreshRooms, switchFocusProject } from './loader';
-import { navigate, currentNavSeq } from './lib/router';
+import { useStore, toast } from './shell';
+import { refreshMembers,refreshRooms } from './loader';
+import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
@@ -37,6 +42,9 @@ import { saveAvatar } from './data/memberAvatar';
 import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
 
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
+/** room.list 行：R171 起成员页自己按页内项目取房间名单（不再用全局 store.rooms）。 */
+export interface PageRoomRow { id: string; name: string; conversationId?: string; coordinatorMemberId?: string | null; description?: string | null; archivedAt?: number | null; revision?: number }
+const EMPTY_ROOMS: PageRoomRow[] = [];
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
 export interface RuntimeInfo {
   binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null;effort?:string|null };
@@ -59,19 +67,32 @@ export const runtimeAuthOf = (raw: string | null): string => {
 
 export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const activeProjectId = useStore((s) => s.activeProjectId);
-  const projectId=routeProjectId??activeProjectId;
   const projects = useStore((s) => s.projects);
-  const opening=useStore(s=>s.openInFlightTarget);
-  const navSequence=currentNavSeq();
-  useEffect(()=>{if(routeProjectId&&routeProjectId!==activeProjectId&&projects.some(p=>p.id===routeProjectId)&&!(opening!=null&&opening.projectId!==routeProjectId&&opening.urlSeqAtStart>=navSequence))void switchFocusProject(routeProjectId).catch((e:unknown)=>{if(getState().activeProjectId===routeProjectId)toast(`成员项目聚焦失败：${userFacingSystemText((e as Error).message ?? '')}`,'error');});},[routeProjectId,activeProjectId,projects,opening,navSequence]);
-  // selector 必须返回稳定引用（useSyncExternalStore 契约——filter 新数组会造成快照死循环，
-  // R46 实证）：先取整份 rooms，再按项目 memo 过滤。
-  const allRooms = useStore((s) => s.rooms);
-  const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
-  /** R170 左栏项目卡片的房间数来源：当前项目用 rooms 投影；其它项目用侧栏已缓存的
-   *  房间索引（同为 room.list 真值）。没有索引时不显示数字——不把未知写成 0，
-   *  也不显示非当前项目的成员数（只有当前项目成员已装载）。 */
+  /**
+   * R171：本页选中的项目——与左侧栏全局焦点**解耦**。
+   * 点项目卡只改这里（本页数据范围），不 switchFocusProject、不改侧栏 active 高亮。
+   * 初值：显式路由项目 > 全局 active；`/members`（无路由项目）时继续跟随全局焦点，
+   * 深链/侧栏入口（`/project/:id/members`）以路由为准。
+   */
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(() => routeProjectId ?? activeProjectId ?? '');
+  const projectId = selectedProjectId;
+  const selectedRef = useRef(projectId);
+  useEffect(() => { selectedRef.current = projectId; }, [projectId]);
+  // 路由变化=页面切换意图（深链 / 侧栏「成员管理」）：只跟随路由，不再反向切换全局项目。
+  useEffect(() => { if (routeProjectId != null && routeProjectId !== '') setSelectedProjectId(routeProjectId); }, [routeProjectId]);
+  // 无路由项目（/members）时跟随全局焦点：从侧栏/标题栏切项目后本页跟过去。
+  useEffect(() => { if ((routeProjectId == null || routeProjectId === '') && activeProjectId !== '') setSelectedProjectId(activeProjectId); }, [activeProjectId, routeProjectId]);
+
+  /**
+   * R171：房间名单**按页内项目本地取数**（room.list）。全局 store.rooms 只属于侧栏
+   * active 项目，页内切到别的项目时它会给出别的项目的名单——因此这里一律不读它。
+   * 读取失败保留同项目上次名单并如实提示（不把未知写成「没有房间」）。
+   */
   const sidebarRoomIndexes = useStore((s) => s.sidebarRoomIndexes);
+  const [pageRooms, setPageRooms] = useState<{ projectId: string; items: PageRoomRow[] } | null>(null);
+  const [roomsErr, setRoomsErr] = useState<{ projectId: string; message: string } | null>(null);
+  const rooms = pageRooms != null && pageRooms.projectId === projectId ? pageRooms.items : EMPTY_ROOMS;
+  const roomsReady = pageRooms != null && pageRooms.projectId === projectId;
   const workload = useMemberWorkload(projectId);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [membersProjectId, setMembersProjectId] = useState<string | null>(null);
@@ -98,6 +119,22 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
     if (projectId == null || projectId === '') return;
     const gen = ++genRef.current;
     setErr(null);
+    // R171：本项目房间名单**本地取数**（room.list，和成员并行发出——房间数尽早就绪）。
+    // 读失败保留同项目上次名单并如实提示，不把未知写成「没有房间」，也不凭旧房间列表取成员。
+    const roomTask = (async (): Promise<PageRoomRow[] | null> => {
+      try {
+        const roomData = await command<{ items: PageRoomRow[] }>('room.list', { projectId });
+        if (gen !== genRef.current) return null;
+        const rows = roomData.items ?? [];
+        setPageRooms({ projectId, items: rows });
+        setRoomsErr(null);
+        return rows;
+      } catch (e) {
+        if (gen !== genRef.current) return null;
+        setRoomsErr({ projectId, message: (e as Error).message });
+        return null;
+      }
+    })();
     try {
       const r = await command<{ items: MemberRow[] }>('member.list', { projectId });
       if (gen !== genRef.current) return; // 已切换——迟到响应不污染
@@ -121,9 +158,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       if (gen !== genRef.current) return;
       setRuntimes(prev => Object.fromEntries(r.items.flatMap(m => rt[m.id] != null ? [[m.id, rt[m.id]]] : prev[m.id] != null ? [[m.id, prev[m.id]]] : [])));
       setRuntimeErrs(rtErr);
+      const roomRows = await roomTask;
+      if (gen !== genRef.current || roomRows == null) return;
       const perRoom: Record<string, MemberRow[]> = {};
       const roomErr: Record<string, string> = {};
-      await Promise.all(rooms.map(async (room) => {
+      await Promise.all(roomRows.map(async (room) => {
         try {
           const rr = await command<{ items: MemberRow[] }>('member.list', { projectId, roomId: room.id });
           if (gen === genRef.current) perRoom[room.id] = rr.items;
@@ -132,12 +171,12 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         }
       }));
       if (gen !== genRef.current) return;
-      setRoomMembers(prev => Object.fromEntries(rooms.flatMap(room => perRoom[room.id] != null ? [[room.id, perRoom[room.id]]] : prev[room.id] != null ? [[room.id, prev[room.id]]] : [])));
+      setRoomMembers(prev => Object.fromEntries(roomRows.flatMap(room => perRoom[room.id] != null ? [[room.id, perRoom[room.id]]] : prev[room.id] != null ? [[room.id, prev[room.id]]] : [])));
       setRoomMemberErrs(roomErr);
     } catch (e) {
       if (gen === genRef.current) setErr((e as Error).message);
     }
-  }, [projectId, rooms]);
+  }, [projectId]);
 
   useEffect(() => { void reload(); return () => { genRef.current += 1; }; }, [reload]);
 
@@ -146,7 +185,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
     try {
       const outcome=await memberWrite(`member.setEnabled:${projectId}:${m.id}`,'member.setEnabled',{projectId,memberId:m.id,expectedRevision:m.revision,enabled:!m.enabled});
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
-      if(getState().activeProjectId!==projectId)return;
+      // R171：页内独立——只要本页还停在这个项目就回读，不因全局 active 不同而丢弃结果。
+      if(selectedRef.current!==projectId)return;
       recordWrite('member.setEnabled', `${m.displayName} → ${!m.enabled ? '启用' : '停用'}（只影响之后的新派发）`);
       toast(`已${!m.enabled ? '启用' : '停用'} ${m.displayName}（作用范围：之后的新派发）`, 'success');
       await reload();
@@ -184,21 +224,25 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const projState = projects.find((x) => x.id === projectId);
   const projArchived = projState?.archivedAt != null;
   const projRemoved = projState?.removedAt != null;
-  /** R170：左栏项目卡片（未移除项目）——点击=切项目 + 回到成员路由（与侧栏同判）。 */
+  /** R170：左栏项目卡片（未移除项目）——R171：点击只切本页数据范围（不切全局焦点）。 */
   const visibleProjects = projects.filter((p) => p.removedAt == null);
+  /** R171：房间数在**真值就绪前不显示数字**（不能把未加载写成 0，用户实测切项目会闪 0）：
+   *  页内选中项目只用本项目 `room.list` 的结果；其它项目用侧栏房间索引（`ready` 直接用，
+   *  正在刷新/读取失败时沿用**上次真实列表**的计数，避免每 5 秒刷新时数字闪没）；
+   *  任何一方都没有真值就返回 null（卡片上不显示数字）。 */
   const roomCountOf = (id: string): number | null => {
-    if (id === projectId) return allRooms.filter((room) => room.projectId === id).length;
+    if (id === projectId) return roomsReady ? rooms.length : null;
     const index = sidebarRoomIndexes[id];
-    return index?.status === 'ready' ? index.rooms.length : null;
+    if (index == null) return null;
+    if (index.status === 'ready') return index.rooms.length;
+    return index.rooms.length > 0 ? index.rooms.length : null;
   };
+  /** R171：选项目=只换本页数据范围；URL 用 replace 记录（刷新/分享后仍停在本页同一项目），
+   *  **不** switchFocusProject、不改变侧栏 active 高亮。 */
   const openProject = (next: string) => {
     if (next === projectId) return;
-    // 先提交路由再装载：迟到的装载回执不会把用户带离本次点击。
-    void switchFocusProject(next).catch((e: unknown) => {
-      if (getState().activeProjectId !== next) return; // 已切到别处——不弹旧错误
-      toast(`切换项目失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
-    });
-    navigate(`/project/${next}/members`);
+    setSelectedProjectId(next);
+    navigate(`/project/${next}/members`, { replace: true });
   };
 
   /**
@@ -242,7 +286,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-members="hifi">
       <div className="page members-page">
-        {/* R170：左栏项目卡片（点击切换项目）+ 右栏当前项目的 AI 列表。
+        {/* R171：左栏一列独立项目卡（像私信会话列表）+ 右栏**页内选中项目**的 AI 列表。
             搜索 / 状态筛选只影响显示，不改变任何成员或任务。 */}
         <UnknownMemberOperations/>
         <div className="members-split">
@@ -261,17 +305,16 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     className={`members-project${current ? ' is-current' : ''}`}
                     data-zs-members-project={p.id}
                     aria-current={current ? 'page' : undefined}
-                    title={current ? `${p.displayName}（当前项目）` : `切换到 ${p.displayName} 的成员`}
+                    title={current ? `${p.displayName}（本页当前项目）` : `在成员管理里查看 ${p.displayName}（不切换侧栏项目）`}
                     onClick={() => openProject(p.id)}
                   >
                     <span className="members-project-name">{p.displayName}</span>
-                    {roomCount != null || missing || archived ? (
-                      <span className="members-project-meta">
-                        {roomCount != null ? <span>{roomCount} 个房间</span> : null}
-                        {missing ? <span className="members-project-flag"><Icon name="alert-triangle" size={11} /> 目录失效</span> : null}
-                        {archived ? <span className="members-project-flag muted"><Icon name="archive" size={11} /> 已归档</span> : null}
-                      </span>
-                    ) : null}
+                    {/* meta 行常驻（CSS min-height）：房间数就绪前后卡片高度不跳。 */}
+                    <span className="members-project-meta">
+                      {roomCount != null ? <span className="members-project-rooms">{roomCount} 个房间</span> : null}
+                      {missing ? <span className="members-project-flag"><Icon name="alert-triangle" size={11} /> 目录失效</span> : null}
+                      {archived ? <span className="members-project-flag muted"><Icon name="archive" size={11} /> 已归档</span> : null}
+                    </span>
                   </button>
                 );
               })}
@@ -301,9 +344,15 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                   setScanning(true);
                   try {
                     const result = await command<{created: unknown[]; existing: unknown[]; notes: string[]; skipped: Array<{reason: string}>}>('member.discoverDefaults', {projectId: targetProjectId});
-                    setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: [...result.notes, ...result.skipped.map(item => item.reason)]});
-                    await Promise.all([refreshMembers(targetProjectId), refreshRooms(targetProjectId)]);
-                    if (getState().activeProjectId === targetProjectId) await reload();
+                    // R171：页内独立——全局投影读失败不影响本页刷新，如实记进扫描说明。
+                    const refreshNotes: string[] = [];
+                    await Promise.all([
+                      refreshMembers(targetProjectId).catch((e: unknown) => { refreshNotes.push(`成员投影刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
+                      refreshRooms(targetProjectId).catch((e: unknown) => { refreshNotes.push(`房间索引刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
+                    ]);
+                    setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: [...result.notes, ...result.skipped.map(item => item.reason), ...refreshNotes]});
+                    // 只刷新本页仍需显示的项目；不因全局 active 不同而跳过（页内独立）。
+                    if (selectedRef.current === targetProjectId) await reload();
                   } catch (error) {
                     setScanResult({projectId: targetProjectId, summary: '扫描未完成', notes: [userFacingSystemText((error as Error).message)]});
                   } finally { setScanning(false); }
@@ -393,10 +442,12 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             </div>
 
             {membersInScope!=null && visibleMembers?.length===0 && membersInScope.length>0 ? <div className="panel">没有匹配的成员；筛选不会修改成员或任务。</div>:null}
-            <TemplatePanel projectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
+            <TemplatePanel projectId={projectId} scopeProjectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
             <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
             <div className="panel">
               <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
+              {roomsErr?.projectId === projectId ? <div className="small" style={{ marginBottom: 8, color: 'var(--warning)' }}>房间名单读取失败：{userFacingSystemText(roomsErr.message)}（保留上次结果，可点「刷新」重试）</div> : null}
+              {!roomsReady && roomsErr?.projectId !== projectId ? <div className="faint small">正在读取本项目的房间名单…</div> : null}
               {rooms.map((room) => {
                 const list = roomMembers[room.id];
                 const failure = roomMemberErrs[room.id];
@@ -419,27 +470,27 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                   </div>
                 );
               })}
-              {rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
+              {roomsReady && rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
             </div>
           </section>
         </div>
       </div>
 
-      {editFor ? <EditMemberModal key={`${editFor.projectId}:${editFor.member.id}`} projectId={editFor.projectId} member={editFor.member} onClose={()=>setEditFor(null)} onSaved={async()=>{setEditFor(null);await reload();}}/>:null}
-      {saveTemplateFor ? <SaveMemberTemplateModal key={`${saveTemplateFor.projectId}:${saveTemplateFor.member.id}`} projectId={saveTemplateFor.projectId} member={saveTemplateFor.member} onClose={()=>setSaveTemplateFor(null)} onSaved={()=>{setSaveTemplateFor(null);window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));}}/>:null}
+      {editFor ? <EditMemberModal key={`${editFor.projectId}:${editFor.member.id}`} projectId={editFor.projectId} scopeProjectId={projectId} member={editFor.member} onClose={()=>setEditFor(null)} onSaved={async()=>{setEditFor(null);await reload();}}/>:null}
+      {saveTemplateFor ? <SaveMemberTemplateModal key={`${saveTemplateFor.projectId}:${saveTemplateFor.member.id}`} projectId={saveTemplateFor.projectId} scopeProjectId={projectId} member={saveTemplateFor.member} onClose={()=>setSaveTemplateFor(null)} onSaved={()=>{setSaveTemplateFor(null);window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));}}/>:null}
       {addFor != null ? (
         <AddMemberModal
           projectId={addFor}
           projectName={projects.find((x) => x.id === addFor)?.displayName ?? addFor}
-          activeProjectId={activeProjectId}
+          scopeProjectId={projectId}
+          rooms={roomsReady ? rooms : null}
           onClose={() => setAddFor(null)}
           onCreated={async () => {
             setAddFor(null);
             toast('已添加 AI 并保存配置', 'success');
-            await Promise.all([refreshRooms(addFor), refreshMembers(addFor)]);
-            // 迟到回执：只刷新**提交目标项目**的名单（当前焦点若已切到别的项目，不覆盖其视图）。
-            if (getState().activeProjectId === addFor) await reload();
-            else await refreshMembers(addFor).catch(() => { /* 焦点已切走——store 投影按目标项目刷新即可 */ });
+            await Promise.all([refreshRooms(addFor).catch(() => {}), refreshMembers(addFor).catch(() => {})]);
+            // R171：页内独立——只刷新本页仍在显示的项目；不因全局 active 不同而跳过或误刷别的项目。
+            if (selectedRef.current === addFor) await reload();
           }}
         />
       ) : null}
@@ -449,26 +500,29 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         <BindRuntimeModal
           member={bindFor.member}
           projectId={bindFor.projectId}
+          scopeProjectId={projectId}
           initial={bindForm}
           guard={guard}
           onClose={() => setBindFor(null)}
-          onSaved={async () => { setBindFor(null); await reload(); void refreshMembers().catch(() => { /* 投影刷新失败=发送区提示按旧事实多显示一轮，下次装载自对 */ }); }}
+          onSaved={async () => { setBindFor(null); await reload(); void refreshMembers(projectId).catch(() => { /* 投影刷新失败=发送区提示按旧事实多显示一轮，下次装载自对 */ }); }}
         />
       ) : null}
     </div>
   );
 }
 
-export function BindRuntimeModal({ member, projectId, initial, guard, onClose, onSaved }: {
+export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, guard, onClose, onSaved }: {
   member: MemberRow;
   projectId:string;
+  /** R171：页内项目作用域（成员管理页里不切换全局焦点也能保存）；省略=按全局 active 校验。 */
+  scopeProjectId?:string;
   initial: { kind: RuntimeKind; model: string; executable: string; permissionMode: string; effort?:string };
   guard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
   const targetProject=useRef(projectId).current;
-  const formGuard=useFormGuard(targetProject);
+  const formGuard=useFormGuard(targetProject,{scopeProjectId});
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -567,11 +621,12 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
   );
 }
 
-/** R67 P4 → R68 §5B：添加成员（member.create——同名可重复=项目级实例）。弹窗**捕获打开时的
- * projectId**：存续期间全局项目切换（标题栏/深链/受控事件）→ 表单作废（提交禁用+可见说明），
- * 提交前再核对一次；迟到回执只刷新提交目标项目（onCreated 侧门控）。 */
-function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCreated }: { projectId: string; projectName: string; activeProjectId: string; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
-  const formGuard=useFormGuard(projectId);
+/** R67 P4 → R68 §5B → R171：添加成员（member.create——同名可重复=项目级实例）。弹窗**捕获打开时的
+ * projectId**：存续期间本页切到别的项目 → 表单作废（提交禁用+可见说明），提交前再核对一次；
+ * 迟到回执只刷新提交目标项目（onCreated 侧门控）。R171 起表单绑定**页内项目作用域**：
+ * 页内选中项目不是侧栏 active 项目时同样能保存（memberWrite 本身按 params.projectId 工作）。 */
+function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, onClose, onCreated }: { projectId: string; projectName: string; scopeProjectId: string; rooms: PageRoomRow[] | null; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
+  const formGuard=useFormGuard(projectId,{scopeProjectId});
   const inFlight=useRef(false);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
@@ -582,9 +637,9 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   const [avatar,setAvatar]=useState<string | null>(()=>defaultAiAvatarPreset('claude').dataUrl);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const rooms = useStore((s) => s.rooms);
-  const joinable = rooms.filter((r) => r.projectId === projectId && r.archivedAt == null);
-  const stale = formGuard.invalid||activeProjectId !== projectId; // 打开后全局项目被切走——旧表单作废
+  // R171：加入房间的说明用**本页按项目取到的房间名单**（不再读只属于侧栏 active 项目的 store.rooms）。
+  const joinable = (rooms ?? []).filter((r) => r.archivedAt == null);
+  const stale = formGuard.invalid||scopeProjectId !== projectId; // 打开后本页切走——旧表单作废
   const submit = async () => {
     if(inFlight.current)return;
     if (stale||!formGuard.valid()) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
@@ -617,7 +672,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">{stale ? '项目已切换——表单作废' : `创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
+          <span className="small faint">{stale ? '本页已切到别的项目——表单作废' : rooms == null ? '正在读取本项目的房间名单…' : `创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn primary sm" disabled={busy || stale} data-zs-member-addsave={projectId} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
@@ -626,7 +681,7 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
     >
       <div className="col" style={{ gap: 12 }}>
         {stale ? (
-          <div className="panel warning" data-zs-member-addstale={projectId}>项目已切换（当前焦点不再是 {projectName}）——本表单已作废：为避免把旧输入写进别的项目，提交已禁用。请关闭后在新项目重新「添加成员」。</div>
+          <div className="panel warning" data-zs-member-addstale={projectId}>本页已切换到别的项目（不再是 {projectName}）——本表单已作废：为避免把旧输入写进别的项目，提交已禁用。请关闭后在新项目重新「添加成员」。</div>
         ) : null}
         <div className="field">
           <label className="field-label">成员名称</label>

@@ -239,9 +239,17 @@ export function ExecutionStatus({
         {summary.main!==summary.label?<span className="small strong truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-summary>
           {summary.main}
         </span>:null}
-        {summary.detail != null && !threadNotice ? (
-          <span className="small faint truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-detail>
-            {summary.detail}
+        {summary.detail != null ? (
+          /* R171 第 7 项：顶部横幅尽量只有一行——详情与「下一步」不再另起一段，
+             统一收进本行（单行省略，完整内容在 title 提示里）。 */
+          <span
+            className="small faint truncate"
+            style={{ flex: 1, minWidth: 120 }}
+            data-zs-execution-detail
+            data-zs-thread-notice-body={threadNotice ? '1' : undefined}
+            title={threadNotice ? [noticeDetail, nextStep].filter((part): part is string => part != null && part !== '').join('\n') : summary.detail}
+          >
+            {threadNotice ? noticeDetail : summary.detail}
           </span>
         ) : null}
         {firstAction != null ? (
@@ -265,10 +273,6 @@ export function ExecutionStatus({
         </button>):null}
         {density==='compact'&&onOpenDetails?<button type="button" className="btn sm ghost" data-zs-execution-details onClick={onOpenDetails}>{['FAILED','NOT_STARTED_FAILED','UNKNOWN'].includes(status.phase)?'查看原因':'查看详情'}</button>:null}
       </div>
-      {threadNotice&&(noticeDetail||nextStep)?<div className="small" data-zs-thread-notice-body style={{marginTop:5,lineHeight:1.65,whiteSpace:'normal',overflowWrap:'anywhere'}}>
-        {noticeDetail}{nextStep?<div>{nextStep}</div>:null}
-      </div>:null}
-
       {density === 'detail' ? (
         <>
           {status.waitingForUser != null ? (
