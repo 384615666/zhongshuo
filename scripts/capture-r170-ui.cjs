@@ -266,14 +266,15 @@ async function capture(win) {
     fs.writeFileSync(RESULT, JSON.stringify({ ok: false, error: String((e && e.stack) || e), results }, null, 2));
     console.error('R170_CAPTURE_FAIL ' + String((e && e.stack) || e));
   }
-  win.close();
+  // close 仅隐藏到托盘；测试必须走正式退出链，等待后台关库。
+  app.quit();
 }
 app.on('browser-window-created', (_e, win) => {
   win.show = () => {};
   win.webContents.once('did-finish-load', () => { void capture(win); });
 });
 require(MAIN);
-setTimeout(() => { for (const win of BrowserWindow.getAllWindows()) win.close(); }, 420000);`;
+setTimeout(() => { app.quit(); }, 420000).unref();`;
 const wrapperPath = path.join(run, 'main.cjs');
 fs.writeFileSync(wrapperPath, wrapperSource
   .replace('__MAIN__', JSON.stringify(mainCjs))
@@ -301,7 +302,7 @@ fs.writeFileSync(wrapperPath, wrapperSource
   const electron = spawnSync(require('electron'), [wrapperPath], { cwd: root, env, encoding: 'utf8', windowsHide: true, timeout: 600000 });
   fs.writeFileSync(path.join(run, 'process.log'), (electron.stdout || '') + '\n' + (electron.stderr || ''));
   const result = JSON.parse(fs.readFileSync(path.join(run, 'result.json'), 'utf8'));
-  const summary = { ok: (result.results || []).every((step) => step.error == null), run: path.relative(root, run), shots: (result.results || []).map((step) => ({ name: step.name, screenshot: step.screenshot, error: step.error, extra: step.extra })) };
+  const summary = { ok: electron.status === 0 && result.ok === true && result.partial !== true && result.results?.length > 0 && result.results.every((step) => step.error == null), processExit: electron.status, run: path.relative(root, run), shots: (result.results || []).map((step) => ({ name: step.name, screenshot: step.screenshot, error: step.error, extra: step.extra })) };
   fs.writeFileSync(path.join(run, 'summary.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
   if (!summary.ok) process.exitCode = 1;

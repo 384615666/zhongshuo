@@ -78,11 +78,11 @@ contextBridge.exposeInMainWorld('zsData', {
 /**
  * 本机文件打开方式窄桥（R170）：预览标签右键菜单与消息文件卡的「打开方式 / 复制路径」。
  * renderer 只能提交主进程探测出的枚举 id 与一个本机绝对文件路径；主进程校验存在性后
- * 才用系统默认程序或固定清单里的编辑器打开。不执行渲染器提供的命令/参数。
+ * 才用系统默认程序、当前文件的关联应用或本机编辑器打开。不执行渲染器提供的命令/参数。
  */
 contextBridge.exposeInMainWorld('zsLocalFiles', {
-  openers: (): Promise<{ items: Array<{ id: string; label: string; kind: 'explorer' | 'editor' }> }> =>
-    ipcRenderer.invoke('zs:local-files.openers'),
+  openers: (path:string): Promise<{ items: Array<{ id: string; label: string; kind: 'default' | 'explorer' | 'editor' }> }> =>
+    ipcRenderer.invoke('zs:local-files.openers',path),
   reveal: (path: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('zs:local-files.reveal', path),
   openDefault: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('zs:local-files.openDefault', path),
   openWith: (appId: string, path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('zs:local-files.openWith', { appId, path }),

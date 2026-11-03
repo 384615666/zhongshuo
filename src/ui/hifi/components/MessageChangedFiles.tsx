@@ -12,7 +12,7 @@ import {formatBytes} from '../lib/format';
 import {attachmentKindLabel} from '../lib/attachmentKindLabel';
 import {useStore, toast} from '../shell';
 import {
-  absoluteProjectPath, copyTextToClipboard, localFileOpeners, openLocalFileWith, revealLocalFile,
+  absoluteProjectPath, copyTextToClipboard, localFileOpeners, openLocalFileWith, openLocalFileDefault, revealLocalFile,
   type LocalFileOpener,
 } from '../lib/localOpen';
 
@@ -72,11 +72,12 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
     return () => {alive = false;};
   }, [selected]);
   useEffect(() => {
-    if (openMenu == null || openers != null) return;
+    if (openMenu == null) return;
     let alive = true;
-    void localFileOpeners().then((items) => { if (alive) setOpeners(items); });
+    setOpeners(null);
+    void localFileOpeners(openMenu.absolutePath).then((items) => { if (alive) setOpeners(items); });
     return () => { alive = false; };
-  }, [openMenu, openers]);
+  }, [openMenu]);
   if (!changes.length && !documents.length) return null;
   const findAttachment = (file: MessageFileChange): FormalAttachmentSummary | undefined => attachmentForChange(file, attachments);
   const open = (file: MessageFileChange): void => {
@@ -93,12 +94,17 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
     const absolutePath = absoluteProjectPath(projectRootOf(projectId), relativePath);
     if (absolutePath == null) return;
     const rect = target.getBoundingClientRect();
+    setOpeners(null);
     setOpenMenu({ x: Math.round(rect.left), y: Math.round(rect.bottom + 4), label, relativePath, absolutePath });
   };
   const copyPath = (text: string, label: string): void => {
     void copyTextToClipboard(text).then((ok) => toast(ok ? `已复制${label}：${text}` : '复制失败：剪贴板不可用', ok ? 'success' : 'error'));
   };
   const runOpener = (opener: LocalFileOpener, absolutePath: string): void => {
+    if(opener.kind==='default'){
+      void openLocalFileDefault(absolutePath).then(result=>{if(!result.ok)toast(`打开失败：${userFacingSystemText(result.error??'')}`,'error');});
+      return;
+    }
     if (opener.kind === 'explorer') {
       void revealLocalFile(absolutePath).then((result) => { if (!result.ok) toast(`打开文件夹失败：${userFacingSystemText(result.error ?? '')}`, 'error'); });
       return;
@@ -189,7 +195,7 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
         {(openers ?? []).map((opener) => (
           <MenuItem
             key={opener.id}
-            icon={opener.kind === 'explorer' ? 'folder' : 'code'}
+            icon={opener.kind === 'explorer' ? 'folder' : 'external-link'}
             title={opener.kind === 'explorer' ? '在资源管理器中选中这个文件' : `用 ${opener.label} 打开这个文件`}
             onClick={() => { setOpenMenu(null); runOpener(opener, openMenu.absolutePath); }}
           >
@@ -206,16 +212,13 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
     {selected ? <Modal title={`${selected.file.displayName} · ${selected.mode === 'diff' ? '查看变更' : '文件内容'}`} size="xl" onClose={() => setSelected(null)}>
       {error ? <div role="alert">读取失败：{userFacingSystemText(error ?? '')}</div> : !snapshot ? <div>正在读取文件…</div> : selected.mode === 'content' ? <>
         {snapshot.content?.after.text != null ? <MarkdownView text={snapshot.content.after.text}/> : <div>{userFacingSystemText(snapshot.content?.after.reason ?? '这份文件没有可预览的文本，可查看变更记录。')}</div>}
-      </> : snapshot.content?.before.text != null && snapshot.content?.after.text != null ? (
+      </> : (
         /* R170 第 10 项：查看变更用行级彩色对比（绿色新增 / 红色删除），不再是两段纯文本。 */
         <div className="message-file-diff">
-          <DiffText left={snapshot.content.before.text} right={snapshot.content.after.text} leftLabel="修改前" rightLabel="修改后" />
+          <DiffText left={snapshot.content?.before.text} right={snapshot.content?.after.text} leftLabel="修改前" rightLabel="修改后" />
+          {(['before','after'] as const).map(side=>snapshot.content?.[side].text==null&&snapshot.content?.[side].reason?<p className="small faint" key={side}>{side==='before'?'修改前':'修改后'}：{userFacingSystemText(snapshot.content[side].reason)}</p>:null)}
         </div>
-      ) : <div className="message-file-diff">
-        {(['before', 'after'] as const).map(side => <section key={side}><strong>{side === 'before' ? '修改前' : '修改后'}</strong>
-          {snapshot.content?.[side].text != null ? <pre>{snapshot.content[side].text}</pre> : <p>{userFacingSystemText(snapshot.content?.[side].reason ?? '没有可预览的文本')}</p>}
-        </section>)}
-      </div>}
+      )}
     </Modal> : null}
   </>;
 }

@@ -12,11 +12,11 @@
 export interface LocalFileOpener {
   id: string;
   label: string;
-  kind: 'explorer' | 'editor';
+  kind: 'default' | 'explorer' | 'editor';
 }
 
 interface LocalFilesBridge {
-  openers(): Promise<{ items: LocalFileOpener[] }>;
+  openers(path:string): Promise<{ items: LocalFileOpener[] }>;
   reveal(path: string): Promise<{ ok: boolean }>;
   openDefault(path: string): Promise<{ ok: boolean; error?: string }>;
   openWith(appId: string, path: string): Promise<{ ok: boolean; error?: string }>;
@@ -47,24 +47,12 @@ export function absoluteProjectPath(projectRoot: string | null | undefined, rela
   return `${root}\\${tail}`;
 }
 
-let openerCache: LocalFileOpener[] | null = null;
-let openerPending: Promise<LocalFileOpener[]> | null = null;
-
 /** 本机可用打开方式（主进程探测；无桥/失败时只返回空数组，不伪造）。 */
-export function localFileOpeners(): Promise<LocalFileOpener[]> {
-  if (openerCache != null) return Promise.resolve(openerCache);
+export async function localFileOpeners(path:string): Promise<LocalFileOpener[]> {
   const b = bridge();
-  if (b == null) return Promise.resolve([]);
-  if (openerPending == null) {
-    openerPending = b.openers()
-      .then((result) => {
-        openerCache = Array.isArray(result?.items) ? result.items.filter((item) => item != null && typeof item.id === 'string') : [];
-        return openerCache;
-      })
-      .catch(() => [])
-      .finally(() => { openerPending = null; });
-  }
-  return openerPending;
+  if(b==null)return [];
+  try{const result=await b.openers(path);return Array.isArray(result?.items)?result.items.filter(item=>item!=null&&typeof item.id==='string'):[];}
+  catch{return [];}
 }
 
 export interface LocalFileResult { ok: boolean; error?: string }

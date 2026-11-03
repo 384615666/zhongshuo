@@ -25,7 +25,9 @@ import { installedDaemonPipe, installedDesktopConfiguration } from './installedD
 import { WindowsTrayLifecycle, type TrayMenuFacts, type TrayProjectFacts } from './windowsTray.ts';
 import { isRuntimeMetadataRead, RUNTIME_METADATA_PIPE_DEADLINE_MS } from '../contracts/runtimeMetadataDeadline.ts';
 import { registerEditContextMenu } from './editContextMenu.ts';
-import { detectLocalOpeners, isOpenableLocalFile, publicOpeners } from './localOpeners.ts';
+import {detectLocalOpeners,isOpenableLocalFile} from './localOpeners.ts';
+import {createLocalFileActions} from './localFileActions.ts';
+import {windowsFileAssociations,openWindowsFileAssociation} from './windowsFileAssociations.ts';
 // 外部链接解析（R157）：只引类型（编译期擦除）；运行时按需 import——主进程启动依赖不新增
 // 顶层模块（与 zs:openPath 里 `await import('electron')` 同法；esbuild 打包时内联）。
 import type { AppLinkTarget } from './appLinks.ts';
@@ -727,19 +729,20 @@ let dataOperationStarting = false;
     }
   });
   // 本机「用其他程序打开」（R170）：预览标签右键菜单与文件卡的展开菜单。
-  // 渲染器只能提交枚举 id + 已存在的本机绝对文件路径；可执行文件由主进程按固定清单探测，
+  // 渲染器只能提交枚举 id + 已存在的本机绝对文件路径；关联应用按扩展名在主进程重新核对，
   // 不接受任意命令/参数，也不返回可执行文件路径。
-  const localOpeners = detectLocalOpeners(process.env, process.platform);
-  const openerById = new Map(localOpeners.map((opener) => [opener.id, opener]));
   const requireOpenableFile = (target: unknown): string => {
     if (typeof target !== 'string' || !isOpenableLocalFile(target)) {
       throw new Error('只能打开本机已存在的文件');
     }
     return normalize(target);
   };
-  ipcMain.handle('zs:local-files.openers', (event) => {
+  const localFiles=createLocalFileActions({validate:requireOpenableFile,
+    editors:()=>detectLocalOpeners(process.env,process.platform),associations:windowsFileAssociations,
+    invokeAssociation:openWindowsFileAssociation,openDefault:path=>shell.openPath(path)});
+  ipcMain.handle('zs:local-files.openers', (event,target:unknown) => {
     assertTrustedSender(event);
-    return { items: publicOpeners(localOpeners) };
+    return {items:localFiles.list(target)};
   });
   ipcMain.handle('zs:local-files.reveal', (event, target: unknown) => {
     assertTrustedSender(event);
@@ -753,19 +756,10 @@ let dataOperationStarting = false;
     const error = await shell.openPath(filePath);
     return error.length === 0 ? { ok: true } : { ok: false, error };
   });
-  ipcMain.handle('zs:local-files.openWith', (event, payload: unknown) => {
+  ipcMain.handle('zs:local-files.openWith', async (event, payload: unknown) => {
     assertTrustedSender(event);
     const { appId, path } = (payload ?? {}) as { appId?: unknown; path?: unknown };
-    const opener = typeof appId === 'string' ? openerById.get(appId as never) : undefined;
-    if (opener == null || opener.kind !== 'editor' || opener.executable == null) throw new Error('没有这个本机打开方式');
-    const filePath = requireOpenableFile(path);
-    try {
-      const child = spawn(opener.executable, [filePath], { detached: true, stdio: 'ignore', windowsHide: false });
-      child.unref();
-      return { ok: true };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+    return localFiles.open(appId,path);
   });
   ipcMain.handle('zs:pickFolder', async (event) => {
     assertTrustedSender(event);
