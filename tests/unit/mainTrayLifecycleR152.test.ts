@@ -10,6 +10,7 @@ import { WindowsTrayLifecycle } from '../../src/ui/windowsTray.ts';
 import * as runtimeMetadataDeadline from '../../src/contracts/runtimeMetadataDeadline.ts';
 import * as editContextMenu from '../../src/ui/editContextMenu.ts';
 import * as windowsAppIdentity from '../../src/ui/windowsAppIdentity.ts';
+import * as localFileActions from '../../src/ui/localFileActions.ts';
 
 // Exercise the actual main module with native process/OS boundaries replaced.
 // Transpilation stays in memory: no app bundle, native process or data is created.
@@ -102,6 +103,8 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
     './windowsAppIdentity.ts':windowsAppIdentity,
     './editContextMenu.ts': editContextMenu,
     './localOpeners.ts': { detectLocalOpeners: () => [], isOpenableLocalFile: () => false, publicOpeners: () => [] },
+    './localFileActions.ts': localFileActions,
+    './windowsFileAssociations.ts': { windowsFileAssociations: () => [], openWindowsFileAssociation: vi.fn() },
     '../contracts/runtimeMetadataDeadline.ts': runtimeMetadataDeadline,
     electron, 'node:path': path, 'node:crypto': crypto, 'node:url': url,
     'node:fs': {
