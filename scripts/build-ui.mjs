@@ -44,7 +44,9 @@ await build({
 mkdirSync(join(root, 'dist', 'ui', 'renderer', 'hifi'), { recursive: true });
 writeFileSync(
   join(root, 'dist', 'ui', 'renderer', 'hifi', 'app.css'),
-  ['tokens.css', 'base.css', 'components.css', 'preview.css', 'titlebar.css', 'h1-overrides.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
+  // R170：本轮按功能拆分的附加样式表（队员各自一份，避免并行修改同一文件）。
+  ['tokens.css', 'base.css', 'components.css', 'preview.css', 'titlebar.css', 'h1-overrides.css',
+    'r170-preview.css', 'r170-members.css', 'r170-board.css', 'r170-settings.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
   'utf8',
 );
 

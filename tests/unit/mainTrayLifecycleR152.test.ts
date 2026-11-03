@@ -101,6 +101,7 @@ function harness(options: { ownerPid?: number; ownerMissing?: boolean; trayFails
   const mocks: Record<string, unknown> = {
     './windowsAppIdentity.ts':windowsAppIdentity,
     './editContextMenu.ts': editContextMenu,
+    './localOpeners.ts': { detectLocalOpeners: () => [], isOpenableLocalFile: () => false, publicOpeners: () => [] },
     '../contracts/runtimeMetadataDeadline.ts': runtimeMetadataDeadline,
     electron, 'node:path': path, 'node:crypto': crypto, 'node:url': url,
     'node:fs': {

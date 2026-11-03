@@ -76,6 +76,19 @@ contextBridge.exposeInMainWorld('zsData', {
 });
 
 /**
+ * 本机文件打开方式窄桥（R170）：预览标签右键菜单与消息文件卡的「打开方式 / 复制路径」。
+ * renderer 只能提交主进程探测出的枚举 id 与一个本机绝对文件路径；主进程校验存在性后
+ * 才用系统默认程序或固定清单里的编辑器打开。不执行渲染器提供的命令/参数。
+ */
+contextBridge.exposeInMainWorld('zsLocalFiles', {
+  openers: (): Promise<{ items: Array<{ id: string; label: string; kind: 'explorer' | 'editor' }> }> =>
+    ipcRenderer.invoke('zs:local-files.openers'),
+  reveal: (path: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('zs:local-files.reveal', path),
+  openDefault: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('zs:local-files.openDefault', path),
+  openWith: (appId: string, path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('zs:local-files.openWith', { appId, path }),
+});
+
+/**
  * 外部链接窄桥（R157）：设置页「操作手册 / GitHub / 主页」——renderer 只提交枚举目标，
  * 解析与白名单在 main（zs:open-app-link）：manual=随包手册文件，其余=写死的 https。
  * **不接受任意 URL/路径**（传非枚举值由 main 拒绝）。

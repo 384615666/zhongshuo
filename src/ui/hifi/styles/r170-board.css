@@ -1,0 +1,150 @@
+/* R170 任务看板卡片重排 + 移除/清空——见 docs/implementation/r170-ui-feedback-plan.md 第 3/4 节。
+   只负责看板自身版式；共享样式仍走 tokens/components/base（不在本轮改那几份）。 */
+
+/* —— 项目分区标题 + 清空本项目 —— */
+.board-project { margin-bottom: 22px; }
+.board-project-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.board-project-head .section-title {
+  margin-bottom: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.board-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-hidden-count {
+  font-size: var(--fs-11);
+  font-weight: 500;
+  color: var(--text-3);
+  flex: none;
+}
+.board-clear-btn { flex: none; }
+/* 二次确认时按钮文字变长，也不要挤掉项目名或换行 */
+.board-clear-btn.danger { white-space: nowrap; }
+
+/* —— 状态分组标题：保留分组但视觉更轻（小标题 + 计数） —— */
+.board-status-group { margin-bottom: 12px; }
+.board-status-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 6px 2px;
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.board-status-head .board-status-name {
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+.board-status-head .board-status-count { color: var(--text-3); }
+
+/* —— 卡片网格：两列自适应；窄屏自动退成一列 —— */
+.board-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 720px) {
+  .board-cards { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* —— 卡片：第一行 #编号 + 状态标签 / 第二行标题两行 / 第三行房间·项目·原因 —— */
+.board-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+.board-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.board-card-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+  /* 给右上角移除按钮让位，标签不会压到按钮下面 */
+  padding-right: 22px;
+}
+.board-card-title {
+  font-size: var(--fs-13);
+  font-weight: 650;
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.board-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-top: auto;
+  font-size: var(--fs-11);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.board-card-project,
+.board-card-room {
+  min-width: 0;
+  max-width: 42%;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-card-reason {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-card-sep { flex: none; color: var(--text-4); }
+
+/* —— 右上角「从看板移除」：悬停/键盘聚焦时出现，触屏常显 —— */
+.board-card-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+}
+.board-card:hover .board-card-remove,
+.board-card:focus-within .board-card-remove,
+.board-card-remove:focus-visible { opacity: 1; }
+.board-card-remove:hover { color: var(--danger); background: var(--danger-soft); }
+@media (hover: none) {
+  .board-card-remove { opacity: 1; }
+}
+
+/* —— 筛选栏：已隐藏 N 项 · 恢复 / 清空全部卡片 —— */
+.board-hidden-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.board-hidden-note .btn { flex: none; }
+.board-clear-all { flex: none; }
+.board-clear-all.danger { white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .board-card-remove { transition: none; }
+}

@@ -15,8 +15,6 @@ import {
   DesktopNotificationsRow,
   desktopNotificationsReadBackMatches,
   desktopNotificationsWrite,
-  notificationMuteReadBackMatches,
-  notificationMuteWrite,
   SectionNotifications,
   SettingsPage,
 } from '../../src/ui/hifi/pages/SettingsPage.tsx';
@@ -105,25 +103,15 @@ describe('R108 native task notification renderer controller', () => {
   });
 });
 
-describe('R108 settings use real thread subscriptions', () => {
-  it('writes mute through thread.subscribe and requires exact read-back', () => {
-    expect(notificationMuteWrite('th1', true)).toEqual({
-      method: 'thread.subscribe',
-      params: { threadId: 'th1', mute: true },
-    });
-    const items = [{ threadId: 'th1', followed: true, muted: true, projectId: 'p1', taskId: 'task1' }];
-    expect(notificationMuteReadBackMatches(items, 'th1', true)).toBe(true);
-    expect(notificationMuteReadBackMatches(items, 'th1', false)).toBe(false);
-    expect(notificationMuteReadBackMatches(items, 'missing', false)).toBe(false);
-  });
-
-  it('renders a discoverable real notification settings section instead of prototype preferences', () => {
+describe('R108 settings use the real desktop notification switch', () => {
+  it('renders only the desktop notification master switch (R170: 对话串通知 block deleted)', () => {
     const section = renderToStaticMarkup(createElement(SectionNotifications));
-    expect(section).toContain('桌面通知的总开关，以及按对话串的静音设置');
+    expect(section).toContain('data-zs-notification-master="1"');
     expect(section).not.toContain('thread_subscriptions');
-    expect(section).toContain('正在读取对话串通知…');
-    expect(section).toContain('data-zs-notification-settings="1"');
-    expect(section).toContain('正在读取桌面投递记录…');
+    // R170：按对话串静音与投递记录整块已删。
+    expect(section).not.toContain('对话串通知');
+    expect(section).not.toContain('data-zs-notification-settings');
+    expect(section).not.toContain('投递记录');
     // R157：开发过程中的操作提示不再出现在用户界面里。
     expect(section).not.toContain('还没有设置过对话串通知');
     expect(section).not.toContain('可在对话串右上角菜单中设置静音');

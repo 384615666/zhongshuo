@@ -2993,9 +2993,6 @@ function RoomFiles({
             文件可保存和预览；成员能否读取取决于当前 AI 配置。系统不会执行文件内的脚本。
           </div>
         </details>
-        <div className="small faint" style={{ marginTop: 8 }}>
-          消息附件可在预览的「⋯ → 评论此文件」中添加评论，评论保存到附件的来源会话。
-        </div>
       </div>
 
       {/* 本房间可预览的资源（含**无任务归属**的普通附件，§2.2） */}

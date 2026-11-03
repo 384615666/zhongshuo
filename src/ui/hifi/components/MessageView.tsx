@@ -611,7 +611,7 @@ function MessageFooter({
   const observedSnapshot = message.authorId === 'system:file-snapshot' && message.id.startsWith('msg_observed_');
   return (
     <div className="msg-attachment-footer">
-      <GeneratedFiles attachments={message.formalAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} nonFinal={observedSnapshot} />
+      <GeneratedFiles attachments={message.formalAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} nonFinal={observedSnapshot} projectId={message.projectId} />
       <MessageAttachments message={message} excludeIds={formalIds} onOpen={onOpenResource} />
     </div>
   );

@@ -153,13 +153,13 @@ app.whenReady().then(async()=>{
    await js("document.querySelector('.zs-winbtn').click();document.querySelector('.zs-winbtn.close').click()");
    check('frameless/window-buttons-bridge',(await js('r152.title().controlsCalled')).join(',')==='minimize,close');
    // R157：设置改成单页（无左侧分区菜单），所有分区自上而下排在一页里。
-   const sections=['general','appearance','notifications','runtime','data','help'];
+   const sections=['appearance','notifications','runtime','data','help'];
    for(const size of [{width:3440,height:1440},{width:1920,height:1000},{width:1440,height:900},{width:1280,height:800},{width:1100,height:800},{width:900,height:760},{width:640,height:700}]) {
     win.setContentSize(size.width,size.height);await pause(80);
     await js("document.querySelector('.page').scrollTop=0;true");await pause(40);
     const s=await js('r152.snapshot()');samples.push({size,snapshot:s});
     const name=size.width+'';
-    check(name+'/single-column-no-side-menu',s.nav===false&&s.sections.length===6&&s.sections.map(x=>x.key).join(',')===sections.join(','),{nav:s.nav,keys:s.sections.map(x=>x.key)});
+    check(name+'/single-column-no-side-menu',s.nav===false&&s.sections.length===sections.length&&s.sections.map(x=>x.key).join(',')===sections.join(','),{nav:s.nav,keys:s.sections.map(x=>x.key)});
     check(name+'/content-width-capped',s.single.width<=901,{width:s.single.width});
     check(name+'/content-inside-page',s.single.x>=s.page.x+16&&s.single.right<=s.page.right-16,{single:s.single,page:s.page});
     check(name+'/no-horizontal-overflow',s.overflow<1,s);

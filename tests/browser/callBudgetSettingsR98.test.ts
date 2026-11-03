@@ -22,7 +22,9 @@ describe('R98 AI 设置里的调用预算开关', () => {
     }
     const html = renderToStaticMarkup(createElement(SettingsPage, { query: { section: 'runtime' } }));
     expect(html).toContain('data-settings-row="call-budget"');
-    expect(html).toContain('还没有 AI 成员。打开项目后');
+    // R170：AI 成员模型/权限整块已删，AI 设置只剩预算与同时运行的 AI。
+    expect(html).not.toContain('还没有 AI 成员');
+    expect(html).toContain('data-settings-row="execution-concurrency"');
     expect(html).toContain('data-zs-call-budget-setting="callBudget.enabled"');
   });
 

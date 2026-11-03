@@ -234,7 +234,9 @@ describe('R108 preload and main wiring', () => {
   it('uses the tested registration and native Electron Notification in main', () => {
     const source = readFileSync(new URL('../../src/ui/main.ts', import.meta.url), 'utf8');
     expect(source).toContain('registerTaskNotificationIpc({');
-    expect(source).toContain('new ElectronNotification({ title, body })');
+    expect(source).toContain('new ElectronNotification({ title, body, ...(icon != null ? { icon } : {}) })');
+    // R170：通知必须显式带随包 .ico（Windows Toast 应用图标），不能只有标题/正文。
+    expect(source).toContain('nativeImage.createFromPath(desktopIcon)');
     expect(source).toContain("const desktopAppId=process.env.ZS_APP_USER_MODEL_ID ??");
     expect(source).toContain("installedDesktop ? 'com.zhongshuo.desktop.app' : 'com.zhongshuo.desktop.portable'");
     expect(source).toContain('app.setAppUserModelId(desktopAppId)');

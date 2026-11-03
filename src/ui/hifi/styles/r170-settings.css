@@ -1,0 +1,183 @@
+/* R170 设置页整理——见 docs/implementation/r170-ui-feedback-plan.md §5。
+   本文件只作用于设置页（.settings-single / .settings-card），不改共享的
+   components.css / base.css / tokens.css，避免并行修改冲突。
+   版面：页头（标题 + 搜索 + 分区锚点 chips）→ 每段一张卡片（段标题 + 一句说明 + 行列表），
+   正文 880px 居中；行 = 左标签 + 一行灰说明 / 右控件。 */
+
+/* ---------- 版面骨架 ---------- */
+.settings-single {
+  max-width: 880px;
+}
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+/* 段与段之间由 gap 分层，不再另写上下外边距。 */
+.settings-section + .settings-section {
+  margin-top: 0;
+}
+
+/* ---------- 页头：标题 + 搜索 + 分区锚点 ---------- */
+.settings-head {
+  gap: 12px 16px;
+  padding-bottom: 10px;
+}
+.settings-head .page-sub {
+  margin-top: 2px;
+}
+.settings-chips {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 2px 0 0;
+}
+.settings-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.settings-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-surface-2);
+  color: var(--text);
+}
+.settings-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- 分区卡片：段标题 + 一句说明 + 行列表 ---------- */
+.settings-card {
+  padding: 0;
+  overflow: hidden;
+  /* 页头吸顶（标题 + 搜索 + chips）约 120–160px：深链/锚点跳转后标题不被盖住。 */
+  scroll-margin-top: 140px;
+}
+.settings-card > .settings-section-head {
+  margin: 0;
+  padding: 15px 20px 11px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-card .settings-section-title {
+  font-size: var(--fs-15);
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+}
+.settings-card .settings-section-sub {
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  line-height: 1.55;
+}
+.settings-card-body {
+  padding: 2px 0 8px;
+}
+
+/* ---------- 行：左标签 + 一行灰说明 / 右控件 ---------- */
+.settings-card-body > .pset-row {
+  padding: 13px 20px;
+}
+.settings-card-body > [data-zs-notification-master] > .pset-row {
+  padding: 13px 20px;
+}
+.settings-card .pset-row-control.wide {
+  align-items: flex-start;
+}
+.settings-card .pset-row-error,
+.settings-card .settings-note {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+.settings-card .panel.warning {
+  margin: 2px 20px 12px;
+}
+
+/* ---------- 卡片内的小分组（一段里有多组行时用） ---------- */
+.settings-group + .settings-group {
+  border-top: 1px solid var(--border-subtle);
+}
+.settings-group-title {
+  padding: 13px 20px 1px;
+  font-size: var(--fs-12);
+  font-weight: 650;
+  color: var(--text-2);
+}
+.settings-group > .pset-row,
+.settings-group > [data-zs-call-budget-setting] > .pset-row,
+.settings-group > [data-zs-notification-master] > .pset-row {
+  padding: 12px 20px;
+}
+
+/* ---------- 嵌入组件：并发面板 / 归档管理 / 诊断 ---------- */
+/* 自带 .card 的面板（并发、诊断）在卡片内摊平，避免卡中卡。 */
+.settings-embed-flat {
+  padding: 4px 20px 10px;
+}
+.settings-embed-flat > .card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  margin: 0 !important;
+}
+.settings-embed-flat .pset-row {
+  padding: 12px 0;
+}
+.settings-embed-flat .panel.warning {
+  margin: 8px 0;
+}
+/* 归档管理自带筛选行与项目卡：卡片内改用浅底，不再套第二层白卡描边。 */
+.settings-embed {
+  margin-top: 8px;
+}
+.settings-embed .card {
+  background: var(--bg-surface-2);
+}
+.settings-embed .page-filters {
+  margin: 0 0 12px;
+}
+
+/* ---------- 窄窗：行上下排，卡片内边距收窄 ---------- */
+@media (max-width: 760px) {
+  .settings-card {
+    scroll-margin-top: 200px;
+  }
+  .settings-card > .settings-section-head {
+    padding: 13px 14px 10px;
+  }
+  .settings-card-body > .pset-row,
+  .settings-card-body > [data-zs-notification-master] > .pset-row,
+  .settings-group > .pset-row,
+  .settings-group > [data-zs-call-budget-setting] > .pset-row,
+  .settings-group > [data-zs-notification-master] > .pset-row {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .settings-group-title,
+  .settings-card .pset-row-error,
+  .settings-card .settings-note {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .settings-card .panel.warning {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+  .settings-embed-flat {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}

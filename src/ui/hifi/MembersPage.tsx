@@ -10,8 +10,10 @@ import { RUNTIME_CHANNELS, isRuntimeKind, runtimeExecutable, type RuntimeKind, t
  * 未绑定成员派发时回落全局默认（ZS_RUNTIME），界面分别显示 绑定渠道 / 全局默认渠道 /
  * 查询失败 / 未解析，不把「未绑定」显示成"不会用任何渠道"。
  *
- * 布局=原型 pages-misc MembersPage：筛选行（项目选择+计数）+ 成员卡片 grid + 房间名单 +
- * 说明面板；AI 设置 从卡片进弹窗。R67 已接正式创建，R81 接资料编辑和独立配置模板。
+ * 布局（R170）：两栏——左栏项目卡片（项目名、房间数、目录失效/已归档、当前项目高亮，
+ * 点击=切项目并回成员路由），右栏=当前项目标题行（项目名+成员数+扫描/刷新/添加 AI）、
+ * 搜索与状态筛选、成员卡片、模板面板、房间名单；AI 设置 从卡片进弹窗。原顶部「项目」
+ * 下拉已移除（R170 用户反馈第 2 项）。R67 已接正式创建，R81 接资料编辑和独立配置模板。
  * 人的关注（阅读订阅）不属于成员管理——在「待我处理」分列（原型同判）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -66,6 +68,10 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   // R46 实证）：先取整份 rooms，再按项目 memo 过滤。
   const allRooms = useStore((s) => s.rooms);
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
+  /** R170 左栏项目卡片的房间数来源：当前项目用 rooms 投影；其它项目用侧栏已缓存的
+   *  房间索引（同为 room.list 真值）。没有索引时不显示数字——不把未知写成 0，
+   *  也不显示非当前项目的成员数（只有当前项目成员已装载）。 */
+  const sidebarRoomIndexes = useStore((s) => s.sidebarRoomIndexes);
   const workload = useMemberWorkload(projectId);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [membersProjectId, setMembersProjectId] = useState<string | null>(null);
@@ -178,6 +184,22 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const projState = projects.find((x) => x.id === projectId);
   const projArchived = projState?.archivedAt != null;
   const projRemoved = projState?.removedAt != null;
+  /** R170：左栏项目卡片（未移除项目）——点击=切项目 + 回到成员路由（与侧栏同判）。 */
+  const visibleProjects = projects.filter((p) => p.removedAt == null);
+  const roomCountOf = (id: string): number | null => {
+    if (id === projectId) return allRooms.filter((room) => room.projectId === id).length;
+    const index = sidebarRoomIndexes[id];
+    return index?.status === 'ready' ? index.rooms.length : null;
+  };
+  const openProject = (next: string) => {
+    if (next === projectId) return;
+    // 先提交路由再装载：迟到的装载回执不会把用户带离本次点击。
+    void switchFocusProject(next).catch((e: unknown) => {
+      if (getState().activeProjectId !== next) return; // 已切到别处——不弹旧错误
+      toast(`切换项目失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
+    });
+    navigate(`/project/${next}/members`);
+  };
 
   /**
    * runtime 分列（R66 P5 修订）：查询失败 / 未绑定（有效=全局默认）/ 已绑定·安装缺失 / 正常。
@@ -220,146 +242,187 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-members="hifi">
       <div className="page members-page">
-        {/* 筛选行：项目与顶栏同源，名称/说明搜索不改变任何成员状态。 */}
+        {/* R170：左栏项目卡片（点击切换项目）+ 右栏当前项目的 AI 列表。
+            搜索 / 状态筛选只影响显示，不改变任何成员或任务。 */}
         <UnknownMemberOperations/>
-        <div className="page-filters">
-          <label className="field inline">
-            <span className="field-label">项目</span>
-            <Select
-              value={projectId}
-              ariaLabel="成员所属项目"
-              title="成员按项目区分；切换项目会显示该项目的成员"
-              onChange={(next) => { if (next !== projectId) { void import('./loader').then((m) => m.switchFocusProject(next)); navigate(`/project/${next}/members`); } }}
-              options={projects.filter((p) => p.removedAt == null).map((p) => ({ value: p.id, label: p.displayName }))}
-            />
-          </label>
-          <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:240}}/>
-          <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
-          <span className="filter-note">
-            {membersInScope?.length ?? '…'} 名成员
-          </span>
-          <div className="spacer" />
-          {!projArchived && !projRemoved ? <button className="btn sm" disabled={scanning || !projectId} onClick={async () => {
-            if (!projectId || scanning) return;
-            const targetProjectId = projectId;
-            setScanning(true);
-            try {
-              const result = await command<{created: unknown[]; existing: unknown[]; notes: string[]; skipped: Array<{reason: string}>}>('member.discoverDefaults', {projectId: targetProjectId});
-              setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: [...result.notes, ...result.skipped.map(item => item.reason)]});
-              await Promise.all([refreshMembers(targetProjectId), refreshRooms(targetProjectId)]);
-              if (getState().activeProjectId === targetProjectId) await reload();
-            } catch (error) {
-              setScanResult({projectId: targetProjectId, summary: '扫描未完成', notes: [userFacingSystemText((error as Error).message)]});
-            } finally { setScanning(false); }
-          }}>{scanning ? '扫描中…' : '扫描本机 AI'}</button> : null}
-          <button
-            className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="刷新成员、工作量与房间名单">刷新</button>
-          {projArchived ? (
-            <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已归档（只读）——不能添加成员</span>
-          ) : projRemoved ? (
-            <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已移除——不能添加成员</span>
-          ) : (
-            <button className="btn primary sm" disabled={projectId == null || projectId === ''} onClick={() => setAddFor(projectId)} title="添加一位使用本机已有渠道的 AI">
-              <Icon name="user-plus" size={12} /> 添加 AI
-            </button>
-          )}
-        </div>
-
-        {scanResult?.projectId === projectId ? <div className="panel info" role="status">
-          <div>{scanResult.summary}</div>
-          {scanResult.notes.map((note, index) => <div className="small" key={index}>{note}</div>)}
-        </div> : null}
-
-        {projectId == null || projectId === '' ? (
-          <div className="panel info">尚未打开项目——请从侧栏项目菜单或顶栏「项目管理」进入。</div>
-        ) : null}
-        {err != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
-        {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的数据。` : '尚未取得工作量数据。'}</div> : null}
-        {workload.data?.truncated ? <div className="faint small">工作量仅统计前 500 名成员。</div> : null}
-        {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
-
-        {membersInScope != null && membersInScope.length === 0 ? (
-          <div className="panel info">这个项目还没有 AI。点右上角「添加 AI」，选择已有渠道和模型即可开始。</div>
-        ) : null}
-
-        {/* 成员卡片（原型 grid-2：头像+名称+身份标签 / runtime 有效来源 / 在跑任务） */}
-        <div className="grid grid-2">
-          {visibleMembers?.map((m) => {
-            const rt = runtimeLabel(m);
-            const running = workload.data?.items.find(row=>row.memberId===m.id);
-            return (
-              <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} 的成员详情`}
-                role="link" tabIndex={0} style={{ cursor: 'pointer' }}
-                onClick={(e) => { if ((e.target as HTMLElement).closest('button, a, input, select, summary')) return; navigate(`/project/${projectId}/member/${m.id}`); }}
-                onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); navigate(`/project/${projectId}/member/${m.id}`); } }}>
-                <div className="row tight">
-                  <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round subject={`member:${m.id}`} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="row tight">
-                      <span className="strong">{m.displayName}</span>
-                      {coordinatorIds.has(m.id) ? <Tag tone="accent" icon="star">协调者</Tag> : null}
-                      {m.principalType === 'agent' ? null : <Tag plain icon="users">人类</Tag>}
-                      {m.enabled ? <Tag plain>启用</Tag> : <Tag tone="neutral" icon="slash">停用</Tag>}
-                    </div>
-                    <div className="small faint" style={{ marginTop: 3 }}>
-                      {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
-                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }} title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span> : <span title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span>}
-                    </div>
-                  </div>
-                </div>
-                <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
-                  {running ? `负责未结束任务 ${running.unfinishedTasks} · 在途执行 ${running.activeTurns} · 待核对结果 ${running.unknownTurns}` : '成员工作量尚未读到'}
-                  {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
-                </div>
-                {m.principalType === 'agent' ? (
-                  <div className="row tight wrap" style={{ marginTop: 10 }}>
-                    <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
-                    <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimes[m.id]?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
-                    <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
-                      title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
-                      {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
-                    </button>
-                    <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的渠道与模型" onClick={() => openBind(m)}>
-                      AI 设置…
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-
-        {membersInScope!=null && visibleMembers?.length===0 && membersInScope.length>0 ? <div className="panel">没有匹配的成员；筛选不会修改成员或任务。</div>:null}
-        <TemplatePanel projectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
-        <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
-        <div className="panel">
-          <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
-          {rooms.map((room) => {
-            const list = roomMembers[room.id];
-            const failure = roomMemberErrs[room.id];
-            return (
-              <div key={room.id} style={{ marginTop: 8 }}>
-                <div className="row tight">
-                  <Icon name="message-circle" size={12} />
-                  <span className="small" style={{ fontWeight: 600 }}>{room.name}</span>
-                  <span className="faint small">{failure != null ? `名单读取失败（${failure}——保留上次结果，可刷新重试）` : list == null ? '（装载中…）' : `${list.length} 位`}</span>
-                </div>
-                {list != null ? (
-                  <div className="row tight wrap" style={{ marginTop: 4 }}>
-                    {list.map((m) => (
-                      <span key={m.id} className="chip" title={`${m.displayName}${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
-                        {m.displayName}{room.coordinatorMemberId === m.id ? ' ★' : ''}
+        <div className="members-split">
+          <aside className="members-projects" aria-label="项目列表" data-zs-members-projects="hifi">
+            <div className="members-projects-title">项目</div>
+            <div className="members-projects-list">
+              {visibleProjects.map((p) => {
+                const current = p.id === projectId;
+                const roomCount = roomCountOf(p.id);
+                const missing = p.status === 'missing';
+                const archived = p.archivedAt != null;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`members-project${current ? ' is-current' : ''}`}
+                    data-zs-members-project={p.id}
+                    aria-current={current ? 'page' : undefined}
+                    title={current ? `${p.displayName}（当前项目）` : `切换到 ${p.displayName} 的成员`}
+                    onClick={() => openProject(p.id)}
+                  >
+                    <span className="members-project-name">{p.displayName}</span>
+                    {roomCount != null || missing || archived ? (
+                      <span className="members-project-meta">
+                        {roomCount != null ? <span>{roomCount} 个房间</span> : null}
+                        {missing ? <span className="members-project-flag"><Icon name="alert-triangle" size={11} /> 目录失效</span> : null}
+                        {archived ? <span className="members-project-flag muted"><Icon name="archive" size={11} /> 已归档</span> : null}
                       </span>
-                    ))}
-                  </div>
-                ) : null}
+                    ) : null}
+                  </button>
+                );
+              })}
+              {visibleProjects.length === 0 ? <div className="members-projects-empty faint small">还没有项目。先从侧栏「打开/切换项目」添加。</div> : null}
+            </div>
+          </aside>
+
+          <section className="members-content">
+            <div className="members-head">
+              <div className="members-head-main">
+                <div className="members-head-title">
+                  <span className="members-head-name">{projState?.displayName ?? '尚未选择项目'}</span>
+                  {projArchived ? <Tag plain icon="archive">已归档·只读</Tag> : null}
+                  {projRemoved ? <Tag plain icon="slash">已移除</Tag> : null}
+                  {projState?.status === 'missing' ? <Tag tone="warning" plain icon="alert-triangle">目录失效</Tag> : null}
+                </div>
+                <div className="members-head-meta small faint">
+                  {membersInScope == null
+                    ? (err != null ? '成员读取失败，可刷新重试' : projectId == null || projectId === '' ? '尚未选择项目' : '正在读取成员…')
+                    : `${membersInScope.length} 名成员`}
+                </div>
               </div>
-            );
-          })}
-          {rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
+              <div className="members-head-actions">
+                {!projArchived && !projRemoved ? <button className="btn sm" disabled={scanning || !projectId} onClick={async () => {
+                  if (!projectId || scanning) return;
+                  const targetProjectId = projectId;
+                  setScanning(true);
+                  try {
+                    const result = await command<{created: unknown[]; existing: unknown[]; notes: string[]; skipped: Array<{reason: string}>}>('member.discoverDefaults', {projectId: targetProjectId});
+                    setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: [...result.notes, ...result.skipped.map(item => item.reason)]});
+                    await Promise.all([refreshMembers(targetProjectId), refreshRooms(targetProjectId)]);
+                    if (getState().activeProjectId === targetProjectId) await reload();
+                  } catch (error) {
+                    setScanResult({projectId: targetProjectId, summary: '扫描未完成', notes: [userFacingSystemText((error as Error).message)]});
+                  } finally { setScanning(false); }
+                }}>{scanning ? '扫描中…' : '扫描本机 AI'}</button> : null}
+                <button
+                  className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="刷新成员、工作量与房间名单">刷新</button>
+                {projArchived ? (
+                  <span className="members-head-note">项目已归档（只读）——不能添加成员</span>
+                ) : projRemoved ? (
+                  <span className="members-head-note">项目已移除——不能添加成员</span>
+                ) : (
+                  <button className="btn primary sm" disabled={projectId == null || projectId === ''} onClick={() => setAddFor(projectId)} title="添加一位使用本机已有渠道的 AI">
+                    <Icon name="user-plus" size={12} /> 添加 AI
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="page-filters">
+              <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:260}}/>
+              <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
+            </div>
+
+            {scanResult?.projectId === projectId ? <div className="panel info" role="status">
+              <div>{scanResult.summary}</div>
+              {scanResult.notes.map((note, index) => <div className="small" key={index}>{note}</div>)}
+            </div> : null}
+
+            {projectId == null || projectId === '' ? (
+              <div className="panel info">尚未选择项目——从左侧选择一个项目，或从侧栏项目菜单进入。</div>
+            ) : null}
+            {err != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
+            {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的数据。` : '尚未取得工作量数据。'}</div> : null}
+            {workload.data?.truncated ? <div className="faint small">工作量仅统计前 500 名成员。</div> : null}
+            {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
+
+            {membersInScope != null && membersInScope.length === 0 ? (
+              <div className="panel info">这个项目还没有 AI。点右上角「添加 AI」，选择已有渠道和模型即可开始。</div>
+            ) : null}
+
+            {/* 成员卡片（卡片内容不变：头像+名称+身份标签 / runtime 有效来源 / 在跑任务；
+                右栏按实际可用宽度自适应列数。） */}
+            <div className="grid members-cards">
+              {visibleMembers?.map((m) => {
+                const rt = runtimeLabel(m);
+                const running = workload.data?.items.find(row=>row.memberId===m.id);
+                return (
+                  <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} 的成员详情`}
+                    role="link" tabIndex={0} style={{ cursor: 'pointer' }}
+                    onClick={(e) => { if ((e.target as HTMLElement).closest('button, a, input, select, summary')) return; navigate(`/project/${projectId}/member/${m.id}`); }}
+                    onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); navigate(`/project/${projectId}/member/${m.id}`); } }}>
+                    <div className="row tight">
+                      <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round subject={`member:${m.id}`} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="row tight">
+                          <span className="strong">{m.displayName}</span>
+                          {coordinatorIds.has(m.id) ? <Tag tone="accent" icon="star">协调者</Tag> : null}
+                          {m.principalType === 'agent' ? null : <Tag plain icon="users">人类</Tag>}
+                          {m.enabled ? <Tag plain>启用</Tag> : <Tag tone="neutral" icon="slash">停用</Tag>}
+                        </div>
+                        <div className="small faint" style={{ marginTop: 3 }}>
+                          {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
+                          {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }} title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span> : <span title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
+                      {running ? `负责未结束任务 ${running.unfinishedTasks} · 在途执行 ${running.activeTurns} · 待核对结果 ${running.unknownTurns}` : '成员工作量尚未读到'}
+                      {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
+                    </div>
+                    {m.principalType === 'agent' ? (
+                      <div className="row tight wrap" style={{ marginTop: 10 }}>
+                        <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
+                        <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimes[m.id]?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
+                        <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
+                          title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
+                          {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
+                        </button>
+                        <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的渠道与模型" onClick={() => openBind(m)}>
+                          AI 设置…
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            {membersInScope!=null && visibleMembers?.length===0 && membersInScope.length>0 ? <div className="panel">没有匹配的成员；筛选不会修改成员或任务。</div>:null}
+            <TemplatePanel projectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
+            <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
+            <div className="panel">
+              <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
+              {rooms.map((room) => {
+                const list = roomMembers[room.id];
+                const failure = roomMemberErrs[room.id];
+                return (
+                  <div key={room.id} style={{ marginTop: 8 }}>
+                    <div className="row tight">
+                      <Icon name="message-circle" size={12} />
+                      <span className="small" style={{ fontWeight: 600 }}>{room.name}</span>
+                      <span className="faint small">{failure != null ? `名单读取失败（${failure}——保留上次结果，可刷新重试）` : list == null ? '（装载中…）' : `${list.length} 位`}</span>
+                    </div>
+                    {list != null ? (
+                      <div className="row tight wrap" style={{ marginTop: 4 }}>
+                        {list.map((m) => (
+                          <span key={m.id} className="chip" title={`${m.displayName}${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
+                            {m.displayName}{room.coordinatorMemberId === m.id ? ' ★' : ''}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
+            </div>
+          </section>
         </div>
-
-
       </div>
 
       {editFor ? <EditMemberModal key={`${editFor.projectId}:${editFor.member.id}`} projectId={editFor.projectId} member={editFor.member} onClose={()=>setEditFor(null)} onSaved={async()=>{setEditFor(null);await reload();}}/>:null}

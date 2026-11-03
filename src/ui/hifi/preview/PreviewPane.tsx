@@ -13,9 +13,9 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { Menu, MenuItem, Modal, PanelNavButton, Tag, anchorFromElement } from '../components/ui';
-import { useStore, getState, toast, queueDraftInsert } from '../data/store';
+import { useStore, getState, toast } from '../data/store';
 import {
-  activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge, openWorktreePreview,
+  activatePreview, closeAllPreviews, closePreviewTab, openWorktreePreview,
   hidePreview, quoteResource, reloadResource, rememberScroll, showPreview,
   togglePreviewMaximized, applyWorktreeRead, markResourceUpdated, applyDeliveryRead,
   registerAttachmentResource, openPreview,
@@ -35,6 +35,7 @@ import { PdfView } from './viewers/PdfView';
 import { DocxView } from './viewers/DocxView';
 import { ImageView } from './viewers/ImageView';
 import { XlsxView } from './viewers/XlsxView';
+import { absoluteProjectPath, copyTextToClipboard, openLocalFileDefault, revealLocalFile } from '../lib/localOpen';
 
 const KIND_LABEL: Record<string, string> = {
   text_file: '文本', code_file: '代码', image_file: '图片', pdf_file: 'PDF',
@@ -147,7 +148,8 @@ export function PreviewPane({
   const tabStripRef = useRef<HTMLDivElement>(null);
   const [openList, setOpenList] = useState<{ x: number; y: number } | null>(null);
   const [moreAt, setMoreAt] = useState<{ x: number; y: number } | null>(null);
-  const [commentOpen, setCommentOpen] = useState(false);
+  /** R170：标签右键菜单（打开文件夹 / 按默认程序打开 / 关闭 / 关闭其他 / 关闭全部）。 */
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; key: string; resourceId: string } | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [wrapSource, setWrapSource] = useState(false);
@@ -321,24 +323,40 @@ export function PreviewPane({
     );
   }
 
-  const url = resource.relativePath ?? resource.title;
+  /**
+   * R170：资源对应的**磁盘文件**。预览路径行（第 7 项）与标签右键菜单（第 8 项）都只认真实
+   * 文件——工作区相对路径、附件来源路径、消息改动路径三者按顺序取第一个可信值；交付文档与
+   * 托管正文没有磁盘文件，不伪造路径。
+   */
+  const projectRootOf = (projectId: string): string | undefined =>
+    s.projects.find((project) => project.id === projectId)?.canonicalPath;
+  const sourcePathOf = (target: PreviewResource | undefined): string | null => {
+    if (target == null) return null;
+    if (target.formalWorktree != null) return target.formalWorktree.path;
+    if (target.relativePath != null && target.relativePath !== '') return target.relativePath;
+    for (const message of messageFiles) {
+      const change = message.fileChanges?.find((file) => file.artifactId === target.id);
+      if (change?.path != null && change.path !== '') return change.path;
+      const attachment = message.formalAttachments?.find((file) => file.artifactId === target.id);
+      if (attachment?.sourcePath != null && attachment.sourcePath !== '') return attachment.sourcePath;
+    }
+    return null;
+  };
+  const absolutePathOf = (target: PreviewResource | undefined): string | null =>
+    target == null ? null : absoluteProjectPath(projectRootOf(target.projectId), sourcePathOf(target));
+  const absolutePath = absolutePathOf(resource);
+  const displayPath = absolutePath ?? `${originLabel(s, resource)} · ${resource.relativePath ?? resource.title}`;
+  const copyDisplayPath = () => {
+    if (absolutePath == null) { toast('这份文件没有可显示的本机路径', 'warn'); return; }
+    void copyTextToClipboard(absolutePath).then((ok) => toast(ok ? `已复制完整路径：${absolutePath}` : '复制失败：剪贴板不可用', ok ? 'success' : 'error'));
+  };
   /** 引用到目标（r61 合同：引用卡直写；focus-composer）。 */
   const doQuote = (excerpt?: string) => {
     const ok = quoteResource(active.resourceId, active.revision, quoteTarget.draftKey, quoteTarget.label, excerpt);
     if (ok) window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: quoteTarget.draftKey }));
     return ok;
   };
-  /** 摘录（r61 独立通道）：正文当前内容前 160 字入队——只有已装载文本可摘录。 */
-  const doExcerpt = () => {
-    const text = excerptTextOf(active.resourceId);
-    if (text == null || text.trim().length === 0) { toast('本预览还没有可摘录的文字内容（文件尚未加载完成，或没有可提取的文字）', 'warn'); return; }
-    const rev = String(revisionLabel(resource, active.revision));
-    const r = queueDraftInsert(quoteTarget.draftKey, `> 摘录「${resource.title}」${rev}：${text.replace(/\s+/g, ' ').trim().slice(0, 160)}`);
-    if (r.ok) {
-      window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: quoteTarget.draftKey }));
-      toast(r.queued === false ? '相同摘录已在待插入队列（不重复）' : '已摘录内容前 160 字到输入框正文', 'success');
-    }
-  };
+  /** 摘录通道已按用户反馈（R170 第 6 项）从预览菜单移除。 */
 
   /**
    * 下载原文件/另存为（R66 P5 / R69 全来源统一）：保存**当前预览这份文件的原件字节**——
@@ -416,6 +434,7 @@ export function PreviewPane({
                     : 'unsupported',
                 )
               : formatBadgeOf('unsupported');
+            const tabPath = absolutePathOf(r);
             return (
               <span key={t.key} className={`preview-tab${on ? ' on' : ''}`}>
                 <button
@@ -424,7 +443,12 @@ export function PreviewPane({
                   className="preview-tab-label"
                   onClick={() => activatePreview(t.key)}
                   onAuxClick={(e) => { if (e.button === 1) { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); closePreviewTab(t.key); } }}
-                  title={`${r?.relativePath ?? r?.title ?? t.key}${ver ? ` · ${ver}` : ''}`}
+                  onContextMenu={(e) => {
+                    // R170 第 8 项：右键标签打开文件操作菜单（打开文件夹 / 默认程序打开 / 关闭…）。
+                    e.preventDefault();
+                    setTabMenu({ x: e.clientX, y: e.clientY, key: t.key, resourceId: t.resourceId });
+                  }}
+                  title={`${tabPath ?? r?.relativePath ?? r?.title ?? t.key}${ver ? ` · ${ver}` : ''}`}
                 >
                   <span className="preview-tab-icon" style={{ color: badge.color }}><Icon name={badge.icon} size={11} /></span>
                   <span className="truncate">{shown}</span>
@@ -464,7 +488,7 @@ export function PreviewPane({
           <button
             className="preview-icon-btn"
             aria-label="更多文件操作"
-            title="更多：引用/摘录/文件信息/评论/下载/阅读宽度/关闭"
+            title="更多：引用/文件信息/下载/阅读宽度/关闭"
             aria-haspopup="menu"
             data-preview-action="more"
             onClick={(e) => setMoreAt(anchorFromElement(e.currentTarget))}
@@ -508,10 +532,22 @@ export function PreviewPane({
       {/* ---------- 第二行：路径面包屑 + 常用动作（对照参考：路径段+右侧动作） ---------- */}
       <div className="preview-crumb">
         <Icon name="link" size={11} className="faint" />
-        <span className="preview-crumb-path truncate" title={`${originLabel(s, resource)} · ${url}`}>
-          <span className="faint">{originLabel(s, resource)} · </span>
-          <span className="mono-sm">{url}</span>
+        {/* R170 第 7 项：这里显示**本机绝对路径**（用户在文件页/对话里看到的真实位置），
+            不再拼「默认房间 › 串内消息」这类来源描述。没有磁盘文件时退回原说明。 */}
+        <span className="preview-crumb-path truncate" title={displayPath} data-zs-preview-path={absolutePath ?? ''}>
+          <span className={`mono-sm${absolutePath == null ? ' faint' : ''}`}>{displayPath}</span>
         </span>
+        {absolutePath != null ? (
+          <button
+            className="preview-icon-btn"
+            aria-label="复制完整路径"
+            title="复制完整路径"
+            data-preview-action="copy-path"
+            onClick={copyDisplayPath}
+          >
+            <Icon name="copy" size={12} />
+          </button>
+        ) : null}
         <span className="spacer" />
         <Tag plain title={isWorktree ? '项目工作区文件（只读）' : isDelivery ? 'AI 交付文档' : '会话附件或成果'}>
           {isWorktree ? '工作区只读' : isDelivery ? 'AI 交付文档' : '会话资源'}
@@ -575,7 +611,6 @@ export function PreviewPane({
           context={context}
           viewMode={viewMode}
           wrapSource={wrapSource}
-          onOpenComment={() => setCommentOpen(true)}
           onDownload={() => void doDownloadOriginal()}
         />
       </div>
@@ -592,6 +627,32 @@ export function PreviewPane({
       ) : null}
 
       {/* ---------- 浮层 ---------- */}
+      {tabMenu ? (() => {
+        const target = tabs.find((t) => t.key === tabMenu.key);
+        const targetResource = target == null ? undefined : resourceOf(s, target.resourceId);
+        const targetPath = absolutePathOf(targetResource);
+        const closeTab = (key: string, resourceId: string) => { dropLoadedCache(resourceId); clearReaderState(resourceId); closePreviewTab(key); };
+        return (
+          <Menu anchor={{ x: tabMenu.x, y: tabMenu.y }} onClose={() => setTabMenu(null)}>
+            <div className="menu-label">{targetResource?.title ?? '文件操作'}</div>
+            {targetPath != null ? (
+              <>
+                <MenuItem icon="folder" title="在系统文件管理器中选中这个文件" onClick={() => { setTabMenu(null); void revealLocalFile(targetPath).then((r) => { if (!r.ok) toast(`打开文件夹失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}>打开文件夹</MenuItem>
+                <MenuItem icon="external-link" title="用系统默认程序打开这个文件（不会改动内容）" onClick={() => { setTabMenu(null); void openLocalFileDefault(targetPath).then((r) => { if (!r.ok) toast(`打开失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}>按默认程序打开</MenuItem>
+                <div style={{ height: 1, margin: '4px 6px', background: 'var(--border-subtle)' }} />
+              </>
+            ) : null}
+            <MenuItem icon="x" title="只关闭这个标签，其他标签不受影响" onClick={() => { setTabMenu(null); closeTab(tabMenu.key, tabMenu.resourceId); }}>关闭</MenuItem>
+            <MenuItem icon="x" title="关闭除这个文件以外的其他标签" disabled={tabs.length <= 1} onClick={() => {
+              setTabMenu(null);
+              for (const t of tabs) if (t.key !== tabMenu.key) closeTab(t.key, t.resourceId);
+              activatePreview(tabMenu.key);
+            }}>关闭其他</MenuItem>
+            <MenuItem icon="panel-right" title="清空全部标签、退出预览；不会删除磁盘文件" onClick={() => { setTabMenu(null); for (const t of tabs) closeTab(t.key, t.resourceId); closeAllPreviews(); }}>关闭全部</MenuItem>
+          </Menu>
+        );
+      })() : null}
+
       {openList ? (
         <Menu anchor={openList} onClose={() => setOpenList(null)}>
           <div className="menu-label">已打开的文件（{tabs.length}{hiddenCount > 0 ? ` · ${hiddenCount} 个已暂藏` : ''}）</div>
@@ -613,9 +674,6 @@ export function PreviewPane({
           <MenuItem icon="corner-down-right" title={`把这份文件的固定版本插入「${quoteTarget.label}」草稿；需你再次点击发送才会进入对话`} onClick={() => { doQuote(); setMoreAt(null); }}>
             引用到 {quoteTarget.label}
           </MenuItem>
-          <MenuItem icon="quote" title="把当前内容文本的前 160 字摘录到输入框正文（独立于文件引用）" onClick={() => { doExcerpt(); setMoreAt(null); }}>
-            摘录到输入框
-          </MenuItem>
           <MenuItem icon="info" title="完整路径、版本、大小、来源与可见范围" onClick={() => { setInfoOpen(true); setMoreAt(null); }}>文件信息</MenuItem>
           <MenuItem
             icon="download"
@@ -625,7 +683,6 @@ export function PreviewPane({
           >
             {dlBusy ? '正在取原件…' : '下载原文件 / 另存为…'}
           </MenuItem>
-          <MenuItem icon="message-square" title="以这份文件的当前版本为锚点发一条仅记录评论到源会话（不触发模型）" onClick={() => { setCommentOpen(true); setMoreAt(null); }}>评论此文件</MenuItem>
           {supportsRendered && viewMode === 'preview' ? (
             <MenuItem
               icon="align-left"
@@ -654,10 +711,6 @@ export function PreviewPane({
           <FileInfoBody resource={resource} revision={revision} />
         </Modal>
       ) : null}
-
-      {commentOpen && resource != null && revision != null ? (
-        <CommentDialog resource={resource} revision={revision} onClose={() => setCommentOpen(false)} />
-      ) : null}
     </aside>
   );
 }
@@ -683,15 +736,10 @@ function attachmentKindToFormat(kind: string, title: string): LoadedFile['kind']
 const scrollTimer = { current: 0 as number | undefined };
 
 /* ============================================================
-   工作区快照（R67 P1-A）与摘录文本缓存
+   工作区快照（R67 P1-A）
    ============================================================ */
 
 const worktreeSnapshots = new Map<string, { bytesBase64: string; sha256: string; bytes: number; mtimeMs: number }>();
-
-/** 各格式子组件装载后上报的摘录文本（src=resourceId——仅当前资源生效）。 */
-const excerptReports = new Map<string, string>();
-function reportExcerpt(resourceId: string, text: string): void { excerptReports.set(resourceId, text); }
-function excerptTextOf(resourceId: string): string | null { return excerptReports.get(resourceId) ?? null; }
 
 /* ============================================================
    文件风味（文本类阅读方式推导——R66 P2 口径保留）
@@ -742,11 +790,11 @@ function dropLoadedCache(resourceId: string): void {
   }
 }
 
-function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenComment, onDownload }: {
+function FileStage({ resource, revision, context, viewMode, wrapSource, onDownload }: {
   resource: PreviewResource; revision: ResourceRevision;
   context: ContextTarget;
   viewMode: 'preview' | 'source'; wrapSource: boolean;
-  onOpenComment: () => void; onDownload: () => void;
+  onDownload: () => void;
 }) {
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<LoadedFile | null>(null);
@@ -781,9 +829,6 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
             revision: revision.revision,
           });
         }
-        if (r.text != null) reportExcerpt(resource.id, r.text);
-        else if (r.office?.slides != null) reportExcerpt(resource.id, r.office.slides.map((sl) => `${sl.text}${sl.notes ? `\n${sl.notes}` : ''}`).join('\n\n'));
-        else if (r.office?.sheets != null && r.office.sheets[0] != null) reportExcerpt(resource.id, r.office.sheets[0].cells.map((row) => row.join('\t')).join('\n'));
       })
       .catch((e: unknown) => { if (!done && gen === genRef.current) setErr(String((e as Error).message)); });
     return () => { done = true; genRef.current += 1; };
@@ -825,7 +870,6 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
         <div className="small muted" style={{ marginTop: 6, maxWidth: 460, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}</div>
         <div className="panel-actions">
           <button className="btn sm" onClick={() => setNonce((n) => n + 1)}>重试</button>
-          <button className="btn sm" onClick={onOpenComment}>评论此文件</button>
         </div>
       </div>
     );
@@ -878,7 +922,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
   // ---------- 文本类（text/code/markdown/html/csv；交付报告走 delivery 视图） ----------
   const text = loaded.text ?? '';
   if (resource.formalDelivery != null) {
-    return <DeliveryDocView resource={resource} revision={revision} rawText={text} delivery={loaded.delivery} viewMode={viewMode} wrapSource={wrapSource} onOpenComment={onOpenComment} onOpenWorktreeFile={(path, bytes) => openWorktreeFileFromDelivery(resource.projectId, path, bytes, context)} />;
+    return <DeliveryDocView resource={resource} revision={revision} rawText={text} delivery={loaded.delivery} viewMode={viewMode} wrapSource={wrapSource} onOpenWorktreeFile={(path, bytes) => openWorktreeFileFromDelivery(resource.projectId, path, bytes, context)} />;
   }
   if (loaded.originalBytes === 0 && text.length === 0) {
     return (
@@ -891,7 +935,6 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenCo
         </div>
         <div className="panel-actions">
           <button className="btn sm" onClick={dl}><Icon name="download" size={12} /> 另存 0 字节原件</button>
-          <button className="btn sm" onClick={onOpenComment}>评论此文件</button>
         </div>
       </div>
     );
@@ -1030,10 +1073,10 @@ interface TaskCompleteDoc {
 /** 交付文档装载缓存（resourceId:revision → 文档）——下载原文件用同一份文本，不二次请求。 */
 const deliveryDocs = new Map<string, { text: string | null; hashMatch: boolean | null; bytes: number }>();
 
-function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrapSource, onOpenComment, onOpenWorktreeFile }: {
+function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrapSource, onOpenWorktreeFile }: {
   resource: PreviewResource; revision: ResourceRevision; rawText: string;
   delivery?: { hashMatch: boolean | null; bytes: number };
-  viewMode: 'preview' | 'source'; wrapSource: boolean; onOpenComment: () => void;
+  viewMode: 'preview' | 'source'; wrapSource: boolean;
   onOpenWorktreeFile: (path: string, bytes: number) => void;
 }) {
   const fd = resource.formalDelivery!;
@@ -1052,9 +1095,6 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
         <div className="strong" style={{ marginTop: 8 }}>这份交付没有可读文档</div>
         <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>
           这份交付没有可读文档（v{fd.revision}）；验收与引用仍可在「详情」中使用。
-        </div>
-        <div className="panel-actions">
-          <button className="btn sm" onClick={onOpenComment}>评论此交付（会话锚点）</button>
         </div>
       </div>
     );
@@ -1131,72 +1171,6 @@ function FileInfoBody({ resource, revision }: { resource: PreviewResource; revis
         {resource.audience.kind === 'room' ? '本房间成员' : resource.audience.kind === 'dm' ? '仅这条私信的参与者' : '项目成员'}
       </dd>
     </dl>
-  );
-}
-
-/* ============================================================
-   评论对话框（正式：向源会话仅记录提交，携带引用卡——不触发模型）
-   ============================================================ */
-
-function CommentDialog({ resource, revision, onClose }: { resource: PreviewResource; revision: ResourceRevision; onClose: () => void }) {
-  const [body, setBody] = useState('');
-  const [busy, setBusy] = useState(false);
-  const s = useStore((x) => x);
-  const originText = originLabel(s, resource);
-  const isDm = resource.origin.kind === 'dm';
-  return (
-    <Modal
-      size="md"
-      title="评论此文件"
-      subtitle={`${resource.title} · v${revision.revision}`}
-      onClose={onClose}
-      footer={
-        <>
-          <span className="small faint">评论会作为「仅记录」消息发到源会话，不触发模型。</span>
-          <div className="spacer" />
-          <button className="btn" onClick={onClose}>取消</button>
-          <button
-            className="btn primary"
-            disabled={!body.trim() || busy}
-            onClick={() => {
-              setBusy(true);
-              void createFileCommentBridge(resource.id, body.trim()).then((r) => {
-                setBusy(false);
-                if (r.ok) { toast(`评论已保存到源会话（${originText}），锚定 v${revision.revision}——仅记录，未触发模型`, 'success'); onClose(); }
-                else toast(`评论提交失败：${userFacingSystemText(r.error ?? '未知错误')}（未提交）`, 'error');
-              });
-            }}
-          >
-            提交评论
-          </button>
-        </>
-      }
-    >
-      <div className="panel info" style={{ marginBottom: 12 }}>
-        <div className="panel-title"><Icon name="corner-down-right" size={13} /> 评论将发布到</div>
-        <div className="strong" style={{ marginTop: 4 }}>{originText}</div>
-        <div className="small faint" style={{ marginTop: 4, lineHeight: 1.65 }}>
-          {isDm
-            ? '这是私信来源的评论，只会进入该私信会话，不会出现在房间或公共成果列表。'
-            : '评论会发送到文件的来源会话。'}
-        </div>
-      </div>
-      <div className="panel" style={{ marginBottom: 12 }}>
-        <div className="small faint" style={{ lineHeight: 1.65 }}>
-          评论固定在 <span className="mono-sm">v{revision.revision}</span>；文件更新后仍指向这个版本。
-        </div>
-      </div>
-      <div className="field">
-        <label className="field-label">评论内容</label>
-        <textarea
-          className="textarea"
-          rows={4}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="例如：这一段的说明需要更清楚。"
-        />
-      </div>
-    </Modal>
   );
 }
 

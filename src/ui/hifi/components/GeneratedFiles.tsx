@@ -48,12 +48,15 @@ export function GeneratedFiles({
   changes,
   onOpen,
   nonFinal = false,
+  projectId,
 }: {
   attachments: readonly FormalAttachmentSummary[] | undefined;
   changes?: readonly MessageFileChange[];
   onOpen?: (att: FormalAttachmentSummary) => void;
   /** Observed after an incomplete/UNKNOWN turn; readable evidence, never final delivery. */
   nonFinal?: boolean;
+  /** R170：文件卡「打开方式 / 复制路径」需要项目根目录来还原本机绝对路径。 */
+  projectId?: string;
 }) {
   const files = normalizeFormalAttachments(attachments);
   const normalizedPath = (value: string | undefined): string | null =>
@@ -135,7 +138,7 @@ export function GeneratedFiles({
   )).map(file => file.name.toLowerCase()));
   return (
     <div className="msg-inline-attachments" data-zs-inline-attachments="1">
-      <MessageChangedFiles changes={visibleChanges} attachments={files} documents={documentFiles} documentChanges={preferredChanges} suppressedCardIds={suppressedCardIds} distinctContentNames={distinctContentNames} onOpen={onOpen} nonFinal={nonFinal}/>
+      <MessageChangedFiles changes={visibleChanges} attachments={files} documents={documentFiles} documentChanges={preferredChanges} suppressedCardIds={suppressedCardIds} distinctContentNames={distinctContentNames} onOpen={onOpen} nonFinal={nonFinal} projectId={projectId}/>
       {standaloneFiles.filter(file => !documentFiles.includes(file)).map((attachment) => {
         const isDocument = attachment.document === true;
         const kindLabel = isDocument ? '文档' : attachment.detailMarkdown ? '完整详情' : attachmentKindLabel(attachment.kind);

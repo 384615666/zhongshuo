@@ -201,121 +201,102 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
         其它页面（房间 / 线程 / 私信 / 看板）用的还是普通 .page，不受影响。
       */}
       <div className="page fg-page">
-        {/* 页头**一行**：标题 + 路径 + 项目选择器 + 操作簇。
-            项目选择器留在页内是因为 §17.7 要求"顶栏写一个项目、页面操作另一个"不能发生；
-            它和顶栏是同一个动作，但不再单独占一条筛选带（原来页头/筛选/页签三条横带叠在一起）。 */}
-        <div className="page-head">
-          {/* 标题已按用户要求删除（2026-09-26）：保留路径这一行（"当前是哪个目录"是坐标，不是说明文字），
-              页签「文件 / Git」就在下面。 */}
-          <div>
-            <div className="page-sub mono">{project.canonicalPath}</div>
+        {/**
+         * R170 第 9 项：文件页顶部与房间页一致——**一条 42px 的合并行**
+         * （本机路径 + 文件/Git 页签 + 仓库状态 + 项目选择 + Git 操作）。
+         * 原来这里是「页头 / 页签 / 状态条」三条横带叠在一起，比对话页顶部高出一大截。
+         * 完整状态（上游领先/落后、写入锁、最近一次 Git 操作）收进这一行的 title，
+         * 界面上只留一句最重要的信息。
+         */}
+        <div className="fg-topbar" data-zs-files-topbar="1">
+          <Icon name="folder" size={13} className="faint" />
+          <span className="fg-topbar-path mono" title={project.canonicalPath} data-zs-files-path={project.canonicalPath}>{project.canonicalPath}</span>
+          <div className="thread-tabs fg-topbar-tabs">
+            <button className={`thread-tab${tab === 'files' ? ' on' : ''}`} onClick={() => setTab('files')}>
+              <Icon name="file-text" size={13} /> 文件
+            </button>
+            <button className={`thread-tab${tab === 'git' ? ' on' : ''}`} onClick={() => setTab('git')}>
+              <Icon name="git-branch" size={13} /> Git
+              {/* 这个数字是**工作区改动文件数**，不是提交数、也不是审批数 */}
+              {git && git.status.length > 0 ? (
+                <span className="faint" title="工作区改动文件数">{changedFileCount}</span>
+              ) : null}
+              {!isGit ? <span className="faint">未初始化</span> : null}
+            </button>
           </div>
-          <div className="page-head-actions">
-            <label className="field inline">
-              <span className="field-label">项目</span>
-              <select
-                className="select"
-                value={projectId}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  focusProject(next, { announce: false });
-                  navigate(`/project/${next}/files?tab=${tab}`);
-                }}
+          <span className="spacer" />
+          {(() => {
+            const upstream = curBranch?.upstream == null
+              ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置）' : '没有上游分支'
+              : curBranch.ahead == null || curBranch.behind == null
+                ? `${curBranch.upstream}（领先/落后未知）`
+                : (() => {
+                  // 领先与落后**同时存在时必须都写出来**，不能互相吃掉。
+                  const parts: string[] = [];
+                  if (curBranch.ahead > 0) parts.push(`领先 ${curBranch.ahead}`);
+                  if (curBranch.behind > 0) parts.push(`落后 ${curBranch.behind}`);
+                  return parts.length > 0 ? parts.join(' · ') : '与远端一致';
+                })();
+            const detail = [
+              upstream,
+              ...(lock != null ? [`${lock.ownerTaskLabel} 正在写入此项目`] : []),
+              ...(git?.lastOp?.ok ? [`最近一次 Git 操作：${git.lastOp.detail}（${relTime(git.lastOp.at)}）`] : []),
+            ].join('\n');
+            return (
+              <span className="fg-statusbar fg-statusbar--inline" title={detail}>
+                <span>{project.isGit ? 'Git 仓库' : '非 Git 目录 · 改动仍会记录'}</span>
+                {isGit && git ? (
+                  <>
+                    <span className="fg-sep" />
+                    <span className="mono-sm">{git.currentBranch}</span>
+                    <span className="fg-sep" />
+                    <span title="工作区改动文件数">{changedFileCount} 个未提交改动</span>
+                    {lock != null ? <><span className="fg-sep" /><Icon name="lock" size={11} /></> : null}
+                  </>
+                ) : null}
+              </span>
+            );
+          })()}
+          <label className="field inline fg-topbar-project">
+            <select
+              className="select sm"
+              aria-label="切换项目"
+              title="切换文件页所属项目"
+              value={projectId}
+              onChange={(e) => {
+                const next = e.target.value;
+                focusProject(next, { announce: false });
+                navigate(`/project/${next}/files?tab=${tab}`);
+              }}
+            >
+              {s.projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.displayName}</option>
+              ))}
+            </select>
+          </label>
+          {tab === 'git' && isGit ? (
+            <div className="fg-topbar-actions">
+              <button
+                className="btn ghost sm"
+                title={`从远端拉取（origin/${git?.currentBranch ?? ''}）`}
+                onClick={() => void pull(projectId)}
+                disabled={!curBranch}
               >
-                {s.projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.displayName}</option>
-                ))}
-              </select>
-            </label>
-            {tab === 'git' && isGit ? (
-              <>
-                <button
-                  className="btn sm"
-                  title={`从远端拉取（origin/${git?.currentBranch ?? ''}）`}
-                  onClick={() => void pull(projectId)}
-                  disabled={!curBranch}
-                >
-                  <Icon name="download" size={12} /> 拉取
-                </button>
-                <button
-                  className="btn sm"
-                  title={`推送到所选远端；不会覆盖远端已有提交${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
-                  onClick={() => void push(projectId)}
-                  disabled={!curBranch}
-                >
-                  <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` (${curBranch.ahead})` : ''}
-                </button>
-                {/* 「分支」→「新建分支」：这个按钮是**创建**动作，
-                    左栏的「分支」是**查看**视图，两个不能同名。
-                    之前同名会让"点顶部想新建"和"点左栏想看分支"分不清。 */}
-                <button className="btn sm" onClick={() => setBranchModal(true)} title="基于当前提交创建分支；不会自动切换分支">
-                  <Icon name="git-branch" size={12} /> 新建分支
-                </button>
-              </>
-            ) : null}
-          </div>
-        </div>
-
-        {/* 顶层两标签：文件 / Git。历史属于 Git 内部导航，不另加第三个顶层标签。 */}
-        <div className="thread-tabs" style={{ marginBottom: 10 }}>
-          <button className={`thread-tab${tab === 'files' ? ' on' : ''}`} onClick={() => setTab('files')}>
-            <Icon name="file-text" size={13} /> 文件
-          </button>
-          <button className={`thread-tab${tab === 'git' ? ' on' : ''}`} onClick={() => setTab('git')}>
-            <Icon name="git-branch" size={13} /> Git
-            {/* 这个数字是**工作区改动文件数**，不是提交数、也不是审批数 */}
-            {git && git.status.length > 0 ? (
-              <span className="faint" title="工作区改动文件数">{changedFileCount}</span>
-            ) : null}
-            {!isGit ? <span className="faint">未初始化</span> : null}
-          </button>
-        </div>
-
-        {/* 状态条：状态**只在这里说一遍**。
-            它合并了原来散在四处的信息 —— page-filters 的"Git 仓库 · 分支"、
-            Git 页自己的 Tag 行、改动集上方的"当前写入锁"、lastOp 成功提示。 */}
-        <div className="fg-statusbar">
-          <span>{project.isGit ? 'Git 仓库' : '非 Git 目录 · 改动仍会记录'}</span>
-          {isGit && git ? (
-            <>
-              <span className="fg-sep" />
-              <span className="mono-sm">{git.currentBranch}</span>
-              <span className="fg-sep" />
-              {/* 领先与落后**同时存在时必须都写出来**。
-                  原来写成三元的 if/else，落后的时候就把领先吃掉（反之亦然），
-                  于是"既领先 2 又落后 3"被显示成"领先 2"。 */}
-              <span>
-                {curBranch?.upstream == null
-                  ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置，可推送/拉取）' : '没有上游分支'
-                  : curBranch.ahead == null || curBranch.behind == null
-                    ? `${curBranch.upstream}（领先/落后未知）`
-                    : (() => {
-                      const parts: string[] = [];
-                      if (curBranch.ahead > 0) parts.push(`领先 ${curBranch.ahead}`);
-                      if (curBranch.behind > 0) parts.push(`落后 ${curBranch.behind}`);
-                      return parts.length > 0 ? parts.join(' · ') : '与远端一致';
-                    })()}
-              </span>
-              <span className="fg-sep" />
-              <span title="工作区改动文件数">{changedFileCount} 个未提交改动</span>
-            </>
-          ) : null}
-          {lock ? (
-            <>
-              <span className="fg-sep" />
-              <span title={`${lock.ownerTaskLabel} 正在写入此项目；其它写入任务会排队，不会同时写入`}>
-                锁：{lock.ownerTaskLabel} 持有
-              </span>
-            </>
-          ) : null}
-          {git?.lastOp?.ok ? (
-            <>
-              <span className="fg-sep" />
-              {/* 成功态也把真实结果说清楚（detail 是动作的结果），不写一个孤零零的"成功" */}
-              <span title={`最近一次 Git 操作 · ${relTime(git.lastOp.at)}`}>
-                {git.lastOp.detail} · {relTime(git.lastOp.at)}
-              </span>
-            </>
+                <Icon name="download" size={12} /> 拉取
+              </button>
+              <button
+                className="btn ghost sm"
+                title={`推送到所选远端；不会覆盖远端已有提交${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
+                onClick={() => void push(projectId)}
+                disabled={!curBranch}
+              >
+                <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` (${curBranch.ahead})` : ''}
+              </button>
+              {/* 「分支」→「新建分支」：这个按钮是**创建**动作，左栏的「分支」是**查看**视图。 */}
+              <button className="btn ghost sm" onClick={() => setBranchModal(true)} title="基于当前提交创建分支；不会自动切换分支">
+                <Icon name="git-branch" size={12} /> 新建分支
+              </button>
+            </div>
           ) : null}
         </div>
 

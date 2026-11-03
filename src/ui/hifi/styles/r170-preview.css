@@ -1,0 +1,152 @@
+/* R170 预览 / 文件页 / 打开方式（见 docs/implementation/r170-ui-feedback-plan.md） */
+
+/* ============================================================
+   文件页顶部（第 9 项）
+   与房间页 .pool-head--merged 对齐：一条 42px 合并行，不再让页头 / 页签 /
+   状态条三条横带叠在一起。整行贴到内容区顶部，左右与页面内边距对齐。
+   ============================================================ */
+.page.fg-page {
+  padding: 0 0 18px;
+}
+.page.fg-page > :first-child {
+  margin-top: 0;
+}
+.page.fg-page > .fg-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-width: 0;
+}
+.fg-topbar-path {
+  min-width: 90px;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.fg-topbar-tabs {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  flex: none;
+}
+.fg-topbar-tabs .thread-tab {
+  height: 28px;
+}
+.fg-topbar .fg-statusbar--inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.fg-topbar .fg-statusbar--inline > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fg-topbar-project {
+  flex: none;
+  gap: 0;
+}
+.fg-topbar-project .select {
+  max-width: 160px;
+  height: 26px;
+}
+.fg-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.fg-topbar-actions .btn {
+  height: 26px;
+  padding: 0 8px;
+}
+.fg-page > .fg-body,
+.fg-page > .git-layout {
+  margin: 12px 18px 0;
+}
+.fg-page > .panel,
+.fg-page > .page-filters,
+.fg-page > .fg-statusbar,
+.fg-page > .git-prepare {
+  margin-left: 18px;
+  margin-right: 18px;
+}
+@media (max-width: 1100px) {
+  .page.fg-page > .fg-topbar { padding: 0 14px; gap: 8px; }
+  .fg-page > .fg-body,
+  .fg-page > .git-layout { margin-left: 14px; margin-right: 14px; }
+  .fg-topbar-path { max-width: 26%; }
+}
+@media (max-width: 960px) {
+  .fg-topbar-path { display: none; }
+  .fg-topbar .fg-statusbar--inline { display: none; }
+  .fg-topbar-actions .btn > .icon + * { display: none; }
+}
+
+/* ============================================================
+   预览路径行（第 7 项）：本机绝对路径 + 一键复制
+   ============================================================ */
+.preview-crumb .preview-crumb-path {
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--text-2);
+}
+.preview-crumb [data-preview-action='copy-path'] {
+  flex: none;
+}
+
+/* ============================================================
+   文件卡「打开」右侧的展开菜单（第 11 项）
+   ============================================================ */
+.open-split {
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+}
+.open-split > .btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.open-split > .open-split-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0 4px;
+  min-width: 20px;
+  border-left: 1px solid var(--border);
+}
+.open-split > .open-split-caret .icon {
+  opacity: 0.75;
+}
+.local-open-menu-label {
+  padding: 4px 10px 2px;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.local-open-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-subtle);
+}
+.message-document-card .open-split,
+.message-file-change-row .open-split {
+  align-self: center;
+}
