@@ -58,6 +58,7 @@ import { createInterface } from 'node:readline';
     const reply = result => write([{ id: msg.id, result }]);
     switch (msg.method) {
       case 'initialize': reply({}); break;
+      case 'thread/read': reply({ thread: { id: msg.params.threadId, status: { type: 'idle' } } }); break;
       // Flush control records before replying on the same pipe as their frames.
       case 'model/list': applyControls(); reply({ data: [], nextCursor: null }); break;
       case 'thread/start': reply({ thread: { id: `r125-thread-${++threadCount}` } }); break;

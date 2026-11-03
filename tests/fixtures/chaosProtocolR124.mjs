@@ -46,6 +46,7 @@ import { createInterface } from 'node:readline';
     const reply = result => write([{ id: msg.id, result }]);
     switch (msg.method) {
       case 'initialize': reply({}); break;
+      case 'thread/read': reply({ thread: { id: msg.params.threadId, status: { type: 'idle' } } }); break;
       case 'model/list': reply({ data: [], nextCursor: null }); break;
       case 'thread/start': reply({ thread: { id: `r124-thread-${++threadCount}` } }); break;
       case 'thread/resume': reply({ thread: { id: msg.params.threadId } }); break;

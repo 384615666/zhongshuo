@@ -9,6 +9,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   const msg = JSON.parse(line); log('in', msg);
   if (msg.id == null || !msg.method) return;
   const reply = result => write({ id: msg.id, result });
+  if (msg.method === 'thread/read') { reply({ thread: { id: msg.params.threadId, status: { type: 'idle' } } }); return; }
   if (msg.method === 'thread/start') { reply({ thread: { id: `ds-thread-${++threads}` } }); return; }
   if (msg.method !== 'turn/start') { reply({}); return; }
   const id = `ds-turn-${++turns}`, threadId = msg.params.threadId, text = msg.params.input[0].text;

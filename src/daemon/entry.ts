@@ -32,6 +32,7 @@ import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
+import { createCodexHistoryCleanup } from './codexHistoryCleanup.ts';
 import * as managedBridgeMod from './managed/bridge.ts';
 import { wrapRealCallLedger } from './realCallLedger.ts';
 import * as claudeCliMod from '../adapter/claude/cliAdapter.ts';
@@ -420,10 +421,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     try { worker.recoverAbandonedDmVerdicts(); } catch (error) {
       process.stderr.write(`[zhongshuo-daemon] dm 结算收案扫描失败（下次启动重试）：${error instanceof Error ? error.message : String(error)}\n`);
     }
+    const codexHistoryCleanup = createCodexHistoryCleanup(db!, async (memberId, providerId, eligible) => {
+      const channel = memberRuntime.adapterFor(memberId);
+      if (channel instanceof CodexAppServerAdapter) await channel.archiveStoredThread(providerId, eligible);
+    });
     const tick = setInterval(() => {
       if (draining) return;
       draining = true;
       inFlightDrain = worker.drain()
+        .then(() => codexHistoryCleanup.runOnce())
         .then(() => undefined)
         .catch((error) => {
           process.stderr.write(`[zhongshuo-daemon] drain error: ${error instanceof Error ? error.stack : String(error)}\n`);

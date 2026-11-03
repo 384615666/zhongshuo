@@ -17,6 +17,12 @@ let threadCounter = 0;
 let turnCounter = 0;
 let currentResultKey = null;
 let buffer = '';
+let historyReads = 0;
+const threads = new Map();
+function threadState(id) {
+  if (!threads.has(id)) threads.set(id, { archived: scenario.archivedThreads?.includes(id) ?? false, status: 'idle' });
+  return threads.get(id);
+}
 const write = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const notify = (method, params) => write({ jsonrpc: '2.0', method, params });
 
@@ -53,12 +59,43 @@ function handleRequest(msg) {
     case 'model/list':
       reply({data:scenario.models??[],nextCursor:null});
       break;
+    case 'thread/read': {
+      const id = msg.params.threadId, state = threadState(id);
+      if (scenario.historyReadActiveOnce && historyReads++ === 0) {
+        reply({ thread: { id, status: { type: 'active' } } });
+        setTimeout(() => notify('thread/status/changed', { threadId: id, status: { type: 'idle' } }), 25);
+        break;
+      }
+      reply({ thread: { id, path: `D:/mock/${state.archived ? 'archived_sessions' : 'sessions'}/${id}.jsonl`, status: { type: scenario.historyReadActive ? 'active' : state.status } } });
+      break;
+    }
+    case 'thread/archive': {
+      if (scenario.archiveError) {
+        write({ id: msg.id, error: { code: -32603, message: 'fixture archive failure' } });
+        break;
+      }
+      const archive = () => {
+        const state = threadState(msg.params.threadId);
+        if (state.status === 'active') { write({ id: msg.id, error: { code: -32600, message: 'cannot archive active fixture thread' } }); return; }
+        state.archived = true;
+        if (!scenario.archiveDropReply) reply({});
+      };
+      setTimeout(archive, scenario.archiveDelayMs ?? 0);
+      break;
+    }
+    case 'thread/unarchive': {
+      if (scenario.unarchiveError) { write({ id: msg.id, error: { code: -32603, message: 'fixture unarchive failure' } }); break; }
+      threadState(msg.params.threadId).archived = false;
+      reply({ thread: { id: msg.params.threadId } });
+      break;
+    }
     case 'thread/start':
     case 'thread/resume': {
       threadCounter += 1;
       const threadId = msg.method === 'thread/resume' && msg.params?.threadId
         ? msg.params.threadId
         : `mock-thread-${threadCounter}`;
+      if (threadState(threadId).archived) { write({ id: msg.id, error: { code: -32600, message: 'fixture thread is archived' } }); break; }
       const delay = scenario.threadStartDelayMs ?? 0;
       setTimeout(() => reply({ thread: { id: threadId }, model: 'mock', modelProvider: 'mock', serviceTier: null, cwd: 'D:/mock', approvalPolicy: 'never', sandbox: {} }), delay);
       break;
@@ -68,6 +105,8 @@ function handleRequest(msg) {
       const script = scenario.turns?.[turnCounter] ?? {};
       turnCounter += 1;
       const threadId = currentThreadIdOf(msg.params);
+      if (threadState(threadId).archived) { write({ id: msg.id, error: { code: -32600, message: 'fixture thread is archived' } }); break; }
+      threadState(threadId).status = 'active';
       const providerTurnId = `mock-turn-${turnCounter}`;
       // 从输入包文本提取 resultKey（worker 信封含 resultKey=xxx），供结构化终态回显。
       const text = String(msg.params?.input?.[0]?.text ?? '');
@@ -132,6 +171,7 @@ function emit(threadId, providerTurnId, n) {
       notify('thread/tokenUsage/updated', { ...base, tokenUsage: { total: { inputTokens: n.input ?? 10, cachedInputTokens: n.cached ?? 0, outputTokens: n.output ?? 5 }, last: {} } });
       break;
     case 'turn.completed': {
+      threadState(threadId).status = 'idle';
       // finalText 中的 {RESULT_KEY} 占位符替换为从输入提取的 resultKey（结构化终态回显）。
       const finalText = String(n.finalText ?? '').replaceAll('{RESULT_KEY}', currentResultKey ?? 'result_mock_unbound');
       notify('turn/completed', { threadId, turn: { id: providerTurnId, status: n.status ?? 'completed', error: n.error ?? null, items: n.items ?? [{ type: 'agentMessage', id: 'item_final', text: finalText }] } });

@@ -35,6 +35,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   switch (frame.method) {
     case 'initialize': reply({}); break;
     case 'model/list': controls(); reply({ data: [], nextCursor: null }); break;
+    case 'thread/read': reply({ thread: { id: frame.params.threadId, status: { type: 'idle' } } }); break;
     case 'thread/start': reply({ thread: { id: `r126-thread-${++threadCount}` } }); break;
     case 'thread/resume': reply({ thread: { id: frame.params.threadId } }); break;
     case 'turn/start': {

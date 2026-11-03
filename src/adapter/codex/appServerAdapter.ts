@@ -90,6 +90,8 @@ interface SessionState {
   ref: SessionRef;
   stream: EventStream;
   providerThreadId: string;
+  resumeParams: Record<string, unknown>;
+  closing?: boolean;
   providerTurnToInternal: Map<string, string>;
   /** 本会话待认领 turn（按会话隔离：双会话并发 startTurn 不互扰，修复轮 3）。 */
   awaitingTurn: TurnStartState | null;
@@ -101,6 +103,20 @@ interface SessionState {
   toolSummaries: Map<string, RuntimeToolSummary>;
   seq: number;
 }
+
+interface ThreadHistoryState {
+  generation: number;
+  threadId: string;
+  preparing: number;
+  archiveWanted: boolean;
+  needsResume: boolean;
+  archiving: Promise<void> | null;
+  restoring: Promise<void> | null;
+  eligible?: () => boolean;
+  retryWhenIdle?: boolean;
+}
+
+const HISTORY_REQUEST_TIMEOUT_MS = 750;
 
 interface ToolLikeItem extends Record<string, unknown> {
   status?: unknown;
@@ -161,6 +177,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private nextRequestId = 1;
   private readonly pending = new Map<number, { processGeneration: number; resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; onResult?: (v: unknown) => void }>();
   private readonly sessions = new Map<string, SessionState>();
+  private readonly threadHistory = new Map<string, ThreadHistoryState>();
   private readonly serverRequests = new Map<string, ServerApproval>();
   /** Retain ownership after completion/close without suppressing the old stream.
    * A later attempt may not claim the same identity in this process generation. */
@@ -169,6 +186,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private stderrTail = '';
   /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
   private handshakeDone = false;
+  private initializing: { generation: number; promise: Promise<void> } | null = null;
   private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { requireConfirmedClose?:boolean; cwd?:string; effort?:string; executable?:string; codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
@@ -195,6 +213,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if (this.child != null && this.child.exitCode == null && this.child.signalCode == null) return this.child;
     const entry = this.invocation();
     const generation = ++this.childGeneration;
+    this.threadHistory.clear();
     // A previous process may have exited before its delayed close callback.
     // Retire only its generation now; it must not retain a startup reservation
     // or settle a response received on the replacement connection.
@@ -212,6 +231,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     this.buffer = '';
     this.stderrTail = '';
     this.handshakeDone = false; // 新连接必须重新 initialize + initialized（修复轮）
+    this.initializing = null;
     // REC-LIFE-1：受管 spawn 经 spawnFn 注入（daemon 层提供 Job Object 桥；adapter 不感知）。
     const spawnServer = this.options.spawnFn ?? ((cmd: string, args: string[]) => spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -267,7 +287,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     return resolveCodexInvocation(this.options.executable,this.options.codexCmdPath);
   }
 
-  private request<T = unknown>(method: string, params?: unknown, onResult?: (v: unknown) => void, onRequest?: (id: number) => void): Promise<T> {
+  private request<T = unknown>(method: string, params?: unknown, onResult?: (v: unknown) => void, onRequest?: (id: number) => void, timeoutMs = this.options.requestTimeoutMs): Promise<T> {
     this.ensureProcess();
     const processGeneration = this.childGeneration;
     const id = this.nextRequestId++;
@@ -275,8 +295,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new AdapterCallError('RUNTIME_NOT_FOUND', `${method} 请求超时（${this.options.requestTimeoutMs}ms）`));
-      }, this.options.requestTimeoutMs);
+        reject(new AdapterCallError('RUNTIME_NOT_FOUND', `${method} 请求超时（${timeoutMs}ms）`));
+      }, timeoutMs);
       timer.unref?.();
       this.pending.set(id, { processGeneration, resolve: resolve as (v: unknown) => void, reject, timer, onResult });
       try {
@@ -408,6 +428,14 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private handleNotification(method: string, params: Record<string, unknown> | undefined): void {
     const p = params ?? {};
     const threadKey = typeof p['threadId'] === 'string' ? p['threadId'] : null;
+    if (method === 'thread/status/changed') {
+      const history = threadKey ? this.threadHistory.get(JSON.stringify([this.childGeneration, threadKey])) : undefined;
+      if (history?.archiveWanted && (p['status'] as { type?: string } | undefined)?.type === 'idle') {
+        if (history.archiving) history.retryWhenIdle = true;
+        else void this.archiveIdleThread(history);
+      }
+      return;
+    }
     const nestedTurnId = (p['turn'] as { id?: unknown } | undefined)?.id;
     const providerTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : typeof nestedTurnId === 'string' ? nestedTurnId : undefined;
     if (!threadKey || !providerTurnId) {
@@ -629,6 +657,83 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       return;
     }
     session.stream.push(this.event(session, spec, turnId));
+    if (spec.kind === 'turn.completed' || spec.kind === 'turn.failed') {
+      void this.archiveIdleThread(this.historyOf(session.providerThreadId, session.processGeneration));
+    }
+  }
+
+  private historyOf(threadId: string, generation = this.childGeneration): ThreadHistoryState {
+    const key = JSON.stringify([generation, threadId]);
+    let history = this.threadHistory.get(key);
+    if (history == null) {
+      history = { generation, threadId, preparing: 0, archiveWanted: false, needsResume: false, archiving: null, restoring: null };
+      this.threadHistory.set(key, history);
+    }
+    return history;
+  }
+
+  private historyConnectionLive(history: ThreadHistoryState): boolean {
+    return history.generation === this.childGeneration && this.child != null && this.child.exitCode == null && this.child.signalCode == null;
+  }
+
+  private historyBusy(history: ThreadHistoryState): boolean {
+    return history.preparing > 0 || [...this.sessions.values()].some(session =>
+      session.processGeneration === history.generation && session.providerThreadId === history.threadId &&
+      (session.startingTurns.size > 0 || [...session.providerTurnToInternal.keys()].some(id => this.providerIdentity(session, id)?.retired === false)));
+  }
+
+  /** Only exact provider IDs opened here or supplied from the daemon's ledger
+   * are eligible. Never enumerate the user's history, restart a dead connection,
+   * or turn a task result into a failure because sidebar housekeeping failed. */
+  private archiveIdleThread(history: ThreadHistoryState, eligible: () => boolean = history.eligible ?? (() => true)): Promise<void> {
+    history.archiveWanted = true;
+    if (history.archiving != null) return history.archiving;
+    if (!this.historyConnectionLive(history) || this.historyBusy(history)) return Promise.resolve();
+    history.archiving = Promise.resolve().then(async () => {
+      if (!this.historyConnectionLive(history) || this.historyBusy(history) || !eligible()) return;
+      const result = await this.request<{ thread?: { id?: string; path?: string | null; status?: { type?: string } } }>(
+        'thread/read', { threadId: history.threadId }, undefined, undefined, HISTORY_REQUEST_TIMEOUT_MS);
+      if (!this.historyConnectionLive(history) || this.historyBusy(history) || !eligible()) return;
+      if (result.thread?.id !== history.threadId) throw Error('invalid thread identity');
+      if (!['idle', 'notLoaded', 'systemError'].includes(result.thread.status?.type ?? '')) return;
+      // A timeout may follow a successful archive. Inspect disk metadata before
+      // the next turn, rather than assuming the thread remained loaded.
+      history.needsResume = true;
+      if (!archivedThreadPath(result.thread.path)) {
+        await this.request('thread/archive', { threadId: history.threadId }, undefined, undefined, HISTORY_REQUEST_TIMEOUT_MS);
+      }
+      history.archiveWanted = false;
+    }).catch(() => {
+      process.stderr.write('[codex-appserver] thread history archive deferred; task result preserved\n');
+    }).finally(() => {
+      history.archiving = null;
+      if (history.retryWhenIdle) {
+        history.retryWhenIdle = false;
+        if (history.archiveWanted) void this.archiveIdleThread(history);
+      }
+    });
+    return history.archiving;
+  }
+
+  private async unarchiveIfNeeded(history: ThreadHistoryState): Promise<void> {
+    if (!this.historyConnectionLive(history)) throw new AdapterCallError('RESOURCE_NOT_FOUND', '执行会话所属连接已经结束', true);
+    const result = await this.request<{ thread?: { id?: string; path?: string | null } }>('thread/read', { threadId: history.threadId });
+    if (result.thread?.id !== history.threadId) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '无法核实待续接的 Codex 会话身份', true);
+    if (!this.historyConnectionLive(history)) throw new AdapterCallError('RESOURCE_NOT_FOUND', '执行会话所属连接已经结束', true);
+    if (archivedThreadPath(result.thread.path)) await this.request('thread/unarchive', { threadId: history.threadId });
+  }
+
+  private async restoreHistory(history: ThreadHistoryState, params: Record<string, unknown>): Promise<void> {
+    if (history.restoring == null) {
+      history.restoring = (async () => {
+        await this.unarchiveIfNeeded(history);
+        if (!this.historyConnectionLive(history)) throw new AdapterCallError('RESOURCE_NOT_FOUND', '执行会话所属连接已经结束', true);
+        const result = await this.request<{ thread: { id: string } }>('thread/resume', { ...params, threadId: history.threadId });
+        if (result.thread.id !== history.threadId) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Codex 续接返回了不同的会话身份', true);
+        history.needsResume = false;
+      })().finally(() => { history.restoring = null; });
+    }
+    await history.restoring;
   }
 
   private internalTurnOf(session: SessionState, providerTurnId: string | undefined): string | undefined {
@@ -680,6 +785,44 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   // ---------- RuntimeAdapter ----------
 
+  private async initialize(timeoutMs = this.options.requestTimeoutMs): Promise<void> {
+    const child = this.ensureProcess(), generation = this.childGeneration;
+    if (this.handshakeDone) return;
+    if (this.initializing?.generation === generation) return await this.initializing.promise;
+    const promise = (async () => {
+      try {
+        await this.request('initialize', { clientInfo: { name: 'zhongshuo', title: '众说', version: ADAPTER_VERSION } }, undefined, undefined, timeoutMs);
+        if (this.child !== child || this.childGeneration !== generation || child.exitCode != null || child.signalCode != null) {
+          throw new AdapterCallError('RESOURCE_NOT_FOUND', '执行连接在握手期间已经结束', true);
+        }
+        this.writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }));
+        this.handshakeDone = true;
+      } catch (error) {
+        // A late initialize response must not poison the next real dispatch
+        // with "already initialized" after bounded metadata maintenance times out.
+        if (this.child === child && this.childGeneration === generation) {
+          this.child = null;
+          child.kill();
+        }
+        throw error;
+      }
+    })().finally(() => {
+      if (this.initializing?.promise === promise) this.initializing = null;
+    });
+    this.initializing = { generation, promise };
+    await promise;
+  }
+
+  /** Metadata-only maintenance. The daemon supplies an exact persisted provider
+   * ID and rechecks its execution ledger immediately before the archive RPC. */
+  async archiveStoredThread(threadId: string, eligible: () => boolean): Promise<void> {
+    if (!eligible()) return;
+    await this.initialize(HISTORY_REQUEST_TIMEOUT_MS);
+    const history = this.historyOf(threadId);
+    history.eligible = eligible;
+    await this.archiveIdleThread(history);
+  }
+
   async probe(): Promise<ProbeResult> {
     if (this.codexVersion == null) {
       const entry=this.invocation();
@@ -691,8 +834,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   /** Metadata only: no thread/start or turn/start, therefore no model inference. */
   async listModels():Promise<Array<{id:string;model:string;displayName?:string;defaultReasoningEffort?:string;supportedReasoningEfforts?:Array<{reasoningEffort:string;description?:string}>;inputModalities?:string[]}>> {
-    this.ensureProcess();
-    if(!this.handshakeDone){await this.request('initialize',{clientInfo:{name:'zhongshuo',version:ADAPTER_VERSION}});this.writeLine(JSON.stringify({jsonrpc:'2.0',method:'initialized',params:{}}));this.handshakeDone=true;}
+    await this.initialize();
     const items:Array<{id:string;model:string;displayName?:string;defaultReasoningEffort?:string;supportedReasoningEfforts?:Array<{reasoningEffort:string;description?:string}>;inputModalities?:string[]}>=[];
     let cursor:string|undefined;
     for(let page=0;page<5;page++){const result=await this.request<{data:typeof items;nextCursor?:string|null}>('model/list',{limit:100,...(cursor?{cursor}:{})});items.push(...result.data);if(!result.nextCursor)return items;cursor=result.nextCursor;}
@@ -733,15 +875,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if(this.options.effort){const models=await this.listModels();const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(!model?.supportedReasoningEfforts?.some(e=>e.reasoningEffort===this.options.effort))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前 model/list 未声明所选思考等级；请重新配置');}
     if(input.writeAccess?.fullAccess && this.options.sandboxMode!=='danger-full-access') throw new AdapterCallError('CAPABILITY_UNSUPPORTED','完整权限与成员配置不匹配');
     if(!input.writeAccess?.fullAccess && input.writeAccess?.modificationAuthorized && (this.options.sandboxMode!=='workspace-write' || input.writeAccess.allowedWriteRoots.length!==1 || input.writeAccess.allowedWriteRoots[0]!==input.cwd)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目写入范围与成员权限不匹配');
-    this.ensureProcess();
-    if (!this.handshakeDone) {
-      await this.request('initialize', {
-        clientInfo: { name: 'zhongshuo', title: '众说', version: ADAPTER_VERSION },
-      });
-      // 官方握手要求：initialize 响应后发送 initialized 通知（修复轮）。
-      this.writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }));
-      this.handshakeDone = true;
-    }
+    await this.initialize();
     const developerInstructions=[input.developerInstructions,CODEX_STRUCTURED_FINAL_INSTRUCTION]
       .filter((value):value is string=>value!=null&&value.length>0)
       .join('\n\n');
@@ -754,7 +888,21 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if (developerInstructions.length > 0) threadParams['developerInstructions'] = developerInstructions;
     const method = input.resume != null ? 'thread/resume' : 'thread/start';
     if (input.resume != null) threadParams['threadId'] = input.resume.providerSessionId;
-    const result = await this.request<{ thread: { id: string } }>(method, threadParams);
+    let result: { thread: { id: string } };
+    if (input.resume != null) {
+      if (!input.resume.providerSessionId) throw new AdapterCallError('VALIDATION_INVALID', '续接缺少 Codex 会话身份');
+      const history = this.historyOf(input.resume.providerSessionId);
+      history.preparing += 1;
+      try {
+        await history.archiving;
+        await this.unarchiveIfNeeded(history);
+        result = await this.request<{ thread: { id: string } }>(method, threadParams);
+        if (result.thread.id !== history.threadId) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Codex 续接返回了不同的会话身份', true);
+        history.needsResume = false;
+      } finally { history.preparing -= 1; }
+    } else {
+      result = await this.request<{ thread: { id: string } }>(method, threadParams);
+    }
     const providerThreadId = result.thread.id;
     const ref: SessionRef = {
       id: `codex-session-${randomUUID()}`,
@@ -772,6 +920,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       ref,
       stream: new EventStream(),
       providerThreadId,
+      resumeParams: threadParams,
       providerTurnToInternal: new Map(),
       awaitingTurn: null,
       startingTurns: new Map(),
@@ -780,16 +929,32 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       seq: 0,
     };
     this.sessions.set(ref.id, state);
+    this.historyOf(providerThreadId).eligible = undefined;
     state.stream.push(this.event(state, { kind: 'session.ready', providerSessionId: providerThreadId }));
     return ref;
   }
 
   async startTurn(session: SessionRef, input: TurnRequest): Promise<void> {
+    const state = this.stateOf(session);
+    this.assertLiveSession(state);
+    const history = this.historyOf(state.providerThreadId, state.processGeneration);
+    history.preparing += 1;
+    try {
+      await history.archiving;
+      this.assertLiveSession(state);
+      if (history.needsResume) await this.restoreHistory(history, state.resumeParams);
+      this.assertLiveSession(state);
+      await this.startPreparedTurn(state, session, input);
+    } finally {
+      history.preparing -= 1;
+      if (history.archiveWanted) void this.archiveIdleThread(history);
+    }
+  }
+
+  private async startPreparedTurn(state: SessionState, session: SessionRef, input: TurnRequest): Promise<void> {
     if(input.images?.length&&input.imageConfigurationKey&&input.imageConfigurationKey!==codexConfigurationIdentity(session.cwd))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','图片执行配置已变化；未发送，原件保留',true);
     if(input.images?.length){let models:Awaited<ReturnType<CodexAppServerAdapter['listModels']>>;try{models=await this.listModels();}catch(e){throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`图片模型信息读取失败；没有发送模型输入：${e instanceof Error?e.message:'元数据不可读'}`,true);}const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(model?.inputModalities&&!model.inputModalities.includes('image'))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前模型明确不支持图片；原件保留，可仅记录或换成员',true);}
     const providerInput = codexInput(input);
-    const state = this.stateOf(session);
-    this.assertLiveSession(state);
     if (state.startingTurns.has(input.turnId) || [...state.providerTurnToInternal.values()].includes(input.turnId)) {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '本轮执行身份已经使用；本次未重复发送', true);
     }
@@ -897,6 +1062,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   async close(session: SessionRef): Promise<void> {
     const state = this.stateOf(session);
+    state.closing = true;
+    await this.archiveIdleThread(this.historyOf(state.providerThreadId, state.processGeneration));
     this.invalidateApprovals(state);
     for (const id of state.providerTurnToInternal.keys()) this.retireTurn(state, id);
     for (const attempt of state.startingTurns.values()) {
@@ -927,6 +1094,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   async dispose(): Promise<void> {
+    for (const session of this.sessions.values()) session.closing = true;
+    const archives = [...this.threadHistory.values()].map(history => this.archiveIdleThread(history));
+    if (archives.length > 0) await Promise.all(archives);
     this.serverRequests.clear();
     this.sessions.clear();
     if (this.child != null) {
@@ -959,10 +1129,14 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   private assertLiveSession(state: SessionState): void {
-    if (state.processGeneration !== this.childGeneration || this.child == null || this.child.exitCode != null || this.child.signalCode != null) {
+    if (state.closing || !this.sessions.has(state.ref.id) || state.processGeneration !== this.childGeneration || this.child == null || this.child.exitCode != null || this.child.signalCode != null) {
       throw new AdapterCallError('RESOURCE_NOT_FOUND', '执行会话所属连接已经结束；请重新打开会话', true);
     }
   }
+}
+
+function archivedThreadPath(path: string | null | undefined): boolean {
+  return typeof path === 'string' && /(?:^|[\\/])archived_sessions[\\/]/.test(path);
 }
 
 function toolOutcome(status: unknown): 'success' | 'failure' | 'unknown' {

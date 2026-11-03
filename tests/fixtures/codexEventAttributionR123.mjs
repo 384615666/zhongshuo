@@ -26,6 +26,7 @@ if (process.argv[2] === '--hold-pipes') {
     const reply = result => write([{ id: msg.id, result }]);
     switch (msg.method) {
       case 'initialize': reply({}); break;
+      case 'thread/read': reply({ thread: { id: msg.params.threadId, status: { type: 'idle' } } }); break;
       case 'model/list': {
         const respond = () => {
           reply({ data: [], nextCursor: null });

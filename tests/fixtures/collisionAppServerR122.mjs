@@ -5,6 +5,7 @@ const reply=(id,result)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,r
 createInterface({input:process.stdin}).on('line',line=>{
  const msg=JSON.parse(line);if(msg.id==null)return;
  if(msg.method==='initialize'){reply(msg.id,{});return;}
+ if(msg.method==='thread/read'){reply(msg.id,{thread:{id:msg.params.threadId,status:{type:'idle'}}});return;}
  if(msg.method==='thread/start'){reply(msg.id,{thread:{id:`thread-${++nextThread}`}});return;}
  if(msg.method!=='turn/start'){reply(msg.id,{});return;}
  const n=++nextTurn,id=`turn-${n}`,threadId=msg.params.threadId,text=msg.params.input[0].text;
