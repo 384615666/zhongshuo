@@ -26,6 +26,10 @@ describe('R172 file opening actions',()=>{
     expect(f.actions.list('C:\\work\\a.docx').map(item=>item.label)).toEqual(['按默认程序打开','资源管理器','Word']);
     expect(f.actions.list('C:\\work\\a.xlsx').map(item=>item.label)).toEqual(['按默认程序打开','资源管理器','Excel']);
   });
+  it('keeps one VS Code entry when Windows and local detection use different display names',()=>{
+    const f=fixture();f.associations.mockReturnValue([{id:'association:md',label:'Visual Studio Code',kind:'editor'}]);
+    expect(f.actions.list('C:\\work\\a.md').map(item=>item.label)).toEqual(['按默认程序打开','资源管理器','Visual Studio Code']);
+  });
   it('does not reuse an association ID from another extension or accept a raw executable',async()=>{
     const f=fixture();
     expect((await f.actions.open('association:docx','C:\\work\\a.xlsx')).ok).toBe(false);

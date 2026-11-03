@@ -4,6 +4,7 @@ import type {LocalOpener} from './localOpeners.ts';
 import type {FileAssociation} from './windowsFileAssociations.ts';
 export interface LocalFileResult {ok:boolean;error?:string}
 export interface FileOpener {id:string;label:string;kind:'default'|'explorer'|'editor'}
+const openerLabelKey=(label:string)=>label.toLowerCase().replaceAll('visual studio code','vs code').replace(/\s+/g,'');
 
 /** A spawn return value is not a successful launch. Keep an error listener even
  * after the spawn event so later errors cannot become uncaught main exceptions. */
@@ -31,7 +32,7 @@ export function createLocalFileActions(io:{
     // Keep optional code editors for text/source files; Office/media menus use
     // their registered applications rather than unrelated code editors.
     if(/\.(?:txt|md|markdown|log|json|csv|ts|tsx|js|jsx|mjs|cjs|py|go|java|rs|html?|css|xml|ya?ml|toml|ini|sql|sh|ps1|bat|cmd)$/i.test(win32.extname(path))){
-      for(const opener of io.editors())if(opener.kind==='editor'&&!items.some(item=>item.label.toLowerCase()===opener.label.toLowerCase()))items.push({id:opener.id,label:opener.label,kind:'editor'});
+      for(const opener of io.editors())if(opener.kind==='editor'&&!items.some(item=>openerLabelKey(item.label)===openerLabelKey(opener.label)))items.push({id:opener.id,label:opener.label,kind:'editor'});
     }
     return items;
   };
