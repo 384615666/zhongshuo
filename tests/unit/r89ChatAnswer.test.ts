@@ -38,12 +38,29 @@ describe('R89 task-complete projection', () => {
     expect(chatAnswer(appended, 'agent', 'result_other')).toBe(appended);
   });
 
-  it('does not accept a mismatched identity or a fenced/truncated suffix as control', () => {
+  it('does not accept a mismatched identity or a truncated suffix as control', () => {
     const natural = '自然回答';
     const appended = `${natural}\n\n${JSON.stringify(control)}`;
     expect(extractAppendedTaskComplete(appended, 'result_other')).toBeNull();
-    expect(extractAppendedTaskComplete(`${natural}\n\n\`\`\`json\n${JSON.stringify(control)}\n\`\`\``, control.resultKey)).toBeNull();
     expect(extractAppendedTaskComplete(`${natural}\n\n${JSON.stringify(control).slice(0, -4)}`, control.resultKey)).toBeNull();
+  });
+
+  it.each(['before','after','only'])('projects a validated fenced receipt %s the readable reply', position => {
+    const fenced=`\`\`\`json\n${JSON.stringify(control)}\n\`\`\``;
+    const text=position==='before'?`${fenced}\n\n${control.answer}`:position==='after'?`${control.answer}\n\n${fenced}`:fenced;
+    expect(extractAppendedTaskComplete(text,control.resultKey)?.controlText).toBe(JSON.stringify(control));
+    expect(agentReplyText(text,JSON.stringify(control),control.resultKey)).toBe(control.answer);
+    expect(chatAnswer(text,'human',control.resultKey)).toBe(text);
+    expect(extractAppendedTaskComplete(text,'foreign-result')).toBeNull();
+    expect(isExplicitTaskCompleteOutput(text.replace(control.resultKey,'foreign-result'))).toBe(true);
+  });
+
+  it('preserves normal fenced JSON and ambiguous or unbound mixed receipts',()=>{
+    const example='说明\n```json\n{"answer":"业务数据"}\n```';
+    expect(agentReplyText(example,undefined,control.resultKey)).toBe(example);
+    const fenced=`\`\`\`json\n${JSON.stringify(control)}\n\`\`\``;
+    expect(chatAnswer(`协议示例\n${fenced}`,'agent')).toBe(`协议示例\n${fenced}`);
+    expect(extractAppendedTaskComplete(`${fenced}\n\n${fenced}`,control.resultKey)).toBeNull();
   });
 
   it('recognizes explicit malformed or wrong-key terminal control without treating ordinary JSON as control', () => {

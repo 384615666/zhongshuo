@@ -11,6 +11,7 @@ import { stopGenerationOfTask } from '../outbox.ts';
 import { randomUUID } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../db.ts';
 import { assessTaskRedispatchReadiness } from './recoveryGuard.ts';
+import { agentReplyText } from '../../contracts/chatAnswer.ts';
 
 export interface DmParticipantRow {
   principal_type: 'human' | 'agent';
@@ -219,8 +220,10 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
     let lastMessagePreview: string | null = null;
     if (lastMsg != null) {
       try {
-        const body = JSON.parse(lastMsg.body_json) as { text?: string };
-        lastMessagePreview = typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 40) : null;
+        const body = JSON.parse(lastMsg.body_json) as { text?: string; runtimeControlResult?: string };
+        lastMessagePreview = typeof body.text === 'string'
+          ? agentReplyText(body.text, body.runtimeControlResult).replace(/\s+/g, ' ').trim().slice(0, 40)
+          : null;
       } catch { /* 残缺消息不虚构预览 */ }
     }
     // pending only counts ACTIVE rows. BLOCKED pre-dispatch failures belong to

@@ -69,6 +69,23 @@ const scenesSource = String.raw`(() => {
   const roomRoute = () => '/project/' + m.projectId + '/room/' + m.roomId;
   const threadRoute = () => roomRoute() + '?thread=' + (m.work && m.work.threadId ? m.work.threadId : '');
   const scenes = [
+    { name: 'dm-r177', run: async () => {
+      await go('/dm');
+      const dmRow = () => qa('[data-zs-dm-id]').find((el) => el.dataset.zsDmId === m.dm);
+      await until(() => dmRow(), '私信列表');
+      dmRow().click();
+      await until(() => q('.composer-editor'), '私信输入框');
+      await until(() => document.body.innerText.includes('普通业务 JSON，需保留'), '历史私信加载');
+      const placeholder=q('.composer-editor').getAttribute('data-placeholder');
+      if(placeholder!=='给 Codex 发消息…')throw Error('成员名未回退：'+placeholder);
+      const text=document.body.innerText;
+      const messageText=qa('[data-zs-message-id]').map(textOf).join('\n');
+      if(text.includes('task-complete-v1')||text.includes('resultKey'))throw Error('内部回执仍可见');
+      const answer='可以这样写：';
+      const count=messageText.split(answer).length-1;
+      if(count!==1)throw Error('可读正文重复或缺失：'+count);
+      window.r170Extra={placeholder,answerCount:count,ordinaryJsonVisible:true,controlVisible:false};
+    } },
     { name: 'members', run: async () => {
       await go('/project/' + m.projectId + '/members');
       await until(() => q('[data-zs-members]'), '成员页');
@@ -362,7 +379,7 @@ fs.writeFileSync(wrapperPath, wrapperSource
       bundle: true, platform: 'node', format: 'cjs', packages: 'external',
       outfile: path.join(run, 'seed.cjs'), logLevel: 'silent',
     });
-    const seeded = spawnSync(process.execPath, [path.join(run, 'seed.cjs'), data, project], { cwd: root, env, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+    const seeded = spawnSync(process.execPath, [path.join(run, 'seed.cjs'), data, project, ...(only.includes('dm-r177')?['--r177']:[])], { cwd: root, env, encoding: 'utf8', windowsHide: true, timeout: 180000 });
     fs.writeFileSync(path.join(run, 'seed.log'), (seeded.stdout || '') + '\n' + (seeded.stderr || ''));
     if (seeded.status !== 0) throw Error('隔离夹具装载失败：' + (seeded.stderr || seeded.stdout));
   } catch (error) {

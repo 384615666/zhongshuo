@@ -2,7 +2,7 @@
  * DELIBERATE 编排场景（零额度）：E4 缺席假时钟、非法输出一次修复、停止、
  * 全员失败 BLOCKED、无争议跳过讨论。与 deliberationFlow（全链/预算）互补。
  */
-import { describe, expect, it, afterAll } from 'vitest';
+import { describe, expect, it, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,6 +75,7 @@ describe('非法输出与一次格式修复（§6.4）', () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1']);
     const { scripts, adapter, worker } = make(db, 2, ['m1']);
+    const starts=vi.spyOn(adapter,'startTurn');
     await step(worker, scripts); // PREPARE
     scripts.push(done({ schemaVersion: 'analysis-draft-v1', summary: '缺 claims 的非法稿' } as unknown)); // IND m1 首输出非法
     await step(worker, scripts);
@@ -82,10 +83,53 @@ describe('非法输出与一次格式修复（§6.4）', () => {
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE '%RPR%'").get() as { c: number }).c).toBe(1); // 修复步骤入队
     scripts.push(done(draft('甲修复稿', [{ claimId: 'c1', statement: '结论' }])));
     await step(worker, scripts); // 修复成功 → 计入屏障
+    expect(starts.mock.calls.at(-1)![1].repairOnly).toBe(true);
+    expect(starts.mock.calls.at(-1)![1].text).toContain('缺 claims 的非法稿');
+    expect(starts.mock.calls.at(-1)![1].text).toContain('待修复原稿');
     expect(listRunArtifacts(db, runIdOf(db), 'analysis_draft')).toHaveLength(1);
     await adapter.closeAllSessions();
     db.close();
   }, 30_000);
+
+  it.each(['confirmed','unconfirmed','active','success','source-corrupt'])('SYN repair settles %s without replaying business work',async outcome=>{
+    const db=openDatabase(':memory:');seed(db,['m1']);
+    const {taskId,scripts,adapter,worker}=make(db,190,['m1']);
+    (worker as unknown as {formatRepairIdleMs:number}).formatRepairIdleMs=80;
+    (worker as unknown as {interruptGraceMs:number}).interruptGraceMs=30;
+    const starts=vi.spyOn(adapter,'startTurn');
+    try{
+      await step(worker,scripts);
+      // Ordinary work can remain silent longer than the repair guard.
+      await step(worker,scripts,[{kind:'stall',ms:110},...done(draft('初稿',[{claimId:'c1',statement:'已有依据'}]))]);
+      await step(worker,scripts,done({schemaVersion:'synthesis-v1',summary:'待修复原整合稿'}));
+      expect(db.prepare('SELECT stage,status FROM workflow_runs').get()).toMatchObject({stage:'SYNTHESIS',status:'RUNNING'});
+      const valid=done({schemaVersion:'synthesis-v1',summary:'修复后整合稿',claims:[{statement:'已有依据',sourceRefs:['c1']}],disputedClaims:[],recommendations:[]});
+      if(outcome==='source-corrupt'){
+        db.prepare("UPDATE daemon_state SET value=json_set(value,'$.hash','corrupt') WHERE key LIKE 'delib:repair-source:%'").run();
+        const before=starts.mock.calls.length;
+        await step(worker,scripts,valid);
+        expect(starts).toHaveBeenCalledTimes(before);
+        expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'BLOCKED'});
+      }else{
+        const script:FakeTurnScript=outcome==='success'?valid:outcome==='active'?
+          [...Array.from({length:4},(_,n)=>[{kind:'stall' as const,ms:35},{kind:'event' as const,event:{kind:'message.progress' as const,messageId:`progress-${n}`,text:'正在修复字段'}}]).flat(),...valid]:
+          [...(outcome==='unconfirmed'?[{kind:'unresponsiveToInterrupt' as const}]:[]),{kind:'stall',ms:60_000}];
+        await step(worker,scripts,script);
+        expect(starts.mock.calls.at(-1)![1]).toMatchObject({repairOnly:true});
+        expect(starts.mock.calls.at(-1)![1].text).toContain('待修复原整合稿');
+        if(outcome==='success'||outcome==='active'){
+          expect(db.prepare('SELECT stage,status FROM workflow_runs').get()).toEqual({stage:'RATIFY',status:'RUNNING'});
+          expect(listRunArtifacts(db,runIdOf(db),'synthesis')).toHaveLength(1);
+          expect(db.prepare("SELECT count(*) n FROM domain_events WHERE kind='run.formatRepairStalled'").get()).toEqual({n:0});
+        }else{
+          expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'BLOCKED'});
+          expect(db.prepare("SELECT status FROM agent_turns WHERE turn_purpose='format_repair'").get()).toEqual({status:outcome==='confirmed'?'FAILED':'UNKNOWN'});
+          expect(db.prepare("SELECT count(*) n FROM domain_events WHERE kind='run.formatRepairStalled'").get()).toEqual({n:1});
+          expect(listRunArtifacts(db,runIdOf(db),'synthesis')).toHaveLength(0);
+        }
+      }
+    }finally{await adapter.closeAllSessions();db.close();}
+  });
 });
 
 describe('停止作用于指定运行（UI 切换不改变目标）', () => {

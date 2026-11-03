@@ -125,6 +125,8 @@ export interface DispatchWorkerOptions {
   turnDeadlineMs?: number | null;
   /** 中断后的等待上限：仍无终结 → UNKNOWN。 */
   interruptGraceMs?: number;
+  /** Only silent DELIB format repair; ordinary work keeps its configured deadline. */
+  formatRepairIdleMs?:number;
   /** DIRECT 预算上限（决策 12：6）。 */
   maxTurns?: number;
   /** New AUTO parent envelope cap, including planning, every child and integration/repair. */
@@ -166,6 +168,7 @@ export class DispatchWorker {
   private readonly leaseMs: number;
   private readonly turnDeadlineMs: number | null;
   private readonly interruptGraceMs: number;
+  private readonly formatRepairIdleMs:number;
   private readonly maxTurns: number;
   private readonly coordinationMaxCalls:number;
   private readonly coordinationMaxCallsOverride:boolean;
@@ -224,6 +227,8 @@ export class DispatchWorker {
     }
     this.turnDeadlineMs = options.turnDeadlineMs == null || options.turnDeadlineMs === 0 ? null : options.turnDeadlineMs;
     this.interruptGraceMs = options.interruptGraceMs ?? 5_000;
+    this.formatRepairIdleMs=options.formatRepairIdleMs??180_000;
+    if(!Number.isSafeInteger(this.formatRepairIdleMs)||this.formatRepairIdleMs<=0)throw Error('formatRepairIdleMs 必须为正整数');
     this.maxTurns = options.maxTurns ?? 6;
     const coordinationCap=options.coordinationMaxCalls??24;
     if(!Number.isSafeInteger(coordinationCap)||coordinationCap<0)throw Error('协作调用预算必须是非负整数');
@@ -1678,7 +1683,7 @@ export class DispatchWorker {
     const repairError = isRepair ? this.kvGet(`delib:repair:${claimed.dispatch_key}`) : undefined;
     const assembly = assembleStepInput(this.db, { taskId: step.taskId, runId: run.id, step, repairError: repairError ?? undefined, appDataDir:this.appDataDir });
     if (!assembly.ok) {
-      this.db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id=? AND status IN ('pending','late')").run(run.id,step.memberId);
+      this.db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id=? AND status IN ('pending','late','completed')").run(run.id,step.memberId);
       await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
       this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'delib-assembly-failed', message: assembly.error.message, stage: step.stage });
       pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
@@ -1888,7 +1893,7 @@ export class DispatchWorker {
         this.db.transaction(()=>{
           this.casTurn(turnId,'CANCELLED');
           const marked=this.refundDelibReservation(run.id,turnId,accStage,accStage!=='front'&&budget.tailReservationByStage[accStage]>0);
-          this.db.prepare("UPDATE run_participants SET status='unavailable' WHERE run_id=? AND member_id=? AND status IN ('pending','late')").run(run.id,step.memberId);
+          this.db.prepare("UPDATE run_participants SET status='unavailable' WHERE run_id=? AND member_id=? AND status IN ('pending','late','completed')").run(run.id,step.memberId);
           this.audit(task,run.id,turnId,'turn.startupCancelled',{reason:'研讨已中断或同轮结果未知；未请求startTurn',classification:'confirmed-not-started',sessionClose:closeOutcome,budgetRefunded:Boolean(marked)});
         })();
         this.releaseAdmission(turnId);await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);
@@ -1908,6 +1913,7 @@ export class DispatchWorker {
         inputBundleId: bundleId,
         text: assembly.value.text,
         stage: assembly.value.stageKey,
+        repairOnly: isRepair,
         images:materials.value.images,
         imageConfigurationKey:imageCapability.identityKey??undefined,
         outputSchema:deliberationOutputSchema(step.stage),
@@ -1956,7 +1962,7 @@ export class DispatchWorker {
         this.casTurn(turnId, 'FAILED');
         if (reservation != null) this.refundDelibReservation(runId, turnId, reservation.stage, reservation.restoreTail);
         else this.settleDelibBudget(runId);
-        this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, step.memberId);
+        this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','completed')").run(runId, step.memberId);
         this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started', ...extra });
       });
       tx();
@@ -2092,7 +2098,10 @@ export class DispatchWorker {
     const deadline = turnCollab.turnDeadlineMs != null && turnCollab.turnDeadlineMs > 0
       ? Date.now() + turnCollab.turnDeadlineMs
       : null;
-    const interruptDeadline = deadline == null ? null : deadline + this.interruptGraceMs;
+    let interruptDeadline = deadline == null ? null : deadline + this.interruptGraceMs;
+    const repair=this.db.prepare("SELECT 1 FROM agent_turns WHERE id=? AND turn_purpose='format_repair' AND stage_key LIKE 'delib.%'").get(turnId)!=null;
+    let lastRepairActivity=Date.now();
+    let interruptReason='no-terminal-after-deadline';
     const iterator = adapter.events({ id: sessionId } as never)[Symbol.asyncIterator]();
     let interruptSent = false;
     let stopConfirmationDeadline: number | null = null;
@@ -2130,6 +2139,7 @@ export class DispatchWorker {
       }
       const deadlineCandidates = [
         interruptSent ? interruptDeadline : deadline,
+        repair&&!interruptSent?lastRepairActivity+this.formatRepairIdleMs:null,
         stopConfirmationDeadline,
       ].filter((value): value is number => value != null);
       const wakeAt = deadlineCandidates.length === 0 ? null : Math.min(...deadlineCandidates);
@@ -2156,8 +2166,16 @@ export class DispatchWorker {
           });
           break;
         }
-        if (deadline != null && !interruptSent && at >= deadline) {
+        const repairWaiting=repair&&this.db.prepare("SELECT 1 FROM agent_turns WHERE id=? AND status IN ('WAITING_APPROVAL','WAITING_INPUT')").get(turnId)!=null;
+        if(repairWaiting)lastRepairActivity=at;
+        const repairStalled=repair&&!repairWaiting&&at-lastRepairActivity>=this.formatRepairIdleMs;
+        if (!interruptSent && (deadline != null && at >= deadline || repairStalled)) {
           interruptSent = true;
+          interruptDeadline=at+this.interruptGraceMs;
+          if(repairStalled){
+            interruptReason='format-repair-idle-timeout';
+            this.audit(task,runId,turnId,'run.formatRepairStalled',{idleMs:this.formatRepairIdleMs,message:'格式修复长时间无响应，已请求中断；保留已有材料，不自动重复业务执行'});
+          }
           // interrupt 限时发送：不 await 其完成；宽限由主循环计时（挂起也不影响）。
           void Promise.race([
             adapter.interrupt({ id: sessionId } as never, turnId),
@@ -2194,6 +2212,7 @@ export class DispatchWorker {
         this.audit(task,runId,turnId,'turn.unattributedEvent',{eventKey:event.eventKey,kind:event.kind});
         continue;
       }
+      if(repair&&event.turnId===turnId)lastRepairActivity=Date.now();
       const turnRow = this.db
         .prepare('SELECT status FROM agent_turns WHERE id = ?')
         .get(turnId) as { status: string } | undefined;
@@ -2233,7 +2252,7 @@ export class DispatchWorker {
     const stopExpired = stopConfirmationDeadline != null && Date.now() >= stopConfirmationDeadline;
     this.settleUnknown(task, runId, turnId,
       stopExpired ? 'stop-confirmation-grace-expired'
-        : interruptSent ? 'no-terminal-after-deadline'
+        : interruptSent ? interruptReason
           : stopInterruptSent ? 'no-terminal-after-user-stop'
             : 'no-terminal-after-interrupt');
   }
@@ -2354,7 +2373,7 @@ export class DispatchWorker {
         if (stageKey.startsWith('delib.')) {
           // 研讨轮结果不确定：成员级缺席（E4），运行继续——不因单成员 UNKNOWN 杀死整个研讨。
           const memberRow = this.db.prepare('SELECT member_id FROM agent_turns WHERE id = ?').get(turnId) as { member_id: string };
-          this.db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, memberRow.member_id);
+          this.db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','completed')").run(runId, memberRow.member_id);
           this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'UNKNOWN', reason, memberAbsenced: memberRow.member_id });
         } else {
           this.db.prepare(`UPDATE workflow_runs SET status = 'INTERRUPTED' WHERE id = ?`).run(runId);
@@ -3068,7 +3087,7 @@ export class DispatchWorker {
         const tx = this.db.transaction(() => {
           this.casTurn(turnId, 'FAILED');
           this.settleDelibBudget(runId);
-          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, baseStep.memberId);
+          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','completed')").run(runId, baseStep.memberId);
           this.audit(task, runId, turnId, 'run.stepFailed', { stage: baseStep.stage, message: out.error.message });
         });
         tx();
@@ -3107,10 +3126,11 @@ export class DispatchWorker {
         this.settleDelibBudget(runId);
         if (repairTurn == null) {
           this.kvSet(`delib:repair:${repairKey}`, out.value.needsRepair ?? '格式无效');
+          this.kvSet(`delib:repair-source:${repairKey}`, JSON.stringify({turnId,text:event.finalText??'',hash:createHash('sha256').update(event.finalText??'').digest('hex')}));
           this.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(repairKey, task.stop_generation); // 意图入队代次（迁移 034）
           this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: [out.value.needsRepair ?? ''], repairEnqueued: repairKey });
         } else {
-          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, baseStep.memberId);
+          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','completed')").run(runId, baseStep.memberId);
           this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: [out.value.needsRepair ?? ''], repairExhausted: true });
         }
       });
@@ -3134,8 +3154,8 @@ export class DispatchWorker {
         if (userStop) {
           settleStoppedDeliberation(this.db,task.id,runId);
         } else if (baseStep != null) {
-          this.db.prepare("UPDATE run_participants SET status = ? WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')")
-            .run(event.code === 'INTERRUPTED' ? 'absent' : 'failed', runId, baseStep.memberId);
+          this.db.prepare("UPDATE run_participants SET status = ? WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','completed')")
+            .run(event.code === 'INTERRUPTED' && baseStep.purpose!=='format_repair' ? 'absent' : 'failed', runId, baseStep.memberId);
         }
         this.audit(task, runId, turnId, 'turn.statusChanged', { status: userStop ? 'CANCELLED' : 'FAILED', code: event.code, message: event.message, source: userStop ? 'user-stop' : 'member-terminal' });
       });

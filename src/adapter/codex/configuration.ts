@@ -267,12 +267,6 @@ function sameBytes(left:Uint8Array,right:Uint8Array):boolean {
   return true;
 }
 
-function startsWithBytes(value:Uint8Array,prefix:Uint8Array):boolean {
-  if(value.length<prefix.length)return false;
-  for(let i=0;i<prefix.length;i++)if(value[i]!==prefix[i])return false;
-  return true;
-}
-
 function canonicalDirectory(path:string):string|null {
   if(!isAbsolute(path))return null;
   try{
@@ -307,12 +301,6 @@ function directProjectTableRoots(text:string):string[]|null {
   return multiline==null?roots:null;
 }
 
-function projectRootCounts(roots:readonly string[]):Map<string,number> {
-  const counts=new Map<string,number>();
-  for(const root of roots)counts.set(root,(counts.get(root)??0)+1);
-  return counts;
-}
-
 function trustedProjectAppendRoots(suffix:string):string[]|null {
   const lines=suffix.replace(/\r\n?/g,'\n').split('\n');
   const roots:string[]=[];
@@ -338,6 +326,37 @@ function trustedProjectAppendRoots(suffix:string):string[]|null {
     roots.push(root);
   }
   return roots.length===0?null:roots;
+}
+
+/** CLI may insert trust tables before existing tables instead of appending.
+ * Remove only new, complete trusted tables; retain all other non-boundary bytes,
+ * including multiline values, comments and existing trust decisions. */
+function removeInitializedTrust(text:string,existingRoots:readonly string[],cwd:string,allowed:readonly string[]):{text:string;roots:string[]}|null {
+  if(directProjectTableRoots(text)==null)return null;
+  const chunks:string[][]=[[]];
+  let multiline:'"""'|"'''"|null=null;
+  for(const line of text.replace(/\r\n?/g,'\n').split('\n')){
+    if(multiline==null&&tomlSection(line)!=null)chunks.push([line]);
+    else chunks[chunks.length-1]!.push(line);
+    multiline=tomlLineState(line,multiline).multiline;
+  }
+  const roots:string[]=[],kept:string[]=[];
+  for(const chunk of chunks){
+    const section=tomlSection(chunk[0]??'');
+    if(section?.kind==='table'&&section.path?.length===2&&section.path[0]==='projects'){
+      const raw=section.path[1]!,root=canonicalDirectory(raw);
+      const exists=existingRoots.some(old=>old===raw||(root!=null&&canonicalDirectory(old)!=null&&sameCanonicalPath(canonicalDirectory(old)!,root)));
+      if(!exists){
+        if(root==null||roots.some(previous=>sameCanonicalPath(previous,root))
+          ||(!allowed.some(candidate=>sameCanonicalPath(candidate,root))&&isWithinPath(root,cwd))
+          ||trustedProjectAppendRoots(chunk.join('\n'))?.length!==1)return null;
+        roots.push(root);continue;
+      }
+    }
+    while(chunk.length>0&&chunk[chunk.length-1]!.trim()==='')chunk.pop();
+    kept.push(...chunk);
+  }
+  return{text:kept.join('\n').trimEnd(),roots};
 }
 
 /** Snapshot the exact effective Codex inputs immediately before preparation.
@@ -383,39 +402,24 @@ function compareCodexConfigurationStates(
   if(changed.length===0)return{ok:true,outcome:'unchanged',trustInitializedRoots:[],reason:null};
   const allowed=allowedTrustRoots.map(canonicalDirectory);
   if(allowed.some(root=>root==null))return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'unverified-trust-root'};
-  const allowedSet=new Set(allowed as string[]);
   const initialized:Record<string,string>={};
   const globalConfigPath=join(previous.home,'config.toml');
   for(const pair of changed){
     if(pair.after.path!==globalConfigPath)return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'non-global-trust-append'};
-    if(!pair.before.present||!pair.after.present||!startsWithBytes(pair.after.bytes!,pair.before.bytes!)){
+    if(!pair.after.present){
       return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'non-append-change'};
     }
-    const beforeText=new TextDecoder('utf-8',{fatal:true}).decode(pair.before.bytes!);
+    const beforeText=pair.before.present?new TextDecoder('utf-8',{fatal:true}).decode(pair.before.bytes!):'';
     const afterText=new TextDecoder('utf-8',{fatal:true}).decode(pair.after.bytes!);
-    const suffix=afterText.slice(beforeText.length);
-    if(beforeText.length>0&&!beforeText.endsWith('\n')&&!suffix.startsWith('\n')&&!suffix.startsWith('\r\n')){
-      return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'non-append-change'};
-    }
-    const appended=trustedProjectAppendRoots(suffix);
     const existing=directProjectTableRoots(beforeText);
-    const complete=directProjectTableRoots(afterText);
-    if(appended==null||existing==null||complete==null)return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'existing-or-invalid-trust'};
-    const expected=projectRootCounts(existing);
-    for(const root of appended)expected.set(root,(expected.get(root)??0)+1);
-    const actual=projectRootCounts(complete);
-    if(expected.size!==actual.size||[...expected].some(([root,count])=>actual.get(root)!==count)){
+    if(existing==null)return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'existing-or-invalid-trust'};
+    const baseline=removeInitializedTrust(beforeText,existing,previous.cwd,allowed as string[]);
+    const normalized=removeInitializedTrust(afterText,existing,previous.cwd,allowed as string[]);
+    if(baseline==null||normalized==null)return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'existing-or-invalid-trust'};
+    if(normalized.text!==baseline.text||normalized.roots.length===0){
       return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'existing-or-invalid-trust'};
     }
-    const existingCanonical=new Set(existing.map(canonicalDirectory).filter((root):root is string=>root!=null));
-    for(const rawRoot of appended){
-      const root=canonicalDirectory(rawRoot);
-      if(root==null||!allowedSet.has(root))return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'unexpected-trust-change'};
-      if([...existingCanonical].some(exists=>sameCanonicalPath(exists,root))||initialized[root]!=null){
-        return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'existing-or-invalid-trust'};
-      }
-      initialized[root]=root;
-    }
+    for(const root of normalized.roots)initialized[root]=root;
   }
   return{ok:true,outcome:'trust-initialized',trustInitializedRoots:Object.values(initialized),reason:null};
 }
@@ -427,10 +431,18 @@ export function codexConfigurationPreparationUnchanged(
   after:CodexPreparationConfigurationEvidence,
   allowedTrustRoots:string[],
 ):boolean {
+  return compareCodexConfigurationPreparationEvidence(before,after,allowedTrustRoots).ok;
+}
+
+export function compareCodexConfigurationPreparationEvidence(
+  before:CodexPreparationConfigurationEvidence,
+  after:CodexPreparationConfigurationEvidence,
+  allowedTrustRoots:readonly string[],
+):CodexPreparationConfigurationComparison {
   const previous=preparationEvidence.get(before);
   const current=preparationEvidence.get(after);
-  if(previous==null||current==null||before.fingerprintVersion!==CODEX_CONFIGURATION_FINGERPRINT_VERSION||after.fingerprintVersion!==CODEX_CONFIGURATION_FINGERPRINT_VERSION)return false;
-  return compareCodexConfigurationStates(previous,current,allowedTrustRoots).ok;
+  if(previous==null||current==null||before.fingerprintVersion!==CODEX_CONFIGURATION_FINGERPRINT_VERSION||after.fingerprintVersion!==CODEX_CONFIGURATION_FINGERPRINT_VERSION)return{ok:false,outcome:'changed',trustInitializedRoots:[],reason:'unverified-evidence'};
+  return compareCodexConfigurationStates(previous,current,allowedTrustRoots);
 }
 
 /** Detailed diagnostic compare that captures the after window itself. */

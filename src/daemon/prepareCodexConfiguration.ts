@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {isAbsolute,relative,sep} from 'node:path';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
-import { codexConfigurationIdentity,captureCodexConfigurationPreparation,codexConfigurationPreparationUnchanged } from '../adapter/codex/configuration.ts';
+import { codexConfigurationIdentity,captureCodexConfigurationPreparation,compareCodexConfigurationPreparationEvidence } from '../adapter/codex/configuration.ts';
 import { resolveMemberRuntime } from './memberRuntime.ts';
 import { physicalRootIdentity,projectWriteAccess } from './projectWriteAccess.ts';
 
@@ -64,12 +64,14 @@ export function createCodexConfigurationPreparation(db: ZhongshuoDatabase) {
       };
       assertScope();
       const after=captureCodexConfigurationPreparation(root);
-      if(!codexConfigurationPreparationUnchanged(before,after,trustRoots))throw Error('配置准备期间有效 Codex 配置或环境变化；未提交，输入保留');
+      const comparison=compareCodexConfigurationPreparationEvidence(before,after,trustRoots);
+      if(!comparison.ok)throw Error(`配置准备期间有效 Codex 配置或环境变化（${comparison.reason}）；未提交，输入保留`);
       return Object.freeze({memberId,projectId,assertCurrent:()=>{
         assertScope();
-        // No trust exception after initialization closes: every byte/environment
-        // input must still equal the proof accepted inside that exact window.
-        if(captureCodexConfigurationPreparation(root).identityV1!==after.identityV1)throw Error('配置准备后有效 Codex 配置或环境变化；未提交，输入保留');
+        // After close, only new trust metadata for unrelated physical projects
+        // can change. This project's own trust and all execution inputs stay frozen.
+        const current=compareCodexConfigurationPreparationEvidence(after,captureCodexConfigurationPreparation(root),[]);
+        if(!current.ok)throw Error(`配置准备后有效 Codex 配置或环境变化（${current.reason}）；未提交，输入保留`);
       }});
     })();
     active.set(key,preparing);

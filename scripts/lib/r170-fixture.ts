@@ -64,6 +64,16 @@ async function main(){
   script=output('可以这样写：\n\n周六下午2点，来参加我们的读书会吧！带上一本喜欢的书，用5分钟分享打动你的故事。欢迎一起交流。');
   await command('message.submit',{target:{kind:'dm',projectId,conversationId:dm},body:'帮我写一段简短的读书会邀请文案。',intent:'default',mentions:[]});
   await worker.drain();
+  if(process.argv.includes('--r177')){
+    // Legacy beta.25 envelope, only inside this script's freshly created DB.
+    db.prepare("UPDATE conversations SET title='' WHERE id=?").run(dm);
+    const rows=db.prepare("SELECT id,body_json FROM messages WHERE conversation_id=? AND author_type='agent'").all(dm) as Array<{id:string;body_json:string}>;
+    for(const row of rows){
+      const body=JSON.parse(row.body_json) as {text:string;runtimeControlResult:string};
+      body.text=`\`\`\`json\n${body.runtimeControlResult}\n\`\`\`\n\n${body.text}\n\n\`\`\`json\n{"note":"普通业务 JSON，需保留"}\n\`\`\``;
+      db.prepare('UPDATE messages SET body_json=? WHERE id=?').run(JSON.stringify(body),row.id);
+    }
+  }
   const delivery=(db.prepare('SELECT current_delivery_id FROM tasks WHERE id=?').get(work.taskId) as {current_delivery_id:string|null}).current_delivery_id;
   if(delivery){db.prepare("UPDATE tasks SET status='REVIEW',review_policy='user_review' WHERE id=?").run(work.taskId);db.prepare("UPDATE task_deliveries SET review_status='pending' WHERE id=?").run(delivery);}
   script=output('座位安排和阅读流程已整理好。茶点费用需要你决定后再安排。',undefined,'是否准备茶点？建议只提供饮用水，节省预算。');

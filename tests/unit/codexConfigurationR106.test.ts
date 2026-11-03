@@ -216,7 +216,7 @@ describe('R106 Codex configuration fingerprint',()=>{
     writeFileSync(f.config,base);
     const before=f.snapshot();
     writeFileSync(f.config,base+block);
-    expect(compareCodexPreparationConfiguration(before,f.project,[f.project,f.root])).toMatchObject({ok:false,reason:'non-append-change'});
+    expect(compareCodexPreparationConfiguration(before,f.project,[f.project,f.root])).toMatchObject({ok:false,reason:'existing-or-invalid-trust'});
     writeFileSync(f.config,`${base}\n${block}`);
     expect(compareCodexPreparationConfiguration(before,f.project,[f.project,f.root])).toMatchObject({ok:true,outcome:'trust-initialized'});
   });
@@ -259,18 +259,31 @@ describe('R106 Codex configuration fingerprint',()=>{
     expect(compareCodexPreparationConfiguration(duplicate,f.project,[f.project,f.root])).toMatchObject({ok:false,reason:'existing-or-invalid-trust'});
   });
 
-  it('rejects unrelated trust appends and unknown fields even when appended at EOF',()=>{
+  it('allows unrelated trust initialization but rejects unknown execution fields',()=>{
     const f=fixture(),base='model = "fixture-model"\n';
     mkdirSync(join(f.root,'other-project'));
     writeFileSync(f.config,base);
     const unrelated=f.snapshot();
     writeFileSync(f.config,`${base}\n[projects."${join(f.root,'other-project').replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\n`);
-    expect(compareCodexPreparationConfiguration(unrelated,f.project,[f.project,f.root])).toMatchObject({ok:false,reason:'unexpected-trust-change'});
+    expect(compareCodexPreparationConfiguration(unrelated,f.project,[f.project,f.root])).toMatchObject({ok:true,outcome:'trust-initialized'});
 
     writeFileSync(f.config,base);
     const unknown=f.snapshot();
     writeFileSync(f.config,`${base}\n[projects."${f.project.replaceAll('\\','\\\\')}"]\ntrust_level = "trusted"\nunknown_policy = true\n`);
     expect(compareCodexPreparationConfiguration(unknown,f.project,[f.project,f.root])).toMatchObject({ok:false,reason:'existing-or-invalid-trust'});
+  });
+
+  it('accepts CLI trust insertion before existing tables and first-time config creation',()=>{
+    const f=fixture(),base='model = "fixture-model"\n[mcp_servers.fixture]\ncommand = "unchanged"\n';
+    const trust=`[projects.${JSON.stringify(f.project)}]\ntrust_level = "trusted"\n`;
+    writeFileSync(f.config,base);
+    const before=f.snapshot();
+    writeFileSync(f.config,base.replace('[mcp_servers.fixture]',`${trust}\n[mcp_servers.fixture]`));
+    expect(compareCodexPreparationConfiguration(before,f.project,[f.project])).toMatchObject({ok:true,outcome:'trust-initialized'});
+    rmSync(f.config);
+    const absent=f.snapshot();
+    writeFileSync(f.config,trust);
+    expect(compareCodexPreparationConfiguration(absent,f.project,[f.project])).toMatchObject({ok:true,outcome:'trust-initialized'});
   });
 
   it.each(['model','provider','mcp','permission','unknown'])('rejects preparation-window %s changes that are not the exact trust append',field=>{

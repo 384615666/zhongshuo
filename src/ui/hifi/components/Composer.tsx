@@ -2527,7 +2527,7 @@ export function Composer({
             inputDisabledReason
               ? inputDisabledReason
               : target.kind === 'dm'
-                ? `给 ${dm?.title ?? '这个成员'} 发消息…`
+                ? `给 ${dm?.title?.trim() || dm?.peerDisplayName?.trim() || members.find((member) => member.principalType === 'agent')?.displayName?.trim() || '这个成员'} 发消息…`
                 : target.kind === 'room_root'
                   ? '发送消息，可 @ 指定成员或文件…'
                   : '跟进当前任务，可 @ 指定成员或文件…'

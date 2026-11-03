@@ -64,6 +64,25 @@ const validComplete = (resultKey: string, summary = '完成：三条结论均附
   JSON.stringify({ schemaVersion: 'task-complete-v1', resultKey, changeSummary: summary, files: ['notes.md'], executedVerifications: ['读取 notes.md 并核对行号'], unexecutedVerifications: [], remainingIssues: [] });
 
 describe('单层围栏规范化（worker 正式路径）', () => {
+  it.each(['prefix','suffix'])('fenced receipt %s is validated and published as one readable reply',async position=>{
+    const {db}=rig([]);const taskId=makeTask(db,180);
+    const answer='代码验收完成。';
+    const adapter=new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:input=>{
+      const key=(input.text.match(/resultKey=([^；\n]+)/)??input.text.match(/"resultKey":"(result_[^"]+)"/))?.[1]??'missing';
+      const receipt=JSON.stringify({schemaVersion:'task-complete-v1',resultKey:key,responseKind:'work',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]});
+      const fenced=`\`\`\`json\n${receipt}\n\`\`\``;
+      const raw=position==='prefix'?`${fenced}\n\n${answer}`:`${answer}\n\n${fenced}`;
+      return [{kind:'event',event:{kind:'message.completed',messageId:'harness-receipt',text:raw}},{kind:'event',event:{kind:'turn.completed',finalText:raw}}];
+    }});
+    try{
+      const worker=new DispatchWorker({db,adapter,leaseOwner:'fenced-receipt',appDataDir:join(tmpRoot,position)});
+      await worker.runOnce();
+      expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'DONE'});
+      const rows=db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent'").all(taskId) as Array<{body_json:string}>;
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0]!.body_json)).toMatchObject({text:answer,runtimeControlResult:expect.stringContaining('task-complete-v1')});
+    }finally{await adapter.closeAllSessions();db.close();}
+  });
   it('纯函数：整文本单层围栏剥壳；内部含围栏/围栏外正文不剥', () => {
     const wrapped = '```json\n{"a":1}\n```';
     expect(stripSingleJsonFence(wrapped)).toEqual({ text: '{"a":1}', normalized: true });
@@ -306,7 +325,7 @@ describe('单层围栏规范化（worker 正式路径）', () => {
     db.close();
   }, 15_000);
 
-  it('反例：围栏外带正文 → 照旧拒绝；散文/附加键 → 照旧拒绝（原始输出保留）', async () => {
+  it('反例：围栏回执身份不匹配且带正文 → 拒绝（原始输出保留）', async () => {
     const { db, worker } = rig([]);
     const taskId = makeTask(db, 2);
     const adapter2 = new FakeRuntimeAdapter({
@@ -314,7 +333,7 @@ describe('单层围栏规范化（worker 正式路径）', () => {
       turnScriptSequencer: (input) => {
         const m = input.text.match(/resultKey=([^；\n]+)/) ?? input.text.match(/"resultKey":"(result_[^"]+)"/);
         const key = m?.[1] ?? 'result_unknown';
-        return [{ kind: 'event', event: { kind: 'turn.completed', finalText: '```json\n' + validComplete(key) + '\n```\n以上为结果。' } }];
+        return [{ kind: 'event', event: { kind: 'turn.completed', finalText: '```json\n' + validComplete(key+'-foreign') + '\n```\n以上为结果。' } }];
       },
     });
     const worker2 = new DispatchWorker({ db, adapter: adapter2, leaseOwner: 'w-dr3', appDataDir: join(tmpRoot, 'c') });

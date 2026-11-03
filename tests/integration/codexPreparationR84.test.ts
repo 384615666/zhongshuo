@@ -25,6 +25,22 @@ async function fixture(){
   return{db,project,projectId,memberId,config,prepare,raw,cmd,params,open,start};
 }
 describe('R84 Codex new-intent configuration preparation, isolated adapter fixture, zero processes/models',()=>{
+  it('accepts inserted CLI trust and another project initializing trust after the proof',async()=>{
+    const f=await fixture();try{
+      const other=join(f.project,'..','other');mkdirSync(other);
+      const base='model_provider="own"\n[mcp_servers.fixture]\ncommand="unchanged"\n';
+      writeFileSync(join(f.config,'config.toml'),base);
+      const original=f.open.getMockImplementation()!;
+      const trust=`[projects.${JSON.stringify(f.project)}]\ntrust_level="trusted"\n`;
+      f.open.mockImplementation(async input=>{writeFileSync(join(f.config,'config.toml'),base.replace('[mcp_servers.fixture]',`${trust}[mcp_servers.fixture]`));return original(input);});
+      const proof=await f.prepare(f.memberId,f.projectId);
+      writeFileSync(join(f.config,'config.toml'),base.replace('[mcp_servers.fixture]',`${trust}[projects.${JSON.stringify(other)}]\ntrust_level="trusted"\n[mcp_servers.fixture]`));
+      expect(()=>proof!.assertCurrent()).not.toThrow();
+      writeFileSync(join(f.config,'config.toml'),base.replace('own','different'));
+      expect(()=>proof!.assertCurrent()).toThrow('配置准备后');
+      expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
   it.each(['model','provider','mcp','permission','environment','existing-trust'])('rejects %s drift during preparation instead of freezing the changed configuration',async field=>{
     const f=await fixture();try{
       if(field==='existing-trust')writeFileSync(join(f.config,'config.toml'),initializedTrust(f.project).replace('"trusted"','"untrusted"'));
