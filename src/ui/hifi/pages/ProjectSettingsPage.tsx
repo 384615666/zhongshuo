@@ -167,9 +167,8 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
   }, []);
   const [stopAllOpen, setStopAllOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [pendingReview, setPendingReview] = useState<{ projectId: string; count: number } | null>(null);
-  const [pendingReviewError, setPendingReviewError] = useState<{ projectId: string; message: string } | null>(null);
   const [unfinished, setUnfinished] = useState<{ projectId: string; count: number } | null>(null);
   const [unfinishedError, setUnfinishedError] = useState<{ projectId: string; message: string } | null>(null);
   /** 同一组件可从 A 设置路由切到 B；旧回执不可回填 B，下一次渲染再绑定 B。 */
@@ -182,6 +181,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
     setCollabSaving(false);
     setBusy(false);
     setArchiveOpen(false);
+    setRemoveOpen(false);
     setStopAllOpen(false);
   }, [projectId]);
   useEffect(() => {
@@ -193,13 +193,6 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
     }).catch((e: unknown) => { if (current) setCollabError(`协作限制读取失败：${userFacingSystemText((e as Error).message ?? '')}；当前值不能当作默认值。`); });
     return () => { current = false; };
   }, [boundId]);
-  useEffect(() => {
-    let current = true;
-    void command<{ projects: Array<{ projectId: string; reviewTasks: unknown[] }> }>('mine.pending', {})
-      .then((result) => { if (current) { setPendingReview({ projectId, count: result.projects.find((p) => p.projectId === projectId)?.reviewTasks.length ?? 0 }); setPendingReviewError(null); } })
-      .catch((e: unknown) => { if (current) setPendingReviewError({ projectId, message: (e as Error).message }); });
-    return () => { current = false; };
-  }, [projectId]);
   useEffect(() => {
     let current = true;
     let inFlight = false;
@@ -347,10 +340,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                 hint="开启后，任务交付会等你验收才算完成；关闭后，满足交付要求即完成。只影响之后创建的任务。"
                 checked={project.taskReviewEnabled ?? false}
                 onChange={(v) => { const targetName = project.displayName; void setTaskReviewReal(project.id, v, project.revision).then((r) => { if (!r.ok) toast(`「${targetName}」验收开关保存失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}
-              >
-                {pendingReview?.projectId === project.id && pendingReview.count > 0 ? <button className="pset-link" onClick={() => navigate('/pending')} title="去待我处理逐条验收">还有 {pendingReview.count} 个已有任务等待验收 → 查看</button> : null}
-                {pendingReviewError?.projectId === project.id ? <span className="small faint">待验收数量读取失败：{userFacingSystemText(pendingReviewError.message ?? '')}（去待我处理查看）</span> : null}
-              </SwitchRow>
+              />
               <div className="pset-note">
                 关闭验收不等于自动批准权限、自动提交或推送 Git。
               </div>
@@ -420,6 +410,22 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                 <Icon name="octagon" size={12} /> 项目全停
               </button>
             </div>
+            <div className="row" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div className="strong" style={{ fontSize: 12 }}>归档与项目管理</div>
+                <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
+                  查看本项目已归档的项目与房间，或解除本项目在应用中的关联。
+                </div>
+              </div>
+              <div className="row tight" style={{ flexWrap: 'wrap' }}>
+                <button className="btn sm" onClick={() => navigate('/archive?project=' + project.id)}>
+                  <Icon name="archive" size={12} /> 归档管理
+                </button>
+                <button className="btn sm danger" onClick={() => setRemoveOpen(true)}>
+                  <Icon name="trash" size={12} /> 移除项目
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -448,7 +454,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                     }
                     setBusy(false);
                     setArchiveOpen(false);
-                    if (r.ok) { toast('项目已归档（历史保留只读）——可在项目 ⋯ 菜单恢复', 'success'); navigate(`/project/${targetId}`); }
+                    if (r.ok) { toast('项目已归档（历史保留只读）——可在项目设置的归档管理中恢复', 'success'); navigate(`/project/${targetId}`); }
                     else toast(`归档被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
                   });
                 }}
@@ -462,6 +468,46 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
             归档后项目退出日常项目列表，历史保留只读；恢复后不会补跑归档期间的任务。磁盘文件与历史记录不受影响。
             失败记录可以保留；仍在排队、执行或等待处理的任务需先结束。
           </div>
+        </Modal>
+      ) : null}
+
+      {removeOpen ? (
+        <Modal
+          size="sm"
+          title={'移除项目「' + project.displayName + '」'}
+          onClose={() => setRemoveOpen(false)}
+          footer={
+            <>
+              <div className="spacer" />
+              <button className="btn" onClick={() => setRemoveOpen(false)}>取消</button>
+              <button
+                className="btn danger"
+                disabled={busy}
+                onClick={() => {
+                  const targetId = project.id;
+                  const targetName = project.displayName;
+                  setBusy(true);
+                  void projectLifecycleReal(targetId, project.revision, 'remove').then((r) => {
+                    setBusy(false);
+                    setRemoveOpen(false);
+                    if (r.ok) {
+                      toast('「' + targetName + '」已移除关联（磁盘与历史不动；重新打开同目录即可恢复）', 'success');
+                      navigate('/welcome');
+                    } else {
+                      toast('移除被拒：' + userFacingSystemText(r.error ?? ''), 'error');
+                    }
+                  });
+                }}
+              >
+                移除项目
+              </button>
+            </>
+          }
+        >
+          <div className="small muted" style={{ lineHeight: 1.75 }}>
+            移除只会解除项目与应用的关联，不删除磁盘文件和历史记录。之后可在欢迎页重新打开同一目录恢复。
+          </div>
+          <div className="small faint" style={{ marginTop: 8 }}>目录：{project.rootPath}</div>
         </Modal>
       ) : null}
 

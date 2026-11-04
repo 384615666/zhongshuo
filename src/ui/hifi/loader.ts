@@ -838,13 +838,15 @@ export function openSidebarProject(projectId: string): void {
   const path = pathOf(window.location.hash.replace(/^#/, ''));
   const dm = path === '/dm' || path.startsWith('/dm/');
   const members = path === '/members' || /^\/project\/[^/]+\/members(?:\/|$)/.test(path);
+  const files = path === '/files' || /^\/project\/[^/]+\/files$/.test(path);
+  const fileTab = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('tab');
   if (dm && state.activeProjectId === projectId) return;
   const first = state.rooms.find(room => room.projectId === projectId && room.archivedAt == null)
     ?? state.sidebarRoomIndexes[projectId]?.rooms.find(room => room.archivedAt == null);
   void switchFocusProject(projectId, { expand: false }).catch((error: unknown) => {
     if (getState().activeProjectId === projectId) toast(`项目读取失败：${(error as Error).message}`, 'error');
   });
-  navigate(dm ? '/dm' : members ? `/project/${projectId}/members`
+  navigate(dm ? '/dm' : members ? `/project/${projectId}/members` : files ? `/project/${projectId}/files${fileTab === 'git' ? '?tab=git' : '?tab=files'}`
     : first ? `/project/${projectId}/room/${first.id}` : `/project/${projectId}`);
 }
 

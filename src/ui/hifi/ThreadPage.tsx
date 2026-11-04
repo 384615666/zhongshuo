@@ -101,7 +101,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       const r = await command<{ followed: boolean; muted: boolean }>('thread.subscribe', { threadId, ...patch });
       setSub({ followed: r.followed, muted: r.muted });
       recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
-      toast(patch.mute === true ? '已静音（新回复不提醒；待办保留）' : patch.follow === true ? '已关注（有新回复进「待我处理」）' : '订阅已更新', 'success');
+      toast(patch.mute === true ? '已静音（新回复不提醒；待办保留）' : patch.follow === true ? '已关注（会在活动流中保留）' : '订阅已更新', 'success');
     } catch (e) { toast(`订阅更新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setSubBusy(false); }
   };
@@ -390,7 +390,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           className="btn ghost sm"
           disabled={subBusy}
           data-zs-thread-follow={sub?.followed ? '1' : '0'}
-          title={sub?.followed === true ? '已关注：有新回复进「待我处理」（点击取消）' : '关注本线程：有新回复进「待我处理」'}
+          title={sub?.followed === true ? '已关注：会在活动流中保留（点击取消）' : '关注本线程：有新回复会在活动流中保留'}
           onClick={() => void toggleSub({ follow: !(sub?.followed ?? false) })}
         >
           <Icon name="star" size={13} />{sub?.followed === true ? '已关注' : '关注'}

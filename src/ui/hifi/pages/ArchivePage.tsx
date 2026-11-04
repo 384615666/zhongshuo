@@ -1,14 +1,13 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 归档管理（R66 P4——原型 ArchivePage 的正式接线版）：**一个页面、多个入口**（原型 §八/§九）：
- *  · 路由 /archive（项目 ⋯ 菜单「归档项目…」确认后的落点 / 项目设置归档入口）；
+ *  · 路由 /archive（项目设置中的归档管理入口）；
  *  · 应用设置嵌入同一组件（SettingsPage 数据与存储分区）。
  * 组织方式=一级项目、二级房间；兼容两种来源：已归档项目（房间随项目只读）与
  * 活跃项目里各自归档的房间。
  *
  * 正式命令（R65 起）：恢复项目=project.lifecycle unarchive（revision CAS）；恢复房间=
- * room.archive unarchive（revision CAS）。归档动作本身在各自主场（项目 ⋯ 菜单/项目设置/
- * 房间设置）发起——本页只做**查看历史 + 恢复**，不动磁盘文件与历史数据。
+ * room.archive unarchive（revision CAS）。归档动作本身在各自主场（项目设置/房间设置）发起——本页只做**查看历史 + 恢复**，不动磁盘文件与历史数据。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';

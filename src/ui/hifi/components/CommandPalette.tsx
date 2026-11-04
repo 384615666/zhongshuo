@@ -30,7 +30,6 @@ const PAGES: PaletteItem[] = [
   { key: 'page-activity', section: '动作', label: '活动流', icon: 'activity', hint: '页面', go: () => navigate('/activity') },
   { key: 'page-files', section: '动作', label: '文件与 Git', icon: 'diff', hint: '页面', go: () => navigate('/files') },
   { key: 'page-members', section: '动作', label: '成员管理', icon: 'users', hint: '页面', go: () => navigate('/members') },
-  { key: 'page-pending', section: '动作', label: '待我处理', icon: 'inbox', hint: '页面', go: () => navigate('/pending') },
   { key: 'page-dm', section: '动作', label: '私信', icon: 'message-square', hint: '页面', go: () => navigate('/dm') },
   { key: 'page-settings', section: '动作', label: '设置与帮助', icon: 'settings', hint: '页面', go: () => navigate('/settings') },
 ];

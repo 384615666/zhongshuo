@@ -19,7 +19,7 @@ export async function toggleThreadSubscription(threadId: string, patch: { follow
       subscriptions: { ...s.subscriptions, [threadId]: { followed: r.followed, muted: r.muted } },
     }));
     recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
-    toast(patch.mute === true ? '已静音（未读/通知聚合排除；待办保留）' : patch.follow === true ? '已关注（有新回复进「待我处理」）' : '订阅已更新', 'success');
+    toast(patch.mute === true ? '已静音（未读/通知聚合排除；待办保留）' : patch.follow === true ? '已关注（有新回复会在活动流中保留）' : '订阅已更新', 'success');
   } catch (e) {
     toast(`订阅更新失败：${(e as Error).message}`, 'error');
   }

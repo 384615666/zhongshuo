@@ -1,4 +1,10 @@
 # 续工记录（continuation）
+## 2026-11-04：项目菜单、待处理入口与文件/Git 切换布局修正
+
+按用户反馈完成三项 UI 调整：移除侧栏/命令面板/项目设置中的「待我处理」入口与跳转文案，保留线程内已有验收能力；项目 ⋯ 菜单只保留置顶项目、项目主页、项目设置，编辑信息、归档、移除与归档管理统一收进项目设置，新增移除确认与归档管理入口；标题栏切换项目时识别文件/Git 路由并保留当前页签，避免从 Git 页切换项目后整体布局错位。
+
+验证：hifi 类型检查通过；UI 构建通过（保留既有 import.meta 警告）；浏览器回归 uiR135 + navigationPinsR160 为 2 文件 3 项通过；隔离文件页截图 codex-ui-files 通过，文件页顶栏 42px、无错误。已基于提交 879e900 生成便携包 BUILD `bld_09f7e4521ff48df1`，桌面验证全通过；生成 beta.27 安装器 BUILD `bld_f9f31a5a4d4a2885`，667 文件、160178749 字节，SHA256 `258c53b76bdc0c180c8970d0e8b92c6dc1156708b6846b3fdb8c832302efc60a`；beta.26→beta.27 合成安装/升级/卸载 32/32 通过，真实模型调用 0。verify-pack 的 daemon 启动/关闭、受管任务/停止、依赖缺失拒绝均通过，截止恢复断言仍受既有 `releaseProtection` 状态变化语义影响而报 1 项失败；未操作用户运行数据。
+
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
@@ -9,6 +15,20 @@
 旧根/子任务 turn 增加续接隔离事件，迟到正文/成功/失败只留审计；旧协调停止收尾不得再次取消已接受的新请求。补测发现研讨续接原先未带上已有成员发言，已将本次请求序号之前的历史文本带入上下文（最近24条、每条至多2000字符，排除仅记录和本轮新初稿）。操作手册同步。schema61与版本号不变。
 
 验证：新 R181 10项通过（含真实 fake worker 停止/续接、已有成员初稿、模式切换、重复提交、迟到事件、再次停止、归档、过期快照、记录/非法输入）；最终相关 **49文件624项通过**；前一修复快照完整跟踪回归纳入367文件（365有执行通过/2整文件跳过），3275通过/16跳过/0失败，之后最终源码另做上述624项定向验证，不冒称最终快照完整重跑。跟踪类型574入口0错误、hifi类型0错误、lint仅10条既有问题/0新增、最终daemon打包通过。证据 `dist/r181/`，报告 [R181](../reviews/r181-stopped-task-continue-20261104.md)。未打安装包、未提交推送、未安装、未操作用户运行程序与数据；原R180等未提交文件保留。
+
+## 2026-11-04：R180 beta.26 暴力/异常操作对抗测试（复测 R130/R131 + 新版本新面；仅测试，未改产品）
+
+用户指出距上次暴力测试已更新多个版本，要求重新暴力测试并复测旧发现。对最新交付 `0.1.3-beta.26`（安装器 `bld_db2ef31489596b19` / 干净便携 `bld_754bf5f9de2d8cd5` / 用户已安装版同 build，产品提交 `80e25ad`，schema 61）用 8 个并行流做了 168 行复测矩阵 + 新面测试：R180 新增 5 个 vitest 文件 135 用例（119 passed + 16 expected fail）+ 导航 33 run/186 断言、输入 17 组/112 步/362 断言、打包 37 场景、数据 42、预览 33、协议 35、新面 38、静态 73 项。全程 fake、0 真实模型调用、产品源码/包/用户数据未改；用户运行中的 Zhongshuo.exe 未触碰。
+
+结论：**上轮发现基本未修**——R130 14 缺陷 12 still + 2 obsolete（PATH-01/02 旧启动器已移除）；R131 73 项唯一发现仅 3 fixed、68 still（含 2 high：Claude 适配器畸形输出可杀死 daemon `cliAdapter.ts:708-753`、Git 选项注入 `gitWrite.ts:1081-1086/1224`）、1 obsolete、1 changed-semantics。汇总去重 168 行：still 145 / fixed 8 / obsolete 9 / changed-semantics 6。新发现 34 缺陷（**3 high**：①远程已配对设备可 `member.setRuntime` 任意 executable 带 effort 即本机执行，`commands.ts` 无 remoteAudit 门禁；②`git.*` 不在 `REMOTE_BLOCKED_METHODS`，远程可达 Git 选项注入；③崩溃恢复后 `task.continue` 被 `UNIQUE coordination_runs` 吞掉、任务无法继续）+ 11 medium（含 `/pair` 落库放大、导出无上限、同步 RSA 阻塞、audience 远程可达、MCP 配置 fail-open、`R180-WRK-N1` 提醒绕过房间归档等）+ 19 low + 1 info；另 18 新边界、15 新限制。R129 修复点与本轮新 UI（pin/未读/房间头/设置单页/成员卡/看板归档/DM 分组/线程分页/回执投影/托盘）全部守住；schema 60→61 迁移与安装版升级数据保留全部通过；产品干净源码全量回归 362/366 passed（唯一 `coordinationManifestR154` 单条 5s 超时，单独 8/8 通过，属并发负载 flake）。
+
+环境事件（已恢复/披露）：合成安装器两次用默认 `/TASKS=desktopicon` 覆盖用户桌面/开始菜单快捷方式与 HKCU 卸载项/AUMID——Lead 记录并恢复、pkg 流卸载全部合成安装并改零副作用参数重跑（最终 shell diff 为空）；另一次便携默认数据根观察写入 `%APPDATA%\zhongshuo`（旧休眠目录，未删文件）。报告 [R180](../reviews/r180-adversarial-beta26-20261104.md)；证据 `dist/r180-adversarial/`（ignored）；新增测试/脚本未 git 提交。下一步需用户决定修复优先级（建议先 RTC-01、Git 远程门禁、CTN-01、UPG-01/ADP-01，再评估旧 R130/R131 清单）。
+
+## 2026-11-04：R179 已安装 beta.26 的四项修复回归
+
+用户安装 `0.1.3-beta.26` 后指定全部成员使用 DeepSeek。定向自动化 5 文件、114 项通过；真实安装版确认 Harness 普通业务 JSON 保留而内部 `task-complete-v1`/`schemaVersion`/`resultKey` 不显示，Codex 私信占位和列表预览正常，外部未信任临时项目的 Codex 首次配置准备不再误拒。全 DeepSeek 独立研讨在 IND 与 RATIFY 各经一次 `.fx` 格式修复后达到 run `SUCCEEDED / PUBLISH`、task `DONE`，共 19 turn；19 份 change set 的 608 对前后文件记录变化为 0，验收项目未被修改。
+
+仍需保留的边界：Harness 在 `bypassPermissions` 下忽略了“只返回纯文本、不访问文件、不执行命令”的自然语言要求，运行了多次 `pwsh`/Python 探测；记录指向系统临时路径，项目快照未变化，不能据此宣称完整权限受限。自动创建的未配置项目仍继承上游 Codex 默认 `gpt-6.1-sol`，已有 DeepSeek 绑定未受影响。本轮无产品源码、构建、安装或发布变化，未保存模型设置。详见 [R179](../reviews/r179-beta26-installed-regression-20261104.md)。
 
 ## 2026-11-03：R178 beta.26 已打包发布
 

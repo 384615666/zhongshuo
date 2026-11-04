@@ -1179,7 +1179,7 @@ export interface AttentionItem {
   detail: string;
   createdAt: number;
   readAt?: number;
-  /** 仅"关于我"的动作类才进待我处理；普通讨论只积累线程未读 */
+  /** 仅"关于我"的动作类才进入提醒聚合；普通讨论只积累线程未读 */
   requiresAction: boolean;
 }
 

@@ -20,11 +20,10 @@ import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
-import { openExternalDeepLink, loadSidebarRooms } from './loader';
+import { openExternalDeepLink, loadSidebarRooms, switchFocusProject } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
 import { MemberDetailPage } from './pages/MemberDetailPage';
-import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
@@ -36,9 +35,8 @@ import { ProjectHomePage, WelcomePage } from './pages/ProjectHome';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { TasksBoardPage } from './pages/TasksBoard';
 import { ArchivePage } from './pages/ArchivePage';
-import { updateProjectReal, projectLifecycleReal, switchFocusProject } from './loader';
 import { toggleProjectPinned } from './data/actions-nav';
-import { Menu, MenuItem, Modal } from './components/ui';
+import { Menu, MenuItem } from './components/ui';
 import { toggleProjectExpanded } from './data/actions-nav';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
@@ -50,16 +48,6 @@ const LEGACY_TARGETS: Record<string, { label: string; locate: () => string | nul
   git: { label: '文件与 Git', locate: () => togglePanel('files-toggle', 'files') },
   tasks: { label: '任务看板', locate: () => togglePanel('board-toggle', 'board') },
   members: { label: '成员管理', locate: () => openDetails('project-settings') },
-  pending: {
-    label: '待我处理',
-    // scrollIntoView 正常返回 undefined——先判存在再滚动（review-r47 §5 反例）。
-    locate: () => {
-      const el = document.getElementById('pending-list');
-      if (el == null) return '未找到待我处理列表';
-      el.scrollIntoView({ block: 'start' });
-      return null;
-    },
-  },
   settings: { label: '设置与帮助', locate: () => openDetails('help-panel') },
   remote: { label: '远程访问设置', locate: () => openDetails('remote-settings') },
 };
@@ -201,12 +189,9 @@ export default function App() {
   const startupSignatureRef = useRef<Set<string> | null>(null);
   const lastNotifiedSignatureRef = useRef<string>('');
   const [sidebarOpen] = useState(true);
-  /* R65：侧栏项目 ⋯ 菜单与其弹窗（编辑信息/归档/移除）+ 项目行 + 建房。 */
+  /* R65：侧栏项目 ⋯ 菜单（置顶/主页/设置）+ 项目行 + 建房。 */
   const [projectMenuFor, setProjectMenuFor] = useState<string | null>(null);
   const [projectMenuAt, setProjectMenuAt] = useState<{ x: number; y: number } | null>(null);
-  const [editInfoFor, setEditInfoFor] = useState<string | null>(null);
-  const [archiveProjFor, setArchiveProjFor] = useState<string | null>(null);
-  const [removeProjFor, setRemoveProjFor] = useState<string | null>(null);
   const [createRoomFor, setCreateRoomFor] = useState<string | null>(null);
   const [folderPickerBusy, setFolderPickerBusy] = useState(false);
   const folderIntentRef = useRef(0);
@@ -384,7 +369,6 @@ export default function App() {
     members: /^\/project\/[^/]+\/(?:members|member\/[^/]+)$/.test(path) || path === '/members',
     settings: path === '/settings',
     dm: path === '/dm' || path.startsWith('/dm/') || /^\/project\/[^/]+\/dm$/.test(path),
-    pending: path === '/pending',
   };
 
   return (
@@ -576,14 +560,6 @@ export default function App() {
                 <span className="side-marks"><span className="nav-dot" title={recoveryOrigin === 'runtime' ? '本次运行新出现' : '启动时已有'} style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span>
               </button> : null}
               <button
-                className={`side-item${navActive.pending ? ' active' : ''}`}
-                title="查看需要你处理的事项"
-                onClick={() => navigate('/pending')}
-              >
-                <Icon name="inbox" size={14} />
-                <span className="side-item-label">待我处理</span>
-              </button>
-              <button
                 className={`side-item${navActive.settings ? ' active' : ''}`}
                 title="应用设置（含操作手册与项目链接）"
                 onClick={() => navigate('/settings?section=general')}
@@ -610,64 +586,9 @@ export default function App() {
             <MenuItem icon="pin" hint={pinned ? '已置顶' : undefined} title={pinned ? '取消置顶：恢复按侧栏顺序排列' : '置顶：排到项目列表前部'} onClick={() => { toggleProjectPinned(p.id); close(); }}>
               {pinned ? '取消置顶' : '置顶项目'}
             </MenuItem>
-            <MenuItem icon="edit" title="编辑项目显示名称与描述" onClick={() => { setEditInfoFor(p.id); close(); }}>编辑项目信息…</MenuItem>
-            <div className="menu-sep" />
             <MenuItem icon="folder" title="打开项目主页（房间/成员/活跃任务概览）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}`); close(); }}>项目主页</MenuItem>
-            <MenuItem icon="users" title="成员管理（含 runtime 绑定）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/members`); close(); }}>成员管理</MenuItem>
             <MenuItem icon="settings" title="项目设置（信息/交付/协作限制/高级操作）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/settings`); close(); }}>项目设置</MenuItem>
-            <div className="menu-sep" />
-            {p.archivedAt != null ? (
-              <MenuItem icon="refresh" title="恢复为日常项目（原归档房不跟着恢复）" onClick={() => { void projectLifecycleReal(p.id, p.revision, 'unarchive').then((r) => { toast(r.ok ? '项目已恢复' : `恢复失败：${userFacingSystemText(r.error ?? '')}`, r.ok ? 'success' : 'error'); }); close(); }}>恢复项目</MenuItem>
-            ) : (
-              <MenuItem icon="archive" title="归档：退出日常列表、历史保留只读（有未结束工作会被拒绝）" onClick={() => { setArchiveProjFor(p.id); close(); }}>归档项目…</MenuItem>
-            )}
-            <MenuItem icon="trash" title="移除：只在应用里解除关联，不删除磁盘文件与历史（可在欢迎页重新打开）" onClick={() => { setRemoveProjFor(p.id); close(); }}>移除项目…</MenuItem>
-            <div className="menu-sep" />
-            <MenuItem icon="archive" title="查看已归档的项目与房间（查看历史 + 恢复——不动磁盘文件与历史）" onClick={() => { navigate('/archive'); close(); }}>归档管理</MenuItem>
           </Menu>
-        );
-      })() : null}
-
-      {editInfoFor != null ? (() => {
-        const p = s.projects.find((x) => x.id === editInfoFor);
-        if (p == null) return null;
-        return <EditProjectInfoModal key={p.id} projectId={p.id} onClose={() => setEditInfoFor(null)} />;
-      })() : null}
-
-      {archiveProjFor != null ? (() => {
-        const p = s.projects.find((x) => x.id === archiveProjFor);
-        if (p == null) return null;
-        return (
-          <Modal
-            size="sm"
-            title={`归档项目「${p.displayName}」`}
-            onClose={() => setArchiveProjFor(null)}
-            footer={<><div className="spacer" /><button className="btn" onClick={() => setArchiveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="archive" onDone={() => { setArchiveProjFor(null); navigate(`/archive?project=${p.id}`); }} /></>}
-          >
-            <div className="small muted" style={{ lineHeight: 1.75 }}>
-              归档后项目退出日常项目列表，历史保留只读，磁盘文件不受影响。失败记录可以保留；仍在排队、执行或等待处理的任务需先结束。
-            </div>
-          </Modal>
-        );
-      })() : null}
-
-      {removeProjFor != null ? (() => {
-        const p = s.projects.find((x) => x.id === removeProjFor);
-        if (p == null) return null;
-        return (
-          <Modal
-            size="sm"
-            title={`移除项目「${p.displayName}」`}
-            onClose={() => setRemoveProjFor(null)}
-            footer={<><div className="spacer" /><button className="btn" onClick={() => setRemoveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="remove" danger onDone={() => setRemoveProjFor(null)} /></>}
-          >
-            <div className="col" style={{ gap: 10 }}>
-              <div className="small muted" style={{ lineHeight: 1.75 }}>
-                「移除」= 从应用的项目列表解除关联：不删除磁盘文件、不删除历史记录（重新打开同一目录即恢复）。
-              </div>
-              <div className="small faint">目录：{p.rootPath}</div>
-            </div>
-          </Modal>
         );
       })() : null}
 
@@ -724,7 +645,6 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   if (path === '/board') return <TasksBoardPage query={query} />;
   if (path === '/library') return <LibraryPage />;
   if (path === '/activity') return <ActivityPage />;
-  if (path === '/pending') return <PendingPage />;
   if (path === '/settings') return <SettingsPage query={query} />;
   if (path === '/members') return <MembersPage />;
 
@@ -879,77 +799,3 @@ function LocateThread({ threadId, messageId, tab,focusedTaskId,focusedDeliveryId
 }
 /* DM 页自渲染共享预览（R66 P2：原型 320/440/480 宽度降级 + 列表收起 + 单区切换在
    DmPage 内实现——App 不再相邻拼一个无宽度规则的 PreviewPane）。 */
-
-/* ---------------- 项目生命周期/信息编辑弹窗按钮（真实命令） ---------------- */
-
-function ProjectLifecycleButton({ projectId, revision, action, danger, onDone }: { projectId: string; revision: number; action: 'archive' | 'remove'; danger?: boolean; onDone: () => void }) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <button
-      className={danger === true ? 'btn danger' : 'btn primary'}
-      disabled={busy}
-      onClick={() => {
-        setBusy(true);
-        void projectLifecycleReal(projectId, revision, action).then((r) => {
-          setBusy(false);
-          onDone();
-          if (r.ok) toast(action === 'archive' ? '项目已归档（历史保留只读）' : '项目已移除关联（磁盘与历史不动；重新打开同目录即恢复）', 'success');
-          else toast(`${action === 'archive' ? '归档' : '移除'}被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
-        });
-      }}
-    >
-      {action === 'archive' ? '归档项目' : '移除项目'}
-    </button>
-  );
-}
-
-function EditProjectInfoModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
-  const s = useStore((x) => x);
-  const p = s.projects.find((x) => x.id === projectId);
-  const [name, setName] = useState(p?.displayName ?? '');
-  const [desc, setDesc] = useState(p?.description ?? '');
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (p == null) return null;
-  return (
-    <Modal
-      size="sm"
-      title="编辑项目信息"
-      onClose={onClose}
-      footer={
-        <>
-          <div className="spacer" />
-          <button className="btn" onClick={onClose}>取消</button>
-          <button
-            className="btn primary"
-            disabled={busy || !name.trim()}
-            onClick={() => {
-              setBusy(true); setErr(null);
-              void updateProjectReal(projectId, p.revision, { displayName: name.trim(), description: desc }).then((r) => {
-                setBusy(false);
-                if (r.ok) { toast('已保存', 'success'); onClose(); }
-                else { setErr(r.error ?? '未知错误'); toast(`保存失败：${userFacingSystemText(r.error ?? '')}（输入保留）`, 'error'); }
-              });
-            }}
-          >
-            保存
-          </button>
-        </>
-      }
-    >
-      <div className="col" style={{ gap: 12 }}>
-        <div className="field">
-          <label className="field-label">显示名称</label>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="项目显示名" />
-          <div className="field-hint">只改应用里的显示名称，不会重命名磁盘目录。</div>
-        </div>
-        <div className="field">
-          <label className="field-label">描述（可选）</label>
-          <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="例如：订单表回填与数据修复" />
-        </div>
-        {err != null ? <div className="panel warning">保存失败：{userFacingSystemText(err ?? '')}（若项目已被他端修改请刷新重试）</div> : null}
-        <div className="small faint">目录：{p.rootPath}</div>
-      </div>
-    </Modal>
-  );
-}
