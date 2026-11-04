@@ -1,0 +1,29 @@
+/* R183 任务看板：左栏项目卡 + 右栏看板（用户 2026-11-04 第 9 项）。
+   项目卡列与成员管理共用 styles/r183-project-rail.css；这里只放看板自己的版式：
+   筛选行（房间/计数/撤销/刷新/归档全部）与项目分组。 */
+
+/* 看板右栏与成员管理右栏一致：页头是筛选行，项目分区块紧随其后。 */
+.tasks-board-page .project-split {
+  margin-top: var(--page-top-gap);
+}
+
+/* 左栏「全部项目」卡：与普通项目卡同尺寸，但语义是范围而不是项目（名称行带图标）。 */
+.project-card.is-all-scope .project-card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 图标与文字同在 name 里：文字必须再包一层，否则 flex 容器里的匿名文本收不到省略号。 */
+.project-card-name-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 右栏纵向节奏：筛选行 → 第一个项目分组用共享的 --sp-3；相邻项目分组之间沿用
+   r170-board.css 的 22px 底边距。两处若都生效会叠成 34px，比原来的分区节奏更松。 */
+.tasks-board-page .project-content > .board-project + .board-project {
+  margin-top: 0;
+}

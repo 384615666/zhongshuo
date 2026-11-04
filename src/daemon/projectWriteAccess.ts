@@ -15,7 +15,7 @@ export interface WriteScope {
 }
 function assertRuntimeProgram(runtime: ReturnType<typeof resolveMemberRuntime>): void {
   if(isRealRuntimeKind(runtime.kind)&&memberExecutableStatus(runtime.kind,runtime.executable??runtimeExecutable(runtime.kind)).status==='missing'){
-    throw Error('成员的 CLI 执行程序未找到，可能已卸载。请重新安装后扫描本机 AI，或在 AI 设置中修改程序路径；本次未发送，草稿保留');
+    throw Error('成员的 CLI 执行程序未找到，可能已卸载。请重新安装后在成员页点「添加 AI」重新扫描本机 AI，或在 AI 设置中修改程序路径；本次未发送，草稿保留');
   }
 }
 /** The snapshot contains digests only. Report known source labels, never values

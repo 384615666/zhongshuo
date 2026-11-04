@@ -14,6 +14,7 @@
 
 import { getState, setState, recordWrite, recordLocalOnly, persistNav, toast } from './store';
 import { cancelAllNavIntents } from '../lib/navIntent';
+import { promoteProjectOrder } from './listOrder';
 import type { HifiState } from './store';
 
 function commitNav(s: HifiState, detail: string, api: string) {
@@ -158,5 +159,10 @@ export function toggleProjectPinned(projectId: string): void {
   const next: HifiState = { ...s0, pinnedProjectIds: pinned };
   setState(() => next);
   persistNav(next);
+  // R183 第 1 项：置顶仍走正式导航偏好，但侧栏现在还能拖动排序（本机 localStorage 偏好）。
+  // 为了让「置顶=排到项目列表最前」在用户拖动过顺序后依然成立，置顶时同步把该项目提升到
+  // 本机顺序最前；取消置顶**不动位置**——它只是失去置顶语义，继续按用户当前顺序显示，
+  // 避免「取消置顶后项目突然跳走」。这里只改显示顺序，不改项目数据、不发 daemon 命令。
+  if (pinned.includes(projectId)) promoteProjectOrder(projectId);
   recordLocalOnly('nav.project.pin', `projectId=${projectId} ${pinned.includes(projectId) ? '置顶' : '取消置顶'}（只影响顺序）`);
 }

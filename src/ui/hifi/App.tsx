@@ -5,10 +5,10 @@ import {TaskNotificationController} from './components/TaskNotificationControlle
  * 房间、私信及任务详情由正式路由打开；启动/渲染失败由 ErrorBoundary 与页面看门狗兜底回退。
  * 内部回退接管期间隔离样式，返回时恢复样式与刷新数据。
  */
-import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, type DragEvent, type PointerEvent, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
 import { NavUnreadCount } from './components/NavMarks';
-import {RoomNavItem} from './components/RoomNavItem';
+import {RoomNavItem,type RoomNavDrag} from './components/RoomNavItem';
 import {ProjectConversationList} from './components/ProjectConversationList';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
@@ -36,11 +36,40 @@ import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { TasksBoardPage } from './pages/TasksBoard';
 import { ArchivePage } from './pages/ArchivePage';
 import { toggleProjectPinned } from './data/actions-nav';
+import { moveProjectOrder, moveRoomOrder, orderProjectIds, orderRoomIds, useListOrderVersion } from './data/listOrder';
 import { Menu, MenuItem } from './components/ui';
 import { toggleProjectExpanded } from './data/actions-nav';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
 let takeoverToken = 0;
+
+/* ---------------- R183 第 1 项：侧栏项目 / 房间拖动调换本机显示顺序 ---------------- */
+
+type SidebarDropPlace = 'before' | 'after';
+type SidebarDrag = { kind: 'project'; projectId: string } | { kind: 'room'; projectId: string; roomId: string };
+type SidebarDropHint =
+  | { kind: 'project'; projectId: string; place: SidebarDropPlace }
+  | { kind: 'room'; projectId: string; roomId: string; place: SidebarDropPlace };
+
+/**
+ * 这些行内按钮只负责点击（⋯ / + / 图钉 / 展开箭头），按下它们时**不能**启动行拖动，
+ * 否则「点 ⋯ 开菜单」「点 + 新建房间」「点图钉」会被拖拽吞掉。
+ *
+ * 注意：只排除操作控件，不排除「行主体」（项目名 / 房间名）——它是行的唯一大面积区域，
+ * 也是拖动把手；只按不拖仍是原来的点击行为（展开/打开房间），点按与拖拽由是否移动区分。
+ */
+const SIDEBAR_DRAG_BLOCKING = '.side-row-act, .side-caret, .conversation-pin';
+
+/** 拖动落点：目标行上半 → 插到它前面；下半 → 插到它后面（列表排序的常见约定）。 */
+function dropPlaceAt(event: DragEvent<HTMLElement>): SidebarDropPlace {
+  const rect = event.currentTarget.getBoundingClientRect();
+  return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+}
+
+/** 该事件目标是行内只负责点击的操作按钮吗（这类按下不转成行拖动）。 */
+function isBlockingDragPress(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(SIDEBAR_DRAG_BLOCKING) != null;
+}
 
 /** 定向接管目标 → legacy 既有控件/面板（review-r46 §6 / r47 §5：切换后落在对应页面与实体）。 */
 const LEGACY_TARGETS: Record<string, { label: string; locate: () => string | null }> = {
@@ -196,6 +225,19 @@ export default function App() {
   const [folderPickerBusy, setFolderPickerBusy] = useState(false);
   const folderIntentRef = useRef(0);
   const sidebarRoomRequests = useRef(new Set<string>());
+
+  /* R183 第 1 项：本机「项目 / 房间」显示顺序偏好（localStorage，不改 daemon 数据）。
+     拖动/置顶写入后派发事件，useListOrderVersion 让本组件重渲染，下面的
+     orderProjectIds/orderRoomIds 在渲染时读到新顺序并立即重排。 */
+  useListOrderVersion();
+  const draggedProjectIdRef = useRef<string | null>(null);
+  const draggedRoomRef = useRef<{ projectId: string; roomId: string } | null>(null);
+  // pointerdown 时记录「这次按下是否落在操作按钮上」：真实拖动时 dragstart 的目标通常是
+  // draggable 的行本身（而不是按下的按钮），只靠 dragstart 的 target 挡不住从 ⋯/+ 起拖；
+  // 这里同时看按下记录与 dragstart 目标，两种浏览器行为都覆盖。
+  const dragPressBlockedRef = useRef(false);
+  const [sidebarDrag, setSidebarDrag] = useState<SidebarDrag | null>(null);
+  const [sidebarDrop, setSidebarDrop] = useState<SidebarDropHint | null>(null);
 
   const chooseFolder = async () => {
     const request = ++folderIntentRef.current;
@@ -360,6 +402,131 @@ export default function App() {
   });
   const visibleRoomProjects=new Set([...s.visibleProjectIds,...s.pinnedProjectIds].filter(id=>s.projects.some(project=>project.id===id&&project.removedAt==null)));
   const compactRooms=new Set([...Object.entries(s.sidebarRoomIndexes).filter(([id])=>visibleRoomProjects.has(id)).flatMap(([,index])=>index.rooms.filter(room=>room.archivedAt==null).map(room=>room.id)),...pinnedRooms.map(pin=>pin.itemId)]).size>20;
+  const pinnedRoomIdSet = new Set(s.navigationPins.filter((pin) => pin.kind === 'room').map((pin) => pin.itemId));
+
+  /* R183 第 1 项：项目显示顺序。
+     默认顺序仍是「置顶在前、其余按可见顺序」；用户拖动/置顶写下的本机偏好（orderProjectIds）
+     覆盖在它上面。这里只算显示顺序，不改变焦点、可见集合或任何项目数据。 */
+  const dailyProjects = s.projects.filter((p) => p.removedAt == null);
+  const dailyProjectIds = new Set(dailyProjects.map((p) => p.id));
+  const projectById = new Map(dailyProjects.map((p) => [p.id, p] as const));
+  const sidebarProjectIds = orderProjectIds([
+    ...s.pinnedProjectIds.filter((id) => dailyProjectIds.has(id)),
+    ...s.visibleProjectIds.filter((id) => dailyProjectIds.has(id) && !s.pinnedProjectIds.includes(id)),
+  ]);
+  const sidebarProjects = sidebarProjectIds
+    .map((id) => projectById.get(id))
+    .filter((p): p is NonNullable<typeof p> => p != null);
+
+  /** 结束一次拖动：清掉 ref/高亮（只改界面状态，不动偏好与数据）。 */
+  const clearSidebarDrag = () => {
+    draggedProjectIdRef.current = null;
+    draggedRoomRef.current = null;
+    dragPressBlockedRef.current = false;
+    setSidebarDrag(null);
+    setSidebarDrop(null);
+  };
+
+  /** 侧栏内按下时记录：操作按钮（⋯/+/图钉/展开箭头）的按下不能转成行拖动。
+   *  用捕获阶段挂在侧栏根上，项目和房间两种行共用一份判断（房间行的图钉按钮在 RoomNavItem 内部）。
+   *  松开/取消即清掉，保证「点过 ⋯ 再拖行」不会被上一次按下误伤。 */
+  const noteSidebarDragPress = (event: PointerEvent<HTMLElement>) => {
+    dragPressBlockedRef.current = isBlockingDragPress(event.target);
+  };
+  const clearSidebarDragPress = () => {
+    dragPressBlockedRef.current = false;
+  };
+
+  /* ---------- 项目行拖动 ---------- */
+
+  const beginProjectDrag = (projectId: string, event: DragEvent<HTMLDivElement>) => {
+    if (dragPressBlockedRef.current || isBlockingDragPress(event.target)) {
+      event.preventDefault();
+      return;
+    }
+    draggedProjectIdRef.current = projectId;
+    draggedRoomRef.current = null;
+    setSidebarDrag({ kind: 'project', projectId });
+    setSidebarDrop(null);
+    // Firefox 要求 dragstart 里至少 setData 一次才会真正开始拖动；text/plain 也便于调试。
+    event.dataTransfer?.setData('text/plain', projectId);
+    if (event.dataTransfer != null) event.dataTransfer.effectAllowed = 'move';
+  };
+
+  const hoverProjectRow = (projectId: string, event: DragEvent<HTMLDivElement>) => {
+    const fromId = draggedProjectIdRef.current;
+    if (fromId == null) return; // 房间拖动不能落到项目行上
+    if (fromId === projectId) {
+      setSidebarDrop(null); // 拖到自己身上不算落点
+      return;
+    }
+    event.preventDefault(); // 只有 preventDefault 过的 dragover 才允许 drop
+    if (event.dataTransfer != null) event.dataTransfer.dropEffect = 'move';
+    const place = dropPlaceAt(event);
+    setSidebarDrop((current) => (current?.kind === 'project' && current.projectId === projectId && current.place === place ? current : { kind: 'project', projectId, place }));
+  };
+
+  const leaveProjectRow = (event: DragEvent<HTMLDivElement>) => {
+    // 在行的子元素之间移动会触发 dragleave，只有真正离开这一行才清掉指示。
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    setSidebarDrop((current) => (current?.kind === 'project' ? null : current));
+  };
+
+  const dropOnProjectRow = (projectId: string, event: DragEvent<HTMLDivElement>) => {
+    const fromId = draggedProjectIdRef.current;
+    if (fromId == null || fromId === projectId) return;
+    event.preventDefault();
+    // 只写本机显示偏好（localStorage，见 data/listOrder.ts）：不派 daemon 命令、不改项目数据。
+    moveProjectOrder(sidebarProjectIds, fromId, projectId, dropPlaceAt(event));
+    clearSidebarDrag();
+  };
+
+  /* ---------- 房间行拖动（同一项目内，禁止跨项目） ---------- */
+
+  const roomDragProps = (projectId: string, roomId: string, displayedRoomIds: string[]): RoomNavDrag => ({
+    draggable: true,
+    className: [
+      sidebarDrag?.kind === 'room' && sidebarDrag.roomId === roomId ? 'is-dragging' : '',
+      sidebarDrop?.kind === 'room' && sidebarDrop.roomId === roomId ? `drop-${sidebarDrop.place}` : '',
+    ].filter(Boolean).join(' '),
+    title: '拖动可调整本项目房间的显示顺序（只改本机显示）',
+    onDragStart: (event) => {
+      if (dragPressBlockedRef.current || isBlockingDragPress(event.target)) {
+        event.preventDefault();
+        return;
+      }
+      draggedRoomRef.current = { projectId, roomId };
+      draggedProjectIdRef.current = null;
+      setSidebarDrag({ kind: 'room', projectId, roomId });
+      setSidebarDrop(null);
+      event.dataTransfer?.setData('text/plain', roomId);
+      if (event.dataTransfer != null) event.dataTransfer.effectAllowed = 'move';
+    },
+    onDragOver: (event) => {
+      const from = draggedRoomRef.current;
+      if (from == null || from.projectId !== projectId) return; // 严禁跨项目；项目拖动不落到房间行
+      if (from.roomId === roomId) {
+        setSidebarDrop(null);
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer != null) event.dataTransfer.dropEffect = 'move';
+      const place = dropPlaceAt(event);
+      setSidebarDrop((current) => (current?.kind === 'room' && current.roomId === roomId && current.place === place ? current : { kind: 'room', projectId, roomId, place }));
+    },
+    onDragLeave: (event) => {
+      if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+      setSidebarDrop((current) => (current?.kind === 'room' ? null : current));
+    },
+    onDrop: (event) => {
+      const from = draggedRoomRef.current;
+      if (from == null || from.projectId !== projectId || from.roomId === roomId) return;
+      event.preventDefault();
+      moveRoomOrder(projectId, displayedRoomIds, from.roomId, roomId, dropPlaceAt(event));
+      clearSidebarDrag();
+    },
+    onDragEnd: () => clearSidebarDrag(),
+  });
 
   const navActive = {
     library: path === '/library',
@@ -379,7 +546,7 @@ export default function App() {
         <div className="app" data-zs-boot={s.boot}>
         <div className="app-body">
           {sidebarOpen && !s.layout.navAutoHidden ? (
-          <aside className="sidebar">
+          <aside className="sidebar" onPointerDownCapture={noteSidebarDragPress} onPointerUpCapture={clearSidebarDragPress} onPointerCancelCapture={clearSidebarDragPress}>
             <div className="sidebar-top">
               <div className="side-row-flat">
                 <button
@@ -453,21 +620,30 @@ export default function App() {
                   {s.boot === 'failed' ? <button className="btn ghost sm" onClick={() => location.reload()}>重试</button> : null}
                 </div>
               ) : null}
-              {(() => {
-                const daily = s.projects.filter((p) => p.removedAt == null);
-                const dailyIds = new Set(daily.map((p) => p.id));
-                const visibleProjects = [
-                  ...s.pinnedProjectIds.filter((id) => dailyIds.has(id)),
-                  ...s.visibleProjectIds.filter((id) => dailyIds.has(id) && !s.pinnedProjectIds.includes(id)),
-                ].map((id) => daily.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => p != null);
-                return visibleProjects.map((p) => {
-                  const isCurrent = p.id === s.activeProjectId;
-                  const expanded = s.expandedProjectIds.includes(p.id);
-                  const roomIndex = s.sidebarRoomIndexes[p.id];
-                  const rooms = roomIndex?.rooms ?? [];
-                  return (
-                    <div key={p.id} className="side-project">
-                      <div className={`side-row${isCurrent ? ' context-active' : ''}`}>
+              {sidebarProjects.map((p) => {
+                const isCurrent = p.id === s.activeProjectId;
+                const expanded = s.expandedProjectIds.includes(p.id);
+                const roomIndex = s.sidebarRoomIndexes[p.id];
+                const rooms = roomIndex?.rooms ?? [];
+                // R183 第 1 项：非置顶房间按本机拖动偏好排序；置顶房间在单独的置顶区，不参与拖动。
+                const displayRooms = rooms.filter((r) => r.archivedAt == null && !pinnedRoomIdSet.has(r.id));
+                const roomById = new Map(displayRooms.map((r) => [r.id, r] as const));
+                const displayedRoomIds = orderRoomIds(p.id, displayRooms.map((r) => r.id));
+                const orderedRooms = displayedRoomIds.map((id) => roomById.get(id)).filter((r): r is NonNullable<typeof r> => r != null);
+                return (
+                  <div key={p.id}
+                    className={`side-project${sidebarDrag?.kind === 'project' && sidebarDrag.projectId === p.id ? ' is-dragging' : ''}${sidebarDrop?.kind === 'project' && sidebarDrop.projectId === p.id ? ` drop-${sidebarDrop.place}` : ''}`}>
+                    <div
+                      className={`side-row${isCurrent ? ' context-active' : ''}`}
+                      data-zs-side-project={p.id}
+                      draggable
+                      title="拖动可调整项目显示顺序（只改本机显示）"
+                      onDragStart={(event) => beginProjectDrag(p.id, event)}
+                      onDragOver={(event) => hoverProjectRow(p.id, event)}
+                      onDragLeave={leaveProjectRow}
+                      onDrop={(event) => dropOnProjectRow(p.id, event)}
+                      onDragEnd={clearSidebarDrag}
+                    >
                         <button
                           className="side-caret"
                           title={expanded ? '收起房间列表' : '展开房间列表'}
@@ -527,13 +703,12 @@ export default function App() {
                       {expanded && roomIndex?.status === 'ready' && rooms.length === 0 ? (
                         <div className="side-empty small">暂无房间</div>
                       ) : null}
-                      {expanded ? <ProjectConversationList projectId={p.id} kind="room" compact={compactRooms} items={rooms.filter(r=>r.archivedAt==null&&!s.navigationPins.some(pin=>pin.kind==='room'&&pin.itemId===r.id))}>
-                        {room=><RoomNavItem key={room.id} projectId={p.id} roomId={room.id} name={room.name} active={room.id===activeRoomId}/>}
+                      {expanded ? <ProjectConversationList projectId={p.id} kind="room" compact={compactRooms} items={orderedRooms}>
+                        {(room)=><RoomNavItem key={room.id} projectId={p.id} roomId={room.id} name={room.name} active={room.id===activeRoomId} drag={roomDragProps(p.id, room.id, displayedRoomIds)}/>}
                       </ProjectConversationList> : null}
                     </div>
                   );
-                });
-              })()}
+                })}
               <button
                 className="side-item"
                 data-zs-open-project="hifi"

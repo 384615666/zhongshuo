@@ -33,7 +33,7 @@ import {createElement} from 'react';
 import {createRoot} from 'react-dom/client';
 import {MembersPage,BindRuntimeModal} from '__ROOT__/src/ui/hifi/MembersPage.tsx';
 import {MemberDetailPage} from '__ROOT__/src/ui/hifi/pages/MemberDetailPage.tsx';
-import {EditTemplateModal,SaveMemberTemplateModal,CreateFromTemplateModal} from '__ROOT__/src/ui/hifi/components/MemberManagementForms.tsx';
+import {EditTemplateModal,SaveMemberTemplateModal} from '__ROOT__/src/ui/hifi/components/MemberManagementForms.tsx';
 import * as store from '__ROOT__/src/ui/hifi/data/store.ts';
 import {RUNTIME_CHANNELS} from '__ROOT__/src/contracts/runtimeKinds.ts';
 
@@ -42,7 +42,8 @@ const checks=[],calls=[];
 const avatars={};
 const root=createRoot(document.getElementById('root'));
 const member={id:'m1',displayName:'审查者',principalType:'agent',enabled:true,revision:4};
-let revision=0,saved=0;
+let revision=0,saved=0,memberRevision=4;
+let templates=[];
 let info={binding:{installationId:'install',model:channel.model,permissionMode:'bypassPermissions',effort:'high'},installation:{id:'install',kind:channel.kind,executable:'C:/test/'+channel.executable+'.exe',capabilities_json:null},effective:{source:'binding',kind:channel.kind,model:channel.model},environment:{allowFake:false,realDispatchGuard:false}};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(test){for(let n=0;n<300;n++){if(test())return;await sleep(10);}throw Error('UI wait timed out: '+document.body.innerText);}
@@ -55,6 +56,7 @@ async function options(label){if(combo(label).getAttribute('aria-expanded')!=='t
 async function choose(label,value){const rows=await options(label);const row=rows.find(el=>el.dataset.zsOption===value);if(!row)throw Error('Missing option '+label+':'+value+' from '+rows.map(el=>el.dataset.zsOption).join(','));row.click();await sleep(20);}
 function executionInput(){return [...document.querySelectorAll('label.field')].find(el=>el.textContent.includes('执行程序'))?.querySelector('input');}
 function last(method){return calls.filter(c=>c.method===method).at(-1)?.params;}
+function countOf(method){return calls.filter(c=>c.method===method).length;}
 async function mount(Component,props={}){root.render(createElement(Component,{...props,key:String(++revision)}));await sleep(40);}
 
 window.zs={command:async envelope=>{
@@ -63,13 +65,14 @@ window.zs={command:async envelope=>{
   switch(method){
     case 'app.appearance.set':if(params.avatar){const {subject,dataUrl}=params.avatar;if(dataUrl==null)delete avatars[subject];else avatars[subject]=dataUrl;}data={saved:true};break;
     case 'app.appearance.get':data={showAvatars:true,avatars:{...avatars}};break;
-    case 'member.list': data={items:[member]};break;
+    case 'member.list': data={items:[{...member,revision:memberRevision}]};break;
+    case 'member.update':data={projectId:'p',memberId:params.memberId,displayName:params.displayName,description:params.description,revision:++memberRevision};break;
     case 'member.discoverDefaults':data={created:[],existing:[{displayName:channel.label}],skipped:[],notes:['fixture: 未找到其他 CLI']};break;
     case 'member.runtime':data=info;break;
     case 'member.runtimes':data={projectId:'p',items:[{memberId:'m1',info}]};break;
     case 'runtime.status':data={memberBindings:[{memberId:'m1',kind:channel.kind,model:channel.model}],dispatchGuard:{fakeAllowed:false,realDispatchGuard:false}};break;
     case 'project.memberWorkload':data={projectId:'p',items:[],truncated:false};break;
-    case 'memberTemplate.list':data={items:[],nextCursor:null};break;
+    case 'memberTemplate.list':data={items:templates,nextCursor:null};break;
     case 'room.list':case 'dm.list':case 'conversation.list':data={items:[]};break;
     case 'member.runtimeCatalog':data={models:params.kind===channel.kind?[{id:channel.model,label:'Harness Model'}]:[{id:'old-model',label:'Old Model'}],defaultModel:null,source:'fixture CLI metadata',warning:null,truncated:false,program:{status:'found',reason:'fixture reference'}};break;
     case 'member.runtimeOptions':data={efforts:params.kind===channel.kind?['high']:['low','medium'],source:'fixture CLI options',reason:'metadata only'};break;
@@ -85,16 +88,24 @@ window.run=async()=>{
   store.initDraftPersistence('r136-isolated-ui');
   await mount(MembersPage,{projectId:'p'});
   await until(()=>document.querySelector('[data-zs-member-bind="m1"]'));
-  button('扫描本机 AI').click();
-  await until(()=>text().includes('扫描完成：新增 0 位 AI，已有 1 位。'));
-  check('scan reports missing CLI without a model call',text().includes('fixture: 未找到其他 CLI')&&last('member.discoverDefaults').projectId==='p');
+  // R183 第 4 项：「扫描本机 AI」独立按钮已删除；点「添加 AI」先 discoverDefaults、刷新投影，再打开添加弹窗。
+  check('no separate 扫描本机 AI button',![...document.querySelectorAll('button')].some(el=>el.textContent.trim()==='扫描本机 AI'));
+  document.querySelector('[data-zs-members-add]').click();
+  await until(()=>document.querySelector('[data-zs-members-scan-result]'));
+  await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  check('scan reports missing CLI without a model call',text().includes('扫描完成：新增 0 位 AI，已有 1 位。')&&last('member.discoverDefaults').projectId==='p');
+  check('add entry scans before opening the add dialog',countOf('member.discoverDefaults')===1&&document.querySelector('[aria-label="运行渠道"]')!=null);
+  check('scan result stays visible on the page',text().includes('fixture: 未找到其他 CLI'));
+  button('取消').click();await sleep(30);
+
   await until(()=>document.querySelector('[data-zs-member-bind="m1"]'));
   document.querySelector('[data-zs-member-bind="m1"]').click();
   await until(()=>document.querySelector('[aria-label="runtime 渠道"]'));
   check('member list preserves Harness kind',combo('runtime 渠道').textContent.includes(channel.label));
   check('member list preserves custom executable',executionInput().value==='C:/test/'+channel.executable+'.exe');
   button('取消').click();await sleep(20);
-  button('添加 AI').click();await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  document.querySelector('[data-zs-members-add]').click();
+  await until(()=>document.querySelector('[aria-label="运行渠道"]'));
   input('input[placeholder="例如 审查者、实现者"]','Harness 新成员');
   const addOptions=await options('运行渠道');
   check('new member uses shared real channel catalog',JSON.stringify(addOptions.map(o=>o.dataset.zsOption))===JSON.stringify(RUNTIME_CHANNELS.map(c=>c.value)));
@@ -131,6 +142,22 @@ window.run=async()=>{
   document.querySelector('[data-zs-member-bindsave]').click();await until(()=>saved===1);
   check('bind saves dsh without stale provider values',last('member.setRuntime').kind===channel.kind&&last('member.setRuntime').executable===channel.executable&&!('model' in last('member.setRuntime'))&&!('effort' in last('member.setRuntime')));
 
+  // R183 第 6 项：AI 设置弹窗内改名称/说明；同一保存里改资料 + 改配置时必须
+  // 「先 member.update 拿新 revision，再 member.setRuntime（用新 revision）」。
+  const updateCallsBefore=countOf('member.update');
+  const runtimeCallsBefore=countOf('member.setRuntime');
+  await mount(BindRuntimeModal,{projectId:'p',member:{...member,revision:memberRevision},initial:{kind:channel.kind,model:channel.model,effort:'high',executable:channel.executable,permissionMode:'bypassPermissions'},guard:{fakeAllowed:false,realDispatchGuard:false},allowProfileEdit:true,onClose:()=>{},onSaved:()=>{saved++;}});
+  await until(()=>document.querySelector('[data-zs-member-name]'));
+  const revisionBeforeTwoStep=memberRevision;
+  input('[data-zs-member-name]','两步改名');
+  await choose('runtime 渠道','codex');await sleep(30);
+  document.querySelector('[data-zs-member-bindsave]').click();
+  await until(()=>countOf('member.update')>updateCallsBefore&&countOf('member.setRuntime')>runtimeCallsBefore);
+  const twoStepWrites=calls.filter(c=>c.method==='member.update'||c.method==='member.setRuntime').slice(-2);
+  check('two-step save updates profile before runtime',twoStepWrites.length===2&&twoStepWrites[0].method==='member.update'&&twoStepWrites[1].method==='member.setRuntime');
+  check('two-step save writes profile with the opened revision',twoStepWrites[0].params.expectedRevision===revisionBeforeTwoStep&&twoStepWrites[0].params.displayName==='两步改名');
+  check('two-step save writes runtime with the revision returned by update',twoStepWrites[1].params.expectedRevision===revisionBeforeTwoStep+1&&twoStepWrites[1].params.kind==='codex');
+
   await mount(MemberDetailPage,{projectId:'p',memberId:'m1'});
   await until(()=>document.querySelector('[data-zs-member-detail-bind]'));
   document.querySelector('[data-zs-member-detail-bind]').click();await until(()=>document.querySelector('[aria-label="runtime 渠道"]'));
@@ -149,20 +176,37 @@ window.run=async()=>{
   check('template defaults dsh and retains grant',executionInput().value===channel.executable&&combo('模板权限').textContent.includes('尚未认证'));
   await choose('模板权限','bypassPermissions');
   input('label.field input[maxlength="1024"]','');await sleep(20);
-  document.querySelector('[data-zs-template-edit-save]').click();await until(()=>saved===2);
+  document.querySelector('[data-zs-template-edit-save]').click();await until(()=>saved===3);
   const edited=last('memberTemplate.update');
   check('template save uses expected revision and default program',edited.expectedRevision===7&&edited.config.kind===channel.kind&&edited.config.executable===channel.executable);
   check('template save removes old model effort',edited.config.model===null&&edited.config.effort===null);
   check('template save does not copy credentials or certification',Object.keys(edited.config).sort().join(',')==='effort,executable,kind,model,permissionMode');
 
-  await mount(SaveMemberTemplateModal,{projectId:'p',member,onClose:()=>{},onSaved:()=>{saved++;}});
-  document.querySelector('[data-zs-template-save]').click();await until(()=>saved===3);
-  check('save member template reads authoritative binding',last('memberTemplate.saveFromMember').memberId==='m1'&&last('memberTemplate.saveFromMember').expectedRevision===4);
-  await mount(CreateFromTemplateModal,{projectId:'p',template:{...template,config:edited.config},onClose:()=>{},onSaved:()=>{saved++;}});
-  check('template creation describes actual program and channel setup',text().includes('程序：'+channel.executable)&&channel.help.every(copy=>text().includes(copy)));
-  document.querySelector('[data-zs-template-create-save]').click();await until(()=>saved===4);
-  check('template creates independent member from authoritative snapshot',last('memberTemplate.createMember').templateId==='t1'&&last('memberTemplate.createMember').expectedRevision===7);
-  const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|setRuntime|discoverDefaults)|memberTemplate\.(list|update|saveFromMember|createMember)|app\.appearance\.(get|set)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;
+  await mount(SaveMemberTemplateModal,{projectId:'p',member:{...member,revision:memberRevision},onClose:()=>{},onSaved:()=>{saved++;}});
+  document.querySelector('[data-zs-template-save]').click();await until(()=>last('memberTemplate.saveFromMember'));
+  check('save member template reads authoritative binding',last('memberTemplate.saveFromMember').memberId==='m1'&&last('memberTemplate.saveFromMember').expectedRevision===memberRevision);
+
+  // R183 第 7、8 项：模板卡简化；「在本项目创建…」打开同一个添加 AI 弹窗并预填，提交走 member.create。
+  templates=[{id:'t1',name:'角色模板',description:'模板说明',enabled:true,revision:7,config:{kind:channel.kind,model:channel.model,effort:'high',executable:channel.executable,permissionMode:'bypassPermissions'}}];
+  await mount(MembersPage,{projectId:'p'});
+  await until(()=>document.querySelector('[data-zs-template="t1"]'));
+  const templateCard=document.querySelector('[data-zs-template="t1"]');
+  check('template card keeps name and hides program details',templateCard.textContent.includes('角色模板')&&!templateCard.textContent.includes('执行程序')&&templateCard.querySelectorAll('details').length===0);
+  check('template card hides permission and enabled state',!templateCard.textContent.includes('权限')&&!templateCard.textContent.includes('启用'));
+  document.querySelector('[data-zs-template-create="t1"]').click();
+  await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  const nameField=document.querySelector('input[placeholder="例如 审查者、实现者"]');
+  const descField=document.querySelector('input[placeholder="例如 实现与重构，偏好直接给结论"]');
+  check('template create opens the shared add-AI dialog with a template note',text().includes('已按模板'));
+  check('template prefill carries name and description',nameField.value==='角色模板'&&descField.value==='模板说明');
+  check('template prefill carries channel model and executable',combo('运行渠道').textContent.includes(channel.label)&&document.querySelector('[aria-label="手动模型 ID"]').value===channel.model&&executionInput().value===channel.executable);
+  const createCallsBefore=countOf('member.create');
+  document.querySelector('[data-zs-member-addsave]').click();
+  await until(()=>countOf('member.create')>createCallsBefore);
+  const created=last('member.create');
+  check('template creation submits member.create with prefilled values',created.displayName==='角色模板'&&created.runtime.kind===channel.kind&&created.runtime.model===channel.model&&created.runtime.executable===channel.executable);
+  check('template creation never calls memberTemplate.createMember',!calls.some(c=>c.method==='memberTemplate.createMember'));
+  const allowed=/^(member\.(list|runtime|runtimes|runtimeCatalog|runtimeOptions|create|update|setRuntime|discoverDefaults)|memberTemplate\.(list|update|saveFromMember|createMember)|app\.appearance\.(get|set)|project\.memberWorkload|runtime\.status|room\.list|dm\.list|conversation\.list)$/;
   check('only metadata reads and member configuration writes: '+calls.filter(c=>!allowed.test(c.method)).map(c=>c.method).join(','),calls.every(c=>allowed.test(c.method)));
   return{ok:checks.every(c=>c.ok),checks};
 };
@@ -192,6 +236,6 @@ setTimeout(()=>app.exit(3),40000);
     const line = output.split(/\r?\n/).find(line=>line.startsWith('R136_RESULT '));
     const report = line == null ? {ok:false,error:output.slice(-5000)} : JSON.parse(line.slice('R136_RESULT '.length)) as {ok:boolean;checks?:Array<{name:string;ok:boolean}>;error?:string};
     expect(report,JSON.stringify(report)).toMatchObject({ok:true});
-    expect(report.checks).toHaveLength(35);
+    expect(report.checks).toHaveLength(46);
   }, 55000);
 });

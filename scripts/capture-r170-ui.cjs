@@ -92,7 +92,13 @@ const scenesSource = String.raw`(() => {
       await until(() => qa('[data-zs-member-card]').length >= 2 || q('[data-zs-member-card]'), '成员卡');
       await until(() => qa('[data-zs-members-project]').length >= 4, '项目卡（含夹具额外项目）', 25000);
       await wait(900);
-      window.r170Extra = { projects: qa('[data-zs-members-project]').map(textOf) };
+      // R183：右栏项目名标题已移除，成员数并进左栏项目卡（data-zs-members-card-members）。
+      window.r170Extra = {
+        projects: qa('[data-zs-members-project]').map(textOf),
+        memberCounts: qa('[data-zs-members-card-members]').map(textOf),
+        headRemoved: q('.members-head') == null,
+        filterButtons: qa('.members-page .page-filters button').map(textOf),
+      };
     } },
     { name: 'members-switch', run: async () => {
       await until(() => qa('[data-zs-members-project]').length >= 4, '项目卡', 25000);
@@ -101,11 +107,12 @@ const scenesSource = String.raw`(() => {
       const cards = qa('[data-zs-members-project]');
       const target = cards.find((el) => textOf(el).includes('社区运营')) ?? cards[1];
       target.click();
-      await until(() => /社区运营|产品手册|数据分析/.test(textOf(q('.members-head-name'))), '切换项目后的标题', 25000);
+      // R183：不再有 .members-head-name——用左栏卡片的 is-current 判断页内选中项目。
+      await until(() => /社区运营|产品手册|数据分析/.test(textOf(q('[data-zs-members-project].is-current'))), '切换项目后的当前卡片', 25000);
       await wait(1200);
       window.r170Extra = {
-        header: textOf(q('.members-head-name')),
-        members: textOf(q('.members-head-meta')),
+        current: textOf(q('[data-zs-members-project].is-current')),
+        memberCount: textOf(q('[data-zs-members-card-members]')),
         projectCards: qa('[data-zs-members-project]').map(textOf),
         sidebarActiveBefore: before,
         sidebarActiveAfter: textOf(q('.side-row.context-active .side-item-label')),
@@ -113,19 +120,21 @@ const scenesSource = String.raw`(() => {
     } },
     { name: 'members-no-flash', run: async () => {
       // R172 第 3/4 项：已看过的项目切回时，房间数与成员列表不应先消失再出现。
+      // R183：成员数/房间数都显示在左栏项目卡上（没有右栏标题了）。
       await until(() => qa('[data-zs-members-project]').length >= 4, '项目卡', 25000);
       await wait(500);
       const cardOf = (name) => qa('[data-zs-members-project]').find((el) => textOf(el).includes(name));
       // 先访问一次「社区运营」建立缓存，再切回主项目。
       (cardOf('社区运营') ?? qa('[data-zs-members-project]')[1]).click();
-      await until(() => /社区运营/.test(textOf(q('.members-head-name'))), '社区运营标题', 25000);
+      await until(() => /社区运营/.test(textOf(q('[data-zs-members-project].is-current'))), '社区运营当前卡片', 25000);
       await until(() => qa('[data-zs-member-card]').length >= 1, '社区运营成员卡', 25000);
       await wait(400);
       (cardOf('读书会筹备') ?? qa('[data-zs-members-project]')[0]).click();
-      await until(() => /读书会筹备/.test(textOf(q('.members-head-name'))), '回到主项目', 25000);
+      await until(() => /读书会筹备/.test(textOf(q('[data-zs-members-project].is-current'))), '回到主项目', 25000);
       await wait(500);
-      // 关键采样：切回已缓存的「社区运营」，每 25ms 看卡片房间数与右侧成员卡是否出现空窗。
+      // 关键采样：切回已缓存的「社区运营」，每 25ms 看卡片房间数/成员数与右侧成员卡是否出现空窗。
       let missingRoomCountFrames = 0;
+      let missingMemberCountFrames = 0;
       let emptyMemberFrames = 0;
       let loadingTextFrames = 0;
       (cardOf('社区运营') ?? qa('[data-zs-members-project]')[1]).click();
@@ -133,6 +142,7 @@ const scenesSource = String.raw`(() => {
       while (Date.now() - start < 1200) {
         const card = cardOf('社区运营');
         if (card == null || !/\d+\s*个房间/.test(textOf(card))) missingRoomCountFrames += 1;
+        if (card == null || card.querySelector('[data-zs-members-card-members]') == null) missingMemberCountFrames += 1;
         if (qa('[data-zs-member-card]').length === 0) emptyMemberFrames += 1;
         const body = document.body.innerText || '';
         if (body.includes('正在装载…') || body.includes('正在读取成员')) loadingTextFrames += 1;
@@ -141,10 +151,11 @@ const scenesSource = String.raw`(() => {
       await wait(600);
       window.r170Extra = {
         missingRoomCountFrames,
+        missingMemberCountFrames,
         emptyMemberFrames,
         loadingTextFrames,
         finalMemberCards: qa('[data-zs-member-card]').length,
-        header: textOf(q('.members-head-name')),
+        current: textOf(q('[data-zs-members-project].is-current')),
       };
     } },
     { name: 'board', run: async () => {
@@ -152,7 +163,15 @@ const scenesSource = String.raw`(() => {
       await until(() => q('.page-filters'), '看板筛选');
       await until(() => qa('[data-zs-task-id]').length > 0, '看板卡片');
       await wait(900);
-      window.r170Extra = { cards: qa('[data-zs-task-id]').length };
+      // R183 第 9 项：左栏项目卡列 + 「全部项目」卡；「范围/项目」下拉已删除。
+      window.r170Extra = {
+        cards: qa('[data-zs-task-id]').length,
+        allCard: textOf(q('[data-zs-board-scope-all]')),
+        projectCards: qa('[data-zs-board-project]').map(textOf),
+        scopeSelectGone: q('[aria-label="看板范围"]') == null,
+        projectSelectGone: q('[aria-label="看板项目"]') == null,
+        roomFilter: q('[aria-label="房间筛选"]') != null,
+      };
     } },
     { name: 'board-archive', run: async () => {
       await go('/board?scope=all');

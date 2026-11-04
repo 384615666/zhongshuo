@@ -10,9 +10,9 @@ import { RUNTIME_CHANNELS, isRuntimeKind, runtimeExecutable, type RuntimeKind, t
  * 未绑定成员派发时回落全局默认（ZS_RUNTIME），界面分别显示 绑定渠道 / 全局默认渠道 /
  * 查询失败 / 未解析，不把「未绑定」显示成"不会用任何渠道"。
  *
- * 布局（R170 → R171）：两栏——左栏是一列**独立项目卡**（每项目一张卡，像私信会话列表；
- * 卡间 6-8px，与右栏之间一条细分隔），右栏=**页内选中项目**的标题行（项目名+成员数+
- * 扫描/刷新/添加 AI）、搜索与状态筛选、成员卡片、模板面板、房间名单；AI 设置 从卡片进弹窗。
+ * 布局（R170 → R171 → R183）：两栏——左栏是一列**独立项目卡**（每项目一张卡，像私信会话列表；
+ * 卡间 7px，与右栏之间一条细分隔），右栏=**页内选中项目**的 AI 列表：搜索/状态筛选与
+ * 刷新/添加 AI 同一行、成员卡片、模板面板、房间名单；AI 设置 从卡片进弹窗。
  * 原顶部「项目」下拉已移除（R170 用户反馈第 2 项）。R67 已接正式创建，R81 接资料编辑和
  * 独立配置模板。人的关注（阅读订阅）不属于成员管理——在活动流中保留。
  *
@@ -20,8 +20,21 @@ import { RUNTIME_CHANNELS, isRuntimeKind, runtimeExecutable, type RuntimeKind, t
  * （不 switchFocusProject、不改侧栏 active 高亮）。成员/房间名单/模板/工作量都按它取数；
  * 房间名单改用本项目自己的 `room.list`，不再依赖只属于侧栏 active 项目的全局 `store.rooms`。
  * 左栏项目卡的「N 个房间」在真实数据就绪前**不显示数字**（不把未加载写成 0）。
+ *
+ * R183（用户第 2-8 项）：
+ *  - 左栏改用共享项目卡列（`styles/r183-project-rail.css`）：卡片左右留白对齐，本页不再
+ *    自带一套几何；项目顺序跟随侧栏的本地排序偏好（`data/listOrder.ts`）。
+ *  - 删除右栏顶部「项目名 + N 名成员」大标题（第 3 项）：成员数并进左栏当前项目卡的 meta 行；
+ *    成员数按项目缓存（沿用房间数缓存的做法），切回看过的项目不闪。
+ *  - 删除「扫描本机 AI」按钮（第 4 项）：改由点「添加 AI」时先扫描本机已有渠道，再打开
+ *    添加弹窗；扫描失败也继续打开（说明保留在页面上）。
+ *  - 「刷新」「添加 AI」与搜索/状态筛选同一行（第 5 项）。
+ *  - AI 卡片去掉自动生成的说明、协调者标签与「编辑资料」（第 6 项）：名称/说明编辑移进
+ *    「AI 设置」弹窗（`allowProfileEdit`，成员详情页行为不变）。
+ *  - 模板卡片只留名称、渠道/模型、编辑与「在本项目创建…」（第 7 项）；从模板创建走同一个
+ *    添加 AI 弹窗并预填（第 8 项，提交仍是正式 `member.create`）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import {RuntimeModel} from './components/RuntimeModel';
 import {RuntimeEffort} from './components/RuntimeEffort';
@@ -37,9 +50,12 @@ import { fullTime, runtimeModelDisplayName } from './lib/format';
 import { runtimePermissionHint, runtimePermissionOptions } from './lib/runtimePermissions';
 import { RuntimeChannelHelp } from './components/RuntimeChannelHelp';
 import { AvatarPicker } from './components/AvatarPicker';
-import { defaultAiAvatarPreset } from './data/avatarPresets';
+import { defaultAiAvatarPreset, findAvatarPreset } from './data/avatarPresets';
 import { saveAvatar } from './data/memberAvatar';
-import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
+import { SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, type ConfigTemplate } from './components/MemberManagementForms';
+import { useFormGuard } from './lib/useFormGuard';
+import { AddMemberModal, type AddMemberPrefill } from './components/AddMemberModal';
+import { orderProjectIds, useListOrderVersion } from './data/listOrder';
 
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
 /** room.list 行：R171 起成员页自己按页内项目取房间名单（不再用全局 store.rooms）。 */
@@ -64,6 +80,16 @@ export const runtimeAuthOf = (raw: string | null): string => {
     return caps.permissionAuth === 'unverified' ? '未认证' : String(caps.permissionAuth ?? '未认证');
   } catch { return '未认证'; }
 };
+
+/**
+ * R183 第 6 项：自动添加成员时由 daemon 写入的固定说明。
+ * 这是给人看的模板文案，不是成员的真实职责描述——卡片上不显示，
+ * 用户手填的说明照常显示（只比对文案本身，不做模糊判断）。
+ */
+const AUTO_ADDED_MEMBER_DESCRIPTION = '由本机默认配置自动添加，可随时修改';
+
+/** R183 第 4/8 项：添加 AI 弹窗的打开参数——项目 + 可选的模板预填值。 */
+interface AddMemberTarget { projectId: string; prefill?: AddMemberPrefill; templateName?: string }
 
 export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -95,6 +121,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    * 缓存严格按 projectId（房间名单按 projectId+roomId）隔离，绝不把别的项目数据显示到当前项目。
    */
   const roomCountCache = useRef(new Map<string, number>());
+  /** R183 第 3 项：成员数按项目缓存——当前项目用本次读取结果，切回看过的项目先用缓存（不闪）。 */
+  const memberCountCache = useRef(new Map<string, number>());
   const roomsCache = useRef(new Map<string, PageRoomRow[]>());
   const membersCache = useRef(new Map<string, MemberRow[]>());
   const roomMembersCache = useRef(new Map<string, MemberRow[]>());
@@ -127,7 +155,6 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const genRef = useRef(0);
   const [query,setQuery]=useState('');
   const [statusFilter,setStatusFilter]=useState('all');
-  const [editFor,setEditFor]=useState<{projectId:string;member:MemberRow}|null>(null);
   const [saveTemplateFor,setSaveTemplateFor]=useState<{projectId:string;member:MemberRow}|null>(null);
   const visibleMembers=membersInScope?.filter(m => `${m.displayName} ${m.description??''} ${memberShortId(m.id)}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()) && (statusFilter==='all'||(statusFilter==='enabled'?m.enabled:!m.enabled)));
 
@@ -225,8 +252,9 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const [bindFor, setBindFor] = useState<{projectId:string;member:MemberRow}|null>(null);
   /** R67：添加成员（member.create 正式合同——已批准原型入口，无用户延期依据）。
    * R68 §5B：捕获**打开时**的 projectId（addFor）——弹窗存续期间全局项目切换（标题栏菜单/
-   * 深链/受控事件）时旧表单作废，不再出现「旧 A 输入随全局 activeProjectId 写进 B」。 */
-  const [addFor, setAddFor] = useState<string | null>(null);
+   * 深链/受控事件）时旧表单作废，不再出现「旧 A 输入随全局 activeProjectId 写进 B」。
+   * R183 第 8 项：从模板进入时同一次打开携带预填值（模板只带配置，不带账号/会话）。 */
+  const [addFor, setAddFor] = useState<AddMemberTarget | null>(null);
   const [bindForm, setBindForm] = useState<{ kind: RuntimeKind; model: string; executable: string; permissionMode: string; effort?:string }>({ kind: 'claude', model: '', executable: runtimeExecutable('claude'), permissionMode: '' });
   const openBind = (m: MemberRow) => {
     const cur = runtimes[m.id];
@@ -242,13 +270,18 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
 
   useEffect(()=>{const changed=(event:Event)=>{const p=(event as CustomEvent<{projectId?:string}>).detail?.projectId;if(p==null||p===projectId)void reload();};window.addEventListener('zs-member-changed',changed);return()=>window.removeEventListener('zs-member-changed',changed);},[reload,projectId]);
 
-  const coordinatorIds = new Set(rooms.map((r) => r.coordinatorMemberId).filter((x): x is string => x != null));
   /** R68 §5A：当前项目归档/移除——添加入口禁用+说明（服务端同判拒绝，双保险）。 */
   const projState = projects.find((x) => x.id === projectId);
   const projArchived = projState?.archivedAt != null;
   const projRemoved = projState?.removedAt != null;
-  /** R170：左栏项目卡片（未移除项目）——R171：点击只切本页数据范围（不切全局焦点）。 */
-  const visibleProjects = projects.filter((p) => p.removedAt == null);
+  /** R183 第 2 项：左栏项目顺序跟随侧栏的本地拖动偏好（新项目/未记录的项目追加在末尾）。
+   *  用 useListOrderVersion 订阅变动，拖动后本页与侧栏一起重排，不需要刷新页面。 */
+  const listOrderVersion = useListOrderVersion();
+  const visibleProjects = useMemo(() => {
+    const visible = projects.filter((p) => p.removedAt == null);
+    const byId = new Map(visible.map((p) => [p.id, p] as const));
+    return orderProjectIds(visible.map((p) => p.id)).flatMap((id) => { const p = byId.get(id); return p == null ? [] : [p]; });
+  }, [projects, listOrderVersion]);
   /** R171：房间数在**真值就绪前不显示数字**（不能把未加载写成 0，用户实测切项目会闪 0）：
    *  页内选中项目只用本项目 `room.list` 的结果；其它项目用侧栏房间索引（`ready` 直接用，
    *  正在刷新/读取失败时沿用**上次真实列表**的计数，避免每 5 秒刷新时数字闪没）；
@@ -271,12 +304,82 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       if (index?.status === 'ready') roomCountCache.current.set(id, index.rooms.length);
     }
   }, [projectId, roomsReady, rooms, sidebarRoomIndexes]);
+  /**
+   * R183 第 3 项：成员数（原来是右栏大标题里的「N 名成员」，现在并进左栏项目卡）。
+   * 当前项目用本次读取结果（`membersInScope`）——这是最新真值；其它项目只可能来自缓存：
+   * 本页只为选中的项目取成员名单，没看过的项目没有真值就**不写数字**（不把未知写成 0）。
+   */
+  const memberCountOf = (id: string): number | null => {
+    if (id === projectId && membersInScope != null) return membersInScope.length;
+    return memberCountCache.current.get(id) ?? null;
+  };
+  /** 成员数缓存只在数据变化时写入（不在 render 里写 ref）。 */
+  useEffect(() => {
+    if (membersInScope != null) memberCountCache.current.set(projectId, membersInScope.length);
+  }, [projectId, membersInScope]);
   /** R171：选项目=只换本页数据范围；URL 用 replace 记录（刷新/分享后仍停在本页同一项目），
    *  **不** switchFocusProject、不改变侧栏 active 高亮。 */
   const openProject = (next: string) => {
     if (next === projectId) return;
     setSelectedProjectId(next);
     navigate(`/project/${next}/members`, { replace: true });
+  };
+
+  /**
+   * R183 第 4 项：「扫描本机 AI」原来是独立按钮，现在**点「添加 AI」时先扫描**。
+   * 顺序是刻意的：先 discovery 让本机已有渠道出现在添加弹窗里，再刷新成员/房间投影，
+   * 最后才打开弹窗；扫描失败也继续打开（用户仍可手动填写），说明留在页面上。
+   */
+  const beginAdd = async () => {
+    if (!projectId || scanning || projArchived || projRemoved) return;
+    const targetProjectId = projectId;
+    setScanning(true);
+    try {
+      const result = await command<{created: unknown[]; existing: unknown[]; notes: string[]; skipped: Array<{reason: string}>}>('member.discoverDefaults', {projectId: targetProjectId});
+      // R171：页内独立——全局投影读失败不影响本页刷新，如实记进扫描说明。
+      const refreshNotes: string[] = [];
+      await Promise.all([
+        refreshMembers(targetProjectId).catch((e: unknown) => { refreshNotes.push(`成员投影刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
+        refreshRooms(targetProjectId).catch((e: unknown) => { refreshNotes.push(`房间索引刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
+      ]);
+      // R183：discoverDefaults 对每个未创建的真实渠道各回一条 skipped 说明，内容常常相同
+      // （如「真实派发防护已开启…」），直接平铺会在页面重复 4 行；按内容去重、保留首次出现顺序。
+      const scanNotes = [...new Set([...result.notes, ...result.skipped.map(item => item.reason), ...refreshNotes])];
+      setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: scanNotes});
+      // 只刷新本页仍需显示的项目；不因全局 active 不同而跳过（页内独立）。
+      if (selectedRef.current === targetProjectId) await reload();
+    } catch (error) {
+      setScanResult({projectId: targetProjectId, summary: '扫描未完成', notes: [userFacingSystemText((error as Error).message)]});
+    } finally {
+      setScanning(false);
+      // 扫描失败也继续打开添加弹窗；项目已切走则不打开（避免把弹窗开在旧项目上）。
+      if (selectedRef.current === targetProjectId) setAddFor({ projectId: targetProjectId });
+    }
+  };
+
+  /** R183 第 8 项：模板卡片「在本项目创建…」= 打开同一个添加 AI 弹窗，只把模板值预填进去。
+   *  提交仍走 `member.create`（模板面板不再调用 `memberTemplate.createMember`）。 */
+  const openAddFromTemplate = (template: ConfigTemplate) => {
+    if (!projectId || projArchived || projRemoved) return;
+    const rawKind = template.config.kind;
+    // 模板渠道可能是只存在于独立工程环境的 fake；添加弹窗只列真实渠道，退回默认渠道并清掉假配置。
+    const kind: RealRuntimeKind = isRuntimeKind(rawKind) && rawKind !== 'fake' ? rawKind : 'claude';
+    const executable = kind === rawKind && template.config.executable.trim().length > 0 ? template.config.executable : runtimeExecutable(kind);
+    const avatar = findAvatarPreset(template.config.avatarPresetId ?? '')?.dataUrl ?? defaultAiAvatarPreset(kind).dataUrl;
+    setAddFor({
+      projectId,
+      templateName: template.name,
+      prefill: {
+        displayName: template.name,
+        description: template.description,
+        kind,
+        model: kind === rawKind ? (template.config.model ?? '') : '',
+        executable,
+        permissionMode: template.config.permissionMode ?? '',
+        effort: template.config.effort ?? '',
+        avatar,
+      },
+    });
   };
 
   /**
@@ -321,97 +424,74 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-members="hifi">
       <div className="page members-page">
-        {/* R171：左栏一列独立项目卡（像私信会话列表）+ 右栏**页内选中项目**的 AI 列表。
-            搜索 / 状态筛选只影响显示，不改变任何成员或任务。 */}
+        {/* R183 第 2 项：左栏项目卡列改用全站共享几何（.project-split / .project-rail /
+            .project-card …，见 styles/r183-project-rail.css）——本页不再自带一套宽度与间距，
+            卡片到页面左缘的留白才与到右栏内容的一致；这里**不覆盖** --project-rail-gap。 */}
         <UnknownMemberOperations/>
-        <div className="members-split">
-          <aside className="members-projects" aria-label="项目列表" data-zs-members-projects="hifi">
-            <div className="members-projects-title">项目</div>
-            <div className="members-projects-list">
+        <div className="project-split members-split">
+          <aside className="project-rail members-projects" aria-label="项目列表" data-zs-members-projects="hifi">
+            <div className="project-rail-title">项目</div>
+            <div className="project-rail-list">
               {visibleProjects.map((p) => {
                 const current = p.id === projectId;
                 const roomCount = roomCountOf(p.id);
+                const memberCount = memberCountOf(p.id);
                 const missing = p.status === 'missing';
                 const archived = p.archivedAt != null;
                 return (
                   <button
                     key={p.id}
                     type="button"
-                    className={`members-project${current ? ' is-current' : ''}`}
+                    className={`project-card${current ? ' is-current' : ''}`}
                     data-zs-members-project={p.id}
                     aria-current={current ? 'page' : undefined}
                     title={current ? `${p.displayName}（本页当前项目）` : `在成员管理里查看 ${p.displayName}（不切换侧栏项目）`}
                     onClick={() => openProject(p.id)}
                   >
-                    <span className="members-project-name">{p.displayName}</span>
-                    {/* meta 行常驻（CSS min-height）：房间数就绪前后卡片高度不跳。 */}
-                    <span className="members-project-meta">
-                      {roomCount != null ? <span className="members-project-rooms">{roomCount} 个房间</span> : null}
-                      {missing ? <span className="members-project-flag"><Icon name="alert-triangle" size={11} /> 目录失效</span> : null}
-                      {archived ? <span className="members-project-flag muted"><Icon name="archive" size={11} /> 已归档</span> : null}
+                    <span className="project-card-name">{p.displayName}</span>
+                    {/* meta 行常驻（CSS min-height）：数字就绪前后卡片高度不跳。
+                        R183 第 3 项：成员数从右栏大标题搬到这里；未知（没看过的项目）不写数字。 */}
+                    <span className="project-card-meta">
+                      {roomCount != null ? <span className="project-card-count">{roomCount} 个房间</span> : null}
+                      {roomCount != null && memberCount != null ? <span aria-hidden="true">{' · '}</span> : null}
+                      {memberCount != null ? <span className="project-card-count" data-zs-members-card-members={p.id}>{memberCount} 名成员</span> : null}
+                      {missing ? <span className="project-card-flag"><Icon name="alert-triangle" size={11} /> 目录失效</span> : null}
+                      {archived ? <span className="project-card-flag muted"><Icon name="archive" size={11} /> 已归档</span> : null}
                     </span>
                   </button>
                 );
               })}
-              {visibleProjects.length === 0 ? <div className="members-projects-empty faint small">还没有项目。先从侧栏「打开/切换项目」添加。</div> : null}
+              {visibleProjects.length === 0 ? <div className="project-rail-empty faint small">还没有项目。先从侧栏「打开/切换项目」添加。</div> : null}
             </div>
           </aside>
 
-          <section className="members-content">
-            <div className="members-head">
-              <div className="members-head-main">
-                <div className="members-head-title">
-                  <span className="members-head-name">{projState?.displayName ?? '尚未选择项目'}</span>
-                  {projArchived ? <Tag plain icon="archive">已归档·只读</Tag> : null}
-                  {projRemoved ? <Tag plain icon="slash">已移除</Tag> : null}
-                  {projState?.status === 'missing' ? <Tag tone="warning" plain icon="alert-triangle">目录失效</Tag> : null}
-                </div>
-                <div className="members-head-meta small faint">
-                  {membersInScope == null
-                    ? (scopeErr != null ? '成员读取失败，可刷新重试' : projectId == null || projectId === '' ? '尚未选择项目' : '正在读取成员…')
-                    : `${membersInScope.length} 名成员`}
-                </div>
-              </div>
-              <div className="members-head-actions">
-                {!projArchived && !projRemoved ? <button className="btn sm" disabled={scanning || !projectId} onClick={async () => {
-                  if (!projectId || scanning) return;
-                  const targetProjectId = projectId;
-                  setScanning(true);
-                  try {
-                    const result = await command<{created: unknown[]; existing: unknown[]; notes: string[]; skipped: Array<{reason: string}>}>('member.discoverDefaults', {projectId: targetProjectId});
-                    // R171：页内独立——全局投影读失败不影响本页刷新，如实记进扫描说明。
-                    const refreshNotes: string[] = [];
-                    await Promise.all([
-                      refreshMembers(targetProjectId).catch((e: unknown) => { refreshNotes.push(`成员投影刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
-                      refreshRooms(targetProjectId).catch((e: unknown) => { refreshNotes.push(`房间索引刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
-                    ]);
-                    setScanResult({projectId: targetProjectId, summary: `扫描完成：新增 ${result.created.length} 位 AI，已有 ${result.existing.length} 位。`, notes: [...result.notes, ...result.skipped.map(item => item.reason), ...refreshNotes]});
-                    // 只刷新本页仍需显示的项目；不因全局 active 不同而跳过（页内独立）。
-                    if (selectedRef.current === targetProjectId) await reload();
-                  } catch (error) {
-                    setScanResult({projectId: targetProjectId, summary: '扫描未完成', notes: [userFacingSystemText((error as Error).message)]});
-                  } finally { setScanning(false); }
-                }}>{scanning ? '扫描中…' : '扫描本机 AI'}</button> : null}
-                <button
-                  className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="刷新成员、工作量与房间名单">刷新</button>
-                {projArchived ? (
-                  <span className="members-head-note">项目已归档（只读）——不能添加成员</span>
-                ) : projRemoved ? (
-                  <span className="members-head-note">项目已移除——不能添加成员</span>
-                ) : (
-                  <button className="btn primary sm" disabled={projectId == null || projectId === ''} onClick={() => setAddFor(projectId)} title="添加一位使用本机已有渠道的 AI">
-                    <Icon name="user-plus" size={12} /> 添加 AI
-                  </button>
-                )}
-              </div>
-            </div>
-
+          <section className="project-content members-content">
+            {/* R183 第 3、5 项：右栏不再有「项目名 + N 名成员」标题块；筛选与两个动作同一行。 */}
             <div className="page-filters">
               <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:260}}/>
               <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
+              <button
+                className="btn ghost sm" data-zs-members-refresh onClick={() => { workload.refresh(); void reload(); }} title="刷新成员、工作量与房间名单">刷新</button>
+              <button
+                className="btn primary sm"
+                data-zs-members-add
+                disabled={scanning || !projectId || projArchived || projRemoved}
+                onClick={() => void beginAdd()}
+                title={projArchived || projRemoved ? '项目已归档或移除——不能添加成员' : '先扫描本机已有渠道，再打开添加弹窗'}
+              >
+                <Icon name="user-plus" size={12} /> {scanning ? '扫描本机 AI…' : '添加 AI'}
+              </button>
             </div>
 
-            {scanResult?.projectId === projectId ? <div className="panel info" role="status">
+            {/* R183 第 3 项：归档/移除仍要如实提示，但用轻量 note，不再恢复项目名大标题。 */}
+            {projArchived || projRemoved ? (
+              <div className="faint small" data-zs-members-readonly-note={projectId}>
+                {projArchived ? '项目已归档（只读）——不能添加成员或修改成员配置。' : '项目已移除——不能添加成员或修改成员配置。'}
+              </div>
+            ) : null}
+
+            {/* R183 第 4 项：扫描结果说明留在页面上（入口变成「添加 AI」后的可读反馈）。 */}
+            {scanResult?.projectId === projectId ? <div className="panel info" role="status" data-zs-members-scan-result={scanResult.projectId}>
               <div>{scanResult.summary}</div>
               {scanResult.notes.map((note, index) => <div className="small" key={index}>{note}</div>)}
             </div> : null}
@@ -425,15 +505,16 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             {membersInScope == null && scopeErr == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
             {membersInScope != null && membersInScope.length === 0 ? (
-              <div className="panel info">这个项目还没有 AI。点右上角「添加 AI」，选择已有渠道和模型即可开始。</div>
+              <div className="panel info">这个项目还没有 AI。点上方「添加 AI」，选择已有渠道和模型即可开始。</div>
             ) : null}
 
-            {/* 成员卡片（卡片内容不变：头像+名称+身份标签 / runtime 有效来源 / 在跑任务；
-                右栏按实际可用宽度自适应列数。） */}
+            {/* 成员卡片（头像+名称+身份标签 / runtime 有效来源 / 在跑任务；右栏自适应列数）。
+                R183 第 6 项：去掉自动生成的说明与 ★协调者 标签；名称/说明编辑移进「AI 设置」弹窗。 */}
             <div className="grid members-cards">
               {visibleMembers?.map((m) => {
                 const rt = runtimeLabel(m);
                 const running = workload.data?.items.find(row=>row.memberId===m.id);
+                const description = m.description != null && m.description !== '' && m.description !== AUTO_ADDED_MEMBER_DESCRIPTION ? m.description : null;
                 return (
                   <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} 的成员详情`}
                     role="link" tabIndex={0} style={{ cursor: 'pointer' }}
@@ -444,12 +525,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="row tight">
                           <span className="strong">{m.displayName}</span>
-                          {coordinatorIds.has(m.id) ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                           {m.principalType === 'agent' ? null : <Tag plain icon="users">人类</Tag>}
                           {m.enabled ? <Tag plain>启用</Tag> : <Tag tone="neutral" icon="slash">停用</Tag>}
                         </div>
                         <div className="small faint" style={{ marginTop: 3 }}>
-                          {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
+                          {description != null ? <div>{description}</div> : null}
                           {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }} title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span> : <span title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span>}
                         </div>
                       </div>
@@ -460,13 +540,12 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     </div>
                     {m.principalType === 'agent' ? (
                       <div className="row tight wrap" style={{ marginTop: 10 }}>
-                        <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
                         <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimeOf(m.id)?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
                         <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
                           title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
                           {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
                         </button>
-                        <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的渠道与模型" onClick={() => openBind(m)}>
+                        <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的渠道与模型；名称与说明也在这里修改" onClick={() => openBind(m)}>
                           AI 设置…
                         </button>
                       </div>
@@ -477,7 +556,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             </div>
 
             {membersInScope!=null && visibleMembers?.length===0 && membersInScope.length>0 ? <div className="panel">没有匹配的成员；筛选不会修改成员或任务。</div>:null}
-            <TemplatePanel projectId={projectId} scopeProjectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
+            <TemplatePanel projectId={projectId} scopeProjectId={projectId} readOnly={projArchived||projRemoved} onCreateFromTemplate={openAddFromTemplate}/>
             <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
             <div className="panel">
               <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
@@ -511,26 +590,32 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         </div>
       </div>
 
-      {editFor ? <EditMemberModal key={`${editFor.projectId}:${editFor.member.id}`} projectId={editFor.projectId} scopeProjectId={projectId} member={editFor.member} onClose={()=>setEditFor(null)} onSaved={async()=>{setEditFor(null);await reload();}}/>:null}
       {saveTemplateFor ? <SaveMemberTemplateModal key={`${saveTemplateFor.projectId}:${saveTemplateFor.member.id}`} projectId={saveTemplateFor.projectId} scopeProjectId={projectId} member={saveTemplateFor.member} onClose={()=>setSaveTemplateFor(null)} onSaved={()=>{setSaveTemplateFor(null);window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));}}/>:null}
       {addFor != null ? (
         <AddMemberModal
-          projectId={addFor}
-          projectName={projects.find((x) => x.id === addFor)?.displayName ?? addFor}
+          key={`${addFor.projectId}:${addFor.templateName ?? 'manual'}`}
+          projectId={addFor.projectId}
+          projectName={projects.find((x) => x.id === addFor.projectId)?.displayName ?? addFor.projectId}
           scopeProjectId={projectId}
           rooms={hasRoomsTruth ? rooms : null}
+          prefill={addFor.prefill}
+          templateName={addFor.templateName}
           onClose={() => setAddFor(null)}
           onCreated={async () => {
+            const addedProjectId = addFor.projectId;
             setAddFor(null);
             toast('已添加 AI 并保存配置', 'success');
-            await Promise.all([refreshRooms(addFor).catch(() => {}), refreshMembers(addFor).catch(() => {})]);
+            await Promise.all([refreshRooms(addedProjectId).catch(() => {}), refreshMembers(addedProjectId).catch(() => {})]);
             // R171：页内独立——只刷新本页仍在显示的项目；不因全局 active 不同而跳过或误刷别的项目。
-            if (selectedRef.current === addFor) await reload();
+            if (selectedRef.current === addedProjectId) await reload();
+            // R183 第 8 项：从模板创建后让模板面板也回读一次（模板本身没变，但列表与计数保持最新）。
+            window.dispatchEvent(new CustomEvent('zs-member-changed', { detail: { projectId: addedProjectId } }));
           }}
         />
       ) : null}
 
-      {/* AI 设置 弹窗（R66 P4：从行内表单收进弹窗——字段与命令不变） */}
+      {/* AI 设置 弹窗（R66 P4：从行内表单收进弹窗——字段与命令不变）。
+          R183 第 6 项：名称/说明编辑也并进这里（allowProfileEdit），成员管理页不再单独开「编辑资料」。 */}
       {bindFor != null && bindFor.member.principalType === 'agent' ? (
         <BindRuntimeModal
           member={bindFor.member}
@@ -538,6 +623,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           scopeProjectId={projectId}
           initial={bindForm}
           guard={guard}
+          allowProfileEdit
           onClose={() => setBindFor(null)}
           onSaved={async () => { setBindFor(null); await reload(); void refreshMembers(projectId).catch(() => { /* 投影刷新失败=发送区提示按旧事实多显示一轮，下次装载自对 */ }); }}
         />
@@ -546,21 +632,35 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   );
 }
 
-export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, guard, onClose, onSaved }: {
+export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, guard, onClose, onSaved, allowProfileEdit = false }: {
   member: MemberRow;
   projectId:string;
   /** R171：页内项目作用域（成员管理页里不切换全局焦点也能保存）；省略=按全局 active 校验。 */
   scopeProjectId?:string;
   initial: { kind: RuntimeKind; model: string; executable: string; permissionMode: string; effort?:string };
   guard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
+  /**
+   * R183 第 6 项：成员管理页把名称/说明编辑并进「AI 设置」弹窗（卡片上不再有「编辑资料」）；
+   * 成员详情页仍保留自己的「编辑名称与说明」入口，因此默认 false 时行为与以前一致。
+   */
+  allowProfileEdit?: boolean;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
   const targetProject=useRef(projectId).current;
   const formGuard=useFormGuard(targetProject,{scopeProjectId});
   const [form, setForm] = useState(initial);
+  /** 配置基线：只在打开时取一次，用来判断「配置是否真的改了」——没改就不发 member.setRuntime。 */
+  const initialForm = useRef(initial).current;
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // R183：名称/说明编辑（可选）——保存基线 + 最新 revision，供「先资料、后配置」两步写使用。
+  // 两步写不能共用打开时的 revision：member.update 成功后 settings_revision 会 +1，
+  // 后续 member.setRuntime 必须带**新** revision，否则会被 CAS 拒绝。
+  const [name, setName] = useState(member.displayName);
+  const [description, setDescription] = useState(member.description ?? '');
+  const [savedProfile, setSavedProfile] = useState({ name: member.displayName, description: member.description ?? '' });
+  const revisionRef = useRef(member.revision);
   // 头像与 AI 配置同一个弹窗保存：初始值取已存头像，没存过就是默认首字母头像。
   const memberSubject = `member:${member.id}`;
   const savedAvatars = useStore((s) => s.ui.avatars ?? {});
@@ -568,37 +668,88 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
   const mounted = useRef(false);
   const savePending = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  const nextName = name.trim();
+  const nextDescription = description.trim();
+  // 名称清空时按钮禁用，不算「改了资料」，这样只调配置时不会被空名称卡住。
+  const profileChanged = allowProfileEdit && nextName.length > 0 && (nextName !== savedProfile.name || nextDescription !== savedProfile.description);
+  const normalizedExecutable = form.executable.trim() || runtimeExecutable(form.kind);
+  const initialExecutable = initialForm.executable.trim() || runtimeExecutable(initialForm.kind);
+  const configChanged = form.kind !== initialForm.kind
+    || form.model.trim() !== initialForm.model.trim()
+    || normalizedExecutable !== initialExecutable
+    || form.permissionMode !== initialForm.permissionMode
+    || (form.effort ?? '') !== (initialForm.effort ?? '');
+  const avatarChanged = (savedAvatars[memberSubject] ?? null) !== avatar;
+  /** 成员管理页：两项与头像都没改就没有可保存的内容；成员详情页保持旧行为（点保存即写配置）。 */
+  const nothingChanged = !profileChanged && !configChanged && !avatarChanged;
+  const shouldWriteConfig = !allowProfileEdit || configChanged;
+
   const save = async () => {
-    if (savePending.current||!formGuard.valid()) return;
-    if (form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 需要选择模型', 'warn'); return; }
+    if (savePending.current || !formGuard.valid() || (allowProfileEdit && nothingChanged)) return;
+    if (allowProfileEdit && nextName.length === 0) { toast('成员名称不能为空白', 'warn'); return; }
+    // 只在配置真的要写时才要求 claude 有模型：只改名称/说明不应被未绑定的配置挡住。
+    if (shouldWriteConfig && form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 需要选择模型', 'warn'); return; }
     savePending.current = true; setBusy(true); setSaveError(null);
+    let profileSaved = false;
     try {
-      const outcome=await memberWrite(`member.setRuntime:${targetProject}:${member.id}`,'member.setRuntime', {projectId:targetProject,expectedRevision:member.revision,
-        memberId: member.id, kind: form.kind,
-        ...(form.model.trim().length > 0 ? { model: form.model.trim() } : {}),
-        executable: form.executable.trim() || runtimeExecutable(form.kind),
-        ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
-        ...(form.effort?{effort:form.effort}:{}),
-      });
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
-      if(!formGuard.valid())return;
-      const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
-      recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}`);
-      toast(`已保存 ${member.displayName} 的 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
-      // 头像与 AI 配置一起保存。头像写失败不回滚已保存的配置——如实提示，别让用户以为整单都没存。
-      if ((savedAvatars[memberSubject] ?? null) !== avatar) {
+      let revision = revisionRef.current;
+      if (profileChanged) {
+        const outcome = await memberWrite<{ revision?: number }>(`member.update:${targetProject}:${member.id}`, 'member.update', {
+          projectId: targetProject, memberId: member.id, expectedRevision: revision,
+          displayName: nextName, description: nextDescription,
+        });
+        if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试` : `${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+        if (!formGuard.valid()) return;
+        revision = typeof outcome.data?.revision === 'number' ? outcome.data.revision : revision + 1;
+        revisionRef.current = revision;
+        setSavedProfile({ name: nextName, description: nextDescription });
+        profileSaved = true;
+        recordWrite('member.update', `${nextName} → 名称与说明已更新`);
+        // 资料已经落库：先让页面背后的列表回读一次（弹窗可能随后因配置失败而保留，别让卡片显示旧名）。
+        window.dispatchEvent(new CustomEvent('zs-member-changed', { detail: { projectId: targetProject } }));
+      }
+      let configSaved = false;
+      if (shouldWriteConfig) {
+        const outcome = await memberWrite(`member.setRuntime:${targetProject}:${member.id}`, 'member.setRuntime', {
+          projectId: targetProject, expectedRevision: revision,
+          memberId: member.id, kind: form.kind,
+          ...(form.model.trim().length > 0 ? { model: form.model.trim() } : {}),
+          executable: normalizedExecutable,
+          ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
+          ...(form.effort ? { effort: form.effort } : {}),
+        });
+        if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试` : `${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+        if (!formGuard.valid()) return;
+        configSaved = true;
+        const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
+        recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}`);
+      }
+      // 头像与资料/配置一起保存。头像写失败不回滚已保存的内容——如实提示，别让用户以为整单都没存。
+      if (avatarChanged) {
         try {
           await saveAvatar(memberSubject, avatar);
           recordWrite('app.appearance.set', `${member.displayName} 头像${avatar == null ? '已恢复默认' : '已更新'}`);
         } catch (avatarError) {
-          toast(`AI 设置已保存，但头像未保存：${userFacingSystemText((avatarError as Error).message ?? '')}`, 'error');
+          toast(`已保存的内容不会丢，但头像未保存：${userFacingSystemText((avatarError as Error).message ?? '')}`, 'error');
         }
       }
-      if (mounted.current) await onSaved();
+      if (mounted.current) {
+        const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
+        if (profileSaved && configSaved) toast(`已保存 ${nextName} 的资料与 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
+        else if (profileSaved) toast(`已保存成员名称与说明：${nextName}`, 'success');
+        else if (configSaved) toast(`已保存 ${member.displayName} 的 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
+        else toast(`已更新 ${member.displayName} 的头像`, 'success');
+        await onSaved();
+      }
     } catch (e) {
-      if (!formGuard.valid())return;
-      if (mounted.current) setSaveError((e as Error).message);
-      toast(`绑定失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
+      if (!formGuard.valid()) return;
+      const failure = userFacingSystemText((e as Error).message ?? '');
+      if (mounted.current) {
+        // 部分成功必须如实分开说：资料已保存、配置没保存，弹窗保留且重试不会重复写资料。
+        setSaveError(profileSaved ? `名称与说明已保存，但 AI 设置未保存：${failure}。弹窗保留；重试只补保存 AI 设置，不会重复保存资料。` : `保存失败：${failure}`);
+      }
+      toast(profileSaved ? `资料已保存，但 AI 设置未保存：${failure}` : `保存失败：${failure}`, 'error'); // 防护模式拒真实绑定等真实原因上屏
     } finally { savePending.current = false; if (mounted.current) setBusy(false); }
   };
   return (
@@ -610,13 +761,18 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
         <>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary sm" disabled={busy||formGuard.invalid} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存 AI 设置'}</button>
+          <button className="btn primary sm" disabled={busy||formGuard.invalid||(allowProfileEdit&&nothingChanged)} title={allowProfileEdit&&nothingChanged ? '没有需要保存的修改' : undefined} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : allowProfileEdit ? '保存' : '保存 AI 设置'}</button>
         </>
       }
     >
       <div className="col" style={{ gap: 10 }}>
         {formGuard.invalid?<div className="panel warning">目标已切换，本表单作废；请关闭后重新配置。</div>:null}
-        {saveError != null ? <div className="panel warning">绑定失败：{userFacingSystemText(saveError ?? '')}。输入已保留，可调整后重试。</div> : null}
+        {saveError != null ? <div className="panel warning">{userFacingSystemText(saveError ?? '')}。输入已保留，可调整后重试。</div> : null}
+        {allowProfileEdit ? <>
+          <label className="field"><span className="field-label">名称</span><input className="input" data-zs-member-name value={name} maxLength={60} disabled={busy} onChange={e => { setName(e.target.value); if (saveError != null) setSaveError(null); }}/></label>
+          <label className="field"><span className="field-label">说明</span><textarea className="input" data-zs-member-description value={description} maxLength={200} disabled={busy} onChange={e => { setDescription(e.target.value); if (saveError != null) setSaveError(null); }}/></label>
+          <div className="field-hint">名称 1–60 字，说明最多 200 字；保存时先更新资料，再保存下面的 AI 设置。</div>
+        </> : null}
         <label className="field" title="选择本机已有的 AI 渠道">
           <span className="field-label">渠道</span>
           <Select
@@ -651,99 +807,6 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
           <div className="field-hint">{runtimePermissionHint(form.kind)}</div>
         </label>
         </details>
-      </div>
-    </Modal>
-  );
-}
-
-/** R67 P4 → R68 §5B → R171：添加成员（member.create——同名可重复=项目级实例）。弹窗**捕获打开时的
- * projectId**：存续期间本页切到别的项目 → 表单作废（提交禁用+可见说明），提交前再核对一次；
- * 迟到回执只刷新提交目标项目（onCreated 侧门控）。R171 起表单绑定**页内项目作用域**：
- * 页内选中项目不是侧栏 active 项目时同样能保存（memberWrite 本身按 params.projectId 工作）。 */
-function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, onClose, onCreated }: { projectId: string; projectName: string; scopeProjectId: string; rooms: PageRoomRow[] | null; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
-  const formGuard=useFormGuard(projectId,{scopeProjectId});
-  const inFlight=useRef(false);
-  const [name, setName] = useState('');
-  const [desc, setDesc] = useState('');
-  const [runtime,setRuntime]=useState({kind:'claude' as RealRuntimeKind,model:'',executable:runtimeExecutable('claude'),permissionMode:'bypassPermissions',effort:''});
-  const [useAsDefault,setUseAsDefault]=useState(true);
-  // 跟随所选渠道，用户明确选图后保留其选择。
-  const avatarTouched=useRef(false);
-  const [avatar,setAvatar]=useState<string | null>(()=>defaultAiAvatarPreset('claude').dataUrl);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // R171：加入房间的说明用**本页按项目取到的房间名单**（不再读只属于侧栏 active 项目的 store.rooms）。
-  const joinable = (rooms ?? []).filter((r) => r.archivedAt == null);
-  const stale = formGuard.invalid||scopeProjectId !== projectId; // 打开后本页切走——旧表单作废
-  const submit = async () => {
-    if(inFlight.current)return;
-    if (stale||!formGuard.valid()) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
-    if(runtime.kind==='claude'&&!runtime.model.trim()){setErr('请选择模型；若渠道未返回清单，可在高级设置指定模型 ID。');return;}
-    if (name.trim().length === 0) { setErr('请填写成员名称（不能为空白）'); return; }
-    inFlight.current=true;setBusy(true); setErr(null);
-    try {
-      const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}), runtime:{kind:runtime.kind,model:runtime.model.trim()||null,executable:runtime.executable.trim()||runtimeExecutable(runtime.kind),permissionMode:runtime.permissionMode,effort:runtime.effort||null},useAsDefault });
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
-      const r=outcome.data;
-      if(!formGuard.valid())return;
-      recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间）`);
-      // 成员已创建，头像单独写；写失败只提示，不让已经建好的成员变成"添加未确认"。
-      try {
-        await saveAvatar(`member:${r.memberId}`, avatar);
-        recordWrite('app.appearance.set', `新成员「${name.trim()}」头像${avatar == null ? '使用默认头像' : '已设置'}`);
-      } catch (avatarError) {
-        toast(`成员已创建，但头像未保存：${userFacingSystemText((avatarError as Error).message ?? '')}`, 'error');
-      }
-      await onCreated(r.memberId);
-    } catch (e) {
-      if(formGuard.valid())setErr(`添加未确认：${userFacingSystemText((e as Error).message ?? '')}`); // 归档/移除守卫等真实原因上屏
-    } finally { inFlight.current=false;if(formGuard.alive.current)setBusy(false); }
-  };
-  return (
-    <Modal
-      size="md"
-      title="添加 AI"
-      subtitle={`添加到 ${projectName}`}
-      onClose={onClose}
-      footer={
-        <>
-          <span className="small faint">{stale ? '本页已切到别的项目——表单作废' : rooms == null ? '正在读取本项目的房间名单…' : `创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
-          <div className="spacer" />
-          <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary sm" disabled={busy || stale} data-zs-member-addsave={projectId} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
-        </>
-      }
-    >
-      <div className="col" style={{ gap: 12 }}>
-        {stale ? (
-          <div className="panel warning" data-zs-member-addstale={projectId}>本页已切换到别的项目（不再是 {projectName}）——本表单已作废：为避免把旧输入写进别的项目，提交已禁用。请关闭后在新项目重新「添加成员」。</div>
-        ) : null}
-        <div className="field">
-          <label className="field-label">成员名称</label>
-          <input className="input" value={name} autoFocus placeholder="例如 审查者、实现者" onChange={(e) => { setName(e.target.value); if (err != null) setErr(null); }} />
-          <div className="field-hint">名称可以重复；同名成员各自独立。</div>
-        </div>
-        <div className="field">
-          <label className="field-label">说明（它会做什么）</label>
-          <input className="input" value={desc} placeholder="例如 实现与重构，偏好直接给结论" onChange={(e) => setDesc(e.target.value)} />
-          <div className="field-hint">出现在成员卡与 @ 选择里，帮模型判断该找谁。</div>
-        </div>
-        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind=>{setRuntime(f=>({...f,kind:kind as RealRuntimeKind,model:'',executable:runtimeExecutable(kind),effort:''}));if(!avatarTouched.current)setAvatar(defaultAiAvatarPreset(kind).dataUrl);}} options={[...RUNTIME_CHANNELS]}/></label>
-        <RuntimeChannelHelp kind={runtime.kind}/>
-        <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model=>setRuntime(f=>({...f,model,effort:''}))}/>
-        <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort=>setRuntime(f=>({...f,effort}))}/>
-        <AvatarPicker
-          value={avatar}
-          disabled={busy}
-          onChange={value=>{avatarTouched.current=true;setAvatar(value);}}
-        />
-        <label className="row tight"><input type="checkbox" checked={useAsDefault} disabled={busy} onChange={e=>setUseAsDefault(e.target.checked)}/>在没有可用协调者的房间中，默认由它接收消息</label>
-        <details><summary>高级：执行程序与权限</summary>
-          <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" disabled={busy} value={runtime.executable} placeholder="留空使用本机 CLI" onChange={e=>setRuntime(f=>({...f,executable:e.target.value}))}/></label>
-          <label className="field"><span className="field-label">执行权限</span><Select ariaLabel="新成员执行权限" value={runtime.permissionMode} disabled={busy} onChange={permissionMode=>setRuntime(f=>({...f,permissionMode}))} options={runtimePermissionOptions(runtime.permissionMode,runtime.kind)}/></label>
-          <div className="field-hint">{runtimePermissionHint(runtime.kind)}</div>
-        </details>
-        {err != null ? <div className="panel warning">{userFacingSystemText(err ?? '')}</div> : null}
       </div>
     </Modal>
   );

@@ -1,0 +1,68 @@
+/* R183 侧栏项目 / 房间拖动调换顺序（用户 2026-11-04 第 1 项）。
+   只负责拖动时的视觉反馈；顺序本身由 data/listOrder.ts 管（localStorage，不改 daemon 数据）。 */
+
+/* 可拖动的行：整行可抓；行内只负责点击的操作按钮（⋯/+/图钉/展开箭头）由各自样式保持 pointer，
+   且 App 的 pointerdown 记录会阻止从这些按钮起拖（见 SIDEBAR_DRAG_BLOCKING）。
+   user-select: none —— 防止从名字文字上按下时浏览器改成"拖选文字"而不是拖动整行。 */
+.side-project > .side-row[draggable='true'],
+.conversation-nav-row[draggable='true'] {
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 拖动中：源行半透明（表示「正在搬走这一行」），光标变成抓取状。 */
+.side-project.is-dragging > .side-row,
+.conversation-nav-row.is-dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+  transition: opacity 0.12s ease;
+}
+
+/* 落点指示：在目标行的上/下缘画一条 2px 强调色横线 = 「插到这里」。
+   用绝对定位的伪元素，不改变行高，也不会把列表挤动。 */
+.side-project.drop-before > .side-row::before,
+.side-project.drop-after > .side-row::after,
+.conversation-nav-row.drop-before::before,
+.conversation-nav-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.side-project > .side-row {
+  position: relative;
+}
+
+.side-project.drop-before > .side-row::before,
+.conversation-nav-row.drop-before::before {
+  top: -2px;
+}
+
+.side-project.drop-after > .side-row::after,
+.conversation-nav-row.drop-after::after {
+  bottom: -2px;
+}
+
+.conversation-nav-row {
+  position: relative;
+}
+
+/* 拖动提示：鼠标悬停行主体时给一点「可抓」的可发现性（拖动本身仍从行上开始）。 */
+.sidebar .side-project > .side-row:hover .side-item-label-btn,
+.sidebar .conversation-nav-row:hover .side-item {
+  cursor: grab;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-project.is-dragging > .side-row,
+  .conversation-nav-row.is-dragging {
+    transition: none;
+  }
+}

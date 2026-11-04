@@ -1,0 +1,219 @@
+/* R183 项目卡列（成员管理 / 任务看板共用）——用户 2026-11-04 第 2、3、9 项。
+   左栏是一列独立项目卡（点击切本页数据范围），与右栏之间一条 1px 竖线。
+   几何目标：卡片到页面左缘的留白 = 卡片到右栏内容的留白（用户反馈「左边留白比右边多」）。
+
+   --project-rail-gap 的取值 = 页面水平内边距 - --project-rail-inner：
+   · 普通窗口 .page padding-inline 24px（base.css）→ 8 + 16 = 24；
+   · ≥1700px 带鱼屏 .page padding-inline 40px（base.css @media）→ 8 + 32 = 40。
+   这样左右两段留白相等，卡片列不再看起来偏右。 */
+
+.project-split {
+  --project-rail-width: 280px;
+  --project-rail-inner: 8px;
+  --project-rail-gap: 16px;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--project-rail-gap);
+}
+
+/* 列间细分隔：贯穿整段两栏内容的一条 1px 竖线（贴在 280px 左栏的右缘）。
+   用定位线而不是给左栏加 border-right：左栏是 sticky + 内容高度，border 会只画到卡片底部。 */
+.project-split::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--project-rail-width);
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+
+@media (min-width: 1700px) {
+  .project-split {
+    --project-rail-gap: 32px;
+  }
+}
+
+/* 左栏：一列独立项目卡，滚动时吸顶。 */
+.project-rail {
+  flex: none;
+  width: var(--project-rail-width);
+  align-self: flex-start;
+  position: sticky;
+  top: var(--page-top-gap);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  /* 右侧留出与分隔线的呼吸；左缘与页面留白对齐（见上方几何目标）。 */
+  padding: 0 var(--project-rail-inner) 0 0;
+}
+
+.project-rail-title {
+  flex: none;
+  padding: 0 2px;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.project-rail-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* 独立项目卡：像私信里的会话卡（实底 + 细边 + 圆角）。 */
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 11px;
+  /* 实边：悬停/选中只换底色与边框色，尺寸不跳。 */
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.project-card:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* 当前项目：浅蓝绿渐变选中态（--grad-soft 垫主题面，规范 §2.0）。 */
+.project-card.is-current {
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  border-color: var(--accent-border);
+}
+
+.project-card-name {
+  overflow: hidden;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.project-card.is-current .project-card-name {
+  color: var(--accent-text);
+}
+
+/* meta 行常驻（min-height）：数字就绪前不显示，但卡片高度不跳。 */
+.project-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 16px;
+  font-size: var(--fs-11);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.project-card-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.project-card-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--warning);
+}
+
+.project-card-flag.muted {
+  color: var(--text-3);
+}
+
+.project-rail-empty {
+  padding: 2px;
+  line-height: 1.6;
+}
+
+/* 右栏：撑满剩余宽度，内部纵向间距统一。 */
+.project-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-content > * + * {
+  margin-top: var(--sp-3);
+}
+
+/* 筛选行常驻（滚动时停留在右栏顶部）。 */
+.project-content > .page-filters {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  margin-bottom: 0;
+  background: var(--bg-surface-2);
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+/* ≤980px：左栏变横向可滚动项目条（不占满一屏高度），右栏在下。 */
+@media (max-width: 980px) {
+  .project-split {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-3);
+  }
+
+  /* 竖线是桌面两栏的分隔，横排时去掉。 */
+  .project-split::before {
+    display: none;
+  }
+
+  .project-rail {
+    position: static;
+    width: 100%;
+    max-height: none;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 0 0 8px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .project-rail-title {
+    padding: 0;
+  }
+
+  .project-rail-list {
+    flex: 1 1 auto;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: var(--sp-2);
+    padding-bottom: 2px;
+  }
+
+  .project-card {
+    flex: none;
+    width: 196px;
+  }
+
+  .project-content > .page-filters {
+    position: static;
+    box-shadow: none;
+  }
+}

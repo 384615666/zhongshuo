@@ -9,10 +9,9 @@ import {RuntimeEffort} from './RuntimeEffort';
 import { runtimePermissionHint, runtimePermissionOptions } from '../lib/runtimePermissions';
 import { RuntimeChannelHelp } from './RuntimeChannelHelp';
 import { AvatarPicker } from './AvatarPicker';
-import { defaultAiAvatarPreset, findAvatarPreset, presetForDataUrl } from '../data/avatarPresets';
-import { saveAvatar } from '../data/memberAvatar';
+import { findAvatarPreset, presetForDataUrl } from '../data/avatarPresets';
 import { refreshDms, refreshMembers,refreshRooms } from '../loader';
-import { getState, toast, useStore } from '../shell';
+import { getState, useStore } from '../shell';
 import { useFormGuard } from '../lib/useFormGuard';
 export { useFormGuard } from '../lib/useFormGuard';
 import { memberWrite, pendingMemberWrites, memberWriteState, memberWriteStorageError, type MemberWrite } from '../data/memberWrites';
@@ -134,37 +133,16 @@ export function EditTemplateModal({ template: t, scopeProjectId, onClose, onSave
     <AvatarPicker value={avatar} disabled={f.busy||f.committed} allowCustom={false} onChange={setAvatar}/>
   </Modal>;
 }
-export function CreateFromTemplateModal({ projectId, scopeProjectId, template: t, onClose, onSaved }: {
-    projectId: string;
-    /** R171：页内项目作用域（成员管理页用）；省略=按全局 activeProjectId 校验。 */
-    scopeProjectId?: string;
-    template: ConfigTemplate;
-    onClose: () => void;
-    onSaved: () => void | Promise<void>;
-}) {
-    const project = useStore(s => s.projects.find(p => p.id === projectId));
-    const [name, setName] = useState(t.name), [desc, setDesc] = useState(t.description);
-    const [avatar, setAvatar] = useState<string | null>(() => findAvatarPreset(t.config.avatarPresetId ?? '')?.dataUrl ?? defaultAiAvatarPreset(t.config.kind).dataUrl);
-    const f = useWriteForm(`memberTemplate.createMember:${projectId}:${t.id}`, projectId, scopeProjectId);
-    return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name}`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent, data) => { const memberId = (data as { memberId?: string } | undefined)?.memberId; if (memberId != null) { try { await saveAvatar(`member:${memberId}`, avatar); } catch (error) { toast(`成员已创建，但头像未保存：${userFacingSystemText((error as Error).message ?? '')}`, 'error'); } } await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
-    {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>
-    <label className="field"><span className="field-label">成员名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-member-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">成员说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
-    <AvatarPicker value={avatar} disabled={f.busy||f.committed} allowCustom onChange={setAvatar}/>
-    <div className="panel">{t.config.kind} · {t.config.model ?? '模型由渠道默认'} · 保存权限 {t.config.permissionMode ?? '未指定'}<br />程序：{t.config.executable}<br />创建后不会自动开始任务，也不成为协调者；加入未归档房间只影响之后派发。</div>
-    <RuntimeChannelHelp kind={t.config.kind}/>
-  </Modal>;
-}
-export function TemplatePanel({ projectId, scopeProjectId, readOnly, onChanged }: {
+export function TemplatePanel({ projectId, scopeProjectId, readOnly, onCreateFromTemplate }: {
     projectId: string;
     /** R171：页内项目作用域（成员管理页用）；省略=按全局 activeProjectId 校验。 */
     scopeProjectId?: string;
     readOnly: boolean;
-    onChanged: () => void | Promise<void>;
+    /** R183 第 8 项：创建入口交回页面——打开与其他入口一致的「添加 AI」弹窗并预填模板值。
+     *  不在模板面板里再挂一个弹窗（两套创建表单会各自漂移）。 */
+    onCreateFromTemplate?: (template: ConfigTemplate) => void;
 }) {
-    const [rows, setRows] = useState<ConfigTemplate[] | null>(null), [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState<string | null>(null), [edit, setEdit] = useState<ConfigTemplate | null>(null), [create, setCreate] = useState<{
-        projectId: string;
-        template: ConfigTemplate;
-    } | null>(null);
+    const [rows, setRows] = useState<ConfigTemplate[] | null>(null), [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState<string | null>(null), [edit, setEdit] = useState<ConfigTemplate | null>(null);
     const seq = useRef(0), pending = useRef(false), queued=useRef(false),alive=useRef(false);
     const load = async (more = false) => { if (pending.current){queued.current=true;return;} pending.current = true; const n = ++seq.current; try {
         const r = await command<{
@@ -189,10 +167,28 @@ export function TemplatePanel({ projectId, scopeProjectId, readOnly, onChanged }
     return <><div className="section-title" style={{ marginTop: 22 }}>可复用的成员模板 <button className="btn ghost sm" onClick={() => void load()}>刷新模板</button></div>
     {error ? <div className="panel warning">模板读取失败：{userFacingSystemText(error ?? '')}（保留上次结果）</div> : null}
     {rows === null && !error ? <div className="panel info">正在读取模板…</div> : rows?.length === 0 ? <div className="panel">暂无配置模板。先配置成员，再从该成员保存模板。</div> : null}
-    <div className="grid grid-3" data-zs-template-list>{rows?.map(t => <div className="card tight" key={t.id} data-zs-template={t.id}><div className="strong">{t.name} · {t.enabled ? '启用' : '停用'}</div><div className="small faint">{t.description}</div><div className="small" style={{ marginTop: 8 }}>{t.config.kind} · {t.config.model ?? '渠道默认模型'} · {t.config.permissionMode ?? '渠道默认权限'}</div><details><summary>执行程序</summary><div className="small mono">{t.config.executable}</div></details><div className="row tight wrap" style={{ marginTop: 10 }}><button className="btn ghost sm" data-zs-template-edit={t.id} onClick={() => setEdit(t)}>编辑 / 停用</button><button className="btn primary sm" data-zs-template-create={t.id} disabled={!t.enabled || readOnly || !projectId} onClick={() => setCreate({ projectId, template: t })}>在本项目创建…</button></div></div>)}</div>
+    <div className="grid grid-3" data-zs-template-list>{rows?.map(t => (
+      /* R183 第 7 项：卡片只留名称、渠道/模型和两个入口——启用态不写「启用」，
+         停用态用极轻的「已停用」保留可读性（停用模板不能创建新成员，服务端同判）。 */
+      <div className="card tight" key={t.id} data-zs-template={t.id}>
+        <div className="row tight">
+          <span className="strong" style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }} title={t.name}>{t.name}</span>
+          {t.enabled ? null : <span className="faint small" title="已停用：不能用来创建新成员；已有成员不受影响">已停用</span>}
+        </div>
+        <div className="small faint">{t.config.kind} · {t.config.model ?? '渠道默认模型'}</div>
+        <div className="row tight wrap" style={{ marginTop: 10 }}>
+          <button className="btn ghost sm" data-zs-template-edit={t.id} onClick={() => setEdit(t)}>编辑…</button>
+          <button
+            className="btn primary sm"
+            data-zs-template-create={t.id}
+            disabled={!t.enabled || readOnly || !projectId || onCreateFromTemplate == null}
+            title={!t.enabled ? '模板已停用，不能创建新成员；已有成员不受影响' : readOnly ? '项目已归档或移除——不能添加成员' : undefined}
+            onClick={() => onCreateFromTemplate?.(t)}
+          >在本项目创建…</button>
+        </div>
+      </div>))}</div>
     {cursor ? <button className="btn sm" onClick={() => void load(true)}>加载更多模板</button> : null}
     {edit ? <EditTemplateModal key={edit.id} template={edit} scopeProjectId={scopeProjectId} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null);await load(); }}/> : null}
-    {create ? <CreateFromTemplateModal key={`${create.projectId}:${create.template.id}`} projectId={create.projectId} scopeProjectId={scopeProjectId} template={create.template} onClose={() => setCreate(null)} onSaved={async () => { setCreate(null);await onChanged(); }}/> : null}
   </>;
 }
 export function UnknownMemberOperations() {
