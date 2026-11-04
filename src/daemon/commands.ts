@@ -36,7 +36,7 @@ import {
   releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate, reworkPendingOf,
 } from '../persistence/stores/dm.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
-import {continueInterruptedTask,unstartedContinuationKey} from './taskContinuation.ts';
+import {continueInterruptedTask,continueStoppedTask,unstartedContinuationKey} from './taskContinuation.ts';
 import {readInterruptedTasks} from './recoveryTasks.ts';
 import { ensureDefaultProject, openProject, relocateProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
@@ -1820,6 +1820,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
+        const threadTaskSnapshot=params.target.kind==='thread'&&params.intent==='default'
+          ?deps.db.prepare(`SELECT t.id,t.status,t.revision,t.stop_generation,
+            (SELECT mode FROM workflow_runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1) mode
+            FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(params.target.threadId) as {id:string;status:string;revision:number;stop_generation:number;mode:string|null}|undefined
+          :undefined;
+        if(threadTaskSnapshot?.status==='CANCELLED'&&threadTaskSnapshot.mode==='DELIBERATE'
+          &&params.intent==='default'&&!params.collaboration&&!params.mentions.length)params.collaboration='deliberate';
         const requestedDeliberationBudget = parseDeliberationBudget(params.deliberationBudget);
         const resolveRequestCallBudget = (mode: CallBudgetMode, overrideLimit?: number | null): FrozenCallBudgetPolicy => {
           try {
@@ -1980,10 +1987,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
               const selection=params.intent==='default'?selectThreadRecipients(deps.db,thread.id,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,target):undefined;
               if(params.intent==='default'){
+                const current=thread.root_task_id?deps.db.prepare('SELECT status,revision,stop_generation FROM tasks WHERE id=?').get(thread.root_task_id) as {status:string;revision:number;stop_generation:number}|undefined:undefined;
+                if(current?.status==='CANCELLED'&&(!threadTaskSnapshot||threadTaskSnapshot.id!==thread.root_task_id
+                  ||current.revision!==threadTaskSnapshot.revision||current.stop_generation!==threadTaskSnapshot.stop_generation))
+                  throw new DaemonCommandError('STALE_REVISION','发送期间任务停止状态已变化；请刷新后重新发送，输入保留');
                 const released=thread.root_task_id?continueInterruptedTask(deps.db,thread.root_task_id):[];
                 for(const id of released)continuedTurns.add(id);
                 if(released.length&&isDispatchGateHeld(deps.db))openDispatchGate(deps.db);
                 assertThreadTaskReady(deps.db,thread.id);
+                if(thread.root_task_id)continueStoppedTask(deps.db,thread.root_task_id);
               }
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
               assertImageGate(resolvedAtts,params.intent==='default',params.imageAck,params.body,(selection?.recipientIds??[]).every(id=>memberImageCapability(deps.db,id).status==='supported'));
@@ -5458,8 +5470,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           assertTaskDispatchScope(deps.db, params.taskId);
           if (params.expectedTaskRevision != null && task.revision !== params.expectedTaskRevision) throw new DaemonCommandError('STALE_REVISION', '任务版本已变化——请刷新后按当前任务事实重试');
           if (params.expectedStopGeneration != null && task.stop_generation !== params.expectedStopGeneration) throw new DaemonCommandError('STALE_REVISION', '停止代次已变化——旧运行的继续请求已作废');
-          if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
-          if(task.stop_generation>0){const latest=deps.db.prepare('SELECT a.stop_generation_snapshot g FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1').get(params.taskId) as {g:number}|undefined;if(params.expectedStopGeneration!==task.stop_generation||latest?.g!==task.stop_generation)throw new DaemonCommandError('STALE_REVISION','任务停止已生效：旧代次不再追加 turn');}
+          const resumeStopped=env.method==='task.continue'&&task.status==='CANCELLED'&&task.stop_generation>0&&!params.formatRepair&&!params.analysisOnly&&!params.expectedRunStatus;
+          if (task.status==='DONE'||task.status==='CANCELLED'&&!resumeStopped) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
+          if(resumeStopped){
+            const latest=deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(task.id) as {id:string}|undefined;
+            if(params.expectedTaskRevision!==task.revision||params.expectedStopGeneration!==task.stop_generation
+              ||params.sourceRunId!=null&&params.sourceRunId!==latest?.id)
+              throw new DaemonCommandError('STALE_REVISION','停止状态已变化；请刷新后重新继续任务');
+          }
+          if(task.stop_generation>0&&!resumeStopped){const latest=deps.db.prepare('SELECT a.stop_generation_snapshot g FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1').get(params.taskId) as {g:number}|undefined;if(params.expectedStopGeneration!==task.stop_generation||latest?.g!==task.stop_generation)throw new DaemonCommandError('STALE_REVISION','任务停止已生效：旧代次不再追加 turn');}
           if(params.useCurrentExecutionSnapshot&&!params.formatRepair)throw new DaemonCommandError('VALIDATION_INVALID','当前配置补交仅用于已有输出的只读修复');
           if (params.expectedRunStatus != null) {
             if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
@@ -5472,7 +5491,29 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           // 用户继续时收口历史占用；随后仍核对实际在途执行，避免重复派发。
           if(!params.formatRepair){
             for(const id of continueInterruptedTask(deps.db,params.taskId))continuedTurns.add(id);
+            if(resumeStopped){continueStoppedTask(deps.db,task.id);task.status='ACTIVE';}
             if(isDispatchGateHeld(deps.db))openDispatchGate(deps.db);
+          }
+          if(resumeStopped){
+            const thread=deps.db.prepare(`SELECT th.id,th.project_id,th.conversation_id,th.room_id,th.last_message_seq,
+              (SELECT mode FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1) mode
+              FROM conversation_threads th WHERE th.root_task_id=?`).get(task.id,task.id) as
+              {id:string;project_id:string;conversation_id:string;room_id:string;last_message_seq:number;mode:string}|undefined;
+            if(thread){
+              // Use the same per-message path as typing Continue. The stopped
+              // run may itself be a follow-up with a different route/member.
+              const selection=selectThreadRecipients(deps.db,thread.id,[],undefined,thread.mode==='DELIBERATE'?'deliberate':undefined);
+              if(selection.route.kind!=='dispatch')throw new DaemonCommandError('VALIDATION_INVALID','本串没有可继续的 AI');
+              const maxTurns=selection.route.mode==='DELIBERATE'
+                ?deriveDeliberateMaxTurns(selection.route.frozenMemberIds.length,{expectsCheckpointRound3:true}).withRevision:undefined;
+              const budget=callBudgetSnapshotObject(resolveNewCallBudget(deps.db,selection.route.mode,maxTurns));
+              const message=insertThreadMessage(deps.db,{projectId:thread.project_id,conversationId:thread.conversation_id,
+                roomId:thread.room_id,threadId:thread.id,threadMessageSeq:thread.last_message_seq+1,
+                body:'继续',mentions:[],authorId:deps.localUserId,taskId:task.id});
+              deps.db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.conversationIntent','default') WHERE id=?").run(message.messageId);
+              const dispatchKey=enqueueThreadReply(deps.db,thread.id,message.messageId,message.threadMessageSeq,selection,deps.localUserId,budget);
+              return{enqueued:true as const,dispatchKey,formatRepair:false,sourceRunId:params.sourceRunId??null};
+            }
           }
           // A queued request may be waiting on an interrupted DIFFERENT task.
           // Continue that existing request, rather than rerunning the old task or

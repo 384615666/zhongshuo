@@ -2398,9 +2398,9 @@ export class DispatchWorker {
   /** A user continuation closes this attempt without rewriting its UNKNOWN
    * business result. Later runtime output is historical evidence only. */
   private wasContinuedByUser(turnId:string):boolean {
-    return this.db.prepare(`SELECT 1 FROM domain_events WHERE turn_id=? AND kind='recovery.protectionReleased'
-      AND json_extract(payload_json,'$.released')=1
-      AND json_extract(payload_json,'$.reason')='user-continue-interrupted-task' LIMIT 1`).get(turnId)!=null;
+    return this.db.prepare(`SELECT 1 FROM domain_events WHERE turn_id=? AND (kind='turn.supersededByContinue'
+      OR kind='recovery.protectionReleased' AND json_extract(payload_json,'$.released')=1
+      AND json_extract(payload_json,'$.reason')='user-continue-interrupted-task') LIMIT 1`).get(turnId)!=null;
   }
 
   private auditEventAfterContinue(task:TaskRow,runId:string,turnId:string,event:NormalizedRuntimeEvent):void {

@@ -133,7 +133,7 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       await f.cmd('room.archive',{roomId:f.room.id,expectedRevision:revision+1,action:'unarchive'});await f.cmd('message.submit',f.params('恢复后明确提问'));await f.worker.runOnce();expect(f.count('agent_turns')).toBe(2);
     }finally{f.db.close();}
   });
-  it('stopping the active reply durably cancels queued intents and rejects further automatic continuation',async()=>{
+  it('stopping cancels queued intents; only a fresh user message may explicitly continue',async()=>{
     const f=await fixture([final('你好！'),[{kind:'stall',ms:250},...final('不可迟到复活')]]);
     try{
       await f.cmd('message.submit',f.params('正在回答的提问'));const executing=f.worker.runOnce();
@@ -142,7 +142,11 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       const queued=await f.cmd<Root>('message.submit',f.params('还在排队的提问'));
       await f.cmd('task.stop',{taskId:f.root.taskId,targetRunId:run.id,expectedStopGeneration:0});await executing;await f.worker.runOnce();
       expect(f.count('agent_turns')).toBe(2);expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'cancelled'});
-      expect((await f.raw('message.submit',f.params('停止后不自动恢复'))).error?.code).toBe('TASK_STOPPED');
+      await f.worker.drain();expect(f.count('agent_turns')).toBe(2);
+      const follow=await f.cmd<Root>('message.submit',f.params('用户主动继续'));
+      expect(follow.taskId).toBe(f.root.taskId);
+      expect(f.db.prepare('SELECT status,stop_generation FROM tasks WHERE id=?').get(f.root.taskId)).toEqual({status:'ACTIVE',stop_generation:1});
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'cancelled'});
     }finally{f.db.close();}
   });
   it('an accepted ordinary reply remains held across a real database reopen and startup recovery without a new turn',async()=>{

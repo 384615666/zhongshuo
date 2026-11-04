@@ -24,6 +24,7 @@ import {unstartedContinuationKey} from './taskContinuation.ts';
 
 interface TaskRow {
   id: string;
+  parent_task_id: string | null;
   project_id: string;
   conversation_id: string;
   kind: 'room_task' | 'dm_turn';
@@ -442,7 +443,7 @@ export function readTaskExecutionStatus(
   options: { includeActions?: boolean } = {},
 ): TaskExecutionStatus | null {
   const task = db.prepare(`
-    SELECT t.id,t.project_id,t.conversation_id,t.kind,t.room_id,t.conversation_thread_id,
+    SELECT t.id,t.parent_task_id,t.project_id,t.conversation_id,t.kind,t.room_id,t.conversation_thread_id,
            t.status,t.revision,t.stop_generation,t.owner_member_id,t.title,t.current_delivery_id,
            pm.display_name AS owner_display_name,c.kind AS conversation_kind
     FROM tasks t
@@ -1242,7 +1243,9 @@ export function readTaskExecutionStatus(
     }
     const recoveryTurnId = unknownTurns[0]?.id ?? (blockerReason === 'unknown-turn' ? blocker?.blockingTurnId : null)
       ?? recovery?.fact.turnId;
-    if (recoveryTurnId != null) {
+    const stoppedRoot=task.status==='CANCELLED'&&task.stop_generation>0&&task.parent_task_id==null
+      &&assessTaskRedispatchReadiness(db,task.id,{allowInterrupted:true})==null;
+    if (recoveryTurnId != null||stoppedRoot) {
       addAction({
         id: `continue:${task.id}:${task.revision}`,
         kind: 'continue',

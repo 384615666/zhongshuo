@@ -815,5 +815,6 @@ export function settleStoppedCoordination(db:ZhongshuoDatabase,taskId:string,tar
   if(active)return;
   db.prepare("UPDATE workflow_runs SET status='CANCELLED' WHERE id IN (?,?) AND status IN ('RUNNING','WAITING','STOPPING')").run(run.run_id,run.integration_run_id);
   const latest=db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId) as {id:string}|undefined;
-  if(latest&&(latest.id===run.run_id||latest.id===run.integration_run_id))db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(taskId);
+  const continued=latest&&db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='task.resumed' LIMIT 1").get(taskId,latest.id);
+  if(latest&&!continued&&(latest.id===run.run_id||latest.id===run.integration_run_id))db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(taskId);
 }

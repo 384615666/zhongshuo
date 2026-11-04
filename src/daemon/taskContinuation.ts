@@ -1,6 +1,33 @@
 import {randomUUID} from 'node:crypto';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import {appendDomainEvent} from '../persistence/events.ts';
+import {assessTaskRedispatchReadiness} from '../persistence/stores/recoveryGuard.ts';
+import {DaemonCommandError} from './commandError.ts';
+
+/** Only an accepted user command may reopen a stopped root. Keep the stop
+ * generation and all old execution/queue facts: only the new intent may run. */
+export function continueStoppedTask(db:ZhongshuoDatabase,taskId:string,now=Date.now()):void {
+  const task=db.prepare('SELECT project_id,conversation_id,conversation_thread_id,parent_task_id,status,stop_generation FROM tasks WHERE id=?')
+    .get(taskId) as {project_id:string;conversation_id:string;conversation_thread_id:string|null;parent_task_id:string|null;status:string;stop_generation:number}|undefined;
+  if(task?.status!=='CANCELLED')return;
+  if(task.stop_generation===0)throw new DaemonCommandError('STALE_REVISION','任务已结束；请新建工作请求');
+  if(task.parent_task_id)throw new DaemonCommandError('STALE_REVISION','已停止的协作步骤不能单独恢复；请从原任务继续');
+  const blocked=assessTaskRedispatchReadiness(db,taskId);
+  if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
+  const source=db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId) as {id:string}|undefined;
+  const turns=db.prepare(`WITH RECURSIVE scope(id) AS (
+    SELECT id FROM tasks WHERE id=? UNION SELECT t.id FROM tasks t JOIN scope s ON t.parent_task_id=s.id
+  ) SELECT a.id,a.run_id,r.task_id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id
+    WHERE r.task_id IN (SELECT id FROM scope) AND NOT EXISTS(SELECT 1 FROM domain_events e
+      WHERE e.turn_id=a.id AND e.kind='turn.supersededByContinue')`).all(taskId) as {id:string;run_id:string;task_id:string}[];
+  for(const turn of turns)appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,
+    taskId:turn.task_id,runId:turn.run_id,turnId:turn.id,kind:'turn.supersededByContinue',createdAt:now,
+    payload:{requestTaskId:taskId,stopGeneration:task.stop_generation}});
+  db.prepare("UPDATE tasks SET status='ACTIVE',revision=revision+1 WHERE id=? AND status='CANCELLED'").run(taskId);
+  appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,
+    conversationId:task.conversation_id,threadId:task.conversation_thread_id,taskId,runId:source?.id,
+    kind:'task.resumed',createdAt:now,payload:{stopGeneration:task.stop_generation}});
+}
 
 /** Durable proof that a previous continuation was consumed before any model or
  * coordination execution was created. A done queue flag alone is insufficient. */
