@@ -3,7 +3,7 @@
 
 按用户反馈完成三项 UI 调整：移除侧栏/命令面板/项目设置中的「待我处理」入口与跳转文案，保留线程内已有验收能力；项目 ⋯ 菜单只保留置顶项目、项目主页、项目设置，编辑信息、归档、移除与归档管理统一收进项目设置，新增移除确认与归档管理入口；标题栏切换项目时识别文件/Git 路由并保留当前页签，避免从 Git 页切换项目后整体布局错位。
 
-验证：hifi 类型检查通过；UI 构建通过（保留既有 import.meta 警告）；浏览器回归 uiR135 + navigationPinsR160 为 2 文件 3 项通过；隔离文件页截图 codex-ui-files 通过，文件页顶栏 42px、无错误。已基于提交 879e900 生成便携包 BUILD `bld_09f7e4521ff48df1`，桌面验证全通过；生成 beta.27 安装器 BUILD `bld_f9f31a5a4d4a2885`，667 文件、160178749 字节，SHA256 `258c53b76bdc0c180c8970d0e8b92c6dc1156708b6846b3fdb8c832302efc60a`；beta.26→beta.27 合成安装/升级/卸载 32/32 通过，真实模型调用 0。verify-pack 的 daemon 启动/关闭、受管任务/停止、依赖缺失拒绝均通过，截止恢复断言仍受既有 `releaseProtection` 状态变化语义影响而报 1 项失败；未操作用户运行数据。
+验证与交付：hifi 类型检查、UI 构建（既有 import.meta 警告）、浏览器 uiR135 + navigationPinsR160（2文件3项）及隔离文件页截图均通过。最终程序提交 `8059008`，干净便携 BUILD `bld_944405ede541a731`，桌面8项全部通过；beta.27安装 BUILD `bld_df1418cbe5440fb1`，667文件清单逐项核验通过，EXE 160153877字节，SHA256 `8db23078cbd40f2db41c90820007bdcf820dbfc5dea5399d90928d9e67aff3b7`，未签名。beta.26→beta.27合成安装/升级/卸载32/32通过，最终安装镜像与该验收镜像667份payload内容完全一致。verify-pack隔离默认成员发现后15/16通过：旧断言要求无租约的releaseProtection.stateChanged=false，但现行为true，UNKNOWN/settled及进程退出观察正常；重复结果一致，不归因为时序抖动。验收脚本曾改写四个系统快捷方式、卸载登记及AUMID，已依据本机beta.26记录恢复并回读核对；原安装目录与聊天数据未覆盖，真实模型调用0。源码推送main，安装器保留在dist/installers，未创建GitHub Release。
 
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
