@@ -16,6 +16,9 @@ export function deepseekHarnessCapabilities(): RuntimeCapabilities {
 }
 export interface ExternalModel { id: string; label: string; efforts?: string[] }
 const PROFILE_ARGS = ['--profile', 'zhongshuo'];
+// The official composition loads providers before announcing appReady. Use the
+// same bounded startup window for execution and metadata discovery.
+const STARTUP_TIMEOUT_MS = 30000;
 
 export class DeepSeekHarnessAdapter extends CliTurnAdapter {
   constructor(options: CliAdapterOptions = {}) { super('deepseek-harness', DSH_ADAPTER_VERSION, options); }
@@ -40,7 +43,11 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
       throw new AdapterCallError('STALE_EXECUTION', 'DeepSeek Harness 程序或配置已变化，请重新发送', true);
   }
   protected begin(session: CliSession, turn: CliTurn): void {
-    this.timer(turn, () => { if (!turn.ready && !turn.terminal) this.protocolFailure(session, turn, 'Harness 连接组件没有完成握手，请检查安装'); }, this.options.requestTimeoutMs ?? 10000);
+    this.timer(turn, () => {
+      if (turn.ready || turn.terminal) return;
+      this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 启动等待超时，尚未收到连接组件就绪确认；请检查官方 dsh 的启动和渠道连接后重试');
+      this.stopProcess(turn);
+    }, this.options.requestTimeoutMs ?? STARTUP_TIMEOUT_MS);
   }
   protected cancel(_session: CliSession, turn: CliTurn): void { this.send(turn, { v: 1, type: 'cancel', requestId: turn.requestId }); }
   protected onFrame(session: CliSession, turn: CliTurn, frame: Record<string, unknown>): void {
@@ -54,7 +61,7 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
       if ((turn.input.outputSchema && frame.capabilities.outputSchema !== true) ||
         (turn.input.repairOnly && frame.capabilities.formatRepair !== true) ||
         (turn.input.stage === 'coordination.planning' && frame.capabilities.planningOnly !== true)) {
-        this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 连接组件需要升级；请运行新版便携包中的 DeepSeek Harness 连接组件安装入口后再继续任务', true);
+        this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 连接组件需要升级；请运行当前安装目录 runtime-tools/deepseek-harness/setup.cmd 后再继续任务', true);
         return;
       }
       this.send(turn, { v: 1, type: 'execute', requestId: turn.requestId, cwd: session.ref.cwd, prompt: turn.input.text,
@@ -110,7 +117,7 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
     const output = await new Promise<string>((resolve, reject) => execFile(entry.command, [...entry.prefixArgs, ...PROFILE_ARGS, flag],
       // Provider catalogs can refresh at startup. A metadata timeout must not
       // misdiagnose a healthy connector as missing or erase configured providers.
-      { cwd: this.options.cwd, env: entry.env ? { ...process.env, ...entry.env } : undefined, windowsHide: true, timeout: this.options.requestTimeoutMs ?? 30000, maxBuffer: 1024 * 1024 },
+      { cwd: this.options.cwd, env: entry.env ? { ...process.env, ...entry.env } : undefined, windowsHide: true, timeout: this.options.requestTimeoutMs ?? STARTUP_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
       (error, stdout) => {
         if (!error) { resolve(stdout); return; }
         const issue = error as Error & { killed?: boolean; code?: string | number };

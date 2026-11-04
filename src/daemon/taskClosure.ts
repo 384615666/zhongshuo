@@ -41,18 +41,31 @@ function recoveryRows(db: ZhongshuoDatabase, taskId: string): RecoveryRow[] {
 /** Task IDs are compared literally (never LIKE patterns). Durable relational
  * owners also cover nonstandard keys and old reply/repair dispatch identities. */
 function scopedOutbox(db: ZhongshuoDatabase, taskId: string): ScopedOutboxRow[] {
-  const rows = db.prepare(`WITH owned AS (SELECT o.id,o.dispatch_key,o.status,o.lease_owner,o.lease_until,
-    (EXISTS(SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id
-      WHERE r.task_id=? AND (a.id=o.turn_id OR a.dispatch_key=o.dispatch_key))
-    OR EXISTS(SELECT 1 FROM thread_reply_requests q WHERE q.task_id=? AND (q.dispatch_key=o.dispatch_key OR q.dispatch_identity=o.dispatch_key))
-    OR EXISTS(SELECT 1 FROM conversation_reply_requests q WHERE q.task_id=? AND q.dispatch_key=o.dispatch_key)
-    OR EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.task_id=? AND f.target_dispatch_key=o.dispatch_key)
-    OR EXISTS(SELECT 1 FROM domain_events e WHERE e.task_id=? AND e.kind IN ('task.redispatchEnqueued','task.resumeEnqueued')
-      AND CASE WHEN json_valid(e.payload_json) THEN json_extract(e.payload_json,'$.dispatchKey') END=o.dispatch_key)
-    OR EXISTS(SELECT 1 FROM daemon_state d WHERE d.key GLOB 'automatic-recovery:*' AND json_valid(d.value)
-      AND json_extract(d.value,'$.taskId')=? AND json_extract(d.value,'$.targetDispatchKey')=o.dispatch_key)) AS linked FROM outbox o)
+  // Build this task's durable identities once. Correlated EXISTS per outbox
+  // row multiplied history scans by every queued item and every descendant.
+  const rows = db.prepare(`WITH
+    owned_turns AS MATERIALIZED (
+      SELECT a.id,a.dispatch_key FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?
+    ),
+    owned_keys AS MATERIALIZED (
+      SELECT dispatch_key FROM owned_turns
+      UNION SELECT dispatch_key FROM thread_reply_requests WHERE task_id=?
+      UNION SELECT dispatch_identity FROM thread_reply_requests WHERE task_id=?
+      UNION SELECT dispatch_key FROM conversation_reply_requests WHERE task_id=?
+      UNION SELECT target_dispatch_key FROM format_repair_workitems WHERE task_id=?
+      UNION SELECT CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.dispatchKey') END
+        FROM domain_events WHERE task_id=? AND kind IN ('task.redispatchEnqueued','task.resumeEnqueued')
+      UNION SELECT json_extract(value,'$.targetDispatchKey') FROM daemon_state
+        WHERE key GLOB 'automatic-recovery:*'
+          AND CASE WHEN json_valid(value) THEN json_extract(value,'$.taskId') END=?
+    ),
+    owned AS MATERIALIZED (
+      SELECT o.id,o.dispatch_key,o.status,o.lease_owner,o.lease_until,
+        (o.turn_id IN (SELECT id FROM owned_turns) OR o.dispatch_key IN (SELECT * FROM owned_keys)) AS linked
+      FROM outbox o
+    )
     SELECT * FROM owned WHERE linked OR substr(dispatch_key,1,length(?))=? OR substr(dispatch_key,1,length(?))=?
-    ORDER BY id`).all(taskId,taskId,taskId,taskId,taskId,taskId,
+    ORDER BY id`).all(taskId,taskId,taskId,taskId,taskId,taskId,taskId,
       `task:${taskId}:`,`task:${taskId}:`,`dmtask:${taskId}:`,`dmtask:${taskId}:`) as Array<ScopedOutboxRow & {dispatch_key:string;linked:number}>;
   return rows.filter(row => {
     if (row.linked) return true;

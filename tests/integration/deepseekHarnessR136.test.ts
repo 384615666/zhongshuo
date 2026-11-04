@@ -8,18 +8,18 @@ const fixture = fileURLToPath(new URL('../fixtures/externalRuntimeR136.mjs', imp
 const adapters: DeepSeekHarnessAdapter[] = [];
 const input = (threadId = 'thread'): OpenSessionInput => ({projectId:'p',memberId:'m',taskId:'t',threadId,sessionGeneration:0,cwd:process.cwd(),policyId:'policy-full',writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[process.cwd()],identityKey:'test'}});
 const request = (text = '中文🙂\n$() `touch` & literal'): TurnRequest => ({turnId:'turn',dispatchKey:'dispatch',inputBundleId:'bundle',text,policyId:'policy-full',taskRevision:0});
-function adapter(scenario = 'success', observe?: (args: string[]) => void) {
-  const result = new DeepSeekHarnessAdapter({executable:process.execPath,model:'deepseek/test',spawnFn:(_command,args,cwd)=>{
+function adapter(scenario = 'success', observe?: (args: string[]) => void, requestTimeoutMs?: number) {
+  const result = new DeepSeekHarnessAdapter({executable:process.execPath,model:'deepseek/test',requestTimeoutMs,spawnFn:(_command,args,cwd)=>{
     observe?.(args);return spawn(process.execPath,[fixture,scenario,...args],{cwd,stdio:'pipe',windowsHide:true});
   }});adapters.push(result);return result;
 }
-async function terminal(adapter: RuntimeAdapter, session: SessionRef) {
+async function terminal(adapter: RuntimeAdapter, session: SessionRef, timeoutMs = 4000) {
   const collected: NormalizedRuntimeEvent[] = [];
   const iterator = adapter.events(session)[Symbol.asyncIterator]();
   const timer = setTimeout(()=>{},5000);
   try {
     for (;;) {
-      const next = await Promise.race([iterator.next(),new Promise<never>((_resolve,reject)=>setTimeout(()=>reject(Error('no terminal')),4000).unref())]);
+      const next = await Promise.race([iterator.next(),new Promise<never>((_resolve,reject)=>setTimeout(()=>reject(Error('no terminal')),timeoutMs).unref())]);
       if(next.done)throw Error('closed without terminal');collected.push(next.value);
       if(next.value.kind==='turn.completed'||next.value.kind==='turn.failed'||next.value.kind==='process.exited')return collected;
     }
@@ -72,6 +72,20 @@ describe('DeepSeek Harness structured profile and actual child lifecycle',()=>{
   it('honors cancellation during the handshake without executing the prompt',async()=>{
     const a=adapter('slow-ready');const s=await a.openSession(input());await a.startTurn(s,request());await a.interrupt(s,'turn');
     const events=await terminal(a,s);expect(events.some(e=>e.kind==='turn.started')).toBe(false);expect(events.at(-1)).toMatchObject({kind:'turn.failed',code:'INTERRUPTED'});
+  });
+  it('allows the native composition to take over ten seconds before ready without declaring incompatibility',async()=>{
+    const a=adapter('cold-start'),s=await a.openSession(input());await a.startTurn(s,request());
+    const events=await terminal(a,s,15000);
+    expect(events.at(-1)).toMatchObject({kind:'turn.completed'});
+    expect(events.some(e=>e.kind==='turn.failed')).toBe(false);
+    expect(await a.waitForTurnExit(s,'turn',3000)).toMatchObject({exitConfirmed:true});
+  },20000);
+  it('bounds startup without sending a prompt or misreporting protocol incompatibility',async()=>{
+    const a=adapter('no-ready',undefined,150),s=await a.openSession(input());await a.startTurn(s,request());
+    const events=await terminal(a,s);
+    expect(events.at(-1)).toMatchObject({kind:'turn.failed',code:'CAPABILITY_UNSUPPORTED',message:expect.stringContaining('启动等待超时')});
+    expect(events.some(e=>e.kind==='turn.started'||e.kind==='session.ready'||e.kind==='turn.completed')).toBe(false);
+    expect(await a.waitForTurnExit(s,'turn',3000)).toMatchObject({exitConfirmed:true});
   });
   it('rejects unsupported scopes, images and malformed repair requests before starting any child',async()=>{
     let calls=0;const a=adapter('success',()=>{calls++;});const readOnly=await a.openSession({...input(),writeAccess:undefined});

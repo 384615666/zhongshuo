@@ -195,9 +195,18 @@ describe('R128 explicit closure of unfinished, idle tasks', () => {
     expect(readTaskClosure(f.db,'root')).toMatchObject({available:false,blockReason:{code:'WORKER_STILL_RUNNING'}});
   });
 
-  it.each(['canonical','reply','repair','recovery','turn','pending-owner'] as const)('rejects claimed %s outbox ownership without releasing or changing it', kind => {
+  it.each(['canonical','reply','repair','recovery','turn','turn-key','event','reply-identity','pending-owner'] as const)('rejects claimed %s outbox ownership without releasing or changing it', kind => {
     const f=fixture(); f.run(); f.turn(); let key:string;
     if (kind==='reply') key=f.reply('thread_reply_requests','root','turn-run-root','queued','nonstandard-reply').key;
+    else if (kind==='reply-identity') {
+      const reply=f.reply('thread_reply_requests');key='legacy-dispatch-identity';f.outbox(key);
+      f.db.prepare('UPDATE thread_reply_requests SET dispatch_identity=? WHERE message_id=?').run(key,reply.id);
+    }
+    else if (kind==='turn-key') {key='turn-key:turn-run-root';f.outbox(key);}
+    else if (kind==='event') {
+      key='event-linked-dispatch';f.outbox(key);
+      appendDomainEvent(f.db,{eventId:'owned-dispatch',schemaVersion:1,kind:'task.resumeEnqueued',projectId:'p',conversationId:'conv',taskId:'root',payload:{dispatchKey:key},createdAt:1});
+    }
     else if (kind==='repair') key=f.repair();
     else if (kind==='recovery') {key=f.recovery().targetDispatchKey; f.outbox(key);}
     else {key=kind==='turn'?'turn-linked-custom':'task:root:initial'; f.outbox(key,'pending',kind==='turn'?'turn-run-root':null);}

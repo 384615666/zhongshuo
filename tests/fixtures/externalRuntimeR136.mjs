@@ -34,5 +34,6 @@ if (process.argv.includes('--zs-probe')) {
   });
   const handshake = () => send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,pluginVersion:'test',capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,...(scenario==='old-plugin'?{}:{outputSchema:true,formatRepair:true})}});
   if (scenario === 'slow-ready') setTimeout(handshake,150);
-  else handshake();
+  else if (scenario === 'cold-start') setTimeout(handshake,10500);
+  else if (scenario !== 'no-ready') handshake();
 }
