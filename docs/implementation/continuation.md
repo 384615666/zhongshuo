@@ -8,7 +8,7 @@
 
 验证：R183 隔离截图场景 **15/15 场景、85/85 断言通过**（`dist/r183-ui/r183-final/`）；几何旧→新 1360 宽 24/36→**24/24**、1873 宽 40/36→**40/40**（成员页与看板差 0）；浏览器测试 `memberChannelsR136`（46 checks×2 渠道，含扫描并入、模板预填走 member.create、两步写 revision）+ 新增 `listOrderR183` 11 项 → **2 文件 15 测试通过**；hifi tsc 0 错、改动文件 eslint 0 新增，根 tsc 仅既有未跟踪 R130/R180 夹具与既有 localOpen DOM 错误；完整跟踪套件（清 `ELECTRON_RUN_AS_NODE`）382 文件（378 过/2 跳/2 失败）、3570 项（3519 过/26 预期失败/16 跳过/9 失败），9 项失败全在本机未跟踪 R130 夹具（历史数据目录缺失），跟踪 0 非预期失败；`coordinationManifestR154` 并发跑偶发 5s 超时、单跑 8/8（既有 flake）；R170 旧截图脚本回归 15/16（唯一 dm-r177 为 seed 耦合，带 `--r177` 单跑通过）。驱动/焦点语义未变、零真实模型。
 
-交付：用户最新要求（R182 记录）是「等另一位 AI 修复前端后统一打包」；本轮完成前端部分，程序提交 `da8f505`（父提交 `6a0fce6`，含 R182 后端修复），据此统一构建 0.1.3-beta.28 Windows 安装包（构建结果与校验见下一条补记）。未安装/升级/卸载，未操作用户运行数据，未推送 GitHub Release。见 [R183](../reviews/r183-ui-feedback-20261105.md)。
+交付：用户最新要求（R182 记录）是「等另一位 AI 修复前端后统一打包」；本轮完成前端部分，程序提交 `da8f505`（父提交 `6a0fce6`，含 R182 后端修复），据此统一构建 0.1.3-beta.28 Windows 安装包。干净 worktree `dist/r183-source`（commit `187bb14`，status 0 改动）构建：便携镜像 BUILD `bld_2032d61079bb6402` clean、667 文件 MANIFEST 逐项 SHA256 核验 0 不符；安装器 BUILD `bld_13ac0d2b2a83cf96`，安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.28-x64.exe` **160,168,614 字节**，SHA256 `5d6a1e25429705969ae908fb883e1d4a78227d8ab4aeeaff40f898c81ab32bf5`，未签名，附 `.sha256`/`.release.json`。**未安装/升级/卸载，未运行静默安装验收，未操作用户运行数据与程序，零真实模型；未创建 GitHub Release。** 源码推送 main。见 [R183](../reviews/r183-ui-feedback-20261105.md)。
 
 ## 2026-11-05：R182 房间查询超时与协作卡住（仅提交代码，版本预留beta.28）
 
