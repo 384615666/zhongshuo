@@ -141,20 +141,22 @@ export async function loadFileForResource(resource: PreviewResource, revision: n
   // pdf：previewPdf 一次取字节+文本层页码（服务端页数事实）。
   if (kind === 'pdf') {
     const r = await command<{ totalPages: number; hash: string; revision: number | string; bytesBase64?: string; parser?: string }>('attachment.previewPdf', { attachmentId, page: 1, includeBytes: true });
+    const bytes=r.bytesBase64!=null?base64ToBytes(r.bytesBase64):null;
     return {
-      kind, bytes: r.bytesBase64 != null ? base64ToBytes(r.bytesBase64) : null, text: null,
-      originalBytes: r.bytesBase64 != null ? base64ToBytes(r.bytesBase64).length : 0,
+      kind, bytes, text: null,
+      originalBytes: bytes?.length??0,
       hash: r.hash, revision: typeof r.revision === 'number' ? r.revision : revision, filename: title,
       office: { parser: r.parser },
     };
   }
   // office（docx/xlsx/pptx）：previewOffice includeBytes 一次取提取+字节（P1-D 分列态含字节）。
   const r = await command<OfficePreviewData>('attachment.previewOffice', { attachmentId, includeBytes: true });
+  const bytes=r.bytesBase64!=null?base64ToBytes(r.bytesBase64):null;
   return {
     kind,
-    bytes: r.bytesBase64 != null ? base64ToBytes(r.bytesBase64) : null,
+    bytes,
     text: null,
-    originalBytes: r.bytesBase64 != null ? base64ToBytes(r.bytesBase64).length : 0,
+    originalBytes: bytes?.length??0,
     hash: r.hash,
     revision: typeof r.revision === 'number' ? r.revision : revision,
     filename: r.filename ?? title,

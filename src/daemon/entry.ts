@@ -382,6 +382,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       async (envelope) => dispatchDaemonCommand(makeCommandDeps(), envelope),
       { authToken: credential.token },
     );
+    // Upgrading an enabled root must not leave an invisible listener running.
+    if(process.env.ZS_REMOTE_ADVANCED!=='1') db!.prepare('UPDATE remote_config SET enabled=0,allow_lan=0 WHERE id=1').run();
     const remoteInitial = readRemoteConfig(db!);
     if (remoteInitial.enabled) {
       try {

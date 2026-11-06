@@ -92,7 +92,9 @@ export async function copyClosedDataRoot(input:{source:string;destinationParent:
   verifyDatabase:(copy:string)=>Promise<{schemaVersion:number}>|{schemaVersion:number};onProgress?:(progress:DataCopyProgress)=>void;
   beforeCopyFile?:(relativePath:string)=>void|Promise<void>;
 }):Promise<DataCopyResult>{
-  const resolved=await resolveLocalDataSource(input.source),source=resolved.root,parent=realpathSync(input.destinationParent);
+  const resolved=await resolveLocalDataSource(input.source),source=resolved.root;
+  let parent:string;
+  try{parent=realpathSync(input.destinationParent);}catch(error){throw new Error('DATA_TARGET_INVALID：请选择可用的文件夹存放新副本。',{cause:error});}
   if(!lstatSync(parent).isDirectory())throw Error('DATA_TARGET_INVALID：请选择存放新副本的文件夹。');
   if(contained(source,parent))throw Error('DATA_PATH_OVERLAP：新副本不能放在原数据内部。');
   assertDataRootClosed(source);

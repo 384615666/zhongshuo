@@ -67,15 +67,16 @@ export function parseImageMeta(buf: Buffer): ImageMeta | null {
   // JPEG：SOI + 扫 SOFn（C0-CF 除 C4/C8/CC）取高宽
   if (buf[0] === 0xff && buf[1] === 0xd8) {
     let off = 2;
-    while (off + 9 < Math.min(buf.length, 256 * 1024)) {
+    while (off + 4 <= buf.length) {
       if (buf[off] !== 0xff) { off += 1; continue; }
       const marker = buf[off + 1]!;
       if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd9)) { off += 2; continue; }
       const len = buf.readUInt16BE(off + 2);
+      if (len < 2 || off + 2 + len > buf.length) return null;
       if ((marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc)) {
+        if (len < 8) return null;
         return { mime: 'image/jpeg', height: buf.readUInt16BE(off + 5), width: buf.readUInt16BE(off + 7) };
       }
-      if (len < 2) return null;
       off += 2 + len;
     }
     return null; // 未找到 SOF=损坏/非常规

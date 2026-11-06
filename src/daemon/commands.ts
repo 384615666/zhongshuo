@@ -1,3 +1,6 @@
+import {userFacingSystemText} from '../contracts/userFacingText.ts';
+import {hasVisibleText} from '../contracts/visibleText.ts';
+import {artifactPath,bindArtifactDataRoot} from '../persistence/artifactPath.ts';
 import {runtimeKindSchema,isRuntimeKind,isRealRuntimeKind,runtimeExecutable} from '../contracts/runtimeKinds.ts';
 import {isExternalRuntimeKind,externalRuntimeMetadata} from './externalRuntime.ts';
 import {TaskNotificationError,pollTaskNotifications,claimTaskNotification,ackTaskNotification} from './taskNotifications.ts';
@@ -369,7 +372,7 @@ const messageSubmitParams = z.strictObject({
   // 表格注入范围（第二十九轮四）：artifactId → "Sheet1!A1:D20"；缺省=有界默认窗口（非全量）。
   attachmentRanges: z.record(z.string().min(1), z.string().min(1).max(200)).optional(),
 }).superRefine((p, ctx) => {
-  if (p.body.trim().length === 0 && (p.attachmentRefs == null || p.attachmentRefs.length === 0)) {
+  if (!hasVisibleText(p.body) && (p.attachmentRefs == null || p.attachmentRefs.length === 0)) {
     ctx.addIssue({ code: 'custom', message: '正文与附件不能同时为空（没有正文时须携带至少一个可发送的附件引用；上传中/失败资源不算就绪附件）' });
   }
 });
@@ -822,7 +825,7 @@ function deliveryFactsOfTask(db: ZhongshuoDatabase, taskId: string): DeliveryFac
   }
   if (report == null) return null;
   try {
-    const payload = JSON.parse(readFileSync(report.blob_path, 'utf8')) as Record<string, unknown>;
+    const payload = JSON.parse(readFileSync(artifactPath(db,report.blob_path), 'utf8')) as Record<string, unknown>;
     const status = payload.deliveryStatus === 'delivered' || payload.deliveryStatus === 'delivered_with_questions'
       || payload.deliveryStatus === 'needs_user' || payload.deliveryStatus === 'blocked' || payload.deliveryStatus === 'legacy'
       ? payload.deliveryStatus : 'legacy';
@@ -966,6 +969,7 @@ function writeRemoteAudit(deps: DaemonCommandDeps, method: string, commandId: st
 }
 
 export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: unknown): Promise<unknown> {
+  if(deps.appDataDir)bindArtifactDataRoot(deps.db,deps.appDataDir);
   // 远程审计包装（第三十二轮一）：请求事实（含重放）独立留痕；上下文由服务端注入——
   // 不信客户端自报身份；同 commandId 幂等语义不变（重放不重复执行业务）。
   const method0 = (envelope as { method?: unknown })?.method;
@@ -2666,8 +2670,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           maxBytes: z.number().int().positive().optional(),
         }).parse(env.params);
         if (deps.appDataDir == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', 'daemon 未配置 appDataDir（内容前像存储不可用）');
-        const { captureBaseline } = await import('./changeset.ts');
-        const r = captureBaseline(deps.db, {
+        const { captureBaselineAsync: captureBaseline } = await import('./changeset.ts');
+        const r = await captureBaseline(deps.db, {
           projectId: params.projectId, taskId: params.taskId ?? null, runId: params.runId ?? null,
           paths: params.paths, appDataDir: deps.appDataDir, now: Date.now(),
         });
@@ -4242,6 +4246,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         } });
       }
       case 'remote.config.set': {
+        if(process.env.ZS_REMOTE_ADVANCED!=='1') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED','本版本未开放远程访问');
         // 远程配置写入+服务生命周期联动（entry 注入 remoteControl；测试直连=明确拒绝）。
         const params = z.strictObject({
           enabled: z.boolean(),
@@ -4256,6 +4261,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: { config: result.data, ...(outcome !== undefined && 'stopped' in (outcome as object) ? { stopped: true } : outcome) } });
       }
       case 'remote.pairing.create': {
+        if(process.env.ZS_REMOTE_ADVANCED!=='1') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED','本版本未开放远程访问');
         // 配对码创建（仅本机可信 UI；HTTP 面不暴露）。码只在本响应出现一次（摘要落库）。
         const params = z.strictObject({ code: z.string().min(8).max(64).optional(), ttlMs: z.number().int().min(1000).max(600_000).optional() }).parse(env.params);
         const cur = deps.remoteControl?.current() ?? null;
@@ -5030,6 +5036,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         return withCommandId({ ok: true, data: { ids, hasStateDb } });
       }
+      case 'app.storage.cleanup': {
+        if(deps.remoteAudit)throw new DaemonCommandError('FORBIDDEN','存储清理仅限本机操作');
+        z.strictObject({}).parse(env.params);
+        const {maintainStorage}=await import('./storageMaintenance.ts');
+        return withCommandId({ok:true,data:await maintainStorage(deps.db,deps.appDataDir??process.env.ZS_APP_DATA??process.cwd())});
+      }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
         const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY])).min(1) }).parse(env.params);
@@ -5316,7 +5328,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
         const report = deps.db.prepare("SELECT id, blob_path FROM artifacts WHERE task_id = ? AND kind = 'final_report' ORDER BY revision DESC LIMIT 1").get(params.taskId) as { id: string; blob_path: string } | undefined;
         if (report == null) return withCommandId({ ok: true, data: { report: null } });
-        const payload = JSON.parse(readFileSync(report.blob_path, 'utf8')) as Record<string, unknown>;
+        const payload = JSON.parse(readFileSync(artifactPath(deps.db,report.blob_path), 'utf8')) as Record<string, unknown>;
         return withCommandId({ ok: true, data: { report: { artifactId: report.id, ...payload } } });
       }
       case 'dispatch.resume': {
@@ -5478,7 +5490,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               ||params.sourceRunId!=null&&params.sourceRunId!==latest?.id)
               throw new DaemonCommandError('STALE_REVISION','停止状态已变化；请刷新后重新继续任务');
           }
-          if(task.stop_generation>0&&!resumeStopped){const latest=deps.db.prepare('SELECT a.stop_generation_snapshot g FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1').get(params.taskId) as {g:number}|undefined;if(params.expectedStopGeneration!==task.stop_generation||latest?.g!==task.stop_generation)throw new DaemonCommandError('STALE_REVISION','任务停止已生效：旧代次不再追加 turn');}
+          if(task.stop_generation>0&&!resumeStopped){
+            const latest=deps.db.prepare('SELECT r.id,r.status,a.stop_generation_snapshot g FROM workflow_runs r LEFT JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=? ORDER BY r.rowid DESC,a.rowid DESC LIMIT 1').get(params.taskId) as {id:string;status:string;g:number}|undefined;
+            const interrupted=env.method==='task.continue'&&!params.formatRepair&&!params.analysisOnly
+              &&params.expectedTaskRevision===task.revision&&params.expectedStopGeneration===task.stop_generation
+              &&latest?.status==='INTERRUPTED'&&(params.sourceRunId==null||params.sourceRunId===latest.id);
+            if(params.expectedStopGeneration!==task.stop_generation||latest?.g!==task.stop_generation&&!interrupted)
+              throw new DaemonCommandError('STALE_REVISION','任务停止已生效：旧代次不再追加 turn');
+          }
           if(params.useCurrentExecutionSnapshot&&!params.formatRepair)throw new DaemonCommandError('VALIDATION_INVALID','当前配置补交仅用于已有输出的只读修复');
           if (params.expectedRunStatus != null) {
             if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
@@ -5793,7 +5812,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     }
     if(error instanceof TaskNotificationError)return withCommandId({ok:false,error:{code:error.code,message:error.message,retryable:false}});
     if (error instanceof z.ZodError) {
-      return withCommandId({ ok: false, error: { code: 'VALIDATION_INVALID', message: error.issues[0]?.message ?? '参数无效', retryable: false } });
+      return withCommandId({ ok: false, error: { code: 'VALIDATION_INVALID', message: userFacingSystemText(error.issues[0]?.message ?? '参数无效'), details:{issues:error.issues}, retryable: false } });
     }
     // 不吞异常假装成功（§16.5）。
     return withCommandId({ ok: false, error: { code: 'STORAGE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error), retryable: false } });

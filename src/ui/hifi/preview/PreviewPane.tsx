@@ -1,4 +1,5 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
+import {ByteLru} from '../lib/byteLru';
 /**
  * 共享预览面板（R69 统一阅读器重做）：**壳=参考 ZCode 三层结构**（标签条→面包屑行→内容区，
  * 对照 reference-*.png 五图与 zai-org/ZCode @29628c9 PreviewPane.tsx/AnimatedSidePanePanel），
@@ -707,7 +708,7 @@ export function PreviewPane({
 function kindOfTitle(r: PreviewResource): LoadedFile['kind'] {
   return worktreeKindCache.get(r.id) ?? formatKindOf(r.title);
 }
-const worktreeKindCache = new Map<string, LoadedFile['kind']>();
+const worktreeKindCache = new ByteLru<LoadedFile['kind']>(()=>64,4096,64);
 function attachmentKindToFormat(kind: string, title: string): LoadedFile['kind'] | 'delivery' | 'unsupported' {
   switch (kind) {
     case 'slides_file': return 'pptx';
@@ -727,7 +728,7 @@ const scrollTimer = { current: 0 as number | undefined };
    工作区快照（R67 P1-A）
    ============================================================ */
 
-const worktreeSnapshots = new Map<string, { bytesBase64: string; sha256: string; bytes: number; mtimeMs: number }>();
+const worktreeSnapshots = new ByteLru<{ bytesBase64: string; sha256: string; bytes: number; mtimeMs: number }>(v=>v.bytesBase64.length*2);
 
 /* ============================================================
    文件风味（文本类阅读方式推导——R66 P2 口径保留）
@@ -762,17 +763,19 @@ function flavorByExt(filename: string, formalKind: string): FileFlavor {
 /** 装载缓存（R70 F3/F4）：键=资源:版本 → LoadedFile（含稳定 bytes 引用）。切标签回来自
  * 缓存瞬时恢复（字节身份不变=引擎不重开）；脏重载 bump 版本=新键新快照。上限 12 条
  * 逐出最旧（bytes 持有大文件的内存有界）。 */
-const loadedCache = new Map<string, LoadedFile>();
-function cachedLoad(key: string, load: () => Promise<LoadedFile>): Promise<LoadedFile> {
+const loadedCache = new ByteLru<LoadedFile>(v=>(v.bytes?.byteLength??0)+(v.text?.length??0)*2+(v.image?.dataUrl.length??0)*2+(v.office?JSON.stringify(v.office).length*2:0));
+function cachedLoad(key: string, load: () => Promise<LoadedFile>,alive:()=>boolean): Promise<LoadedFile> {
   const hit = loadedCache.get(key);
   if (hit != null) return Promise.resolve(hit);
   return load().then((r) => {
     if (loadedCache.size >= 12) loadedCache.delete(loadedCache.keys().next().value as string);
-    loadedCache.set(key, r);
+    if(alive())loadedCache.set(key, r);
     return r;
   });
 }
 function dropLoadedCache(resourceId: string): void {
+  worktreeKindCache.delete(resourceId);
+  for(const cache of [worktreeSnapshots,deliveryDocs])for(const key of [...cache.keys()])if(key.startsWith(`${resourceId}:`))cache.delete(key);
   for (const k of [...loadedCache.keys()]) {
     if (k.startsWith(`${resourceId}:`)) loadedCache.delete(k);
   }
@@ -794,7 +797,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onDownlo
     const gen = ++genRef.current;
     let done = false;
     setErr(null); setLoaded(null);
-    void cachedLoad(`${stateKey}${nonce > 0 ? `:r${nonce}` : ''}`, () => loadFileForResource(resource, revision.revision))
+    void cachedLoad(`${stateKey}${nonce > 0 ? `:r${nonce}` : ''}`, () => loadFileForResource(resource, revision.revision),()=>!done&&gen===genRef.current)
       .then((r) => {
         if (done || gen !== genRef.current) return;
         setLoaded(r);
@@ -903,7 +906,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onDownlo
   }
   if (loaded.kind === 'image' && loaded.image != null) {
     return <ImageView key={`${stateKey}:${nonce}`} resourceId={resource.id} revision={revision.revision}
-      dataUrl={loaded.image.dataUrl} filename={loaded.filename}
+      dataUrl={loaded.image.dataUrl} imageWidth={loaded.image.width} imageHeight={loaded.image.height} filename={loaded.filename}
       onRetry={() => setNonce((n) => n + 1)} onDownload={dl} />;
   }
 
@@ -1059,7 +1062,7 @@ interface TaskCompleteDoc {
 }
 
 /** 交付文档装载缓存（resourceId:revision → 文档）——下载原文件用同一份文本，不二次请求。 */
-const deliveryDocs = new Map<string, { text: string | null; hashMatch: boolean | null; bytes: number }>();
+const deliveryDocs = new ByteLru<{ text: string | null; hashMatch: boolean | null; bytes: number }>(v=>(v.text?.length??0)*2);
 
 function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrapSource, onOpenWorktreeFile }: {
   resource: PreviewResource; revision: ResourceRevision; rawText: string;

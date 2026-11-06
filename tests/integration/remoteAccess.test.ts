@@ -25,6 +25,7 @@ import { ensureServerIdentity, type RemoteServerIdentity } from '../../src/daemo
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
+process.env.ZS_REMOTE_ADVANCED = '1';
 delete process.env.ZS_APP_DATA;
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-remote-'));

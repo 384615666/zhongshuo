@@ -11,11 +11,11 @@ export function validatedImages(input: TurnRequest) {
       : raw[0] === 255 && raw[1] === 216 ? 'image/jpeg'
       : /^GIF8[79]a$/.test(raw.subarray(0, 6).toString('ascii')) ? 'image/gif'
       : raw.subarray(0, 4).toString('ascii') === 'RIFF' && raw.subarray(8, 12).toString('ascii') === 'WEBP' ? 'image/webp' : null;
-    if (raw.length > 8 * 1024 * 1024 || mime !== image.mime || createHash('sha256').update(raw).digest('hex') !== image.hash) {
-      throw new AdapterCallError('VALIDATION_INVALID', '图片输入字节、格式、容量或 hash 校验失败');
+    if (mime !== image.mime || createHash('sha256').update(raw).digest('hex') !== image.hash) {
+      throw new AdapterCallError('VALIDATION_INVALID', '图片输入字节、格式或 hash 校验失败', true);
     }
   }
-  if (input.text.trim().length === 0 && images.length === 0) throw new AdapterCallError('VALIDATION_INVALID', '模型输入为空');
+  if (input.text.trim().length === 0 && images.length === 0) throw new AdapterCallError('VALIDATION_INVALID', '模型输入为空', true);
   return images;
 }
 

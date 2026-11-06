@@ -26,7 +26,7 @@ import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
 import { ExecutionConcurrencyPanel } from '../components/ExecutionConcurrencyPanel';
-import { Switch, Tag } from '../components/ui';
+import { Modal, Switch, Tag } from '../components/ui';
 import { AvatarPicker } from '../components/AvatarPicker';
 import {
   CALL_BUDGET_ENABLED_SETTING_KEY,
@@ -570,6 +570,9 @@ function SectionData() {
   const draftPersist = useStore((st) => st.draftPersist);
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
   const [cleared, setCleared] = useState<string | null>(null);
+  const [clearConfirm,setClearConfirm]=useState(false);
+  const [cleanupBusy,setCleanupBusy]=useState(false);
+  const [cleanupResult,setCleanupResult]=useState<string|null>(null);
   const [importBusy, setImportBusy] = useState<string | null>(null);
   const [dataOp, setDataOp] = useState<DataOperationStatus | null>(null);
   const [dataOpError, setDataOpError] = useState<string | null>(null);
@@ -596,10 +599,11 @@ function SectionData() {
     } finally { setDataOpBusy(null); }
   };
   const clearDrafts = () => {
+    setClearConfirm(false);
     const r = clearPersistedSnapshot();
     if (!r.ok) { toast(userFacingSystemText(r.error ?? '清理失败'), 'error'); return; }
     if (!r.hadKey) { setCleared('没有已保存的草稿'); toast('没有已保存的草稿', 'info'); return; }
-    recordWrite('drafts.clear', `清空本地草稿（未确认发送一并清除；当前页面内容保留到关闭）`);
+    recordWrite('drafts.clear', `清空本地草稿（内存与保存快照同步清除；未确认发送保留保护）`);
     setCleared(`${new Date().toLocaleTimeString()} 已清除本地草稿（之后输入会重新保存）`);
     toast('本地草稿已清除', 'success');
   };
@@ -657,9 +661,14 @@ function SectionData() {
         <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）" control={
           <div className="row tight">
             <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试保存</button>
-            <button className="btn sm" onClick={clearDrafts}>清理本地草稿</button>
+            <button className="btn sm" disabled={draftPersist.mode==='locked'} onClick={()=>setClearConfirm(true)}>清理本地草稿</button>
           </div>
         } />
+        {clearConfirm?<Modal title="清理本地草稿" onClose={()=>setClearConfirm(false)} footer={<><button className="btn" onClick={()=>setClearConfirm(false)}>取消</button><button className="btn primary" onClick={clearDrafts}>确认清理</button></>}><p>将清除当前数据目录的本地草稿，无法恢复。发送结果尚未确认或处于保全锁定时会拒绝清理。</p></Modal>:null}
+        <SettingsRow label="清理存储" hint="回收七天前无引用的变更前像、清理九十天前的回执正文；保留历史、撤销与防重复记录" control={<button className="btn sm" disabled={cleanupBusy} onClick={()=>{
+          setCleanupBusy(true);void command<{reclaimedBytes:number;expiredReceipts:number;skippedActive:boolean}>('app.storage.cleanup',{}).then(r=>setCleanupResult(r.skippedActive?'仍有执行或待核对占用，请结束后重试':`已释放 ${(r.reclaimedBytes/1024/1024).toFixed(1)} MB，清理 ${r.expiredReceipts} 条过期回执正文`)).catch(e=>toast(userFacingSystemText(e.message),'error')).finally(()=>setCleanupBusy(false));
+        }}>{cleanupBusy?'清理中…':'清理存储'}</button>}/>
+        {cleanupResult?<div className="small faint settings-note">{cleanupResult}</div>:null}
         {cleared != null ? <div className="small faint settings-note">{cleared}</div> : null}
         <SettingsRow
           label="从旧版本导入草稿"

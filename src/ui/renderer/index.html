@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;" />
   <title>众说</title>
+  <script src="theme-init.js"></script>
   <link rel="icon" type="image/png" href="assets/logo.png" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -79,7 +80,7 @@
             <div><b>文件修改</b>：同一目录同时只安排一个写入任务；实际修改文件仍需相应权限。</div>
           </div>
         </details>
-        <details id="remote-settings" class="help-panel">
+        <details id="remote-settings" class="help-panel hidden" hidden>
           <summary>远程访问</summary>
           <div class="help-body">
             <div><b>远程访问</b>：默认<b>关闭</b>。启用后通过 HTTPS 访问；局域网访问需选择对应地址。配对前请核对证书指纹，配对设备拥有与本机相同的权限。</div>

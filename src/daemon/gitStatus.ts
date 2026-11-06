@@ -32,9 +32,21 @@ export interface GitCapture {
  * 执行 git 并完整采集 stdout；仅测试显式传 capBytes 时截断并终止。
  * stderr 上限 16KB。读取类命令统一走这里；env 需要显式传入（写命令不剥离用户配置）。
  */
-export function captureGit(args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv }): Promise<GitCapture> {
+export function captureGit(args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv; timeoutMs?:number }): Promise<GitCapture> {
   return new Promise((resolveCapture) => {
-    const child = spawn('git', args as string[], { cwd: options.cwd, env: options.env ?? process.env, windowsHide: true });
+    const child = spawn('git', ['-c','core.quotepath=false',...args], { cwd: options.cwd, env: options.env ?? process.env, windowsHide: true, detached:process.platform!=='win32' });
+    let timedOut=false;
+    const configured=Number(process.env.ZS_GIT_TIMEOUT_MS);
+    const timeoutMs=options.timeoutMs??(Number.isFinite(configured)&&configured>=100?Math.min(configured,300_000):120_000);
+    const killTree=():void=>{
+      if(child.pid==null)return;
+      if(process.platform==='win32') {
+        const killer=spawn('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true});
+        killer.on('error',()=>{child.kill('SIGKILL');});
+      } else { try { process.kill(-child.pid,'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+    };
+    const timer=setTimeout(()=>{timedOut=true;killTree();},timeoutMs);
+    timer.unref?.();
     const outChunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
     let outBytes = 0;
@@ -44,12 +56,13 @@ export function captureGit(args: readonly string[], options: { cwd?: string; cap
     const finish = (exitCode: number | null, spawnError?: string): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       resolveCapture({
         exitCode,
         stdout: Buffer.concat(outChunks),
         stderr: Buffer.concat(errChunks).toString('utf8'),
         truncated,
-        ...(spawnError != null ? { spawnError } : {}),
+        ...(timedOut?{spawnError:'Git 操作超时，已中止；请检查网络或仓库后重试'}:spawnError != null ? { spawnError } : {}),
       });
     };
     child.stdout.on('data', (chunk: Buffer) => {
@@ -60,7 +73,7 @@ export function captureGit(args: readonly string[], options: { cwd?: string; cap
         const headroom = options.capBytes - (outBytes - chunk.length);
         if (headroom > 0) outChunks.push(chunk.subarray(0, headroom));
         truncated = true;
-        child.kill('SIGKILL');
+        killTree();
         return;
       }
       outChunks.push(chunk);
@@ -88,23 +101,11 @@ function readDiffEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
 const GIT_TIMEOUT_MS = 15_000;
 
 async function runGitOk(args: readonly string[], options: { cwd?: string; capBytes?: number; env?: NodeJS.ProcessEnv; what: string }): Promise<GitCapture> {
-  const cap = await withTimeout(captureGit(args, options), GIT_TIMEOUT_MS, options.what);
+  const cap = await captureGit(args, {...options,timeoutMs:GIT_TIMEOUT_MS});
   if (cap.spawnError != null) {
     throw new GitProtocolError('GIT_COMMAND_FAILED', `git ${options.what} 无法执行（${cap.spawnError}）`);
   }
   return cap;
-}
-
-async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      p,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new GitProtocolError('GIT_COMMAND_FAILED', `git ${what} 超时（>${ms}ms）——按失败处理，不当作空结果`)); }, ms); }),
-    ]);
-  } finally {
-    if (timer != null) clearTimeout(timer);
-  }
 }
 
 export class GitProtocolError extends Error {

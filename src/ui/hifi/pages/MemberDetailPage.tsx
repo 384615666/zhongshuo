@@ -96,7 +96,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
           </div>
           <div className="page-head-actions">
             <button className="btn sm" onClick={() => navigate(`/project/${projectId}/members`)}><Icon name="arrow-left" size={12} /> 返回成员管理</button>
-            {member?.principalType === 'agent' ? <button className="btn sm" disabled={busy || member == null} onClick={() => void toggle()}><Icon name={member.enabled ? 'pause' : 'play'} size={12} /> {member.enabled ? '停用成员' : '启用成员'}</button> : null}
+            {member?.principalType === 'agent' ? <button className="btn sm" disabled={busy || member == null || project.archivedAt!=null || project.removedAt!=null} onClick={() => void toggle()}><Icon name={member.enabled ? 'pause' : 'play'} size={12} /> {member.enabled ? '停用成员' : '启用成员'}</button> : null}
           </div>
         </div>
 
@@ -132,7 +132,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>文件访问权限</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{userFacingSystemText(runtime.permissionExecution.reason ?? '')}</div>:null}</dd>
                 <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}</dd>
               </dl>
-              {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>AI 设置…</button> : null}
+              {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} disabled={project.archivedAt!=null||project.removedAt!=null} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>AI 设置…</button> : null}
             </div>
           </div>
         </> : null}

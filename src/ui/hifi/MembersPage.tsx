@@ -541,11 +541,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     {m.principalType === 'agent' ? (
                       <div className="row tight wrap" style={{ marginTop: 10 }}>
                         <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimeOf(m.id)?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
-                        <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
+                        <button className="btn ghost sm" disabled={projArchived||projRemoved||busyId === m.id} onClick={() => void toggle(m)}
                           title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
                           {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
                         </button>
-                        <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的渠道与模型；名称与说明也在这里修改" onClick={() => openBind(m)}>
+                        <button className="btn ghost sm" data-zs-member-bind={m.id} disabled={projArchived||projRemoved} title="配置该成员的渠道与模型；名称与说明也在这里修改" onClick={() => openBind(m)}>
                           AI 设置…
                         </button>
                       </div>

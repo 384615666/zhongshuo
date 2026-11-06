@@ -1,3 +1,4 @@
+import {artifactPath} from '../persistence/artifactPath.ts';
 /**
  * DELIBERATE 持久化编排（§6/§10.4/§4.3；DEV-08/09 M1）。
  *
@@ -206,7 +207,7 @@ function draftsFromManifest(db: ZhongshuoDatabase, runId: string, manifest: Froz
   for (const e of manifest.entries) {
     const row = db.prepare('SELECT id, run_id, author_id, kind, revision, hash, blob_path FROM artifacts WHERE id = ?').get(e.artifactId) as { id: string; run_id: string; author_id: string; revision: number; hash: string; blob_path: string } | undefined;
     if (row == null || row.run_id !== runId || row.revision !== e.revision || row.hash !== e.hash) continue; // 与冻结版本不一致：不读
-    const payload = JSON.parse(readFileSync(row.blob_path, 'utf8')) as DraftArtifact['payload'];
+    const payload = JSON.parse(readFileSync(artifactPath(db,row.blob_path), 'utf8')) as DraftArtifact['payload'];
     out.push({ artifactId: row.id, memberId: row.author_id, revision: row.revision, payload });
   }
   return out;
@@ -445,7 +446,7 @@ function participantsOf(db: ZhongshuoDatabase, runId: string): Array<{ memberId:
 function artifactPayload(db: ZhongshuoDatabase, artifactId: string): unknown {
   const row = db.prepare('SELECT blob_path FROM artifacts WHERE id = ?').get(artifactId) as { blob_path: string } | undefined;
   if (row == null) return null;
-  return JSON.parse(readFileSync(row.blob_path, 'utf8'));
+  return JSON.parse(readFileSync(artifactPath(db,row.blob_path), 'utf8'));
 }
 
 class FrozenInputMismatchError extends Error {
@@ -784,7 +785,7 @@ function resolveIssuesAfterRatification(db: ZhongshuoDatabase, input: {
     if (meta == null || meta.run_id !== input.runId || meta.author_id !== memberId || meta.kind !== 'ratify_response') return [];
     let payload: Record<string, unknown> | null;
     try {
-      payload = JSON.parse(readFileSync(meta.blob_path, 'utf8')) as Record<string, unknown>;
+      payload = JSON.parse(readFileSync(artifactPath(db,meta.blob_path), 'utf8')) as Record<string, unknown>;
     } catch {
       return [];
     }
@@ -901,7 +902,7 @@ function successfulHostRatifySummary(db: ZhongshuoDatabase, input: {
   if (meta == null || meta.run_id !== input.runId || meta.author_id !== input.hostMemberId || meta.kind !== 'ratify_response') return null;
   let payload: Record<string, unknown> | null;
   try {
-    payload = JSON.parse(readFileSync(meta.blob_path, 'utf8')) as Record<string, unknown>;
+    payload = JSON.parse(readFileSync(artifactPath(db,meta.blob_path), 'utf8')) as Record<string, unknown>;
   } catch {
     return null;
   }
@@ -1673,7 +1674,7 @@ function collectReviewsFromManifest(db: ZhongshuoDatabase, runId: string, manife
     const row = db.prepare('SELECT run_id, author_id, kind, revision, hash, blob_path FROM artifacts WHERE id = ?').get(entry.artifactId) as
       { run_id: string; author_id: string; kind: string; revision: number; hash: string; blob_path: string } | undefined;
     if (row == null || row.run_id !== runId || row.kind !== 'cross_review' || row.revision !== entry.revision || row.hash !== entry.hash) continue;
-    const payload = JSON.parse(readFileSync(row.blob_path, 'utf8')) as { reviews?: Array<{
+    const payload = JSON.parse(readFileSync(artifactPath(db,row.blob_path), 'utf8')) as { reviews?: Array<{
       targetArtifactId: string; targetRevision: number; targetClaimId: string;
       stance: 'agree' | 'disagree' | 'needs_evidence'; reason?: string;
       evidenceIds?: string[]; suggestedVerification?: string;
@@ -2146,7 +2147,7 @@ function renderStageBody(
       }
       let bytes: Buffer;
       try {
-        bytes = readFileSync(meta.blob_path);
+        bytes = readFileSync(artifactPath(db,meta.blob_path));
       } catch {
         throw new FrozenInputMismatchError(`SYNTHESIS_REVISION round ${step.roundNo} 冻结输入正文不可读：${entry.artifactId}`);
       }
@@ -2281,7 +2282,7 @@ function claimStatementOf(db: ZhongshuoDatabase, runId: string, artifactId: stri
   try {
     const row = db.prepare('SELECT revision, blob_path FROM artifacts WHERE id = ? AND run_id = ?').get(artifactId, runId) as { revision: number; blob_path: string } | undefined;
     if (row == null || row.revision !== revision) return null;
-    const payload = JSON.parse(readFileSync(row.blob_path, 'utf8')) as { claims?: Array<{ claimId?: string; statement?: string }> };
+    const payload = JSON.parse(readFileSync(artifactPath(db,row.blob_path), 'utf8')) as { claims?: Array<{ claimId?: string; statement?: string }> };
     return payload.claims?.find((c) => c.claimId === claimId)?.statement ?? null;
   } catch {
     return null;

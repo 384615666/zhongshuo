@@ -95,7 +95,9 @@ export function match(pattern: string, path: string): Record<string, string> | n
   if (p.length !== t.length) return null;
   const params: Record<string, string> = {};
   for (let i = 0; i < t.length; i++) {
-    if (t[i].startsWith(':')) params[t[i].slice(1)] = decodeURIComponent(p[i]);
+    if (t[i].startsWith(':')) {
+      try { params[t[i].slice(1)] = decodeURIComponent(p[i]); } catch { return null; }
+    }
     else if (t[i] !== p[i]) return null;
   }
   return params;

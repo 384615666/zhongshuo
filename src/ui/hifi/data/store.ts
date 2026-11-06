@@ -22,6 +22,13 @@ import { openTab } from '../lib/resource';
 import { configureReadingPositions, readingPosition, saveReadingPosition } from './readingPositions';
 import type { MemberMentionBindings } from '../lib/mentionText';
 
+function initialTheme(): 'light'|'dark' {
+  try { const theme=localStorage.getItem('zs.hifi.theme')==='dark'?'dark':'light';
+    if(typeof document!=='undefined')document.documentElement.dataset.theme=theme;
+    return theme;
+  } catch { return 'light'; }
+}
+
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
  * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
 export interface ThreadTaskDetail {
@@ -174,7 +181,7 @@ function makeEmptyState(): HifiState {
       runtimeLimits: { maxActiveTurns: 3, maxTurnsPerMember: 1, providerCapEnabled: false, providerCapTurns: 3 },
     },
     preview: { tabs: [], hidden: true, maximized: false, contextChangedSinceOpen: false },
-    ui: { theme: 'light', activeRoomId: '', showAvatars: true, avatars: {}, writeLog: [] },
+    ui: { theme: initialTheme(), activeRoomId: '', showAvatars: true, avatars: {}, writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0, sidebarRoomIndexes: {}, dmProjectIndexes: {}, navigationPins:[],navigationPinBusy:{},
     roomPool: {}, dmHistory: {}, dmHistoryThroughSeq:{},dmReadSeq:{},threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
@@ -1332,9 +1339,10 @@ export function retryDraftPersistence(): void {
 
 /** R68：清理**当前活动命名空间**的草稿快照键（设置页「清理本地草稿」）。R67 起 v2 逻辑身份
  * 键与旧绝对路径键并存——必须清活动键（store 记录的 persistKey），不能按绝对路径拼键
- * （旧拼法清的是已不使用的 v1 键，活动键原样保留=清理无效）。内存态照旧保留至页面关闭。 */
+ * （旧拼法清的是已不使用的 v1 键，活动键原样保留=清理无效）。同步清理内存；保全锁定与未确认发送拒绝清理。 */
 export function clearPersistedSnapshot(): { ok: boolean; hadKey: boolean; key: string | null; error?: string } {
   if (persistKey == null) return { ok: false, hadKey: false, key: null, error: '草稿持久化未初始化（身份未就绪/浏览器宿主）——没有活动键可清理' };
+  if(state.draftPersist.mode==='locked'||Object.keys(state.outboundLedger).length>0||Object.keys(state.pendingSends).length>0) return {ok:false,hadKey:false,key:persistKey,error:'草稿含保全原件或发送结果待确认，请先导出保全并处理未确认发送后再清理'};
   let hadKey = false;
   try {
     hadKey = localStorage.getItem(persistKey) != null;
@@ -1342,6 +1350,9 @@ export function clearPersistedSnapshot(): { ok: boolean; hadKey: boolean; key: s
   } catch (e) {
     return { ok: false, hadKey, key: persistKey, error: `快照键清除失败：${e instanceof Error ? e.message : String(e)}` };
   }
+  drafts.clear(); draftRev += 1;
+  setState(s=>({...s,drafts:{},draftRefs:{},uploadItems:{},pendingSends:{},lastSendReferences:{},outboundLedger:{}}));
+  if(typeof window.dispatchEvent==='function')window.dispatchEvent(new CustomEvent('zs:drafts-cleared'));
   return { ok: true, hadKey, key: persistKey };
 }
 

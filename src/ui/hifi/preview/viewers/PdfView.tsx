@@ -107,7 +107,7 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId
         if (ctx == null) return;
         const task = page.render({ canvasContext: ctx, viewport });
         renderTaskRef.current = task;
-        await task.promise;
+        try { await task.promise; } finally { try { page.cleanup?.(); } catch { /* document already disposed */ } }
       } catch (e) {
         if (!cancelled) setErr(`页面渲染失败：${String((e as Error).message).slice(0, 120)}`);
       } finally {

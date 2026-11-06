@@ -3,8 +3,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { readerStateOf, saveReaderState } from '../readerState';
 
 /** Offline browser decoding; persisted view state is bound to resource + revision. */
-export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, onDownload }: {
+export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, onDownload, imageWidth, imageHeight }: {
   resourceId: string; revision: number; dataUrl: string; filename: string;
+  imageWidth?:number; imageHeight?:number;
   onRetry: () => void; onDownload: () => void;
 }) {
   const saved = readerStateOf(resourceId, revision);
@@ -14,6 +15,27 @@ export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, on
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [error, setError] = useState<string | null>(null);
+  const [previewUrl,setPreviewUrl]=useState<string|null>(null);
+  const [original,setOriginal]=useState(false);
+  useEffect(()=>{
+    let live=true,url:string|null=null;
+    setPreviewUrl(null);
+    if(original||!imageWidth||!imageHeight||Math.max(imageWidth,imageHeight)<=4096){setPreviewUrl(dataUrl);return;}
+    const ratio=Math.min(1,4096/Math.max(imageWidth,imageHeight));
+    void fetch(dataUrl).then(r=>r.blob()).then(blob=>createImageBitmap(blob,{
+      resizeWidth:Math.max(1,Math.round(imageWidth*ratio)),resizeHeight:Math.max(1,Math.round(imageHeight*ratio)),resizeQuality:'high',
+    })).then(async bitmap=>{
+      try {
+        if(!live)return;
+        const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;
+        const ctx=canvas.getContext('2d');if(!ctx)throw Error('无法创建图片预览');ctx.drawImage(bitmap,0,0);
+        const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('图片预览生成失败'))));
+        canvas.width=canvas.height=0;
+        if(live){url=URL.createObjectURL(blob);setPreviewUrl(url);}
+      }finally{bitmap.close();}
+    }).catch(()=>{if(live)setError('图片无法解码，文件可能损坏或尺寸过大；可另存原件。');});
+    return()=>{live=false;if(url)URL.revokeObjectURL(url);};
+  },[dataUrl,imageWidth,imageHeight,original]);
   const viewport = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   useLayoutEffect(() => {
@@ -36,7 +58,7 @@ export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, on
   return <div className="zs-image-reader" data-zs-image-stage="1" data-zs-image-status={error != null ? 'error' : size.width > 0 && visibleLayout ? 'decoded' : 'decoding'}>
     <div className="zs-image-tools" role="group" aria-label="图片缩放">
       <button className="btn sm" onClick={() => chooseZoom(0)}>适应窗口</button>
-      <button className="btn sm" onClick={() => chooseZoom(1)}>原尺寸</button>
+      <button className="btn sm" onClick={() => {setOriginal(true);chooseZoom(1);}}>原尺寸</button>
       <button className="btn sm" title="缩小图片" onClick={() => setZoom(Math.max(0.05, scale / 1.25))}>−</button>
       <span>{Math.round(scale * 100)}%</span>
       <button className="btn sm" title="放大图片" onClick={() => setZoom(Math.min(16, scale * 1.25))}>＋</button>
@@ -47,11 +69,11 @@ export function ImageView({ resourceId, revision, dataUrl, filename, onRetry, on
       onPointerDown={(e) => { if (error != null) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y }; }}
       onPointerMove={(e) => { const d = drag.current; if (d != null) setOffset({ x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y }); }}
       onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}>
-      <img src={dataUrl} alt={filename} draggable={false} data-zs-image-preview="hifi"
-        onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth === 0 || img.naturalHeight === 0) setError('图片尺寸无法读取'); else { setError(null); setSize({ width: img.naturalWidth, height: img.naturalHeight }); } }}
+      {previewUrl ? <img src={previewUrl} alt={filename} draggable={false} data-zs-image-preview="hifi"
+        onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth === 0 || img.naturalHeight === 0) setError('图片尺寸无法读取'); else { setError(null); setSize({ width: imageWidth??img.naturalWidth, height: imageHeight??img.naturalHeight }); } }}
         onError={() => setError('图片无法解码，文件可能损坏或格式不受支持；原件已保存。')}
         style={{ width: size.width > 0 ? size.width * scale : undefined, height: size.height > 0 ? size.height * scale : undefined,
-          visibility: size.width > 0 && visibleLayout && error == null ? 'visible' : 'hidden', transform: `translate(${offset.x}px, ${offset.y}px)` }} />
+          visibility: size.width > 0 && visibleLayout && error == null ? 'visible' : 'hidden', transform: `translate(${offset.x}px, ${offset.y}px)` }} /> : null}
       {error != null ? <div className="zs-image-error" role="alert" data-zs-preview-error={error}>{userFacingSystemText(error ?? '')}<button className="btn sm" onClick={onRetry}>重试预览</button><button className="btn sm" onClick={onDownload}>另存原件</button></div> : null}
     </div>
     <div className="small faint">{error != null ? '预览失败' : size.width > 0 && visibleLayout ? `${size.width} × ${size.height} · 拖动查看` : '正在显示图片…'}</div>

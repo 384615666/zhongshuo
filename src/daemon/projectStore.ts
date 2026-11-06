@@ -54,9 +54,9 @@ export function openProject(
 
   const existing = db
     .prepare(
-      `SELECT * FROM projects WHERE status != 'removed' ORDER BY created_at LIMIT 50`,
+      `SELECT * FROM projects WHERE status != 'removed' AND json_valid(directory_identity) AND json_extract(directory_identity,'$.identityKey')=? ORDER BY created_at`,
     )
-    .all() as ProjectRow[];
+    .all(identity.value.identityKey) as ProjectRow[];
   const hit = existing.find((row) => {
     try {
       return (JSON.parse(row.directory_identity) as { identityKey: string }).identityKey === identity.value.identityKey;
@@ -69,7 +69,7 @@ export function openProject(
     return domainOk({ project: rowToProject(hit), created: false });
   }
 
-  const removed = db.prepare(`SELECT * FROM projects WHERE status='removed' ORDER BY created_at LIMIT 50`).all() as ProjectRow[];
+  const removed = db.prepare(`SELECT * FROM projects WHERE status='removed' AND json_valid(directory_identity) AND json_extract(directory_identity,'$.identityKey')=? ORDER BY created_at`).all(identity.value.identityKey) as ProjectRow[];
   const removedHit = removed.find((row) => {
     try {
       return (JSON.parse(row.directory_identity) as { identityKey: string }).identityKey === identity.value.identityKey;

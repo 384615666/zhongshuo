@@ -46,10 +46,15 @@ export function focusProject(projectId: string, opts?: { announce?: boolean; sys
   const next: HifiState = {
     ...s0,
     activeProjectId: projectId,
+    ...(s0.activeProjectId!==projectId?{loadGen:s0.loadGen+1,rooms:s0.rooms.filter(r=>r.projectId===projectId),members:s0.members.filter(m=>m.projectId===projectId),dms:s0.dmProjectIndexes[projectId]?.items??s0.dms.filter(d=>d.projectId===projectId)}:{}),
     visibleProjectIds: visible,
     expandedProjectIds: ensureVisible(s0.expandedProjectIds, projectId),
   };
   setState(() => next);
+  if(s0.activeProjectId!==projectId)void import('../loader').then(async loader=>{
+    const results=await Promise.allSettled([loader.refreshRooms(projectId),loader.refreshMembers(projectId),loader.refreshDms(projectId)]);
+    if(getState().activeProjectId===projectId&&results.some(r=>r.status==='rejected'))toast('项目部分信息读取失败，请刷新重试','warn');
+  });
   commitNav(next, `projectId=${projectId} 焦点切换（不改变其他可见项目）`, 'navigation.preferences.update');
 
   // 深链/隐藏项目被打开时的轻提示，让"它怎么突然出现了"有解释

@@ -46,6 +46,22 @@ afterEach(() => {
 });
 
 describe('hifi 草稿/未知信封持久化与文件引用（r61）', () => {
+  it('R184 clears the memory draft as well as its persisted snapshot, without resurrection',async()=>{
+    const s=await freshStore();s.initDraftPersistence('r184|local');
+    s.setDraftFull('thread:t1',{body:'draft',mentions:[],attachments:[],access:'default',sendAs:'ai'});
+    expect(s.clearPersistedSnapshot().ok).toBe(true);
+    expect(s.getDraftFull('thread:t1').body).toBe('');
+    s.hydrateUploadRefs('thread:t1','c1',[]);
+    const reloaded=await freshStore();reloaded.initDraftPersistence('r184|local');expect(reloaded.getDraftFull('thread:t1').body).toBe('');
+  });
+  it('R184 refuses to delete the only protected draft copy',async()=>{
+    const s=await freshStore();s.initDraftPersistence('r184locked|local');s.setState(v=>({...v,draftPersist:{...v.draftPersist,mode:'locked'}}));
+    expect(s.clearPersistedSnapshot()).toMatchObject({ok:false,error:expect.stringContaining('保全')});
+  });
+  it('R184 restores the validated dark theme at store initialization',async()=>{
+    stub.setItem('zs.hifi.theme','dark');expect((await freshStore()).getState().ui.theme).toBe('dark');
+    stub.setItem('zs.hifi.theme','invalid');expect((await freshStore()).getState().ui.theme).toBe('light');
+  });
 
   it('文件引用：一次落账、同文件同版本去重、新版本加行、身份缺失零写入', async () => {
     const s = await freshStore();

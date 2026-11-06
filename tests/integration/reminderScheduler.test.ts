@@ -203,11 +203,12 @@ describe('DEV-23 正式合同：原子触发+正式派发链（第二十四轮�
       if (failOnce) { failOnce = false; throw new Error('注入：派发中途崩溃'); }
       return { taskId: `task_${randomUUID()}` };
     });
-    expect(() => scheduler2.tick()).toThrow(/注入/);
+    expect(scheduler2.tick().paused).toEqual([{reminderId,reason:expect.stringContaining('已暂停')}]);
     // 回滚事实：occurrence/task/消息全部未落，计划未推进（next_at 仍=at——重扫不丢触发）。
     expect((h.db.prepare('SELECT count(*) c FROM reminder_occurrences WHERE reminder_id = ?').get(reminderId) as { c: number }).c).toBe(0);
     expect((h.db.prepare('SELECT count(*) c FROM tasks').get() as { c: number }).c).toBe(0);
-    expect((h.db.prepare('SELECT next_at, status FROM reminders WHERE id = ?').get(reminderId) as { next_at: number; status: string })).toMatchObject({ next_at: at, status: 'active' });
+    expect((h.db.prepare('SELECT next_at, status FROM reminders WHERE id = ?').get(reminderId) as { next_at: number; status: string })).toMatchObject({ next_at: at, status: 'paused' });
+    h.db.prepare("UPDATE reminders SET status='active',paused_reason=NULL WHERE id=?").run(reminderId);
     const out = scheduler2.tick(); // 恢复后重试
     expect(out.fired).toHaveLength(1);
     expect((h.db.prepare('SELECT count(*) c FROM reminder_occurrences WHERE reminder_id = ?').get(reminderId) as { c: number }).c).toBe(1);
@@ -485,5 +486,27 @@ describe('DEV-23 正式合同：命令面（幂等/audience/交错——第二�
     expect(out.fired).toHaveLength(1);
     expect(out.fired[0]!.scheduledAt).toBe(until);
     h.db.close();
+  });
+});
+
+
+describe('R184 reminder isolation',()=>{
+  it('pauses a failing reminder and dispatches the next one in the same tick',async()=>{
+    const h=makeHarness();try{
+      const at=h.clock.now+60000;const bad=await scheduleOnce(h,at,{autoDispatch:true});
+      const good=await scheduleOnce(h,at+1,{autoDispatch:true});h.clock.now=at+2;
+      const scheduler=h.makeScheduler(input=>{if(input.reminder.id===bad.reminderId)throw Error('broken reminder');return {taskId:'synthetic-good'};});
+      const result=scheduler.tick();expect(result.paused.map(r=>r.reminderId)).toEqual([bad.reminderId]);
+      expect(result.fired.map(r=>r.reminderId)).toEqual([good.reminderId]);expect(scheduler.tick().paused).toEqual([]);
+    }finally{h.db.close();}
+  });
+  it.each(['room','project'])('pauses reminders for archived %s',async scope=>{
+    const h=makeHarness();try{
+      const at=h.clock.now+60000;await scheduleOnce(h,at,{autoDispatch:true});
+      if(scope==='room')h.db.prepare("UPDATE rooms SET archived_at=1 WHERE id='r0'").run();
+      else h.db.prepare("UPDATE projects SET status='archived' WHERE id='p1'").run();
+      h.clock.now=at+1;const result=h.scheduler.tick();expect(result.fired).toEqual([]);expect(result.paused).toHaveLength(1);
+      expect((h.db.prepare('SELECT count(*) n FROM tasks').get() as {n:number}).n).toBe(0);
+    }finally{h.db.close();}
   });
 });

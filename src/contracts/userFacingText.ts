@@ -1,6 +1,18 @@
 /** Presentation for program-generated status and errors only. Never apply this
  * to user/AI messages, files, tool output, or raw diagnostic payloads. */
 export function userFacingSystemText(value:string):string {
+  if(/reply was never sent|IPC.*(?:timeout|timed out)|command.*timed out/i.test(value))return '发送结果尚未确认，请稍后检查；使用原发送记录重试，避免重复发送。';
+  if(/SQLITE_READONLY|readonly database/i.test(value))return '数据目录无法写入，请检查磁盘和目录权限后重试。';
+  if(/SQLITE_CORRUPT|SQLITE_NOTADB|database disk image is malformed/i.test(value))return '数据文件损坏，请保留整个数据目录并从完整备份恢复。';
+  if(/SQLITE_BUSY|database is locked/i.test(value))return '数据正在被占用，请稍后重试。';
+  if(/SQLITE_FULL|ENOSPC|disk is full/i.test(value))return '磁盘空间不足，请释放空间后重试。';
+  if(/ENOENT/.test(value))return '目标文件或文件夹不可用，请重新选择位置。';
+  if(/EINVAL/.test(value))return '文件名或目标路径无效，请重新选择保存位置。';
+  if(/EPERM|EACCES/.test(value))return '没有权限访问目标位置，请选择可读写的文件夹。';
+  if(/Too big: expected string to have <=(\d+) characters/i.test(value)) {
+    const limit=/<=([0-9]+)/.exec(value)?.[1];
+    return `输入内容超过 ${limit} 字符上限，请缩短后重试。`;
+  }
   if (/源执行[\s\S]*恢复派发已完成/.test(value)) return '这次继续请求已处理，请刷新查看任务的最新进展。';
   if (/该任务已有在途恢复派发/.test(value)) return '已有继续请求在处理中，请稍候查看任务进展。';
   if (/protection_state\s*=\s*['"]?retained\b/i.test(value)) return '上次执行尚未确认结束。请点击“检查中断”查看具体成员和程序检查结果，解除占用后再继续。';

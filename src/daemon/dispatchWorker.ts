@@ -13,7 +13,8 @@ import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThr
 import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
 import {persistDetailMarkdown} from './detailMarkdownAttachments.ts';
 import type { DocumentArtifact } from '../contracts/document.ts';
-import { captureBaseline, finalizeChangeset } from './changeset.ts';
+import { captureBaselineAsync as captureBaseline, finalizeChangeset } from './changeset.ts';
+import {bindArtifactDataRoot} from '../persistence/artifactPath.ts';
 import { snapshotGeneratedFiles, type SnapshotOutcome } from './generatedFileSnapshots.ts';
 import { capturedFileChanges, recordMessageFileChanges } from './messageFileChanges.ts';
 import { humanFacingFile } from '../contracts/messageFileChanges.ts';
@@ -235,6 +236,7 @@ export class DispatchWorker {
     this.coordinationMaxCalls=coordinationCap;
     this.coordinationMaxCallsOverride=options.coordinationMaxCalls!=null;
     this.appDataDir = options.appDataDir ?? join(tmpdir(), 'zhongshuo-appdata');
+    bindArtifactDataRoot(this.db,this.appDataDir);
     this.enableDeliberate = options.enableDeliberate === true;
     this.absenceToleranceMs = options.absenceToleranceMs ?? 20 * 60_000;
     this.dispatchWaitDeadlineMs = options.dispatchWaitDeadlineMs;
@@ -930,7 +932,7 @@ export class DispatchWorker {
       }
 
       if (writeAccess.modificationAuthorized) {
-        const baseline = captureBaseline(this.db, {
+        const baseline = await captureBaseline(this.db, {
           projectId: task.project_id,
           taskId: task.id,
           runId,
@@ -1261,6 +1263,7 @@ export class DispatchWorker {
         if (/database (?:connection is not open|is closed)|database has been closed/i.test(message)) return;
         throw settleError;
       }
+      if(startupPhase==='records'&&!this.db.prepare('SELECT 1 FROM agent_turns WHERE id=?').get(turnId))return;
       throw dispatchError;
     } finally {
       if (!this.detached || !this.inFlightTurns.has(turnId)) {
@@ -1288,6 +1291,17 @@ export class DispatchWorker {
     openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null,
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
+    if(phase==='records'&&!this.db.prepare('SELECT 1 FROM agent_turns WHERE id=?').get(turnId)) {
+      this.db.transaction(()=>{
+        this.transitionTask(task.id,'BLOCKED');
+        this.audit(task,null,null,'task.dispatchFailed',{phase,message:message.slice(0,2000),dispatchKey:
+          (this.db.prepare('SELECT dispatch_key FROM outbox WHERE id=?').get(outbox.id) as {dispatch_key:string}|undefined)?.dispatch_key,
+          classification:'confirmed-not-started'});
+      })();
+      this.releaseAdmission(turnId);
+      await completeOutbox(this.db,outbox.id,outbox.attemptEpoch);
+      return;
+    }
     if(phase==='startTurn'&&error instanceof AdapterCallError&&error.notStarted)phase='session-record';
     const integrationAttempt=this.db.prepare('SELECT coordination_run_id FROM coordination_integration_attempts WHERE execution_run_id=?').get(runId) as {coordination_run_id:string}|undefined;
     const blockIntegrationStart=()=>integrationAttempt?settleIntegrationLaunchFailure(this.db,integrationAttempt.coordination_run_id,message,true):false;
@@ -1396,6 +1410,7 @@ export class DispatchWorker {
         });
       // 租约续期：detached 消费可长于租约窗口；完结以 attemptEpoch fencing 保护。
       const leaseKeeper = setInterval(() => {
+        if(!this.db.open){clearInterval(leaseKeeper);return;}
         this.db
           .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND attempt_epoch = ? AND status = 'leased'`)
           .run(this.clock() + this.leaseMs, outbox.id, outbox.attemptEpoch);
@@ -1815,7 +1830,7 @@ export class DispatchWorker {
       }
       startupPhase = 'standing-prompt';
       if(writeAccess.modificationAuthorized){
-        const baseline=captureBaseline(this.db,{projectId:task.project_id,taskId:task.id,runId:run.id,appDataDir:this.appDataDir});
+        const baseline=await captureBaseline(this.db,{projectId:task.project_id,taskId:task.id,runId:run.id,appDataDir:this.appDataDir});
         if(!baseline.ok)throw Error(`研讨写入基线失败：${baseline.error.message}`);
         if(baseline.value.truncated)throw Error(`研讨写入基线不完整：${baseline.value.scanProblems.slice(0,3).join('；')}`);
         const baselineChangeSetId=baseline.value.changeSetId;

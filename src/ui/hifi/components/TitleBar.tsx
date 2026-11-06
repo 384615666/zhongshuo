@@ -210,7 +210,7 @@ function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: numb
   const activeId = useStore((s) => s.activeProjectId);
   const visible = useStore((s) => s.visibleProjectIds);
   const [filter, setFilter] = useState('');
-  const projects = useMemo(() => projectsAll.filter((p) => p.removedAt == null), [projectsAll]);
+  const projects = useMemo(() => projectsAll.filter((p) => p.removedAt == null && p.archivedAt == null), [projectsAll]);
   const list = useMemo(
     () => projects.filter((p) => filter.length === 0 || p.displayName.toLowerCase().includes(filter.toLowerCase())),
     [projects, filter],

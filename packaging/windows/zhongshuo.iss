@@ -176,6 +176,10 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+  if Length(ExpandConstant('{app}')) > 180 then begin
+    Result := '安装路径过长，请选择更短的文件夹（完整安装目录不超过 180 字符）。';
+    exit;
+  end;
   if InstalledFilesBusy() then
     Result := '众说或后台进程仍在运行，无法安全更新。请在众说中正常退出，等待后台任务结束后重新安装。本次安装尚未更改程序文件。';
 end;

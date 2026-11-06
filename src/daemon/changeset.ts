@@ -1,3 +1,4 @@
+import {captureGit} from './gitStatus.ts';
 /**
  * DEV-12 主体：Git/非 Git 基线、前后前像、差异与非破坏撤销（2026-09-28 第五轮）。
  *
@@ -83,13 +84,13 @@ export interface UndoOutcome {
 
 /** Git HEAD/索引状态探测（本地 git 进程只读调用；失败如实记录，不假装非仓库）。 */
 export function captureGitBaseline(root: string): GitBaseline {
-  const head = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  const head = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000, windowsHide:true });
   if (head.error != null || head.status !== 0) {
     const notRepo = head.stderr != null && /not a git repository/i.test(head.stderr);
     if (notRepo) return { isRepo: false, head: null, indexStatus: null };
     return { isRepo: true, head: null, indexStatus: null, error: `git rev-parse 失败：${String(head.stderr ?? head.error).slice(0, 160)}` };
   }
-  const porcelain = spawnSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  const porcelain = spawnSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', timeout:5000, windowsHide:true, maxBuffer: 1024 * 1024 });
   let dirtyPaths: string[] | null = null;
   if (porcelain.status === 0 && porcelain.stdout.length < 64 * 1024) {
     // -z 机器格式解析出基线 dirty 路径（含未跟踪与重命名两端）——供批量暂存跳过
@@ -134,8 +135,28 @@ export interface CaptureBaselineOk {
   scanProblems: string[];
 }
 
+/** Production path yields while Git runs; the synchronous API remains for callers
+ * that explicitly need it and is bounded by a short subprocess deadline. */
+export async function captureBaselineAsync(db:ZhongshuoDatabase,input:CaptureBaselineInput):Promise<DomainResult<CaptureBaselineOk>> {
+  const project=lookupProject(db,input.projectId);
+  if(!project)return domainErr('RESOURCE_NOT_FOUND','项目不存在');
+  const head=await captureGit(['rev-parse','HEAD'],{cwd:project.canonical_path,timeoutMs:5000});
+  let git:GitBaseline;
+  if(head.spawnError||head.exitCode!==0)git=/not a git repository/i.test(head.stderr)
+    ?{isRepo:false,head:null,indexStatus:null}:{isRepo:true,head:null,indexStatus:null,error:head.spawnError??head.stderr};
+  else {
+    const status=await captureGit(['status','--porcelain=v1','-z','--untracked-files=all'],{cwd:project.canonical_path,timeoutMs:5000});
+    const text=status.stdout.toString('utf8');
+    const valid=!status.spawnError&&status.exitCode===0&&!status.truncated;
+    git={isRepo:true,head:head.stdout.toString('utf8').trim(),indexStatus:valid?text.slice(0,64*1024):null,
+      ...(valid&&status.stdout.length<64*1024?{dirtyPaths:[...new Set(parsePorcelainEntries(text).flatMap(e=>e.renamedFrom?[e.path,e.renamedFrom]:[e.path]))]}:{}),
+      ...(!valid?{error:status.spawnError??status.stderr}:{})};
+  }
+  return captureBaseline(db,input,git);
+}
+
 /** 基线捕获：Git 基线（HEAD+索引状态）+ before 内容前像（含未跟踪文件，不 stash/reset）。 */
-export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInput): DomainResult<CaptureBaselineOk> {
+export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInput, gitSnapshot?:GitBaseline): DomainResult<CaptureBaselineOk> {
   const project = lookupProject(db, input.projectId);
   if (project == null) return domainErr('RESOURCE_NOT_FOUND', `项目不存在：${input.projectId}`);
   const now = input.now ?? Date.now();
@@ -144,7 +165,7 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
   const explicit = input.paths != null && input.paths.length > 0;
   const scanned = explicit ? null : scanProjectFiles(root);
   const paths = explicit ? input.paths! : scanned!.files.map((f) => f.slice(root.length + 1));
-  const git = captureGitBaseline(root);
+  const git = gitSnapshot ?? captureGitBaseline(root);
   const preimage = captureFilePreimage(root, paths, { storeDir, now, maxBytes: input.maxBytes });
   const scanIncomplete = scanned != null
     && (scanned.truncated || scanned.failedDirs.length > 0 || scanned.rejectedEntries.length > 0);

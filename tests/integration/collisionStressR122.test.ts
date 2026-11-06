@@ -5,6 +5,16 @@ import {randomUUID} from 'node:crypto';
 import {collisionFixture,finish,ObservedAdapter,pause} from '../helpers/collisionHarnessR122.ts';
 import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
 
+/** Keep the first wave alive explicitly. Sync Git used to delay fake timers,
+ * accidentally making a 50ms task appear concurrent with later launches. */
+function holdFirstWave(adapter:ObservedAdapter,count:number):()=>void {
+  let release!:()=>void,started=0;const ready=new Promise<void>(resolve=>{release=resolve;});
+  const start=adapter.startTurn.bind(adapter),events=adapter.events.bind(adapter);
+  adapter.startTurn=async(session,input)=>{await start(session,input);if(++started>=count)release();};
+  adapter.events=async function*(session){await ready;yield* events(session);};
+  return release;
+}
+
 afterEach(()=>vi.unstubAllEnvs());
 function simulation(){vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');vi.stubEnv('ZS_REAL_DISPATCH_GUARD','1');}
 
@@ -155,6 +165,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
 
   it('production session-scoped role slots run full-access writes at the default provider limit four',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('已更新',50)});
+    const release=holdFirstWave(adapter,4);
     const f=await collisionFixture('session-write-production',{members:1,writable:true,adapter});
     try{
       const roots=await Promise.all(Array.from({length:8},(_,i)=>f.send(0,i%3,[0],`TOKEN_SERIAL_${i} 修改文件`)));
@@ -162,11 +173,12 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       expect(adapter.peakMember).toBe(4);expect(adapter.peakWritableRoot).toBe(4);
       expect(new Set(adapter.turns.map(t=>t.sessionId)).size).toBe(8);
       f.save({ok:true,productionAdmission:true,requests:8,peakSameRole:adapter.peakMember,peakWritableRoot:adapter.peakWritableRoot});
-    }finally{await f.close();}
+    }finally{release();await f.close();}
   },30000);
 
   it('unmanaged external JSON read-modify-write loses an update; this is not the product role-memory API',async()=>{
     simulation();const adapter=new ObservedAdapter({turnScriptSequencer:()=>finish('记忆已更新',30)});
+    const releaseWave=holdFirstWave(adapter,2);
     const f=await collisionFixture('shared-memory-collision',{projects:2,writable:true,adapter});
     const memory=join(f.dir,'shared-role-memory.json');writeFileSync(memory,JSON.stringify({entries:[]}));
     let release!:()=>void;const both=new Promise<void>(r=>{release=r;}),captured:Array<{entries:string[]}>=[];
@@ -182,7 +194,7 @@ describe('R122 disruptive overlapping user requests through formal commands and 
       await Promise.all(writes);const stored=JSON.parse(readFileSync(memory,'utf8')) as {entries:string[]};
       expect(captured).toHaveLength(2);expect(stored.entries).toHaveLength(1);expect(adapter.peak).toBe(2);
       f.save({ok:true,unmanagedExternalJson:true,productMemoryApi:false,successfulTasks:2,expectedMemoryEntries:2,actualMemoryEntries:stored.entries.length,lostUpdates:1});
-    }finally{release();await f.close();}
+    }finally{releaseWave();release();await f.close();}
   });
 
   it('an unresponsive writer retains protection while an unrelated project still completes',async()=>{

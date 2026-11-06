@@ -266,16 +266,19 @@ export function DmPage() {
       await refreshDms();
     } finally { setBusy(null); }
   };
+  const [archiveConfirm,setArchiveConfirm]=useState<string|null>(null);
+  const archivePending=useRef(false);
   const doArchive = async () => {
     if (active == null) return;
-    setBusy('archive');
+    if(archivePending.current)return;archivePending.current=true;
+    setArchiveConfirm(null);setBusy('archive');
     try {
       const r = await command<{ archived: boolean; already: boolean; stopPending: boolean }>('conversation.archive', { conversationId: active.id, expectedRevision: active.revision ?? 0 });
       recordWrite('conversation.archive', `归档私信（stopPending=${r.stopPending}）`);
       toast(r.already ? '已归档' : `已归档${r.stopPending ? '，已请求停止正在执行的任务' : ''}`, 'success');
       await reloadAll();
     } catch (e) { toast(`归档失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
-    finally { setBusy(null); }
+    finally { archivePending.current=false;setBusy(null); }
   };
   const doRestore = async () => {
     if (active == null) return;
@@ -765,7 +768,7 @@ export function DmPage() {
           {active?.archivedAt != null ? (
             <MenuItem icon="refresh" title="取消归档（不自动续跑）" onClick={() => { setOpsAt(null); void doRestore(); }}>取消归档</MenuItem>
           ) : (
-            <MenuItem icon="archive" title="归档后可查看历史；正在执行的任务会停止。" onClick={() => { setOpsAt(null); void doArchive(); }}>归档会话…</MenuItem>
+            <MenuItem icon="archive" title="归档后可查看历史；正在执行的任务会停止。" onClick={() => { setOpsAt(null); setArchiveConfirm(activeId); }}>归档会话…</MenuItem>
           )}
           <div className="menu-sep" />
           <MenuItem icon="download" title="导出这条会话的消息记录及已保存的附件" onClick={() => { setOpsAt(null); void doExport('md'); }}>导出会话记录（Markdown）…</MenuItem>
@@ -776,6 +779,9 @@ export function DmPage() {
         </Menu>
       ) : null}
 
+      {archiveConfirm===activeId&&active!=null?<Modal title="归档会话" onClose={()=>setArchiveConfirm(null)} footer={<><button className="btn" onClick={()=>setArchiveConfirm(null)}>取消</button><button className="btn primary" onClick={()=>void doArchive()}>确认归档</button></>}>
+        <p>归档后仍可查看历史；将请求停止这条会话中正在执行的任务。</p>
+      </Modal>:null}
       {/* 新建私聊（1 对 1：选一位成员——正式 conversation.create）。 */}
       {active&&recordsFor===active.id?<DmTaskRecords projectId={active.projectId} conversationId={active.id} onClose={()=>setRecordsFor(null)} retryBusy={busy!=null} acceptedRetry={acceptedRetry} onRetry={failedView.conversationId===active.id?async detail=>{if(detail.task.projectId!==active.projectId||detail.task.conversationId!==active.id||!detail.latestRunId)return;await doRetryFailed({taskId:detail.task.id,title:detail.task.title,taskRevision:detail.task.revision,stopGeneration:detail.task.stopGeneration,latestRunId:detail.latestRunId,...detail.failedRetry});}:undefined}/>:null}
       {createFor ? (

@@ -7,6 +7,7 @@
  * 消息可带图引用（四通道沿用）；图片评论随分批归属（comment.add 对 image 明确拒绝）。
  */
 import type { TurnRequest } from '../../src/contracts/runtime.ts';
+import {validatedImages} from '../../src/adapter/imageInput.ts';
 import { describe, expect, it, afterAll, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -84,6 +85,20 @@ const status=vi.hoisted(()=>({supported:true,identityKey:'original'}));
 vi.mock('../../src/daemon/imageCapability.ts',()=>({memberImageCapability:()=>({status:status.supported?'supported':'unverified',identityKey:status.identityKey})}));
 
 describe('R76 image sends and frozen omission',()=>{
+ it.each([10,50])('R184 %i MiB images finish the full fake worker path without UNKNOWN or retained protection',async mb=>{
+  const env=makeEnv();const {worker,adapter}=env.makeWorker();
+  try{
+   const raw=Buffer.concat([makePng(),Buffer.alloc(mb*1024*1024)]);
+   const up=await env.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:'conv_room',filename:'large.png',contentBase64:raw.toString('base64')});
+   await env.cmd('message.submit',{target:{kind:'room_root',projectId:'p1',conversationId:'conv_room',roomId:'r0'},body:'查看图片',intent:'default',mentions:[{kind:'member',memberId:'mA'}],attachmentRefs:[up.attachmentId]});
+   const start=adapter.startTurn.bind(adapter);let inputBytes=0;
+   adapter.startTurn=async(session,input)=>{validatedImages(input);inputBytes=Buffer.from(input.images![0]!.dataBase64,'base64').length;await start(session,input);};
+   await worker.runOnce();expect(inputBytes).toBe(raw.length);
+   expect(env.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='UNKNOWN' OR protection_state='retained'").get()).toEqual({n:0});
+   expect(env.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='SUCCEEDED'").get()).toEqual({n:1});
+   expect(env.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
+  }finally{await adapter.closeAllSessions();env.close();}
+ });
  it('image-only positive, original envelope replay once, worker passes actual bytes; omission persists',async()=>{
   const env=makeEnv();try{
    const png=makePng();const up=await env.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:'conv_room',filename:'中文.png',contentBase64:png.toString('base64')});

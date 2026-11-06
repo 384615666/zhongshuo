@@ -1,3 +1,4 @@
+import {safeFilename} from '../contracts/safeFilename.ts';
 /**
  * 导出生成器（第三十轮五建；第三十一轮一重写）。
  * 完整性链（第三十一轮一）：
@@ -111,7 +112,7 @@ function prepare(input: ExportInput): Prepared {
       // 不可读的先按 missing 走（readVerifiedBlob 三态在拷贝阶段定谳：out-of-store/corrupted
       // 到那时整笔失败；unreadable 留在 missing 清单）。
       kept.push(a);
-      const file = `assets/${a.hash.slice(0, 16)}-${(a.display_name ?? a.artifact_id).replace(/[\\/:*?"<>|]/g, '_')}`;
+      const file = `assets/${a.hash.slice(0, 16)}-${safeFilename(a.display_name ?? a.artifact_id)}`;
       if (!seenAssetFiles.has(file)) {
         seenAssetFiles.add(file);
         assets.push({ file, att: a });

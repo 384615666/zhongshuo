@@ -1,3 +1,4 @@
+import {hasVisibleText} from '../../../contracts/visibleText.ts';
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 /**
  * 输入条（§4.1 / §4.2 / E6 / E8 / E3）
@@ -1823,13 +1824,23 @@ export function Composer({
     setConversationQuotes(next.conversationQuotes ?? []);
   }
 
+  useEffect(()=>{
+    const clear=()=>{
+      composingRef.current=false;pendingCompositionSyncRef.current=null;syncDraftBodyToEditor(draftKeyRef.current);
+      bodyRef.current='';setBody('');setMentions([]);setConversationQuotes([]);
+      mentionBindingsRef.current=emptyMemberMentionBindings();setMentionBindings(emptyMemberMentionBindings());
+      skipSaveRef.current=draftKeyRef.current;
+    };
+    window.addEventListener('zs:drafts-cleared',clear);return()=>window.removeEventListener('zs:drafts-cleared',clear);
+  },[]);
+
   async function submit(imageAck?: 'omit-images') {
     const text = stripInlineAttachmentTokens(body).trim();
     const sentQuotes = getDraftFull(draftKey).conversationQuotes ?? [];
     const outboundText = composeDraftOutboundBody(text, sentQuotes);
     // 普通聊天固定交给 AI；没有可编辑正文但有引用或 ready 附件仍可发送。
     const refsAtGuard = getDraftFull(draftKey).attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
-    if (outboundText.length === 0 && refsAtGuard.length === 0) return;
+    if (!hasVisibleText(outboundText) && refsAtGuard.length === 0) return;
     const busyAttachments = (getState().uploadItems[draftKey] ?? []).filter((item) => item.removed !== true && (item.status === 'preparing' || item.status === 'uploading'));
     if (busyAttachments.length > 0) {
       setSendErrorFor(draftKey, `仍有 ${busyAttachments.length} 个文件正在准备或上传；完成或移除后再发送`);
@@ -2263,7 +2274,7 @@ export function Composer({
     : null;
   const modeInvalid = deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all');
   const canUseDeliberate = target.kind === 'room_root' || target.kind === 'thread';
-  const hasSendableBody = stripInlineAttachmentTokens(body).trim().length > 0 || conversationQuotes.length > 0;
+  const hasSendableBody = hasVisibleText(stripInlineAttachmentTokens(body)) || conversationQuotes.length > 0;
 
   function enableDeliberate(): void {
     const explicitlyNamed = mentions.filter((id) => availableDeliberateIds.includes(id));
@@ -2457,7 +2468,7 @@ export function Composer({
       ) : null}
 
       {/* 空文件门：不造空派发，也不提供“仅记录”逃生口。 */}
-      {stripInlineAttachmentTokens(body).trim().length === 0 && conversationQuotes.length === 0 && readyAttachmentCount > 0
+      {!hasVisibleText(stripInlineAttachmentTokens(body)) && conversationQuotes.length === 0 && readyAttachmentCount > 0
         && attachments.filter((x) => x.status === 'ready').every((x) => x.size === 0 && (x.kind === 'text_file' || x.kind === 'code_file')) ? (
         <div className="composer-mentions" data-zs-empty-text-gate="1">
           <span className="chip composer-info-chip" title="这些附件都是 0 字节空文本——发给 AI 不会带上任何可用内容">
@@ -2479,7 +2490,7 @@ export function Composer({
           <span className="chip composer-info-chip" title="未能确认图片能否发送；图片默认不发送给 AI">
             <Icon name="image" size={11} />
             {userFacingSystemText(imageGate.reason ?? '当前目标暂不能接收图片')}：{imageGate.names.join('、')}
-            <button disabled={stripInlineAttachmentTokens(body).trim().length === 0 && conversationQuotes.length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片保留在聊天中，本次只把文字发送给 AI" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
+            <button disabled={!hasVisibleText(stripInlineAttachmentTokens(body)) && conversationQuotes.length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片保留在聊天中，本次只把文字发送给 AI" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
             <button title="移除本草稿图片引用；已保存原件保留，其余内容可继续发送" onClick={() => { for (const a of attachments) if (a.kind === 'image_file') removeAttachment(a.uploadId); setImageGate(null); }}>移除图片继续</button>
             {showMentions ? <button title="重新选择能接收图片的成员后发送" onClick={() => { setImageGate(null); setMentionTrigger(null); setMentionOpen(true); }}>换可用成员</button> : <button onClick={navigateToMembers}>成员配置</button>}
             <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
@@ -2644,7 +2655,7 @@ export function Composer({
                   title={`提及 ${m.displayName}`}
                 >
                   <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={16} subject={`member:${m.id}`} />
-                  <span style={{ flex: 1 }}>{memberLabel(m)}</span>
+                  <span style={{ flex: 1 }}>{mentionTokenById.get(m.id) ?? memberLabel(m)}</span>
                   <span className="hint">{m.description?`${m.description} · `:''}{runtimeLabelOf(m)}</span>
                 </button>
               );

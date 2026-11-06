@@ -42,7 +42,11 @@ export function safeUnzipWith(raw: Buffer): Record<string, Buffer> {
     f.start();
   };
   try {
-    uz.push(new Uint8Array(raw), true);
+    // Small input batches bound fflate's recursive entry dispatch stack.
+    const chunkBytes=4096;
+    for(let offset=0;offset<raw.length;offset+=chunkBytes) {
+      uz.push(raw.subarray(offset,offset+chunkBytes),offset+chunkBytes>=raw.length);
+    }
   } catch (error) {
     const f1 = failure as { code: string; message: string } | null;
     if (f1 != null) throw new ZipGuardError(f1.code, f1.message);

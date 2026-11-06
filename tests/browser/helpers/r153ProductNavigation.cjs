@@ -113,7 +113,9 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:144
   await capture('dm-task-records');await js('document.querySelector("[aria-label=关闭弹窗]")?.click()');
   if((await snap()).records){await js('document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');await pause(50);}
   await until('!r153.snapshot().records','close records');
-  await menu();await click('归档会话…');await until('r153.snapshot().archived','archive');await menu();s=await snap();
+  await menu();await click('归档会话…');
+  s=await snap();check('archive-requires-confirmation',!s.archived&&!s.calls.some(c=>c.method==='conversation.archive'));
+  await click('确认归档');await until('r153.snapshot().archived','archive');await menu();s=await snap();
   check('archive-retains-history-and-restore',s.menu.includes('取消归档')&&s.calls.some(c=>c.method==='conversation.archive'&&c.params.conversationId==='c'&&c.params.expectedRevision===3),s.menu);
   await click('取消归档');await until('!r153.snapshot().archived','restore');
   await js('r153.recover()');await until('r153.snapshot().text.includes("继续这次请求")','recovery action');await click('继续这次请求');

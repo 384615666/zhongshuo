@@ -4294,6 +4294,7 @@ function syncRemoteEditControls(cfg) {
   if (portInput != null && cfg.port > 0) portInput.value = String(cfg.port);
 }
 async function renderRemoteSettings() {
+  if (document.getElementById('remote-settings')?.hidden !== false) return;
   const row = el('remote-config-row');
   const deviceBox = el('remote-device-list');
   if (row == null) return;

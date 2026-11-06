@@ -98,6 +98,29 @@ function SheetTabs({ controller, restoreSheet, onSwitch }: {
 
 export interface XlsxFallbackSheet { name: string; rowCount: number; colCount: number; cells: string[][]; rowTruncated?: boolean; colTruncated?: boolean; merges?: unknown[]; formulaMissing?: boolean }
 
+function VirtualSheetGrid({sheet}:{sheet:XlsxFallbackSheet}) {
+  const host=useRef<HTMLDivElement>(null);
+  const [view,setView]=useState({top:0,left:0,width:800,height:500});
+  useEffect(()=>{
+    const node=host.current;if(!node)return;
+    const update=()=>setView({top:node.scrollTop,left:node.scrollLeft,width:node.clientWidth,height:node.clientHeight});
+    update();const observer=new ResizeObserver(update);observer.observe(node);return()=>observer.disconnect();
+  },[sheet]);
+  const rowHeight=28,columnWidth=140;
+  const startRow=Math.max(0,Math.floor(view.top/rowHeight)-3),endRow=Math.min(sheet.cells.length,startRow+Math.ceil(view.height/rowHeight)+8);
+  const startColumn=Math.max(0,Math.floor((view.left-40)/columnWidth)-1),endColumn=Math.min(sheet.colCount,startColumn+Math.ceil(view.width/columnWidth)+3);
+  return <div ref={host} className="xlsx-fallback-grid" data-zs-xlsx-grid="1" role="grid" aria-rowcount={sheet.rowCount} aria-colcount={sheet.colCount}
+    onScroll={e=>{const node=e.currentTarget;setView(v=>({...v,top:node.scrollTop,left:node.scrollLeft}));}}>
+    <div style={{position:'relative',height:sheet.cells.length*rowHeight,width:40+sheet.colCount*columnWidth}}>
+      {Array.from({length:endRow-startRow},(_,i)=>i+startRow).map(r=><div key={r} role="row" aria-rowindex={r+1}>
+        <div style={{position:'absolute',top:r*rowHeight,left:0,height:rowHeight,width:40,borderBottom:'1px solid var(--border)',background:'var(--surface)'}}>{r+1}</div>
+        {Array.from({length:Math.max(0,endColumn-startColumn)},(_,i)=>i+startColumn).map(c=><div key={c} role="gridcell" aria-colindex={c+1} title={String(sheet.cells[r]?.[c]??'')}
+          style={{position:'absolute',top:r*rowHeight,left:40+c*columnWidth,height:rowHeight,width:columnWidth,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',padding:'3px 6px',border:'1px solid var(--border)',boxSizing:'border-box'}}>{String(sheet.cells[r]?.[c]??'')}</div>)}
+      </div>)}
+    </div>
+  </div>;
+}
+
 export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackSheets, fallbackNote, resourceId, revision, initialState }: {
   bytes: ArrayBuffer; filename: string; revisionLabel: string; onDownload: () => void;
   fallbackSheets: XlsxFallbackSheet[]; fallbackNote?: string;
@@ -155,18 +178,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
           </div>
         )}
         {sh != null ? (
-          <div className="xlsx-fallback-grid" data-zs-xlsx-grid="1">
-            <table className="sheet-grid">
-              <tbody>
-                {sh.cells.map((row, r) => (
-                  <tr key={r}>
-                    <th className="row-no">{r + 1}</th>
-                    {row.map((cell, c) => <td key={c}>{String(cell ?? '')}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <VirtualSheetGrid key={sh.name} sheet={sh}/>
         ) : null}
       </div>
     );

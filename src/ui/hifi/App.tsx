@@ -18,7 +18,7 @@ import { command } from './bridge';
 import { TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, parseTaskNotificationsEnabledSetting } from '../../contracts/taskNotifications';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
-import { OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
+import { requestRecoveryOpen, OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink, loadSidebarRooms, switchFocusProject } from './loader';
 import { DmPage } from './DmPage';
@@ -78,7 +78,6 @@ const LEGACY_TARGETS: Record<string, { label: string; locate: () => string | nul
   tasks: { label: '任务看板', locate: () => togglePanel('board-toggle', 'board') },
   members: { label: '成员管理', locate: () => openDetails('project-settings') },
   settings: { label: '设置与帮助', locate: () => openDetails('help-panel') },
-  remote: { label: '远程访问设置', locate: () => openDetails('remote-settings') },
 };
 
 /** 按机器身份定位 legacy 目标（review-r48 §4：名称 includes 会把同成员第二个会话/同名房间
@@ -407,7 +406,7 @@ export default function App() {
   /* R183 第 1 项：项目显示顺序。
      默认顺序仍是「置顶在前、其余按可见顺序」；用户拖动/置顶写下的本机偏好（orderProjectIds）
      覆盖在它上面。这里只算显示顺序，不改变焦点、可见集合或任何项目数据。 */
-  const dailyProjects = s.projects.filter((p) => p.removedAt == null);
+  const dailyProjects = s.projects.filter((p) => p.removedAt == null && p.archivedAt == null);
   const dailyProjectIds = new Set(dailyProjects.map((p) => p.id));
   const projectById = new Map(dailyProjects.map((p) => [p.id, p] as const));
   const sidebarProjectIds = orderProjectIds([
@@ -785,14 +784,18 @@ export default function App() {
 
 /* ---------------- 路由分派（原型路由表 + 换装期旧路由归一） ---------------- */
 
+function RecoveryLink(){useEffect(()=>{requestRecoveryOpen();},[]);return <div className="main"><div className="page"><div className="page-title">恢复状态</div><p>查看中断的执行和仍需核对的占用。</p><button className="btn" onClick={()=>requestRecoveryOpen()}>查看恢复状态</button></div></div>;}
+
 function Routes({ path, route, query }: { path: string; route: string; query: Record<string, string> }) {
   const s = useStore((x) => x);
   void route;
+  if(path==='/recovery')return <RecoveryLink/>;
 
   // 线程直达链接 #/thread/:id?message=:mid → 所属房间 + 线程面板（§15.5）
   const threadDirect = path.match(/^\/thread\/([^/?]+)$/);
   if (threadDirect != null) {
-    const tid = decodeURIComponent(threadDirect[1] ?? '');
+    let tid: string;
+    try { tid = decodeURIComponent(threadDirect[1] ?? ''); } catch { return <div className="main"><div className="empty">链接格式无效，请从侧栏重新打开对话。</div></div>; }
     const ent = (s as { threadEntities?: Record<string, { projectId: string; roomId: string }> }).threadEntities?.[tid];
     // R72：实体已缓存**且归属项目正是活跃项目**才直接渲染——否则 loadThread 的
     // stillCurrent 双门会丢弃装载（切项目后点旧直链=线程面板拿不到数据），走定位器对齐。

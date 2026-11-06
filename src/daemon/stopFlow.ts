@@ -54,12 +54,13 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
       const run = db
         .prepare('SELECT id, status FROM workflow_runs WHERE id = ? AND task_id = ?')
         .get(input.targetRunId, input.taskId) as { id: string; status: RunStatus } | undefined;
+      if (run == null) throw new StopCommandError('RESOURCE_NOT_FOUND', '目标运行不存在或不属于该任务；请刷新后重试');
       const verdict = evaluateStopTarget({
         taskCurrentRunId: currentRunIdOf(db, input.taskId),
         targetRunId: input.targetRunId,
         expectedStopGeneration: input.expectedStopGeneration,
         currentStopGeneration: task.stop_generation,
-        targetRunStatus: run?.status ?? 'FAILED',
+        targetRunStatus: run.status,
       });
       if (!verdict.ok) {
         throw new StopCommandError(verdict.error.code, verdict.error.message);

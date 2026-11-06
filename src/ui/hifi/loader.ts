@@ -533,7 +533,12 @@ export async function stopAllProjectReal(projectId: string): Promise<{ stopped: 
 }
 
 /** R65：任务验收开关（project.reviewPolicy.set——CAS；只影响新任务）。 */
-export async function setTaskReviewReal(projectId: string, enabled: boolean, expectedRevision: number): Promise<{ ok: boolean; error?: string }> {
+const reviewSettingsRequests=new Map<string,Promise<{ok:boolean;error?:string}>>();
+export function setTaskReviewReal(projectId:string,enabled:boolean,expectedRevision:number):Promise<{ok:boolean;error?:string}>{
+  const key=JSON.stringify([projectId,enabled,expectedRevision]);const pending=reviewSettingsRequests.get(key);if(pending)return pending;
+  const request=setTaskReviewOnce(projectId,enabled,expectedRevision).finally(()=>reviewSettingsRequests.delete(key));reviewSettingsRequests.set(key,request);return request;
+}
+async function setTaskReviewOnce(projectId: string, enabled: boolean, expectedRevision: number): Promise<{ ok: boolean; error?: string }> {
   try {
     await command('project.reviewPolicy.set', { projectId, taskReviewEnabled: enabled, expectedRevision });
     recordWrite('project.reviewPolicy.set', `任务交付验收=${enabled ? '开启' : '关闭'}（仅影响新任务）`);
@@ -1115,7 +1120,7 @@ export async function refreshRooms(projectIdArg?: string): Promise<void> {
         unread: 0,
       };
     }),
-    readErrors: { ...prev.readErrors, ...rosterErrors },
+    readErrors: { ...Object.fromEntries(Object.entries(prev.readErrors).filter(([key])=>!rooms.some(room=>key===`roster:${room.id}`))), ...rosterErrors },
   }));
 }
 
@@ -2142,7 +2147,14 @@ export interface ReviewSnapshot {
 
 /** 提交验收：只带**冻结快照**的三重身份（id+revision+manifest_hash）——不重读当前 review；
  * 冲突（STALE_REVISION 等）如实上屏并刷新详情。 */
-export async function submitTaskReview(snapshot: ReviewSnapshot, decision: 'accept' | 'changes_requested', note?: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }> {
+const reviewRequests=new Map<string,Promise<{ok:boolean;error?:string}>>();
+export function submitTaskReview(snapshot:ReviewSnapshot,decision:'accept'|'changes_requested',note?:string,threadIdForRefresh?:string):Promise<{ok:boolean;error?:string}> {
+  const key=JSON.stringify([snapshot,decision,note??null]);
+  const pending=reviewRequests.get(key);if(pending)return pending;
+  const request=submitTaskReviewOnce(snapshot,decision,note,threadIdForRefresh).finally(()=>reviewRequests.delete(key));
+  reviewRequests.set(key,request);return request;
+}
+async function submitTaskReviewOnce(snapshot: ReviewSnapshot, decision: 'accept' | 'changes_requested', note?: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }> {
   try {
     await command('task.review', {
       taskId: snapshot.taskId, deliveryId: snapshot.deliveryId, deliveryRevision: snapshot.deliveryRevision,

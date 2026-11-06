@@ -4,7 +4,7 @@
  */
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { MIGRATIONS } from './migrations/index.ts';
 
@@ -17,6 +17,16 @@ export interface OpenOptions {
 
 export function openDatabase(path: string, options: OpenOptions = {}): ZhongshuoDatabase {
   if (path !== ':memory:') {
+    // Validate before SQLite can initialize/truncate any existing evidence.
+    if (!existsSync(path) && existsSync(`${path}-wal`)) throw new DataDatabaseError('DATA_DATABASE_CORRUPT', '主数据库缺失但仍有日志文件；请保留整个数据目录并从完整备份恢复');
+    if (existsSync(path)) {
+      const size = statSync(path).size;
+      if (size === 0) throw new DataDatabaseError('DATA_DATABASE_EMPTY', '数据文件为空，可能被同步软件截断；请保留原文件并从完整备份恢复');
+      const fd = openSync(path,'r');
+      const header = Buffer.alloc(16);
+      try { readSync(fd,header,0,16,0); } finally { closeSync(fd); }
+      if (!header.equals(Buffer.from('SQLite format 3\0'))) throw new DataDatabaseError('DATA_DATABASE_CORRUPT', '数据文件头损坏；请保留原文件并从完整备份恢复');
+    }
     mkdirSync(dirname(path), { recursive: true });
   }
   const db = new Database(path);
@@ -31,8 +41,16 @@ export function openDatabase(path: string, options: OpenOptions = {}): Zhongshuo
     // r60（review-r59 §2）：任何打开/迁移失败（含更高版本拒绝、备份失败）都关闭句柄——
     // 不留半开 WAL/锁占用；调用方（daemon entry）再释放单实例锁后拒绝启动。
     try { db.close(); } catch { /* 关闭失败不掩盖原始错误 */ }
+    if(/SQLITE_(?:CORRUPT|NOTADB)/.test(String((err as {code?:unknown}|null)?.code??''))) {
+      throw new DataDatabaseError('DATA_DATABASE_CORRUPT','数据文件损坏；请保留整个数据目录并从完整备份恢复',err);
+    }
     throw err;
   }
+}
+
+export class DataDatabaseError extends Error {
+  readonly code:'DATA_DATABASE_EMPTY'|'DATA_DATABASE_CORRUPT';
+  constructor(code:'DATA_DATABASE_EMPTY'|'DATA_DATABASE_CORRUPT',message:string,cause?:unknown) { super(message,{cause}); this.name=code;this.code=code; }
 }
 
 export interface Migration {

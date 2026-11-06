@@ -1,3 +1,4 @@
+import {artifactPath} from '../artifactPath.ts';
 /**
  * DELIBERATE 持久化（§6.4/§6.5；DEV-08/09 + M1 修复轮）。
  *
@@ -92,17 +93,17 @@ export function publishDeliberationArtifact(db: ZhongshuoDatabase, input: SaveAr
     .prepare('SELECT id, kind, revision, hash, blob_path FROM artifacts WHERE id = ?')
     .get(input.artifactId) as { id: string; kind: string; revision: number; hash: string; blob_path: string } | undefined;
   if (existing != null) {
-    if (!existsSync(existing.blob_path)) {
+    if (!existsSync(artifactPath(db,existing.blob_path))) {
       return domainErr('ARTIFACT_BODY_MISSING', `成果 ${input.artifactId} 的正文缺失（blob ${existing.blob_path}）；先恢复再操作`);
     }
-    const diskHash = sha256Of(readFileSync(existing.blob_path, 'utf8'));
+    const diskHash = sha256Of(readFileSync(artifactPath(db,existing.blob_path), 'utf8'));
     if (diskHash !== existing.hash) {
       return domainErr('ARTIFACT_BODY_MISMATCH', `成果 ${input.artifactId} 磁盘正文与记录 hash 不一致；需人工/恢复流程核对`);
     }
     if (hash !== existing.hash) {
       return domainErr('ARTIFACT_CONFLICT', `成果 ${input.artifactId} 已提交且内容不同（不可变版本，修订须用新 ID/新版本）`);
     }
-    return domainOk({ artifactId: existing.id, kind: existing.kind as DeliberationArtifactKind, revision: existing.revision, hash: existing.hash, blobPath: existing.blob_path, idempotentReplay: true });
+    return domainOk({ artifactId: existing.id, kind: existing.kind as DeliberationArtifactKind, revision: existing.revision, hash: existing.hash, blobPath: artifactPath(db,existing.blob_path), idempotentReplay: true });
   }
   if (existsSync(finalPath)) {
     return domainErr('ARTIFACT_CONFLICT', `成果正文 ${finalPath} 已存在但无数据库记录（孤儿文件）；需核对来源后清理`);
@@ -171,11 +172,12 @@ export interface ArtifactRow {
 export function listRunArtifacts(db: ZhongshuoDatabase, runId: string, kind: DeliberationArtifactKind): ArtifactRow[] {
   return db
     .prepare('SELECT id, run_id, author_id, kind, revision, hash, blob_path FROM artifacts WHERE run_id = ? AND kind = ? ORDER BY revision, id')
-    .all(runId, kind) as ArtifactRow[];
+    .all(runId, kind).map(row=>({...row as ArtifactRow,blob_path:artifactPath(db,(row as ArtifactRow).blob_path)})) as ArtifactRow[];
 }
 
 export function getArtifact(db: ZhongshuoDatabase, artifactId: string): ArtifactRow | undefined {
-  return db.prepare('SELECT id, run_id, author_id, kind, revision, hash, blob_path FROM artifacts WHERE id = ?').get(artifactId) as ArtifactRow | undefined;
+  const row=db.prepare('SELECT id, run_id, author_id, kind, revision, hash, blob_path FROM artifacts WHERE id = ?').get(artifactId) as ArtifactRow | undefined;
+  return row?{...row,blob_path:artifactPath(db,row.blob_path)}:undefined;
 }
 
 export interface IntegrityReport {
@@ -193,13 +195,13 @@ export function verifyArtifactIntegrity(db: ZhongshuoDatabase, options: { runId?
     ? (db.prepare('SELECT id, hash, blob_path FROM artifacts WHERE run_id = ?').all(options.runId) as Array<{ id: string; hash: string; blob_path: string }>)
     : (db.prepare('SELECT id, hash, blob_path FROM artifacts').all() as Array<{ id: string; hash: string; blob_path: string }>);
   const reports = rows.map((r) => {
-    if (!existsSync(r.blob_path)) return { artifactId: r.id, ok: false, problem: 'body_missing' as const };
-    const disk = sha256Of(readFileSync(r.blob_path, 'utf8'));
+    if (!existsSync(artifactPath(db,r.blob_path))) return { artifactId: r.id, ok: false, problem: 'body_missing' as const };
+    const disk = sha256Of(readFileSync(artifactPath(db,r.blob_path), 'utf8'));
     return disk === r.hash ? { artifactId: r.id, ok: true } : { artifactId: r.id, ok: false, problem: 'hash_mismatch' as const };
   });
   const orphanFiles: string[] = [];
   if (options.blobDir != null && existsSync(options.blobDir)) {
-    const known = new Set(rows.map((r) => r.blob_path));
+    const known = new Set(rows.map((r) => artifactPath(db,r.blob_path)));
     for (const name of readdirSync(options.blobDir)) {
       const full = join(options.blobDir, name);
       if (!known.has(full)) orphanFiles.push(full);
@@ -217,7 +219,7 @@ export function repairArtifactBody(db: ZhongshuoDatabase, artifactId: string, ex
   if (hash !== row.hash) {
     return domainErr('ARTIFACT_CONFLICT', `恢复载荷与记录 hash 不一致（${artifactId}）：期望内容不是该版本`);
   }
-  if (!existsSync(row.blob_path)) writeFileSync(row.blob_path, body, 'utf8');
+  if (!existsSync(artifactPath(db,row.blob_path))) writeFileSync(artifactPath(db,row.blob_path), body, 'utf8');
   return domainOk({ restored: true });
 }
 

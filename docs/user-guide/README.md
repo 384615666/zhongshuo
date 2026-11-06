@@ -1,6 +1,6 @@
 # 众说操作手册
 
-**Windows 桌面版 · 图文入门 · 更新于 2026-11-02**
+**Windows 桌面版 · 图文入门 · 更新于 2026-11-06**
 
 第一次用众说，可以跟着本手册做一次：打开项目 → 添加 AI → 发消息 → 看回复。本手册用“读书会筹备”举例，你可以换成自己的工作、资料或代码项目。
 
@@ -10,13 +10,15 @@
 
 ## 1. 第一次打开：从一个项目开始
 
-使用安装版时，运行下载的 `Zhongshuo-Setup-…-x64.exe`，按安装向导完成后，从开始菜单或桌面的 **众说** 打开。无需另外安装 Node.js。再次打开会回到已有窗口。
+本版本仅提供 Windows 安装包，不提供远程访问入口。安装目录完整路径请保持在 180 字符以内，数据目录在 240 字符以内。
+
+运行下载的 `Zhongshuo-Setup-…-x64.exe`，按安装向导完成后，从开始菜单或桌面的 **众说** 打开。无需另外安装 Node.js。再次打开会回到已有窗口。
 
 ![安装确认：检查程序位置与桌面快捷方式后，点击“安装”](images/21-install-ready.png)
 
 ![安装完成：点击“完成”，从桌面或开始菜单打开众说](images/22-install-complete.png)
 
-安装版默认把聊天、任务和设置保存在 `%LOCALAPPDATA%\Zhongshuo\data`；升级或卸载程序会保留这些数据。旧便携版的数据不会自动导入，需要时按 [第 12 章](#optional) 使用已有数据或备份恢复。
+安装版默认把聊天、任务和设置保存在 `%LOCALAPPDATA%\Zhongshuo\data`；升级或卸载程序会保留这些数据。旧便携版的数据通常位于 `%APPDATA%\zhongshuo`，不会自动导入。先正常退出旧程序，再按 [第 12 章](#optional) 使用已有数据或备份恢复。
 
 升级前请先从系统托盘右键选择 **退出众说**，等待后台任务结束后再运行安装器。窗口右上角的 **×** 只会隐藏窗口。众说仍在运行时，安装器会停止安装，保留当前程序。
 
@@ -118,7 +120,7 @@
 
 ### 使用 DeepSeek Harness 或 Pi
 
-**DeepSeek Harness：** 对应官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该版本及其要求的 Node.js、包管理工具，再打开便携包内的 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 `zhongshuo` profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。
+**DeepSeek Harness：** 对应官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该版本及其要求的 Node.js、包管理工具，再打开安装目录内的 `runtime-tools/deepseek-harness/setup.cmd`。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 `zhongshuo` profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。
 
 从源码运行时，先执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime`。找不到程序时可在高级设置填写实际 CLI 路径。
 
@@ -130,7 +132,7 @@ Harness 的配置按 profile 区分。`dsh web` 的设置通常写入 `web` prof
 
 Windows 上，Harness 官方桌面版安装后提供的 `dsh` 入口可直接使用，也可以在高级设置选择 `DeepSeek Harness.exe`。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 `pi`。已安装好时无需重复安装 CLI，只需为 Harness 运行一次众说连接组件安装入口。
 
-密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版便携包中的 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd` 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 **继续任务**。
+密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版安装目录中的 `runtime-tools/deepseek-harness/setup.cmd` 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 **继续任务**。
 
 ### 修改已有AI
 

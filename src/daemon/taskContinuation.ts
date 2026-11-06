@@ -90,5 +90,16 @@ export function continueInterruptedTask(db:ZhongshuoDatabase,taskId:string,now=D
     db.prepare(`UPDATE workflow_runs SET status='INTERRUPTED' WHERE id=? AND status IN ('RUNNING','WAITING','QUEUED')
       AND NOT EXISTS(SELECT 1 FROM agent_turns WHERE run_id=? AND status NOT IN ('UNKNOWN','SUCCEEDED','FAILED','CANCELLED'))`).run(turn.run_id,turn.run_id);
   }
+  // A crashed coordinator retains its partial unique-index slot. Retire only
+  // interrupted attempts after the user has explicitly released their protection.
+  if((db.pragma('user_version',{simple:true}) as number)>=52)db.prepare(`WITH RECURSIVE scope(id) AS (
+    SELECT id FROM tasks WHERE id=? UNION SELECT t.id FROM tasks t JOIN scope s ON t.parent_task_id=s.id
+  ) UPDATE coordination_runs SET state='blocked',error_message='执行中断；用户已接受新一次继续，旧协作保留供核对'
+    WHERE task_id IN (SELECT id FROM scope) AND state IN ('planning','running','integrating')
+      AND EXISTS(SELECT 1 FROM workflow_runs r WHERE r.id=COALESCE(coordination_runs.integration_run_id,coordination_runs.run_id)
+        AND r.status IN ('INTERRUPTED','FAILED','CANCELLED'))
+      AND NOT EXISTS(SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id
+        WHERE r.task_id IN (SELECT id FROM scope) AND (a.status NOT IN ('UNKNOWN','SUCCEEDED','FAILED','CANCELLED')
+          OR a.protection_state='retained'))`).run(taskId);
   return turns.map(turn=>turn.id);
 }

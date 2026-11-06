@@ -179,6 +179,12 @@ export function recheckReminderAuthority(db: ZhongshuoDatabase, reminder: Remind
     | { project_id: string; kind: string; room_id: string | null; archived_at: number | null } | undefined;
   if (conv == null) return { ok: false, reason: 'conversation-missing' };
   if (conv.archived_at != null) return { ok: false, reason: 'conversation-archived' };
+  const project = db.prepare('SELECT status FROM projects WHERE id=?').get(conv.project_id) as {status:string}|undefined;
+  if (project?.status !== 'active') return {ok:false,reason:'project-archived'};
+  if (conv.room_id != null) {
+    const room = db.prepare('SELECT archived_at FROM rooms WHERE id=?').get(conv.room_id) as {archived_at:number|null}|undefined;
+    if (!room || room.archived_at != null) return {ok:false,reason:'room-archived'};
+  }
   if (reminder.thread_id != null) {
     const thread = db.prepare("SELECT status FROM conversation_threads WHERE id = ?").get(reminder.thread_id) as { status: string } | undefined;
     if (thread == null) return { ok: false, reason: 'thread-missing' };
@@ -285,7 +291,12 @@ export class ReminderScheduler {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (message.includes('database is locked') || message.includes('SQLITE_BUSY')) { outcome.busySkipped += 1; continue; }
-        throw error;
+        // One malformed reminder must not block every project behind it.
+        this.db.prepare("UPDATE reminders SET status='paused',paused_reason=?,updated_at=? WHERE id=? AND status='active'")
+          .run('提醒执行失败，已暂停；请检查设置后恢复',now,snapshot.id);
+        this.db.prepare('INSERT INTO daemon_state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
+          .run(`reminder:error:${snapshot.id}`,JSON.stringify({reason:'dispatch-error',message:message.slice(0,2000),scheduledAt:snapshot.next_at}),now);
+        outcome.paused.push({reminderId:snapshot.id,reason:'提醒执行失败，已暂停；请检查设置后恢复'});
       }
     }
     return outcome;

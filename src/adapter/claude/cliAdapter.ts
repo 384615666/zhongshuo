@@ -691,6 +691,19 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     } catch {
       return; // 坏行：丢弃（不猜归属；无终态时由 close 兜底 failed）
     }
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    if (parsed['type'] === 'assistant' || parsed['type'] === 'user') {
+      const message = parsed['message'];
+      const content = message != null && typeof message === 'object' && !Array.isArray(message)
+        ? (message as Record<string,unknown>)['content'] : undefined;
+      if (!Array.isArray(content) || content.some(block => block == null || typeof block !== 'object'
+        || typeof block.type !== 'string' || block.text != null && typeof block.text !== 'string'
+        || block.id != null && typeof block.id !== 'string' || block.name != null && typeof block.name !== 'string'
+        || block.tool_use_id != null && typeof block.tool_use_id !== 'string')) {
+        turn.stderrTail = (turn.stderrTail + '\n[protocol-invalid] AI 输出字段格式异常，已忽略该行').slice(-2000);
+        return;
+      }
+    }
     const type = String(parsed['type'] ?? '');
     if (type === 'system' && parsed['subtype'] === 'init') {
       const sid = typeof parsed['session_id'] === 'string' ? (parsed['session_id'] as string) : null;

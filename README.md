@@ -104,10 +104,10 @@
 git clone https://github.com/384615666/zhongshuo.git
 cd zhongshuo
 pnpm install --frozen-lockfile
-node scripts/make-desktop-daily.mjs desktop-daily-win-local
+node scripts/make-windows-installer.mjs
 ```
 
-双击 `dist/desktop/desktop-daily-win-local/start-desktop.vbs` 启动，再按 [操作手册](docs/user-guide/README.md) 完成第一次协作：打开项目 → 添加 AI → 发出第一条消息。安装后也可以在 **设置 → 操作手册** 随时查看图文教程。
+运行 `dist/installers/` 中生成的安装包，安装后从开始菜单打开众说，再按 [操作手册](docs/user-guide/README.md) 完成第一次协作：打开项目 → 添加 AI → 发出第一条消息。安装后也可以在 **设置 → 操作手册** 随时查看图文教程。
 
 <details>
 <summary><b>构建 Windows 安装包</b></summary>
@@ -123,15 +123,11 @@ node scripts/make-windows-installer.mjs
 </details>
 
 <details>
-<summary><b>已有数据 / 便携入口</b></summary>
+<summary><b>已有数据</b></summary>
 
-关闭旧程序后执行：
+本版本仅发行 Windows 安装包，不再提供便携包或远程访问入口。安装目录完整路径不超过 180 字符，数据目录不超过 240 字符。
 
-```powershell
-node scripts/install-existing-data-launcher.mjs <新包目录> <已有 server-data 的绝对路径>
-```
-
-再双击新包的 `start-existing-data.vbs`。该入口固定使用选定目录；连接标记缺失时自动补建，找不到原数据库时会报错。启动失败可查看包目录的 `startup-existing-data.log`。
+旧便携版的数据通常在 `%APPDATA%\zhongshuo`。先正常退出旧程序，再进入安装版的 **设置 → 数据与存储 → 使用已有数据或从备份恢复**，选择旧数据目录并复制到新位置。导入会保留原目录，详细步骤见 [操作手册](docs/user-guide/README.md#optional)。
 
 </details>
 
@@ -142,7 +138,7 @@ AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 
 <details>
 <summary><b>DeepSeek Harness / Pi 配置说明</b></summary>
 
-DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；便携包附带 `ZhongshuoDual/runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。
+DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；安装目录附带 `runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。
 
 Pi 直接连接已安装的官方 CLI，沿用其模型配置；同时兼容官方安装器和 npm 全局安装，无需额外插件。
 

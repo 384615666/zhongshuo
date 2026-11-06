@@ -568,6 +568,9 @@ function registerNotificationIdentity():void{
 
 app.whenReady().then(async () => {
   if (!ownsDesktopInstance || desktopLifecycle.quitting) return;
+  if(process.platform==='win32'&&[appRoot,appDataDir].some(path=>resolve(path).length>240)){
+    dialog.showErrorBox('路径过长','安装或数据目录路径过长，请缩短路径后重新打开众说。');app.quit();return;
+  }
   if (installedConfigurationError != null) throw Error(installedConfigurationError);
   registerNotificationIdentity();
   removeStaleStartMenuShortcuts();
@@ -806,6 +809,7 @@ let dataOperationStarting = false;
   const desktopIcon = resolveDesktopIconPath();
   const windowIcon = resolveWindowIconPath();
   const win = new BrowserWindow({
+    minWidth: 900, minHeight: 600,
     width: 1280,
     height: 800,
     ...(windowIcon?{icon:windowIcon}:{}),
@@ -937,14 +941,15 @@ let dataOperationStarting = false;
   ipcMain.handle('zs:saveAs', async (event, payload: unknown) => {
     assertTrustedSender(event);
     const p = payload as { suggestedName?: unknown; contentBase64?: unknown };
-    if (typeof p?.suggestedName !== 'string' || p.suggestedName.length === 0 || p.suggestedName.length > 200) {
-      throw new Error('另存为参数无效（suggestedName 必须是 1–200 字符）');
+    if (typeof p?.suggestedName !== 'string' || p.suggestedName.length === 0) {
+      throw new Error('另存为参数无效（文件名不能为空）');
     }
     if (typeof p?.contentBase64 !== 'string') {
       throw new Error('另存为参数无效（contentBase64 缺失）');
     }
-    // suggestedName 只作默认文件名：取 basename（剥离任何路径成分——不接受路径注入）。
-    const safeName = p.suggestedName.split(/[\\/]/).pop() ?? 'file';
+    // suggestedName 只作默认文件名：统一清洗路径字符和 Windows 非法名称。
+    const {safeFilename}=await import('../contracts/safeFilename.ts');
+    const safeName = safeFilename(p.suggestedName);
     // R68 §6：**空文件按原件语义保存**（0 字节是合法原文件——工作区空文件读取通道可读 0B；
     // 空串 base64 解码即 0 字节）。
     const raw = Buffer.from(p.contentBase64, 'base64');

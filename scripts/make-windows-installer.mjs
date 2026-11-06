@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { packageUserGuideAssets, renderUserGuide } from './package-user-guide.mjs';
@@ -145,6 +145,9 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     assert.ok(existsSync(join(sourceImage,'electron.exe')),'Expected a portable source image with electron.exe');
     privacyCheck(sourceImage);
     image=mkdtempSync(join(work,'image-'));cpSync(sourceImage,image,{recursive:true});
+    for(const file of ['start-desktop.bat','start-desktop.vbs','start-existing-data.vbs','start-existing-data.cmd','本地体验启动.cmd','自动本地验证.cmd','自动桌面验证.cmd','一页说明.md','升级说明.txt']) {
+      const target=join(image,file);if(existsSync(target)&&lstatSync(target).isFile())rmSync(target);
+    }
     renameSync(join(image,'electron.exe'),join(image,release.executable));
     const branded=brandWindowsExecutable(join(image,release.executable),icon,windowsExecutableBrand({...release,...version},release.executable));
     const {Version:nativeVersion,...nativeIcon}=branded;
@@ -169,7 +172,7 @@ export async function makeInstaller(argv=process.argv.slice(2)) {
     cpSync(join(repo,'docs/user-guide/README.md'),join(guide,'README.md'));if(existsSync(join(repo,'docs/user-guide/images')))cpSync(join(repo,'docs/user-guide/images'),join(guide,'images'),{recursive:true});
     writeFileSync(join(image,'众说操作手册.html'),renderUserGuide({assetPrefix:'操作手册/',markdownPath:'操作手册/README.md'}),'utf8');
     packageUserGuideAssets(join(appDir,'dist/ui/renderer/user-guide'));
-    writeFileSync(join(image,'安装说明.txt'),`众说 ${version.version}\r\n\r\n安装范围：当前 Windows 用户，无需管理员权限。\r\n默认程序目录：%LOCALAPPDATA%\\Programs\\Zhongshuo\r\n默认数据目录：%LOCALAPPDATA%\\Zhongshuo\\data\r\n\r\n安装、升级和卸载均不删除用户数据。数据目录仅由应用启动后管理。\r\n安装不自动导入已有聊天；需要时在设置中选择导入已有数据。\r\n升级或卸载前，请先在众说中正常退出并等待后台任务结束。\r\n静默安装不会自动启动应用。\r\n随包提供操作手册、MIT LICENSE、第三方许可证说明。\r\n`,'utf8');
+    writeFileSync(join(image,'安装说明.txt'),`众说 ${version.version}\r\n\r\n仅提供 Windows 安装版；不再发行便携包。\r\n安装范围：当前 Windows 用户，无需管理员权限。\r\n默认程序目录：%LOCALAPPDATA%\\Programs\\Zhongshuo\r\n默认数据目录：%LOCALAPPDATA%\\Zhongshuo\\data\r\n\r\n安装、升级和卸载均不删除用户数据。数据目录仅由应用启动后管理。\r\n安装不自动导入已有聊天；需要时在设置中选择导入已有数据。\r\n旧便携数据通常在 %APPDATA%\\zhongshuo；先退出旧程序，再用设置中的“使用已有数据或从备份恢复”复制导入。原目录保留。\r\n安装目录完整路径不超过 180 字符，数据目录不超过 240 字符。\r\n本版本不提供远程访问入口。\r\n升级或卸载前，请先在众说中正常退出并等待后台任务结束。\r\n静默安装不会自动启动应用。\r\n随包提供操作手册、MIT LICENSE、第三方许可证说明。\r\n`,'utf8');
     privacyCheck(image);build=stampImage(image,original,metadata);
     json(join(work,'payload-audit.json'),{...version,...build,runAsNode:false,privacyScanPassed:true,dataFilesIncluded:false});
   }
