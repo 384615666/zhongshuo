@@ -7,17 +7,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveCliExecutable } from '../src/adapter/cli/executable.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const supportedVersion = '0.2.1-rc.5';
+const supportedVersions = ['0.2.1-rc.5', '0.2.2-rc.1'];
+const supportedVersion = supportedVersions.join(' || ');
 const exists = async (path) => { try { await access(path); return true; } catch { return false; } };
 
 export async function setupDeepseekHarness(args) {
-  if (args.includes('--help') || args.includes('-h')) return { usage: 'node setup-deepseek-harness.mjs --install|--plan [--artifact-dir DIR] [--dsh PATH | --dsh-js PATH]', profile: 'zhongshuo', dshVersion: supportedVersion };
-  if (!args.includes('--install') && !args.includes('--plan')) throw new Error('Manual setup only: pass --install (or read-only --plan).');
+  if (args.includes('--help') || args.includes('-h')) return { usage: 'node setup-deepseek-harness.mjs --install|--installer|--plan [--artifact-dir DIR] [--dsh PATH | --dsh-js PATH]', profile: 'zhongshuo', dshVersion: supportedVersion };
+  const installer = args.includes('--installer');
+  if (!args.includes('--install') && !args.includes('--plan') && !installer) throw new Error('Pass --install, --installer (if Harness is present), or read-only --plan.');
   let artifacts = await exists(join(here, 'manifest.json')) ? here : resolve(here, '../dist/dsh-runtime');
   let executable; let script;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--install' || arg === '--plan') continue;
+    if (arg === '--install' || arg === '--plan' || arg === '--installer') continue;
     if (!['--artifact-dir', '--dsh', '--dsh-js'].includes(arg) || !args[i + 1]) throw new Error(`Unknown or incomplete option: ${arg}`);
     const value = args[++i];
     if (arg === '--artifact-dir') artifacts = resolve(value);
@@ -40,9 +42,34 @@ export async function setupDeepseekHarness(args) {
   const durableTarball = join(durableDir, manifest.tarball);
   if (args.includes('--plan')) return { profile: 'zhongshuo', dshVersion: supportedVersion, pluginVersion: manifest.pluginVersion,
     artifactVerified: true, durableTarball, modifiesProfile: false };
-  const launch = script ? { command: process.execPath, prefixArgs: [script] } : resolveCliExecutable('deepseek-harness', executable);
+  let launch;
+  try { launch = script ? { command: process.execPath, prefixArgs: [script] } : resolveCliExecutable('deepseek-harness', executable); }
+  catch (error) {
+    if (!installer || executable || script || error.code !== 'RUNTIME_NOT_FOUND') throw error;
+    // Explorer's PATH can predate the Harness installation. Resolve its normal
+    // Windows entry points without installing or downloading the runtime.
+    const candidates = [process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs/DeepSeek Harness/DeepSeek Harness.exe'),
+      process.env.APPDATA && join(process.env.APPDATA, 'npm/dsh.cmd')].filter(Boolean);
+    for (const candidate of candidates) if (await exists(candidate)) { launch = resolveCliExecutable('deepseek-harness', candidate); break; }
+    if (!launch) return { status: 'skipped', reason: 'harness-not-installed', modifiesProfile: false };
+  }
   const version = await run(launch, ['--version'], true);
-  if (version.trim() !== supportedVersion) throw new Error(`This plugin supports DSH ${supportedVersion}; install that official version separately before setup.`);
+  if (!supportedVersions.includes(version.trim())) throw new Error(`This plugin supports DSH ${supportedVersions.join(' or ')}; install a supported official version separately before setup.`);
+  if (installer) {
+    const installed = join(home, 'profiles/zhongshuo/node_modules/@zhongshuo/dsh-runtime');
+    let matches = true;
+    for (const [file, expected] of Object.entries(manifest.files)) {
+      try { if (createHash('sha256').update(await readFile(join(installed, file))).digest('hex') !== expected) matches = false; }
+      catch { matches = false; }
+    }
+    // Exact current content needs no package-manager call on later app upgrades.
+    if (matches) {
+      const frame = JSON.parse(await run(launch, ['--profile', 'zhongshuo', '--zs-probe'], true));
+      if (frame.runtime === 'zhongshuo-dsh' && frame.v === 1 && frame.protocol === 1 && frame.type === 'probe' && frame.pluginVersion === manifest.pluginVersion)
+        return { status: 'current', profile: 'zhongshuo', pluginVersion: manifest.pluginVersion, modifiesProfile: false };
+      throw new Error('Current component probe mismatch.');
+    }
+  }
   await mkdir(durableDir, { recursive: true });
   const data = await readFile(tarball);
   try { await writeFile(durableTarball, data, { flag: 'wx' }); }
@@ -54,17 +81,22 @@ export async function setupDeepseekHarness(args) {
   const probe = await run(launch, ['--profile', 'zhongshuo', '--zs-probe'], true);
   let frame; try { frame = JSON.parse(probe.trim()); } catch { throw new Error('Installed profile did not return a valid probe.'); }
   if (frame.runtime !== 'zhongshuo-dsh' || frame.v !== 1 || frame.protocol !== 1 || frame.type !== 'probe' || frame.pluginVersion !== manifest.pluginVersion) throw new Error('Installed profile probe mismatch.');
-  return { profile: 'zhongshuo', dshVersion: supportedVersion, pluginVersion: manifest.pluginVersion, probe: frame };
+  return { status: 'installed', profile: 'zhongshuo', dshVersion: version.trim(), pluginVersion: manifest.pluginVersion, probe: frame };
 }
 
 async function run(launch, args, capture = false) {
   return new Promise((resolveRun, reject) => {
     const child = spawn(launch.command, [...launch.prefixArgs, ...args], { env: launch.env ? { ...process.env, ...launch.env } : undefined,
       stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'], windowsHide: true, shell: false });
+    const timer = setTimeout(() => child.kill(), args[0] === 'plugin' ? 120_000 : 30_000);
     let text = '';
     child.stdout?.on('data', (chunk) => { text += chunk.toString('utf8'); if (text.length > 1024 * 1024) child.kill(); });
-    child.once('error', reject);
-    child.once('close', (code) => code === 0 ? resolveRun(text) : reject(new Error(`Official DSH command failed (exit ${code}).`)));
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolveRun(text);
+      else reject(new Error(`Official DSH command failed (exit ${code}).`));
+    });
   });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

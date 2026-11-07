@@ -2,7 +2,7 @@ import process from 'node:process';
 let buffer='';process.stdin.setEncoding('utf8');
 const send=frame=>process.stdout.write(JSON.stringify(frame)+'\n');
 const scenario=process.argv[2];
-send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true,planningOnly:scenario!=='old'}});
+send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true,privateSessions:true,planningOnly:scenario!=='old'}});
 process.stdin.on('data',chunk=>{
   buffer+=chunk;let pos;
   while((pos=buffer.indexOf('\n'))>=0){

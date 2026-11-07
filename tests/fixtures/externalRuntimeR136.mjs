@@ -16,7 +16,7 @@ if (process.argv.includes('--zs-probe')) {
     }
     if (command.type !== 'execute') return;
     const requestId = scenario === 'wrong-request' ? 'someone-else' : command.requestId;
-    const sessionId = scenario === 'wrong-session' ? 'wrong-session' : command.sessionId ?? `session-${requestId}`;
+    const sessionId = scenario === 'wrong-session' ? 'wrong-session' : command.sessionId ?? `${process.env.ZHONGSHUO_DSH_PRIVATE_SESSIONS === '1' ? 'zhongshuo-session-' : 'session-'}${requestId}`;
     active = {sessionId};
     if (scenario === 'malformed') { process.stdout.write('[null]\n'); return; }
     if (scenario === 'no-result') { reader.close(); process.stdin.destroy(); return; }
@@ -32,7 +32,7 @@ if (process.argv.includes('--zs-probe')) {
     if (scenario === 'failure') send({v:1,type:'result',requestId,sessionId,status:'failed',error:{code:'AUTH_REQUIRED',message:'Fixture auth error'}});
     else send({v:1,type:'result',requestId,sessionId:scenario==='conflicting-session'?'second-session':sessionId,status:'completed',stopReason:scenario === 'truncated' ? 'max-tokens' : 'completed',text:scenario === 'empty' ? '' : JSON.stringify({prompt:command.prompt,developer:command.developerInstructions??null,schemaVersion:'fixture',sessionId,mode:command.mode,outputSchema:command.outputSchema})});
   });
-  const handshake = () => send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,pluginVersion:'test',capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,...(scenario==='old-plugin'?{}:{outputSchema:true,formatRepair:true})}});
+  const handshake = () => send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,pluginVersion:'test',capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,...(scenario==='old-plugin'?{}:{outputSchema:true,formatRepair:true,...(scenario==='shared-history-plugin'?{}:{privateSessions:true})})}});
   if (scenario === 'slow-ready') setTimeout(handshake,150);
   else if (scenario === 'cold-start') setTimeout(handshake,10500);
   else if (scenario !== 'no-ready') handshake();

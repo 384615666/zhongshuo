@@ -8,9 +8,9 @@ const fixture = fileURLToPath(new URL('../fixtures/externalRuntimeR136.mjs', imp
 const adapters: DeepSeekHarnessAdapter[] = [];
 const input = (threadId = 'thread'): OpenSessionInput => ({projectId:'p',memberId:'m',taskId:'t',threadId,sessionGeneration:0,cwd:process.cwd(),policyId:'policy-full',writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[process.cwd()],identityKey:'test'}});
 const request = (text = '中文🙂\n$() `touch` & literal'): TurnRequest => ({turnId:'turn',dispatchKey:'dispatch',inputBundleId:'bundle',text,policyId:'policy-full',taskRevision:0});
-function adapter(scenario = 'success', observe?: (args: string[]) => void, requestTimeoutMs?: number) {
-  const result = new DeepSeekHarnessAdapter({executable:process.execPath,model:'deepseek/test',requestTimeoutMs,spawnFn:(_command,args,cwd)=>{
-    observe?.(args);return spawn(process.execPath,[fixture,scenario,...args],{cwd,stdio:'pipe',windowsHide:true});
+function adapter(scenario = 'success', observe?: (args: string[], env?: NodeJS.ProcessEnv) => void, requestTimeoutMs?: number) {
+  const result = new DeepSeekHarnessAdapter({executable:process.execPath,model:'deepseek/test',requestTimeoutMs,spawnFn:(_command,args,cwd,env)=>{
+    observe?.(args,env);return spawn(process.execPath,[fixture,scenario,...args],{cwd,env,stdio:'pipe',windowsHide:true});
   }});adapters.push(result);return result;
 }
 async function terminal(adapter: RuntimeAdapter, session: SessionRef, timeoutMs = 4000) {
@@ -43,6 +43,21 @@ describe('DeepSeek Harness structured profile and actual child lifecycle',()=>{
     const resumed=await a.openSession({...input(),resume:first});await a.startTurn(resumed,request('followup'));await terminal(a,resumed);await a.close(resumed);
     const other=await a.openSession(input('other'));await a.startTurn(other,request());await terminal(a,other);
     expect(resumed.providerSessionId).toBe(first.providerSessionId);expect(other.providerSessionId).not.toBe(first.providerSessionId);
+    expect(first.providerSessionId).toMatch(/^zhongshuo-session-/);
+  });
+  it('requires private storage support before sending a new request to an older component',async()=>{
+    const a=adapter('shared-history-plugin'),s=await a.openSession(input());
+    await a.startTurn(s,request());const events=await terminal(a,s);
+    expect(events.at(-1)).toMatchObject({kind:'turn.failed',code:'CAPABILITY_UNSUPPORTED',message:expect.stringContaining('setup.cmd')});
+    expect(events.some(event=>event.kind==='session.ready'||event.kind==='turn.started')).toBe(false);
+  });
+  it('continues an existing shared-history session with its exact ID and original storage',async()=>{
+    let storageMode:string|undefined;
+    const a=adapter('shared-history-plugin',(_args,env)=>{storageMode=env?.ZHONGSHUO_DSH_PRIVATE_SESSIONS;}),prior=await a.openSession(input());
+    const s=await a.openSession({...input(),resume:{...prior,providerSessionId:'session-existing-history'}});
+    await a.startTurn(s,request('continue existing'));const events=await terminal(a,s);
+    expect(events.at(-1)?.kind).toBe('turn.completed');expect(s.providerSessionId).toBe('session-existing-history');
+    expect(storageMode).toBe('0');
   });
   it('rejects a resume from a different conversation before spawning',async()=>{
     const a=adapter();const prior=await a.openSession(input());prior.providerSessionId='provider-session';

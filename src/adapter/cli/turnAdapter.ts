@@ -38,6 +38,7 @@ export abstract class CliTurnAdapter implements RuntimeAdapter {
   }
   abstract probe(): Promise<ProbeResult>;
   protected abstract arguments(session: CliSession, input: TurnRequest): string[];
+  protected environment(session: CliSession): NodeJS.ProcessEnv | undefined { void session; return undefined; }
   protected abstract validate(session: CliSession, input: TurnRequest): void;
   protected abstract onFrame(session: CliSession, turn: CliTurn, frame: Record<string, unknown>): void;
   protected abstract begin(session: CliSession, turn: CliTurn): void;
@@ -61,7 +62,8 @@ export abstract class CliTurnAdapter implements RuntimeAdapter {
     this.validate(session, input);
     const entry = resolveAgentExecutable(this.kind, this.options.executable);
     const args = [...entry.prefixArgs, ...this.arguments(session, input)];
-    const env = entry.env ? { ...process.env, ...entry.env } : undefined;
+    const overrides = this.environment(session);
+    const env = entry.env || overrides ? { ...process.env, ...entry.env, ...overrides } : undefined;
     const child = this.options.spawnFn
       ? this.options.spawnFn(entry.command, args, ref.cwd, env)
       : spawn(entry.command, args, { cwd: ref.cwd, env, shell: false, windowsHide: true, stdio: 'pipe' });

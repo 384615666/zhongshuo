@@ -5,9 +5,10 @@
  * 本地凭据一致才接受后续命令，否则拒绝该连接（不执行任何命令）。
  * 任何能连上管道的主体 ≠ 可信调用者——CallerContext 只在凭据验证后构造。
  * 通过验证后：每行一个请求 envelope，回一行 result；写命令按 FIFO 串行，
- * 权限提示查询独立处理，客户端按 commandId 对应响应。
+ * 权限提示与应用设置读取独立处理，客户端按 commandId 对应响应。
  */
 import { createServer, type Server, type Socket } from 'node:net';
+import { isRuntimeMetadataRead } from '../contracts/runtimeMetadataDeadline.ts';
 
 export interface NamedPipeIpcHandle {
   pipeName: string;
@@ -29,9 +30,11 @@ export function startNamedPipeIpc(
       socket.setEncoding('utf8');
       let buffer = '';
       let authenticated = false;
-      // 同 socket 按行 FIFO 串行处理（异步 handler 的响应顺序与请求一致——
-      // 否则同步失败路径会先于异步成功路径写出，响应错位到下一个请求）。
+      // 同 socket 的写命令及默认操作按行 FIFO；独立读的响应由 commandId 关联。
       let queue: Promise<void> = Promise.resolve();
+      // 设置读取只等此前的设置写入，避免被 AI 初始化/元数据查询拖到 15 秒超时；
+      // 不能直接跳过所有队列，否则连续发送 set/get 可能回读到保存前的旧值。
+      let settingsWrites: Promise<void> = Promise.resolve();
       const enqueue = (process: () => Promise<void>): void => {
         queue = queue.then(process, process);
       };
@@ -95,12 +98,21 @@ export function startNamedPipeIpc(
             }
             if(!socket.destroyed)socket.write(`${JSON.stringify(response)}\n`);
           };
-          // Advisory permission reads must not wait behind CLI initialization
-          // during a send. Responses carry commandId; all writes retain FIFO.
-          let advisory=false;
-          try{advisory=(JSON.parse(requestLine) as {method?:string}).method==='message.writeCapability';}catch{/* Invalid JSON follows the normal error path. */}
-          if(advisory)void processRequest();
-          else enqueue(processRequest);
+          // Keep this an explicit allowlist: names ending in get/list can still
+          // initialize runtimes or mutate state and are not safe to bypass FIFO.
+          let method: unknown;
+          try { method = (JSON.parse(requestLine) as { method?: unknown } | null)?.method; }
+          catch { /* Invalid JSON follows the normal error path. */ }
+          // CLI catalogs/options do not write daemon state. Wait for preceding
+          // writes (e.g. a newly created project), then let the FIFO continue
+          // while this independent metadata process is starting or querying.
+          if (isRuntimeMetadataRead(method)) void queue.then(processRequest, processRequest);
+          else if (method === 'message.writeCapability') void processRequest();
+          else if (method === 'app.settings.get') void settingsWrites.then(processRequest, processRequest);
+          else {
+            enqueue(processRequest);
+            if (method === 'app.settings.set') settingsWrites = queue;
+          }
         }
       });
       socket.on('close', () => {

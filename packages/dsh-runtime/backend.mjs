@@ -34,14 +34,24 @@ function installToolFree(agentCtx, instructions, mode) {
   const planning = mode === 'planning';
   const deniedCode = planning ? 'PLANNING_TOOL_DENIED' : 'FORMAT_REPAIR_TOOL_DENIED';
   const tools = required(agentCtx, 'tools');
-  if (!['restrict', 'presentAs', 'guard'].every((name) => typeof tools[name] === 'function')) {
+  if (!['restrict', 'guard'].every((name) => typeof tools[name] === 'function') ||
+    (typeof tools.presentAs !== 'function' && typeof tools.setExecutor !== 'function')) {
     throw new RuntimeError(planning ? 'PLANNING_UNSUPPORTED' : 'FORMAT_REPAIR_UNSUPPORTED', 'Harness cannot enforce this tool-free phase; reinstall the supported official runtime and Zhongshuo component.');
   }
   const message = planning ? 'Tools are disabled during coordination planning.' : 'Tools are disabled during format-only repair.';
   const denied = () => ({ isError: true, error: { message, info: { name: 'ToolFreePhaseDenied', code: deniedCode } }, content: [{ type: 'text', text: message }] });
   // All registrations are owned by the unpublished agent scope. Restrictions
   // alone exempt own-scope registrations and the reserved PTC run_code transport.
-  tools.presentAs('native');
+  if (typeof tools.presentAs === 'function') tools.presentAs('native');
+  else {
+    // DSH 0.2.2 moved presentation and batch dispatch into scoped executors.
+    // Own the complete boundary: expose no schemas and refuse every batch,
+    // including late scoped tools and reserved transport names.
+    tools.setExecutor({
+      describe: () => ({ schemas: [], knownNames: [] }),
+      async execute() { throw new RuntimeError(deniedCode, message); },
+    });
+  }
   tools.restrict({ allow: [] });
   tools.guard(() => message);
   // Prepend and never delegate: stale/unknown names and extension hooks cannot
@@ -92,7 +102,7 @@ export function createBackend(ctx) {
       if (command.effort !== undefined) selection.reasoningEffort = ReasoningEffortId(command.effort==='none'?'off':command.effort);
       await required(ctx, 'llm').resolveCallConfig(selection, signal);
       checkAbort(signal);
-      const sessionId = command.sessionId ?? `session-${randomUUID()}`;
+      const sessionId = command.sessionId ?? `${process.env.ZHONGSHUO_DSH_PRIVATE_SESSIONS === '1' ? 'zhongshuo-session-' : 'session-'}${randomUUID()}`;
       const setup = async (agentCtx, agent) => {
         checkAbort(signal);
         if (String(agent.session.id) !== sessionId) throw new RuntimeError('SESSION_ID_MISMATCH', 'Harness returned a different session.');

@@ -86,8 +86,8 @@ if (!existsSync(koffiPlatform)) {
 mkdirSync(join(nm, '@koromix'), { recursive: true });
 cpSync(koffiPlatform, join(nm, '@koromix'), { recursive: true, dereference: true });
 
-// The connector is bundled as data, and installed only through the user's
-// explicit setup command. DSH itself and its credentials remain user-owned.
+// The Windows installer configures this connector when Harness is present.
+// DSH itself and its credentials remain user-owned; setup.cmd retries failures.
 const dshTools = join(staging, 'runtime-tools', 'deepseek-harness');
 await buildDshRuntime(dshTools);
 writeFileSync(join(dshTools, 'setup.cmd'), [
@@ -106,7 +106,8 @@ writeFileSync(join(dshTools, 'README.txt'), [
   'DeepSeek Harness connection for Zhongshuo',
   '',
   'Install official @deepseek-ai/dsh@0.2.1-rc.5 and its required toolchain first.',
-  'Run setup.cmd to install only the Zhongshuo profile connector.',
+  'The Windows installer configures the Zhongshuo profile connector automatically when Harness is installed.',
+  'Run setup.cmd to retry connector setup if it fails, or after installing Harness later.',
   'Configure provider/model/MCP in the zhongshuo profile; dsh web uses its separate web profile.',
   'The connector does not install DSH or store API keys in Zhongshuo.',
   'Pi uses its installed CLI directly and needs no connector.',

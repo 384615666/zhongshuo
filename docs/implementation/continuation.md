@@ -1,5 +1,25 @@
 # 续工记录（continuation）
 
+## 2026-11-07：R187 元数据查询阻塞与安装器自动升级 Harness 组件（beta.32 候选）
+
+用户在beta.31仍遇room.list/成员工作量超时，另发现Harness模型列表读不到，随后确认未执行setup.cmd并要求整合进安装包。现场官方0.2.2-rc.1明确拒载旧0.1.3组件；模型查询原等待30秒并阻塞公共FIFO。现将runtimeCatalog/runtimeOptions独立执行、仍等此前写操作；正常写入彼此FIFO不变。明确拒载立即返回升级提示（现场约160ms）。安装器ssPostInstall自动调用随包setup --installer：未装Harness跳过、相同组件哈希只probe、需更新则官方plugin add；失败警告及完成页重试说明。保留原配置/MCP/会话，组件0.1.4，版本/schema61。
+
+定向45项、组件协议/安装22项、官方桌面隔离SDK通过。官方模型清单19个（配置副本+合成凭据占位，无推理）；随包setup隔离首次安装2.7秒、重复current、旧0.1.3→0.1.4升级13.1秒且供应商patch字节保留。包内668hash/21项通过，元数据故意等待18秒时四项普通查询6ms返回、设置写回成功/退出0/真实调用0。跟踪回归分两批覆盖373文件3372项：首批中断无最终JSON，仅94文件完成通过日志1410项/1跳；其余279文件完整退出0、1946通过/1预期失败/15跳。合计3355通过/1预期失败/16跳、无报告非预期失败；不是单次全量成功。hifi类型/本轮lint通过，根类型保留既有29错误。
+
+交付 `dist/installers/Zhongshuo-Setup-0.1.3-beta.32-x64.exe`，160190778字节，SHA256 `f2f89fa3d849f0ccc820f9e2c9286468929a1f8ccffb29ec1454d15d424c01b2`，BUILD `bld_928424cda3b63b37`，dirty候选/未签名，含既有R185/R186。未执行安装/升级/卸载或静默安装验收、未改用户运行数据或真实Harness profile；用户自行安装后自动完成组件更新。未提交推送Release。详见[R187](../reviews/r187-runtime-metadata-installer-20261107.md)。
+
+## 2026-11-07：R186 通知设置读取超时（beta.31 安装包候选）
+
+用户截图 `app.settings.get` 15000ms 超时。复现设置读取排在 AI 初始化/运行时元数据后阻塞；命名管道现允许设置读取独立响应，但等待此前设置写入，保留保存回读顺序、写命令 FIFO、凭据与参数校验，默认超时不变；读取失败改为简明中文。新6项修复前4项超时、修复后全过，最终定向10文件81项通过；hifi类型/本轮lint/diff检查过，根tsc仅既有29条错误，未跑完整套件。包内668hash及22项通过，前请求故意延迟18秒时设置1ms返回、正常退出0/真实调用0。现场beta.30独立诊断认证被拒，未绕过，原请求具体前置操作未证实。
+
+交付 `dist/installers/Zhongshuo-Setup-0.1.3-beta.31-x64.exe`，160183624字节，SHA256 `f60f2a7e17b2b2df493f642b1522007fa2a31819ca41b7300a2190beda21c31e`，BUILD `bld_b1d1b110b77f096c`，当前工作区dirty候选/未签名，含既有R185改动。未安装/操作用户程序和数据、未提交推送Release；用户自行安装。详见 [R186](../reviews/r186-settings-read-timeout-20261107.md)。
+
+## 2026-11-07：R185 众说新建 Harness 会话不进入普通历史列表（beta.30 安装包候选）
+
+用户发现内部会话挤入 Harness“未分组”，并明确选择只处理今后新建的会话。连接组件 0.1.4 通过官方 JSONL/storage 后端把新会话及投影缓存放到 `<DSH_HOME>/connectors/zhongshuo/sessions|storages`；新 ID 前缀 `zhongshuo-session-` 绑定原编号冷续聊，旧 ID 显式使用原目录，不搬迁/归档/删除已有记录。新会话握手要求 privateSessions，旧组件在请求前提示升级。发现本机 Harness 已升级为0.2.2-rc.1，补该精确版本支持；规划/补交采用新 scoped executor 的空工具/拒绝批次，旧0.2.1-rc.5保留原限制。
+
+官方 npm0.2.1-rc.5和桌面0.2.2-rc.1各32 SDK检查+7存储检查通过（隔离home、固定响应、0供应商调用）；协议/安装21过；完整跟踪370文件3345通过/16跳/0失败，最终旧环境路由断言另23/23；hifi类型0、本轮lint0，根类型仅既有localOpen DOM和未跟踪夹具错误。安装器668 hash、组件源码/归档一致、包内IPC17/17过/退出0/0真实调用。交付 `dist/installers/Zhongshuo-Setup-0.1.3-beta.30-x64.exe`，160203449字节，SHA256 `5d3ea06da8064009fb456ae1cc4307ea1a6c00d759b4502775536788515ec277`，BUILD `bld_47ecf506a0d396af`，当前工作区候选dirty如实记录，未签名。未安装/升级/卸载、未安装连接组件、未改用户数据、未提交推送/Release；安装后用户需运行安装目录 `runtime-tools/deepseek-harness/setup.cmd` 升级组件。详见 [R185](../reviews/r185-harness-private-sessions-20261107.md)。
+
 ## 2026-11-07：R184 beta.29 复核并发布（仅安装版）
 
 用户确认“gpt 已修复完成，检查一下，没问题就发版”。Lead 复核修复后按干净源码构建并发版：修复提交 `bf0b61d`；干净 worktree `dist/r184-source` 装配镜像 BUILD `bld_0a040e3c761c7200`（clean，632 文件清单逐项长度/SHA256 一致），安装器 BUILD `bld_e492ad807127d466`，668 文件 payload；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.29-x64.exe` **160,196,520 字节**、SHA256 `9b0d02cc075f03ce0d8634936e72d418ea15b36a98a6a16b8d5950e01aa365bf`，未签名。独立 payload 隔离校验 **14/14**（清单、无便携启动器、主题引导、内置 daemon IPC、远程默认关闭且无监听、配对不可用、中文项目路径、重复打开去重、存储清理、零宽正文拒绝、优雅退出、0 真实调用）。回归：完整跟踪套件 370 文件（368 通过/2 跳过）、**3340 通过/3 预期失败/16 跳过/0 非预期失败/0 未处理异常**（`ZS_SKIP_WORD=1`、并发 2、清除 `ELECTRON_RUN_AS_NODE`；不含本机未跟踪 R130/R131/R180 混沌资产）；hifi tsc 0、lint 无新增；根 tsc 仅既有 localOpen DOM 与旧夹具错误。已推送公开 `main`（`92dbb9b..bf0b61d`）并创建 GitHub Release `v0.1.3-beta.29`（安装包+sha256+release.json，仅安装版；旧便携数据导入说明在 README/手册/安装说明）。安装/升级/卸载交互仍由用户自行执行；第24项待确认、不修项保留；未调用真实模型、未操作用户已安装程序与数据。详见 [R184](../reviews/r184-r180-fixes-20261106.md)。

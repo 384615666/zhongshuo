@@ -477,12 +477,13 @@ body.embedded .footer{display:none}
 </table></div>
 <p><strong>模型列表为空时：</strong> 先在对应的渠道程序中完成安装和配置，再回到这里点 <strong>重新读取</strong>，选择模型。切换渠道时，旧模型和思考等级会清空；默认程序随渠道切换，Harness 为 <code>dsh</code>，Pi 为 <code>pi</code>。</p>
 <h3>使用 DeepSeek Harness 或 Pi</h3>
-<p><strong>DeepSeek Harness：</strong> 对应官方 <code>@deepseek-ai/dsh@0.2.1-rc.5</code>。先安装该版本及其要求的 Node.js、包管理工具，再打开安装目录内的 <code>runtime-tools/deepseek-harness/setup.cmd</code>。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 <code>zhongshuo</code> profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。</p>
+<p><strong>DeepSeek Harness：</strong> 支持官方 <code>@deepseek-ai/dsh@0.2.1-rc.5</code> 和 <code>0.2.2-rc.1</code>。先安装其中一个版本及其要求的 Node.js、包管理工具。自众说 beta.32 起，安装或升级众说时会自动检测 Harness 并安装或升级众说专用的连接组件，已有组件内容一致时只做就绪检查。未安装 Harness 时跳过；之后再安装 Harness，或自动配置失败时，可打开众说安装目录内的 <code>runtime-tools/deepseek-harness/setup.cmd</code> 重试。安装器不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 <code>zhongshuo</code> profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。</p>
+<p>连接组件升级至 0.1.4 后，众说今后新建的 Harness 会话会单独保存，不再出现在 Harness 的“未分组”等普通会话列表中；众说内仍可正常聊天和续聊。已有会话保留原来的位置和显示方式。</p>
 <p>从源码运行时，先执行 <code>node scripts/build-dsh-runtime.mjs</code>，再执行 <code>node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime</code>。找不到程序时可在高级设置填写实际 CLI 路径。</p>
 <p>Harness 的配置按 profile 区分。<code>dsh web</code> 的设置通常写入 <code>web</code> profile，不会自动搬到众说的专用 profile。专用配置文件为 <code>$DSH_HOME/profiles/zhongshuo/cordis.patch.yml</code>；未设置 <code>DSH_HOME</code> 时位于用户目录下的 <code>.dsh/profiles/zhongshuo/cordis.patch.yml</code>。按 Harness 官方说明添加所需供应商或 MCP 条目，并保留已有供应商、默认模型和插件条目，避免用单段配置覆盖整份文件。无需把其他 profile 的权限或全部配置复制过来。</p>
 <p><strong>Pi：</strong> 安装官方 Pi CLI，在 Pi 内完成供应商和模型配置，再回众说选择 <strong>Pi</strong>。Pi 无需安装众说连接插件。众说为不同任务建立独立会话，续接时核对原会话编号与目录；原会话缺失会明确失败，不会自动创建替代会话。</p>
 <p>这两种渠道均不要求安装 Magpie。官方直连、其他网关或本地服务按对应 CLI 的供应商配置方式接入，众说不预置个人网关地址、模型或密钥。MCP 和 Skill 也沿用对应 CLI 的配置。Pi 的 MCP 可以通过默认 codemode 调用，或按原生配置选择 direct 展示；不要仅因界面里没有同名独立工具就判断 MCP 不可用。修改 Pi 的用户级或项目级 MCP 配置后，已排队的旧执行会要求重新确认当前配置，避免默默采用不同工具设置。</p>
-<p>Windows 上，Harness 官方桌面版安装后提供的 <code>dsh</code> 入口可直接使用，也可以在高级设置选择 <code>DeepSeek Harness.exe</code>。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 <code>pi</code>。已安装好时无需重复安装 CLI，只需为 Harness 运行一次众说连接组件安装入口。</p>
+<p>Windows 上，Harness 官方桌面版安装后提供的 <code>dsh</code> 入口可直接使用，也可以在高级设置选择 <code>DeepSeek Harness.exe</code>。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 <code>pi</code>。已安装好时无需重复安装 CLI，众说安装器会自动配置 Harness 连接组件。</p>
 <p>密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版安装目录中的 <code>runtime-tools/deepseek-harness/setup.cmd</code> 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 <strong>继续任务</strong>。</p>
 <h3>修改已有AI</h3>
 <p>进入 <strong>成员管理</strong>，在对应成员卡片上点 <strong>AI设置…</strong>。修改渠道或模型后，点 <strong>保存 AI 设置</strong>。</p>

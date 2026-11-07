@@ -1,5 +1,5 @@
 ; All paths/version values are supplied by make-windows-installer.mjs.
-; No data directory is created, imported, migrated, registered or deleted here.
+; Chat data is untouched. Harness's connector is installed through its official CLI.
 #ifndef PayloadDir
   #error PayloadDir must be provided by the builder
 #endif
@@ -74,7 +74,7 @@ Name: "zhcn"; MessagesFile: "compiler:Default.isl,{#SourcePath}ChineseSimplified
 SetupAppTitle=众说 安装程序
 SetupWindowTitle=众说 安装程序
 WelcomeLabel1=欢迎安装 众说
-WelcomeLabel2=众说是本地多 Agent 协同工作台，%n项目、对话与任务数据都保存在本机。%n%n安装只写入程序目录，不会迁移或删除已有聊天数据；%n升级和卸载同样保留数据。
+WelcomeLabel2=众说是本地多 Agent 协同工作台，%n项目、对话与任务数据都保存在本机。%n%n安装会自动配置已安装的 DeepSeek Harness 连接组件；%n升级和卸载保留已有项目与聊天数据。
 ReadyLabel1=准备安装 众说
 ReadyLabel2a=点击「安装」开始；安装不需要管理员权限，也不会改动你的聊天记录。
 ReadyLabel2b=安装完成后可从开始菜单或桌面打开众说。
@@ -106,6 +106,26 @@ Root: HKCU; Subkey: "Software\Classes\AppUserModelId\com.zhongshuo.desktop.app";
 ; Inno removes only recorded installed files/shortcuts/its uninstall registration.
 
 [Code]
+var
+  HarnessSetupFailed: Boolean;
+
+procedure SetupHarnessConnector();
+var
+  NodePath, ScriptPath, Params: String;
+  ExitCode: Integer;
+begin
+  ExitCode := -1;
+  NodePath := ExpandConstant('{app}\resources\app\daemon\node\node.exe');
+  ScriptPath := ExpandConstant('{app}\runtime-tools\deepseek-harness\setup-deepseek-harness.mjs');
+  Params := '"' + ScriptPath + '" --installer';
+  WizardForm.StatusLabel.Caption := '正在配置 DeepSeek Harness 连接组件…';
+  HarnessSetupFailed := not Exec(NodePath, Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  if not HarnessSetupFailed then HarnessSetupFailed := ExitCode <> 0;
+  Log(Format('Harness connector setup result: %d', [ExitCode]));
+  if HarnessSetupFailed then
+    SuppressibleMsgBox('众说已安装，但 DeepSeek Harness 连接组件未能自动配置。请检查网络及 Harness 版本后，运行安装目录 runtime-tools\deepseek-harness\setup.cmd 重试。已有渠道、MCP 和聊天记录会保留。', mbError, MB_OK, IDOK);
+end;
+
 procedure RefreshShellItem(EventId, Flags: LongWord; ItemPath: String; Reserved: LongWord);
   external 'SHChangeNotify@shell32.dll stdcall';
 
@@ -134,6 +154,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then begin
+    SetupHarnessConnector();
     RemoveStaleAppShortcut('Electron');
     RemoveStaleAppShortcut('ElectronApp');
     if FileExists(ExpandConstant('{userdesktop}\众说.lnk')) then
@@ -141,6 +162,12 @@ begin
     if FileExists(ExpandConstant('{group}\众说.lnk')) then
       RefreshShellItem($2000, $1005, ExpandConstant('{group}\众说.lnk'), 0);
   end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and HarnessSetupFailed then
+    WizardForm.FinishedLabel.Caption := '众说已安装。DeepSeek Harness 连接组件自动配置失败，请运行安装目录 runtime-tools\deepseek-harness\setup.cmd 重试；在此之前 Harness 模型清单可能不可用。';
 end;
 
 function RefreshDesktopIcon(): Boolean;

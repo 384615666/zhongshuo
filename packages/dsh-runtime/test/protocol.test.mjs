@@ -5,10 +5,11 @@ import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
 import { RuntimeProtocol, RuntimeError, createWriter, bindInput, splitModelSelection, identity } from '../protocol.mjs';
 
-test('0.1.3 probe and ready advertise separate planning and format repair without readonly expansion', () => {
+test('0.1.4 probe and ready advertise private sessions, planning and format repair without readonly expansion', () => {
   for (const type of ['probe', 'ready']) {
     const frame = identity(type);
-    assert.equal(frame.pluginVersion, '0.1.3');
+    assert.equal(frame.pluginVersion, '0.1.4');
+    assert.equal(frame.capabilities.privateSessions, true);
     assert.equal(frame.capabilities.outputSchema, true);
     assert.equal(frame.capabilities.formatRepair, true);
     assert.equal(frame.capabilities.planningOnly, true);

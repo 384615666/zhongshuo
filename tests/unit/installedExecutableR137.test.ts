@@ -47,7 +47,7 @@ describe('official Windows installer launchers',()=>{
         child.stdout.write(JSON.stringify({v:1,type:'session',requestId:r.requestId,sessionId:'fixture',resumed:false})+'\n');
         child.stdout.write(JSON.stringify({v:1,type:'result',requestId:r.requestId,sessionId:'fixture',status:'completed',text:'fixture'})+'\n');child.emit('close',0);
       });});
-      queueMicrotask(()=>child.stdout.write(JSON.stringify({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true}})+'\n'));
+      queueMicrotask(()=>child.stdout.write(JSON.stringify({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,privateSessions:true}})+'\n'));
       return child as unknown as ChildProcessWithoutNullStreams;
     }});
     vi.stubEnv('ELECTRON_RUN_AS_NODE',undefined);

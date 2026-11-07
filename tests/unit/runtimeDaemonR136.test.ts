@@ -83,14 +83,15 @@ describe.each(['deepseek-harness','pi'] as const)('R136 daemon %s managed produc
           child.emit('close',0);
         });
       });
-      if(kind==='deepseek-harness')queueMicrotask(()=>child.stdout.write(JSON.stringify({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true}})+'\n'));
+      if(kind==='deepseek-harness')queueMicrotask(()=>child.stdout.write(JSON.stringify({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,privateSessions:true}})+'\n'));
       return child as unknown as ReturnType<typeof bridge.spawnManagedBridge>;
     });
     const daemon=await startDaemon({appDataDir:data,runtime:kind,pipeName:'r136-managed-'+randomUUID(),tickMs:60000});
     try{
       const globalRef=await daemon.adapter.openSession({projectId:'p',memberId:'m',taskId:'t',threadId:'th',sessionGeneration:0,cwd:f.root,policyId:'full',writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey:'local'}});
       await daemon.adapter.startTurn(globalRef,{turnId:'managed-global',dispatchKey:'k',inputBundleId:'b',text:'local fixture',policyId:'full',taskRevision:0});
-      expect(spawn).toHaveBeenCalledWith(expect.any(String),expect.arrayContaining(kind==='pi'?['--mode','rpc','--offline']:['--profile','zhongshuo','--zs-stdio']),{cwd:f.root});
+      const launchOptions=kind==='pi'?{cwd:f.root}:expect.objectContaining({cwd:f.root,env:expect.objectContaining({ZHONGSHUO_DSH_PRIVATE_SESSIONS:'1'})});
+      expect(spawn).toHaveBeenCalledWith(expect.any(String),expect.arrayContaining(kind==='pi'?['--mode','rpc','--offline']:['--profile','zhongshuo','--zs-stdio']),launchOptions);
       const raw=async(method:string,params:unknown)=>{const r=await dispatchDaemonCommand({db:daemon.db,localUserId:'r136',appDataDir:data,interruptTurn:async()=>{}},{protocolVersion:1,commandId:randomUUID(),method,params}) as {ok:boolean;data:Record<string,unknown>;error?:unknown};if(!r.ok)throw Error(JSON.stringify(r.error));return r.data;};
       const opened=await raw('project.open',{path:f.root});const projectId=(opened.project as {id:string}).id;
       const made=await raw('member.create',{projectId,displayName:'Managed Harness'});const memberId=made.memberId as string;
@@ -98,7 +99,7 @@ describe.each(['deepseek-harness','pi'] as const)('R136 daemon %s managed produc
       const adapter=daemon.memberRuntime.adapterFor(memberId);
       const ref=await adapter.openSession({projectId,memberId,taskId:'t',threadId:'th',sessionGeneration:0,cwd:f.root,policyId:'full',writeAccess:{fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[],identityKey:'local'}});
       await adapter.startTurn(ref,{turnId:'managed-member',dispatchKey:'k',inputBundleId:'b',text:'local fixture',policyId:'full',taskRevision:0});
-      expect(spawn).toHaveBeenLastCalledWith(process.execPath,kind==='pi'?expect.arrayContaining([f.executable,'--mode','rpc','--offline']):[f.executable,'--profile','zhongshuo','--zs-stdio'],{cwd:f.root});
+      expect(spawn).toHaveBeenLastCalledWith(process.execPath,kind==='pi'?expect.arrayContaining([f.executable,'--mode','rpc','--offline']):[f.executable,'--profile','zhongshuo','--zs-stdio'],launchOptions);
       expect(adapter.processIdentity?.(ref,'managed-member')).toMatchObject({model:'per-turn',pid:987654321,managedJobId:'r136-mock-job'});
       expect(daemon.db.prepare('SELECT runtime_kind FROM real_calls ORDER BY id').all()).toEqual([{runtime_kind:kind},{runtime_kind:kind}]);
       expect(spawn).toHaveBeenCalledTimes(2);

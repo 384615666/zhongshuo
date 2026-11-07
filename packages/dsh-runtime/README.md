@@ -1,7 +1,7 @@
 # Zhongshuo DSH runtime
 
 Original MIT implementation; no OpenDesign source is copied. Supports exactly
-`@deepseek-ai/dsh@0.2.1-rc.5` (official npm latest/next inspected 2026-10-31).
+`@deepseek-ai/dsh@0.2.1-rc.5` and `0.2.2-rc.1` (verified 2026-11-07).
 Release metadata: https://registry.npmjs.org/@deepseek-ai%2fdsh/0.2.1-rc.5
 Official source: https://github.com/deepseek-ai/deepseek-harness
 
@@ -18,7 +18,7 @@ the main application can decline images until separately certified.
 
 Build: `node scripts/build-dsh-runtime.mjs` produces `dist/dsh-runtime/` containing
 the npm-compatible tgz, SHA256 manifest, and standalone manual setup script.
-Portable packaging should include those files and the launcher resolver below. No root dependency changes
+Windows installer packaging includes those files and the launcher resolver below. No root dependency changes
 or package-manager commands are needed to build. Nothing auto-installs on launch.
 
 The setup directory also includes the shared `executable.mjs` launcher resolver.
@@ -26,14 +26,32 @@ It supports both npm DSH and the official Windows desktop installer (Electron
 Node mode with its packaged ASAR entry); Pi's managed installer shim and npm
 shim are resolved without a shell. Keep this file beside the setup script.
 
-After the user separately installs official DSH **0.2.1-rc.5** and its profile
+After the user separately installs official DSH **0.2.1-rc.5 or 0.2.2-rc.1** and its profile
 package manager, run the bundled `node setup-deepseek-harness.mjs --install`.
 From source it defaults to `<source root>/dist/dsh-runtime` independently of cwd.
 `--help` shows the required `--install` switch. Optional `--dsh PATH` selects a
 CLI executable; `--dsh-js PATH` selects the official `dsh/lib/bin.js` for Node.
+The Windows installer automatically runs this setup when Harness is present;
+absent Harness is skipped, and identical installed component files require only
+a readiness probe. Failed setup is reported on the installer's completion page;
+`setup.cmd` remains available for retry or for Harness installed later.
+
 The script verifies version and archive hash, invokes only
 `dsh plugin --profile zhongshuo add --save-exact <tgz>`, then verifies the probe.
 It never installs DSH itself or targets the default or OpenDesign profile.
+
+Version 0.1.4 supports private session storage. The current adapter sets
+`ZHONGSHUO_DSH_PRIVATE_SESSIONS=1` for a new session and for exact resumes of
+`zhongshuo-session-*` IDs. The official JSONL backend writes these logs under
+`<DSH_HOME>/connectors/zhongshuo/sessions`, with projection storage under
+`<DSH_HOME>/connectors/zhongshuo/storages`. Harness's normal history does not
+enumerate these roots. Credentials, providers, MCP and skills keep their existing
+configuration paths. Legacy IDs explicitly select `0` and their original roots;
+no existing logs, grouping, archives or workspace records are moved or changed.
+The adapter rejects a component without `privateSessions` before sending a new
+request, and never silently creates a replacement for a missing resumed session.
+On DSH 0.2.2, tool-free phases own a scoped executor with no schemas and a
+denial for every batch; DSH 0.2.1 retains scoped native presentation and guards.
 
 Resume is exact: missing logs or mismatched cwd fail, without new-session fallback.
 Each new request receives a random session identity. One active request is allowed
@@ -100,17 +118,21 @@ never store or log secrets. Shared agent resources use `DSH_AGENTS_HOME` or
 Official code confirming paths: published `dsh-home-paths`, `dsh-app-boot`,
 `dsh-credentials-local`, and `dsh-settings` at the locked version.
 
-## Verification (Windows, 2026-10-31)
+## Verification (Windows, 2026-11-07)
 
-`node --test packages/dsh-runtime/test/protocol.test.mjs` passes 17 protocol tests.
+`node --test packages/dsh-runtime/test/protocol.test.mjs packages/dsh-runtime/test/setup.test.mjs` passes 21 protocol/setup tests.
 For opt-in official-CLI verification, set `ZHONGSHUO_DSH_TEST_CLI` to the absolute
 official `dsh/lib/bin.js` path, and run
 `node --test packages/dsh-runtime/test/official-cli.test.mjs`.
+For the installed Windows desktop runtime, set `ZHONGSHUO_DSH_TEST_DESKTOP=1`
+instead. The suite passes on both supported versions and records the actual
+runtime version, private roots, exact legacy/private resumes, concurrent sessions,
+and unchanged shared history/cache after private requests.
 The test uses a freshly isolated `DSH_HOME` and `DSH_AGENTS_HOME`, an environment
 allowlist without provider credentials, and a test-only scripted LlmAdapter.
 The fixture is excluded from the production archive. No real model is contacted.
 The test stages this package in a temporary profile without a package manager or
-changes to shared node_modules. Its 27 checks cover probe/catalog, effort metadata,
+changes to shared node_modules. Its checks cover probe/catalog, effort metadata,
 the official agent/tool/persistence loop, streaming and usage, exact restart resume,
 fresh-session isolation, missing/wrong-cwd session rejection, readonly rejection,
 max-tokens failure, error redaction and active/startup/pre-execute cancellation,

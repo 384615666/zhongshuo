@@ -19,7 +19,7 @@ export function apply(ctx) {
   ctx.on('tools/execute', async (_exec, next) => { extensionHooks++; return next(); });
   ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
     const assembly = await next();
-    return { ...assembly, tools: [...assembly.tools, { name: 'fixture_extension', description: 'Extension-added schema', parameters: { type: 'object', properties: {} } }] };
+    return { ...assembly, tools: [...(assembly.tools ?? []), { name: 'fixture_extension', description: 'Extension-added schema', parameters: { type: 'object', properties: {} } }] };
   });
   class Fixture extends LlmAdapter {
     providerInfo() { return { id: 'fixture', name: 'Local fixture (no model)' }; }
@@ -47,6 +47,16 @@ export function apply(ctx) {
           if (prompts.length !== 1) throw Error('Repair inherited work history');
           const agent = currentAgent;
           const tools = agent.ctx.get('tools');
+          async function deniedCall(exec) {
+            if (typeof tools.presentAs === 'function') return tools.execute(exec);
+            try {
+              await tools.execute({agent,signal:options.signal,calls:[{type:'tool-call',id:exec.callId,name:exec.name,arguments:JSON.stringify(exec.arguments)}]});
+            } catch(error) {
+              if(error.code!==deniedCode)throw error;
+              return {isError:true,error:{message:error.message,info:{code:error.code}}};
+            }
+            throw Error('Tool-free executor accepted a batch');
+          }
           tools.register(definition('fixture_late'));
           // Own scoped tools remain in the registry: prove the guard, not only
           // filtering or absence, prevents them from executing.
@@ -54,7 +64,7 @@ export function apply(ctx) {
           const names = ['fixture_echo', 'fixture_scoped', 'fixture_late', 'run_code', 'fixture_extension', 'stale_known_tool'];
           for (const name of names) {
             const exec = { name, arguments: {}, agent, callId: `denied-${name}`, signal: options.signal };
-            const result = await tools.execute(exec);
+            const result = await deniedCall(exec);
             if (!result.isError || result.error.info?.code !== deniedCode) throw Error(`Tool not explicitly denied: ${name}`);
             // Exercise the actual scoped dispatch waterfall directly, including
             // stale names and run_code, without relying on registry lookup.
@@ -65,7 +75,7 @@ export function apply(ctx) {
           // A later extension can skip the pre-execute waterfall. The official
           // monotonic guard must STILL deny the newly registered scoped tool.
           agent.ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }), true);
-          const guarded = await tools.execute({ name: 'fixture_late', arguments: {}, agent, callId: 'guard-only', signal: options.signal });
+          const guarded = await deniedCall({ name: 'fixture_late', arguments: {}, agent, callId: 'guard-only', signal: options.signal });
           if (!guarded.isError || !guarded.error.message.includes(planning?'disabled during coordination planning':'disabled during format-only repair') || bodies || extensionHooks) throw Error('Monotonic scoped guard failed');
         }
       }

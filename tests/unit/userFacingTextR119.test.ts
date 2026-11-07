@@ -1,6 +1,13 @@
 import {describe,expect,it} from 'vitest';
 import {userFacingSystemText,userFacingSystemEventText} from '../../src/contracts/userFacingText.ts';
 
+it('explains settings read timeouts without presenting them as an uncertain send', () => {
+  expect(userFacingSystemText("Error invoking remote method 'zs:command': Error: 请求超时（15000ms）：app.settings.get"))
+    .toBe('读取设置超时，请稍后重试。');
+  const writeTimeout = '请求超时（15000ms）：app.settings.set';
+  expect(userFacingSystemText(writeTimeout)).toBe(writeTimeout);
+});
+
 describe('R119 legacy program status presentation',()=>{
   it('points a retained execution error to the readonly interruption check without exposing refund instructions',()=>{
     const raw='拒绝派发：turn=old-turn protection_state=retained。需人工退款或 recovery.reconcile。';

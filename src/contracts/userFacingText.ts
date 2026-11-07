@@ -1,6 +1,7 @@
 /** Presentation for program-generated status and errors only. Never apply this
  * to user/AI messages, files, tool output, or raw diagnostic payloads. */
 export function userFacingSystemText(value:string):string {
+  if (/请求超时[（(]\d+ms[）)]\s*[：:]\s*app\.settings\.get\s*$/.test(value)) return '读取设置超时，请稍后重试。';
   if(/reply was never sent|IPC.*(?:timeout|timed out)|command.*timed out/i.test(value))return '发送结果尚未确认，请稍后检查；使用原发送记录重试，避免重复发送。';
   if(/SQLITE_READONLY|readonly database/i.test(value))return '数据目录无法写入，请检查磁盘和目录权限后重试。';
   if(/SQLITE_CORRUPT|SQLITE_NOTADB|database disk image is malformed/i.test(value))return '数据文件损坏，请保留整个数据目录并从完整备份恢复。';

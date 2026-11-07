@@ -120,7 +120,9 @@
 
 ### 使用 DeepSeek Harness 或 Pi
 
-**DeepSeek Harness：** 对应官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该版本及其要求的 Node.js、包管理工具，再打开安装目录内的 `runtime-tools/deepseek-harness/setup.cmd`。这个入口安装众说专用的连接组件，不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 `zhongshuo` profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。
+**DeepSeek Harness：** 支持官方 `@deepseek-ai/dsh@0.2.1-rc.5` 和 `0.2.2-rc.1`。先安装其中一个版本及其要求的 Node.js、包管理工具。自众说 beta.32 起，安装或升级众说时会自动检测 Harness 并安装或升级众说专用的连接组件，已有组件内容一致时只做就绪检查。未安装 Harness 时跳过；之后再安装 Harness，或自动配置失败时，可打开众说安装目录内的 `runtime-tools/deepseek-harness/setup.cmd` 重试。安装器不替你安装 Harness，也不修改其他应用的 profile。众说固定使用 `zhongshuo` profile，请先让需要的供应商、模型和 MCP 配置在该 profile 生效，再回众说读取模型并添加成员。
+
+连接组件升级至 0.1.4 后，众说今后新建的 Harness 会话会单独保存，不再出现在 Harness 的“未分组”等普通会话列表中；众说内仍可正常聊天和续聊。已有会话保留原来的位置和显示方式。
 
 从源码运行时，先执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime`。找不到程序时可在高级设置填写实际 CLI 路径。
 
@@ -130,7 +132,7 @@ Harness 的配置按 profile 区分。`dsh web` 的设置通常写入 `web` prof
 
 这两种渠道均不要求安装 Magpie。官方直连、其他网关或本地服务按对应 CLI 的供应商配置方式接入，众说不预置个人网关地址、模型或密钥。MCP 和 Skill 也沿用对应 CLI 的配置。Pi 的 MCP 可以通过默认 codemode 调用，或按原生配置选择 direct 展示；不要仅因界面里没有同名独立工具就判断 MCP 不可用。修改 Pi 的用户级或项目级 MCP 配置后，已排队的旧执行会要求重新确认当前配置，避免默默采用不同工具设置。
 
-Windows 上，Harness 官方桌面版安装后提供的 `dsh` 入口可直接使用，也可以在高级设置选择 `DeepSeek Harness.exe`。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 `pi`。已安装好时无需重复安装 CLI，只需为 Harness 运行一次众说连接组件安装入口。
+Windows 上，Harness 官方桌面版安装后提供的 `dsh` 入口可直接使用，也可以在高级设置选择 `DeepSeek Harness.exe`。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 `pi`。已安装好时无需重复安装 CLI，众说安装器会自动配置 Harness 连接组件。
 
 密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版安装目录中的 `runtime-tools/deepseek-harness/setup.cmd` 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 **继续任务**。
 

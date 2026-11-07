@@ -6,7 +6,7 @@ import { externalRuntimeLaunchIdentity } from '../cli/configuration.ts';
 import { resolveAgentExecutable } from '../cli/executable.ts';
 import { CliTurnAdapter, isRecord, type CliAdapterOptions, type CliSession, type CliTurn } from '../cli/turnAdapter.ts';
 
-export const DSH_ADAPTER_VERSION = 'dsh-profile-adapter-2';
+export const DSH_ADAPTER_VERSION = 'dsh-profile-adapter-3';
 /** Protocol support and actual model/platform certification remain distinct. */
 export function deepseekHarnessCapabilities(): RuntimeCapabilities {
   return { structuredEvents: 'unverified', taskContextIsolation: 'unverified', resumeSession: 'unverified',
@@ -24,6 +24,14 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
   constructor(options: CliAdapterOptions = {}) { super('deepseek-harness', DSH_ADAPTER_VERSION, options); }
   capabilities(): RuntimeCapabilities { return deepseekHarnessCapabilities(); }
   protected arguments(): string[] { return [...PROFILE_ARGS, '--zs-stdio']; }
+  private privateSessions(session: CliSession): boolean {
+    return !session.requestedSessionId || session.requestedSessionId.startsWith('zhongshuo-session-');
+  }
+  protected override environment(session: CliSession): NodeJS.ProcessEnv {
+    // Legacy IDs retain their original log location. Never move user history or
+    // fall back to a new session when an exact resume cannot be opened.
+    return { ZHONGSHUO_DSH_PRIVATE_SESSIONS: this.privateSessions(session) ? '1' : '0' };
+  }
   protected validate(session: CliSession, input: TurnRequest): void {
     const planning = input.stage === 'coordination.planning';
     if (input.images?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 图片输入尚未认证，请换用已支持图片的成员', true);
@@ -58,7 +66,8 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
         throw Error('Harness 连接组件不兼容，请重新安装众说连接组件');
       turn.ready = true;
       if (turn.stopRequested) { this.cancel(session, turn); return; }
-      if ((turn.input.outputSchema && frame.capabilities.outputSchema !== true) ||
+      if ((this.privateSessions(session) && frame.capabilities.privateSessions !== true) ||
+        (turn.input.outputSchema && frame.capabilities.outputSchema !== true) ||
         (turn.input.repairOnly && frame.capabilities.formatRepair !== true) ||
         (turn.input.stage === 'coordination.planning' && frame.capabilities.planningOnly !== true)) {
         this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 连接组件需要升级；请运行当前安装目录 runtime-tools/deepseek-harness/setup.cmd 后再继续任务', true);
@@ -114,18 +123,33 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
       if (!available) throw new AdapterCallError('RESOURCE_NOT_FOUND', '当前项目目录不存在或不可访问，无法读取该目录下的 Harness 配置；请先选择有效项目目录', true);
     }
     const entry = resolveAgentExecutable('deepseek-harness', this.options.executable);
-    const output = await new Promise<string>((resolve, reject) => execFile(entry.command, [...entry.prefixArgs, ...PROFILE_ARGS, flag],
+    const output = await new Promise<string>((resolve, reject) => {
+      let incompatibleComponent = false;
+      let diagnostic = '';
+      const child = execFile(entry.command, [...entry.prefixArgs, ...PROFILE_ARGS, flag],
       // Provider catalogs can refresh at startup. A metadata timeout must not
       // misdiagnose a healthy connector as missing or erase configured providers.
       { cwd: this.options.cwd, env: entry.env ? { ...process.env, ...entry.env } : undefined, windowsHide: true, timeout: this.options.requestTimeoutMs ?? STARTUP_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
       (error, stdout) => {
-        if (!error) { resolve(stdout); return; }
-        const issue = error as Error & { killed?: boolean; code?: string | number };
-        const message = issue.killed ? 'Harness 模型配置读取超时，请检查当前渠道的连接后重试；没有修改配置或发起模型推理'
+        if (!error && !incompatibleComponent) { resolve(stdout); return; }
+        const issue = (error ?? new Error()) as Error & { killed?: boolean; code?: string | number };
+        const message = incompatibleComponent ? 'Harness 已跳过不兼容的众说连接组件。请运行当前众说安装目录 runtime-tools/deepseek-harness/setup.cmd 升级组件，然后重新读取模型清单；已有渠道和 MCP 配置会保留。'
+          : issue.killed ? 'Harness 模型配置读取超时，请检查当前渠道的连接后重试；没有修改配置或发起模型推理'
           : issue.code === 'ENOENT' ? 'Harness 程序或项目目录不可访问，请重新选择已安装的官方 dsh 并检查项目目录'
           : 'Harness 配置或众说连接组件启动失败；请先检查官方 dsh 能否正常启动，组件需要修复时运行当前安装包 runtime-tools/deepseek-harness/setup.cmd（保留已有渠道和 MCP 配置）';
         reject(new AdapterCallError('CAPABILITY_UNSUPPORTED', message, true));
-      }));
+      });
+      // DSH skips incompatible bundles and can remain alive without our JSONL
+      // surface. Recognize its explicit rejection instead of waiting 30 seconds
+      // and presenting a channel/network timeout. Never allow-version it.
+      child.stderr?.on('data', (chunk: string | Buffer) => {
+        diagnostic = (diagnostic + chunk.toString()).slice(-8192);
+        if (/skipping profile bundle ["']@zhongshuo\/dsh-runtime["'][^\r\n]*incompatible with dsh/i.test(diagnostic)) {
+          incompatibleComponent = true;
+          child.kill();
+        }
+      });
+    });
     let result: unknown;
     try { result = JSON.parse(output.trim()); } catch { throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Harness 连接组件返回了无效信息，请重新安装连接组件', true); }
     if (!isRecord(result) || result.v !== 1 || result.runtime !== 'zhongshuo-dsh') throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Harness 连接组件版本不兼容', true);

@@ -3,7 +3,7 @@ import process from 'node:process';
 import { setTimeout, clearTimeout } from 'node:timers';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, cp } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, cp, readdir } from 'node:fs/promises';
 import { join, dirname, resolve, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,18 @@ test('official DSH isolated profile, schema, tool-free repair and persisted agen
   env.PATH = [join(tools, '.bin'), dirname(process.execPath), 'C:\\Windows\\System32', 'C:\\Program Files\\Git\\cmd'].join(delimiter);
   env.DSH_HOME = join(area, 'home'); env.DSH_AGENTS_HOME = join(area, 'agents'); env.DSH_TELEMETRY_DISABLED = '1'; env.CI = 'true'; env.COREPACK_ENABLE_AUTO_PIN = '0';
   Object.assign(env,desktop?.env);
-  const launch = (args, stdio) => spawn(desktop?.command ?? process.execPath, desktop ? [...desktop.prefixArgs,...args.slice(1)] : args, {cwd:work,env,windowsHide:true,stdio});
+  const launch = (args, stdio, privateSessions = true) => spawn(desktop?.command ?? process.execPath, desktop ? [...desktop.prefixArgs,...args.slice(1)] : args,
+    {cwd:work,env:{...env,ZHONGSHUO_DSH_PRIVATE_SESSIONS:privateSessions?'1':'0'},windowsHide:true,stdio});
+  async function snapshot(root) {
+    const files = {};
+    let entries; try { entries = await readdir(root, {recursive:true,withFileTypes:true}); } catch(error) { if(error.code==='ENOENT')return files; throw error; }
+    for(const entry of entries) if(entry.isFile()) {
+      const path=join(entry.parentPath,entry.name);files[path]=(await readFile(path)).toString('base64');
+    }
+    return files;
+  }
+  const version = await run([cli, '--version']); assert.equal(version.code, 0, version.stderr);
+  const officialVersion = version.stdout.trim();
   const artifacts = join(area, 'artifacts'); await buildDshRuntime(artifacts);
   async function run(args, timeout = 20000) {
     const child = launch(args, ['ignore', 'pipe', 'pipe']);
@@ -44,7 +55,8 @@ test('official DSH isolated profile, schema, tool-free repair and persisted agen
   assert.deepEqual(manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@zhongshuo/dsh-runtime']);
   const probe = await run([cli, '--profile', 'zhongshuo', '--zs-probe']); assert.equal(probe.code, 0, probe.stderr);
   assert.equal(JSON.parse(probe.stdout).type, 'probe');
-  assert.equal(JSON.parse(probe.stdout).pluginVersion, '0.1.3');
+  assert.equal(JSON.parse(probe.stdout).pluginVersion, '0.1.4');
+  assert.equal(JSON.parse(probe.stdout).capabilities.privateSessions, true);
   assert.equal(JSON.parse(probe.stdout).capabilities.planningOnly, true);
   assert.equal(JSON.parse(probe.stdout).capabilities.outputSchema, true);
   assert.equal(JSON.parse(probe.stdout).capabilities.formatRepair, true);
@@ -56,14 +68,15 @@ test('official DSH isolated profile, schema, tool-free repair and persisted agen
   // The fixture's explicit peer manifest shares the official llm class identity.
   const fixturePackage = join(profile, 'fixture-package'); await mkdir(fixturePackage);
   await cp(fixture, join(fixturePackage, 'index.mjs'));
-  await writeFile(join(fixturePackage, 'package.json'), JSON.stringify({ name: 'zhongshuo-test-fixture', type: 'module', peerDependencies: { '@deepseek-ai/dsh-llm': '0.2.1-rc.5', '@deepseek-ai/dsh-scope': '0.2.1-rc.5' } }));
+  await writeFile(join(fixturePackage, 'package.json'), JSON.stringify({ name: 'zhongshuo-test-fixture', type: 'module', peerDependencies: { '@deepseek-ai/dsh-llm': pkg.engines.dsh, '@deepseek-ai/dsh-scope': pkg.engines.dsh } }));
   const overlay = join(area, 'fixture.patch.yml');
   await writeFile(overlay, `- insert:\n    - id: zhongshuo-test-fixture\n      name: ${JSON.stringify(join(fixturePackage, 'index.mjs').replaceAll('\\', '/'))}\n`);
   const models = await run([cli, '--profile', 'zhongshuo', '--patch', overlay, '--zs-models']); assert.equal(models.code, 0, models.stderr);
   assert.deepEqual(JSON.parse(models.stdout).models, [{ id: 'fixture/scripted', label: 'Scripted fixture', efforts: ['low', 'high'] }]);
   async function execute(prompt, options = {}) {
     const frames = []; let stderr = ''; let settled = false; let result;
-    const child = launch([cli, '--profile', 'zhongshuo', '--patch', overlay, '--zs-stdio'], ['pipe', 'pipe', 'pipe']);
+    const privateSessions = !options.legacyStorage && (!options.sessionId || options.sessionId.startsWith('zhongshuo-session-'));
+    const child = launch([cli, '--profile', 'zhongshuo', '--patch', overlay, '--zs-stdio'], ['pipe', 'pipe', 'pipe'], privateSessions);
     child.stderr.on('data', (data) => { stderr += data; });
     const timer = setTimeout(() => child.kill(), 15000);
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -84,11 +97,31 @@ test('official DSH isolated profile, schema, tool-free repair and persisted agen
   }
   const first = await execute('fixture:hello'); assert.equal(first.result.status, 'completed', JSON.stringify(first)); assert.match(first.result.text, /prompts=1 effort=high/);
   const sessionId = first.frames.find((frame) => frame.type === 'session').sessionId;
+  assert.match(sessionId,/^zhongshuo-session-/);
+  assert.deepEqual(await snapshot(join(env.DSH_HOME,'sessions')),{});
+  assert.deepEqual(await snapshot(join(env.DSH_HOME,'storages')),{});
+  assert.ok(Object.keys(await snapshot(join(env.DSH_HOME,'connectors/zhongshuo/sessions'))).some(path=>path.includes(sessionId)));
+  assert.ok(Object.keys(await snapshot(join(env.DSH_HOME,'connectors/zhongshuo/storages'))).length>0);
   assert.equal(first.result.sessionId, sessionId); assert.ok(first.frames.some((frame) => frame.event?.kind === 'thinking')); assert.ok(first.frames.some((frame) => frame.event?.kind === 'text'));
   assert.deepEqual(first.frames.find((frame) => frame.event?.kind === 'usage').event, { kind: 'usage', inputTokens: 12, cachedTokens: 4, outputTokens: 6, model: 'fixture/scripted' });
   const resumed = await execute('fixture:resume', { sessionId }); assert.equal(resumed.result.status, 'completed', JSON.stringify(resumed)); assert.match(resumed.result.text, /prompts=2/); assert.equal(resumed.frames.find((frame) => frame.type === 'session').resumed, true);
   const fresh = await execute('fixture:fresh'); assert.equal(fresh.result.status, 'completed'); assert.match(fresh.result.text, /prompts=1/); assert.notEqual(fresh.result.sessionId, sessionId);
+  // Selecting the original roots reproduces a pre-upgrade caller using the
+  // real official stack. An exact resume must retain its two-prompt history.
+  const legacy = await execute('fixture:legacy', {legacyStorage:true});assert.equal(legacy.result.status,'completed',JSON.stringify(legacy));
+  assert.match(legacy.result.sessionId,/^session-/);
+  const legacyResumed=await execute('fixture:legacy-resume',{sessionId:legacy.result.sessionId});
+  assert.equal(legacyResumed.result.status,'completed',JSON.stringify(legacyResumed));assert.match(legacyResumed.result.text,/prompts=2/);
+  const sharedSessions=await snapshot(join(env.DSH_HOME,'sessions'));
+  const sharedStorages=await snapshot(join(env.DSH_HOME,'storages'));
+  assert.ok(Object.keys(sharedSessions).some(path=>path.includes(legacy.result.sessionId)));
+  assert.ok(!Object.keys(sharedSessions).some(path=>path.includes(sessionId)));
+  const concurrent=await Promise.all([execute('fixture:parallel-one'),execute('fixture:parallel-two')]);
+  for(const item of concurrent)assert.equal(item.result.status,'completed',JSON.stringify(item));
+  assert.notEqual(concurrent[0].result.sessionId,concurrent[1].result.sessionId);
   const missing = await execute('fixture:missing', { sessionId: 'session-does-not-exist' }); assert.equal(missing.result.status, 'failed'); assert.ok(!missing.frames.some((frame) => frame.type === 'session'));
+  const privateMissing=await execute('fixture:missing-private',{sessionId:'zhongshuo-session-does-not-exist'});
+  assert.equal(privateMissing.result.status,'failed');assert.ok(!privateMissing.frames.some(frame=>frame.type==='session'));
   const other = join(area, 'other-workspace'); await mkdir(other);
   const wrongCwd = await execute('fixture:wrong-cwd', { sessionId, cwd: other }); assert.equal(wrongCwd.result.error.code, 'SESSION_CWD_MISMATCH');
   const readonly = await execute('fixture:readonly', { mode: 'readonly' }); assert.equal(readonly.result.error.code, 'READ_ONLY_UNSUPPORTED'); assert.ok(!readonly.frames.some((frame) => frame.type === 'session'));
@@ -135,6 +168,11 @@ test('official DSH isolated profile, schema, tool-free repair and persisted agen
     assert.ok(!attempt.frames.some(frame=>frame.event?.kind?.startsWith('tool-')));
     planningDenied.push(attempt);
   }
-  await writeFile(join(area, 'report.json'), JSON.stringify({ version: '0.2.1-rc.5', realModelCalls: 0, checks: ['package-staged-without-install', 'probe-0.1.3-capabilities', 'empty-models', 'fixture-models-and-efforts', 'official-agent-loop', 'text', 'thinking', 'usage', 'resume-after-process-restart', 'fresh-session-isolation', 'missing-session', 'cwd-mismatch', 'readonly-preexecute-rejection', 'max-tokens-failure', 'error-redaction', 'active-cancel', 'startup-cancel', 'cancel-before-execute', 'official-tool-events', 'complete-task-schema-in-real-sdk-prompt', 'repair-exact-result-key', 'empty-repair-tool-schemas', 'global-scoped-late-stale-run_code-denial', 'extension-hooks-blocked', 'monotonic-guard-after-extension-allow', 'direct-dispatch-interceptor', 'unsolicited-model-tool-call-fails-before-dispatch', 'distinct-planning-instructions', 'planning-empty-tool-schemas', 'planning-scoped-late-stale-run_code-denial', 'planning-extensions-blocked', 'planning-forged-tool-fails-before-dispatch'], results: [first, resumed, fresh, missing, wrongCwd, readonly, max, failed, cancelled, early, unopened, tool, structured, repair, ...unsolicited, planning, ...planningDenied] }, null, 2));
+  await writeFile(join(area, 'report.json'), JSON.stringify({ version: officialVersion, realModelCalls: 0, checks: ['package-staged-without-install', 'probe-0.1.4-capabilities', 'empty-models', 'fixture-models-and-efforts', 'official-agent-loop', 'text', 'thinking', 'usage', 'resume-after-process-restart', 'fresh-session-isolation', 'missing-session', 'cwd-mismatch', 'readonly-preexecute-rejection', 'max-tokens-failure', 'error-redaction', 'active-cancel', 'startup-cancel', 'cancel-before-execute', 'official-tool-events', 'complete-task-schema-in-real-sdk-prompt', 'repair-exact-result-key', 'empty-repair-tool-schemas', 'global-scoped-late-stale-run_code-denial', 'extension-hooks-blocked', 'monotonic-guard-after-extension-allow', 'direct-dispatch-interceptor', 'unsolicited-model-tool-call-fails-before-dispatch', 'distinct-planning-instructions', 'planning-empty-tool-schemas', 'planning-scoped-late-stale-run_code-denial', 'planning-extensions-blocked', 'planning-forged-tool-fails-before-dispatch'], results: [first, resumed, fresh, missing, wrongCwd, readonly, max, failed, cancelled, early, unopened, tool, structured, repair, ...unsolicited, planning, ...planningDenied] }, null, 2));
+  assert.deepEqual(await snapshot(join(env.DSH_HOME,'sessions')),sharedSessions);
+  assert.deepEqual(await snapshot(join(env.DSH_HOME,'storages')),sharedStorages);
+  await writeFile(join(area,'private-sessions.json'),JSON.stringify({realModelCalls:0,privateSessionId:sessionId,
+    legacySessionId:legacy.result.sessionId,checks:['private-log-root','private-projection-storage','private-cold-resume',
+      'legacy-cold-resume','concurrent-private-sessions','missing-private-no-fallback','shared-history-and-cache-unchanged']},null,2));
   process.stdout.write(`SDK evidence: ${join(area, 'report.json')}\n`);
 });

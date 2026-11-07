@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer';
 const { AbortController } = globalThis;
-export const PLUGIN_VERSION = '0.1.3';
+export const PLUGIN_VERSION = '0.1.4';
 export const DSH_VERSION = '0.2.1-rc.5';
 export const RUNTIME = 'zhongshuo-dsh';
-export const capabilities = Object.freeze({ sessionResume: true, sessionCancel: true, structuredEvents: true, readOnly: false, outputSchema: true, formatRepair: true, planningOnly: true });
+export const capabilities = Object.freeze({ sessionResume: true, sessionCancel: true, structuredEvents: true, readOnly: false, outputSchema: true, formatRepair: true, planningOnly: true, privateSessions: true });
 export const identity = (type) => ({ v: 1, type, runtime: RUNTIME, protocol: 1, pluginVersion: PLUGIN_VERSION, capabilities });
 
 export class RuntimeError extends Error {

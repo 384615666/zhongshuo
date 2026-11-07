@@ -41,7 +41,7 @@ reader.on('line',line=>{
   reader.close();process.stdin.destroy();
 });
 send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,
-  capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true}});
+  capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,outputSchema:true,formatRepair:true,privateSessions:true}});
 `;
 
 type Outcome = 'success' | 'wrong-key' | 'identity-conflict';
