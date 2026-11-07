@@ -1,5 +1,15 @@
 # 续工记录（continuation）
 
+## 2026-11-07：R191 前端提示去英文与去括号说明（beta.36）
+
+用户 2026-11-07 截图反馈成员停用协调者时提示「操作失败：VALIDATION_INVALID: 协调者不可停用（房间 自动协作 路由依赖协调者——如需更换请先调整协调者）」，要求各种前端提示里的英文都去掉、括号里的说明也去掉。确认口径：只清提示类文案（报错/toast/错误条/空态/tooltip/placeholder/状态说明），错误码、命令名、参数名、枚举值与技术英文去掉，Git/AI/PDF/Word 等产品名保留；提示里的所有括号及括号内容去掉，安全关键信息不得丢失。
+
+实现：`src/contracts/userFacingText.ts` 中央清洗升级（先保护路径/文件名/URL，去 Electron 包装、错误码前缀、下划线错误码、命令名、参数赋值，阶段/状态/技术词转中文，递归去括号，清理标点；`userFacingTextR119` 测试重写）；hifi 界面去掉 `MembersPage`/`MemberDetailPage`/`RoomPage`/`AddMemberModal`/`MemberManagementForms` 的错误码前缀，提示/空态/tooltip/placeholder 去括号并保留安全信息，渠道去「CLI」、权限档位/思考等级/用量单位/Git HEAD·diff·stash·base·ours·theirs·origin·hooks·runtime·agent·LAN 等技术英文中文化，导出格式菜单改「导出 Markdown/HTML/DOCX 记录…」「Markdown/Word 聊天记录」；旧渲染器约 230 处提示与 `src/ui/main.ts` 数据/启动/另存为对话框同步清理（新增 `userFacingDisplayText` 最小清洗，控制台日志不动）；`callBudget`/`document`/`localDataCopy`/`daemonIpc` 用户可见校验/连接文案去英文标识。`userCopyR119` 新增覆盖全部 hifi `*.tsx/*.ts` 提示上下文的括号、技术英文与错误码插值守卫。未改 daemon 命令合同、schema 61、错误码枚举与数据；未改 `src/contracts/prompts.ts`、用户/AI 消息正文与工具输出。
+
+验证：单元 68 文件 **595 项通过**；浏览器 69 文件 **382 项通过**；集成跟踪测试 242 文件通过、**2605 项通过**（仅本机未跟踪 R130/R180 混沌资产仍有既有 20 项失败，与本轮无关）；hifi tsc 0、根 tsc 仅既有 `localOpen` DOM 错误；改动源文件 eslint 99 项与基线 99 项一致、0 新增；`build-ui.mjs` 通过；`scan-prompts`/`scan-visible-english` 均 0 条。旧断言 `memberChannelsR136`、`taskDetailsDisplayR78`、`preDispatchFailureFactsR107`、`threadReadingAids`、`r91MessageCollaboration`、`r102RecoveryHumanCopy`、`composerCallBudgetDisplayR114`、`composerWriteHintR129`、`gitReadPartialR78`、`callBudgetSettingsR98`、`dmInterruptedNoRunR106`、`threadStatusR132`、`r98PanelAdaptiveReading`、`settingsReadQueueR186`、`hifiThreadRound51`、`hifiUploadDeepLinkRound52`、`rootAttachmentsR76`、`r153ProductNavigation` 等按新口径更新。
+
+交付：程序提交 `2753a2f`（含版本 beta.36），干净 worktree `dist/r191-source`（`2753a2f`，status 0）构建：便携镜像 BUILD `bld_6c15553c55284cce`（clean、668 文件 MANIFEST 逐项 SHA256 复核 668/668）、安装器 BUILD `bld_6a177bed4abd1838`，安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.36-x64.exe` **160,206,843 字节**，SHA256 `2cc020e9f891e5059021598cd466a7d3850d09e0355edf6036cd63966312f73a`，未签名；payload 审计 668 文件、privacyScanPassed、dataFilesIncluded=false。未安装/升级/卸载、未操作用户运行数据、零真实模型；未创建 GitHub Release。见 [R191](../reviews/r191-copy-cleanup-20261107.md)。
+
 ## 2026-11-07：R190 七项界面细节（文件与 Git / 搜索与收藏 / Git 空态 / 提示居中；beta.35）
 
 用户 2026-11-07 基于 beta.34 反馈七项：①文件/Git 顶栏与下方面板贴太近；②搜索页两个页签偏上、作者名筛选不要；③搜索输入时不要弹「按 Enter 或点检索开始」；④去掉「范围：「X」· 搜索范围为消息…」「…收藏总计 N 条」「在线程回复消息上点书签按钮…」等开发口径；⑤文件预览 ⋯ 去掉「引用到 选择讨论位置」；⑥Git 页去掉「改动记录不受影响 / 任务改动仍会记录…」；⑦各种提示偏上，应居中。
