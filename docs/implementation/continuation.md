@@ -1,5 +1,15 @@
 # 续工记录（continuation）
 
+## 2026-11-07：R189 四页视觉统一（成员管理 / 看板 / 文件与 Git / 搜索与收藏；beta.34）
+
+用户 2026-11-07 基于已安装 beta.33 反馈两条：①四个页面的项目卡片和标题样式不一致、有割裂感；②四个页面的顶部栏和搜索栏风格不一致。确认口径：项目卡统一「项目名 + 一行小字」，四页顶部统一为同一条灰底圆角工具栏（页签收进栏内）。
+
+实现：新增共享 `components/ui.tsx` 的 `SearchField`（放大镜+外框、30px）与 `styles/r189-consistency.css`（工具栏内页签对齐、`min-height:48px`、`.search-field`、`.toolbar-tail`/`.toolbar-more`、文件页工具栏单行与 inline 状态条）；成员页搜索框改 `SearchField`；看板「全部项目」卡小字补「侧栏可见项目」、刷新按钮改 `.btn.sm`；文件页白底 42px 顶栏并入 `.page-filters fg-toolbar`（并补页面右内边距 24/40、首行 20px 顶部间距、状态条压单行）；搜索页页签并入工具栏、关键词改 `SearchField`、作者/日期/会话收进「更多筛选」（默认收起）、范围说明移到栏下、无当前项目时自动落到「全部项目」、项目卡小字显示 Git 类型；删除 r188-files/r188-library 里被新结构取代的覆盖。
+
+验证：新增 `scripts/capture-r189-ui.cjs` 四页一致性场景 **50/50 断言通过**（四页工具栏 computed 样式逐项相等、位置/宽度相同、高 48px、控件 30px、与左栏标题顶部对齐、搜索框一致、卡片字体与高度一致且小字非空；功能回归含成员搜索过滤/搜索页回车/看板按钮），证据 `dist/r189-ui/r189-verify2/`；1360×900 与 1873×740 两档实测工具栏 y=58/h=48、四页 x 与宽度完全一致；`capture-r188-ui.cjs` 14 场景 124 断言、`capture-r183-ui.cjs` 15 场景 86 断言回归通过（选择器按新 DOM 更新）；`memberChannelsR136 + listOrderR183 + r149UiBrandingCopy + r153ProductNavigation` 4 文件 18 项通过；hifi tsc 0 错、改动源文件与脚本 eslint 0 新增。
+
+交付：程序提交 `a4435ae`（含版本 beta.34）；干净 worktree `dist/r189-source`（`a4435ae`，status 0）构建，镜像 BUILD `bld_b20575d937068da7`（clean、668 文件清单逐项 SHA256 0 不符），安装器 BUILD `bld_5c8128cce6bb8650`；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.34-x64.exe` **160,197,756 字节**，SHA256 `919d6287564ac5f8832c1a87d10084794090f8eaf84e044fe6cd598994993f29`，未签名。按用户长期偏好只交付安装包，未安装/升级/卸载、未操作用户运行数据、零真实模型；未创建 GitHub Release。见 [R189](../reviews/r189-ui-consistency-20261107.md)。
+
 ## 2026-11-07：R188 用户八项界面反馈 + 推送并发布 beta.33 安装包（含此前未提交的 R185–R187）
 
 用户在已安装 beta.32 上提八项界面反馈：①侧栏项目/房间平时不要抓取光标、真正拖动才 grabbing ②成员管理/看板共用的项目卡左右留白收到 16px 且相等 ③看板单卡归档按钮 ×→√ ④该按钮 title/aria-label 改「归档」短文案 ⑤看板去掉「房间」筛选下拉（旧 roomId 链接进入时 URL 归一、不再 toast）⑥文件与 Git 页左栏项目卡列取代顶栏项目下拉，切项目不再横向位移且同时切当前项目 ⑦搜索与收藏页左栏项目卡列取代「范围」下拉，「全部项目」=侧栏可见项目，点卡同时切当前项目 ⑧去掉「此文件夹未初始化 Git」面板。实现集中在 `src/ui/hifi`（并行队员 board-r188 / files-r188 / library-r188 与 Lead 共享 CSS），不改 daemon 命令合同、schema 61、不迁移数据。
