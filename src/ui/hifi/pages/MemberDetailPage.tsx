@@ -1,5 +1,5 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
-import { isRuntimeKind, runtimeExecutable, type RuntimeKind } from '../../../contracts/runtimeKinds';
+import { RUNTIME_CHANNELS, isRuntimeKind, runtimeExecutable, type RuntimeKind } from '../../../contracts/runtimeKinds';
 /** 成员详情：批准原型的单成员两列布局，字段来自明确项目的 member.list/member.runtime。 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
@@ -64,7 +64,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
       const version=seq.current;
       const outcome=await memberWrite(`member.setEnabled:${projectId}:${member.id}`,'member.setEnabled',{projectId,memberId:member.id,expectedRevision:member.revision,enabled:!member.enabled});
       if(!mounted.current||seq.current!==version)return;
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${userFacingSystemText(outcome.error ?? '')}`);
       recordWrite('member.setEnabled', `${member.displayName} → ${member.enabled ? '停用' : '启用'}（之后新派发）`);
       if (mounted.current) await reload();
       toast(`已${member.enabled ? '停用' : '启用'}「${member.displayName}」——只影响之后的新派发`, 'success');
@@ -82,7 +82,8 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   const guard = runtime?.environment != null ? { fakeAllowed: runtime.environment.allowFake === true, realDispatchGuard: runtime.environment.realDispatchGuard === true } : null;
   const effective = runtime?.effective;
   const modelId = runtime?.binding?.model ?? effective?.model ?? '';
-  const modelName = modelId ? runtimeModelDisplayName({ id: modelId, label: modelId }) : '（未指定／未获确认）';
+  const modelName = modelId ? runtimeModelDisplayName({ id: modelId, label: modelId }) : '未指定或未获确认';
+  const channelLabel = (kind: string): string => RUNTIME_CHANNELS.find((c) => c.value === kind)?.label.replace(/ CLI$/, '') ?? kind;
 
   if (project == null) return <div className="main"><div className="page"><ErrorState code="PROJECT_NOT_FOUND" detail={`项目不存在或不可访问：${projectId}。`} /></div></div>;
   return (
@@ -115,17 +116,17 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>项目</dt><dd>{project.displayName}</dd>
                 <dt>类型</dt><dd>{member.principalType === 'agent' ? 'AI 成员' : '本地用户'}</dd>
                 <dt>状态</dt><dd>{member.enabled ? '启用' : '停用'}</dd>
-                <dt>AI 渠道</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已配置` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 使用默认配置` : '未配置'}</dd>
+                <dt>AI 渠道</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${channelLabel(runtime.installation.kind)} · 已配置` : effective?.source === 'global-default' ? `${effective.kind != null ? channelLabel(effective.kind) : '未知'} · 使用默认配置` : '未配置'}</dd>
                 <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${userFacingSystemText(runtime.executableStatus.reason ?? '')}`:runtime?.executableStatus?.status==='found'?'已找到程序':'尚未确认'}</dd>
-                <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '（未获确认）'}</dd>
+                <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '未获确认'}</dd>
               </dl>
-              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{userFacingSystemText(runtimeError ?? '')}（保留上次结果） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
+              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{userFacingSystemText(runtimeError ?? '')}，保留上次结果 <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
             </div>
 
             <div className="card">
               <div className="card-title" style={{ marginBottom: 12 }}>模型与能力</div>
               <dl className="kv">
-                <dt>模型</dt><dd title={modelId?`完整模型 ID：${modelId}`:undefined}>{modelName}</dd>
+                <dt>模型</dt><dd title={modelId?`完整模型编号：${modelId}`:undefined}>{modelName}</dd>
                 <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未设置'}</dd>
                 <dt>保存的权限模式</dt><dd>{runtimePermissionLabel(runtime?.binding?.permissionMode,effective?.kind)}</dd>
                 <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}</dd>

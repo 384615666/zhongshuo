@@ -66,25 +66,25 @@ export function SettingsPage() {
    * **立即用回读值更新对应控件/显示**（此前 repoStatus.visible 只写库不更新页面——按钮与
    * 「当前」文字停在旧值，要手动刷新才一致，用户短测确认的缺陷）；失败保留编辑与真实错误。 */
   const saveSetting = async (key: 'ui.autoOpenProjectPath' | 'repoStatus.visible', value: string, label: string) => {
-    if (value.trim().length === 0) { toast('值不能为空（此键不接受空串——如需默认行为请保持原值）', 'warn'); return; }
+    if (value.trim().length === 0) { toast('值不能为空；此键不接受空串，如需默认行为请保持原值', 'warn'); return; }
     setBusy(true);
     try {
       await command('app.settings.set', { key, value });
       const back = await command<{ values: Record<string, string | null> }>('app.settings.get', { keys: [key] });
       const readBack = back.values[key] ?? '';
-      if (readBack !== value) { toast(`${label}：保存后的值与输入不一致（当前为「${readBack}」），请刷新后重试`, 'error'); return; }
+      if (readBack !== value) { toast(`${label}：保存后的值与输入不一致，当前为「${readBack}」，请刷新后重试`, 'error'); return; }
       recordWrite('app.settings.set', `${label} = ${value}（已回读核对）`);
       // 成功即同步页面状态：显示文字与按钮可用性当场反映新值，不需要用户刷新。
       if (key === 'ui.autoOpenProjectPath') setAutoOpenSaved(readBack);
       if (key === 'repoStatus.visible') setRepoVisible(readBack);
-      toast(`${label}已保存（已生效${key === 'ui.autoOpenProjectPath' ? '，重启后生效' : ''}）`, 'success');
+      toast(`${label}已保存${key === 'ui.autoOpenProjectPath' ? '，重启后生效' : '，已生效'}`, 'success');
     } catch (e) {
       toast(`${label}保存失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error');
     } finally { setBusy(false); }
   };
   const openDeepLink = async () => {
     const raw = deepLinkInput.trim();
-    if (!isExternalDeepLink(raw)) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
+    if (!isExternalDeepLink(raw)) { toast('定位链接格式不正确；请从线程详情「复制定位链接」获得链接后粘贴', 'warn'); return; }
     try { await openExternalDeepLink(raw); toast('已定位', 'success'); }
     catch (e) { toast(`定位失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
   };
@@ -102,33 +102,33 @@ export function SettingsPage() {
       <div className="panel info">
         <div className="row tight"><strong>应用</strong></div>
         <div style={{ marginTop: 6 }}>
-          <div className="faint small">启动时打开的项目（留空=上次状态；填写项目文件夹的完整路径）</div>
+          <div className="faint small">启动时打开的项目；留空则沿用上次状态，填写项目文件夹的完整路径</div>
           <div className="row tight" style={{ marginTop: 4 }}>
-            <input className="composer-input" style={{ flex: 1, minWidth: 160 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\\项目\\我的项目（保存后重启生效）" />
+            <input className="composer-input" style={{ flex: 1, minWidth: 160 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 项目文件夹的完整路径，保存后重启生效" />
             <button className="btn ghost sm" disabled={busy || !dirty} title={dirty ? '保存' : '没有修改'} onClick={() => void saveSetting('ui.autoOpenProjectPath', autoOpen.trim(), '「启动时打开的项目」')}>保存</button>
           </div>
-          <div className="faint small" style={{ marginTop: 4 }}>当前生效值：{autoOpenSaved != null && autoOpenSaved !== '' ? autoOpenSaved : '（未设置）'}</div>
+          <div className="faint small" style={{ marginTop: 4 }}>当前生效值：{autoOpenSaved != null && autoOpenSaved !== '' ? autoOpenSaved : '未设置'}</div>
         </div>
         <div style={{ marginTop: 10 }}>
           <div className="faint small">显示顶部的仓库状态条</div>
           <div className="row tight" style={{ marginTop: 4 }}>
             <button className="btn ghost sm" disabled={busy || repoVisible === 'true'} onClick={() => void saveSetting('repoStatus.visible', 'true', '「显示仓库状态」')}>显示</button>
             <button className="btn ghost sm" disabled={busy || repoVisible === 'false'} onClick={() => void saveSetting('repoStatus.visible', 'false', '「显示仓库状态」')}>隐藏</button>
-            <span className="faint small">当前：{repoVisible === 'false' ? '隐藏' : repoVisible === 'true' ? '显示' : '（未设置=默认显示）'}</span>
+            <span className="faint small">当前：{repoVisible === 'false' ? '隐藏' : repoVisible === 'true' ? '显示' : '未设置，默认显示'}</span>
           </div>
         </div>
       </div>
 
       <div className="panel info" data-zs-settings-storage="1">
-        <div className="row tight"><strong>数据与草稿存储</strong><span className="faint small">（数据位置与草稿保存状态）</span></div>
+        <div className="row tight"><strong>数据与草稿存储</strong><span className="faint small">数据位置与草稿保存状态</span></div>
         <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-          <div>数据位置：<span className="mono small">{identity != null ? identity.appDataDir : '（读取中…）'}</span></div>
+          <div>数据位置：<span className="mono small">{identity != null ? identity.appDataDir : '读取中…'}</span></div>
           <div className="faint small">消息、任务、附件和凭据都存放在这个目录。</div>
           <div style={{ marginTop: 4 }}>草稿保存：
-            {draftPersist.mode === 'on' && draftPersist.error == null ? <span className="faint small">正常（刷新/崩溃后草稿与未确认发送保留；普通草稿 24 小时过期）</span> : null}
+            {draftPersist.mode === 'on' && draftPersist.error == null ? <span className="faint small">正常；刷新或崩溃后草稿与未确认发送保留，普通草稿 24 小时过期</span> : null}
             {draftPersist.mode === 'locked' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>保全锁定——原草稿未能隔离，已保留不覆盖；新输入只保存在内存，暂时无法发送</span> : null}
-            {draftPersist.mode === 'off' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>不可用（{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}）——草稿仅本次进程内有效</span> : null}
-            {draftPersist.mode === 'on' && draftPersist.error != null ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>写入失败（{userFacingSystemText(draftPersist.error ?? '')}）——内存仍有效</span> : null}
+            {draftPersist.mode === 'off' ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>不可用：{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}；草稿仅本次进程内有效</span> : null}
+            {draftPersist.mode === 'on' && draftPersist.error != null ? <span className="panel warning" style={{ display: 'inline-block', padding: '2px 8px' }}>写入失败：{userFacingSystemText(draftPersist.error ?? '')}；内存仍有效</span> : null}
           </div>
           {draftPersist.recoveryNote != null ? <div className="faint small" data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div> : null}
           {draftPersist.mode !== 'on' || draftPersist.error != null || draftPersist.recoveryNote != null ? (
@@ -142,45 +142,45 @@ export function SettingsPage() {
       <div className="panel info">
         <div className="row tight"><strong>项目</strong></div>
         <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-          <div>当前项目：{project != null ? `${project.displayName}` : '（未打开）'}{project != null && (project.rootPath ?? '') !== '' ? <span className="faint small">（{project.rootPath}）</span> : null}</div>
+          <div>当前项目：{project != null ? `${project.displayName}` : '未打开'}{project != null && (project.rootPath ?? '') !== '' ? <span className="faint small">，路径 {project.rootPath}</span> : null}</div>
           <div className="faint small">成员与 AI 设置在成员页管理；任务验收等其余项目设置：</div>
           <div className="row tight" style={{ marginTop: 4 }}>
-            <button className="btn ghost sm" onClick={() => navigate('/members')}>成员与 AI 设置（成员页）</button>
-            <button className="btn ghost sm" onClick={() => takeLegacy('members')}>其余项目设置（原界面）</button>
+            <button className="btn ghost sm" onClick={() => navigate('/members')}>成员与 AI 设置，进入成员页</button>
+            <button className="btn ghost sm" onClick={() => takeLegacy('members')}>其余项目设置，进入原界面</button>
           </div>
         </div>
       </div>
 
       <div className="panel info">
-        <div className="row tight"><strong>远程访问</strong><span className="faint small">（只读）</span></div>
+        <div className="row tight"><strong>远程访问</strong><span className="faint small">只读</span></div>
         {remoteErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>远程配置读取失败：{userFacingSystemText(remoteErr ?? '')}</div> : remote == null ? <div className="faint small" style={{ marginTop: 4 }}>读取中…</div> : (
           <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-            <div>模式：{remote.allowLan ? '局域网' : '仅本机'} · 状态：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
-            {remote.fingerprint != null ? <div className="mono faint small">服务证书指纹 {remote.fingerprint.slice(0, 24)}…{remote.caFingerprint != null ? ` · CA ${remote.caFingerprint.slice(0, 16)}…` : ''}</div> : null}
+            <div>模式：{remote.allowLan ? '局域网' : '仅本机'} · 状态：{remote.running === true ? `运行中，地址 ${remote.address ?? '?'}` : '未运行'}</div>
+            {remote.fingerprint != null ? <div className="mono faint small">服务证书指纹 {remote.fingerprint.slice(0, 24)}…{remote.caFingerprint != null ? ` · 证书机构 ${remote.caFingerprint.slice(0, 16)}…` : ''}</div> : null}
             {remote.certNotAfter != null ? <div className="faint small">证书有效期至 {new Date(remote.certNotAfter).toLocaleDateString()}</div> : null}
-            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'panel warning'}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
+            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'panel warning'}>局域网自检：{remote.lanSelfCheck.ok ? '通过' : `失败：${remote.lanSelfCheck.detail ?? '?'}`}</div> : null}
             <div className="faint small">{remote.note}</div>
             <div className="row tight" style={{ marginTop: 4 }}>
-              <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>变更远程设置（原界面）</button>
+              <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>变更远程设置，进入原界面</button>
             </div>
           </div>
         )}
       </div>
 
       <div className="panel info">
-        <div className="row tight"><strong>打开定位</strong><span className="faint small">（粘贴「复制定位链接」得到的定位链接）</span></div>
+        <div className="row tight"><strong>打开定位</strong><span className="faint small">粘贴「复制定位链接」得到的定位链接</span></div>
         <div className="row tight" style={{ marginTop: 6 }}>
-          <input className="composer-input" style={{ flex: 1, minWidth: 160 }} placeholder="如 #task=task_ab12…（线程详情 →「复制定位链接」）" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
+          <input className="composer-input" style={{ flex: 1, minWidth: 160 }} placeholder="粘贴从线程详情「复制定位链接」得到的链接" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
           <button className="btn ghost sm" onClick={() => void openDeepLink()}>打开定位</button>
         </div>
         <div className="faint small" style={{ marginTop: 4 }}>粘贴任务链接后，可直接打开对应的项目和对话。</div>
       </div>
 
       <details className="panel info" open={diagOpen} onToggle={(e) => setDiagOpen((e.target as HTMLDetailsElement).open)}>
-        <summary style={{ cursor: 'pointer' }}><strong>诊断信息</strong><span className="faint small">（排查问题时查看）</span></summary>
+        <summary style={{ cursor: 'pointer' }}><strong>诊断信息</strong><span className="faint small">排查问题时查看</span></summary>
         <div className="mono faint small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-          <div>app.settings 键：ui.autoOpenProjectPath={autoOpenSaved ?? ''} · repoStatus.visible={repoVisible === '' ? '(未设置)' : repoVisible}</div>
-          <div>projectId={projectId ?? '（未打开）'}</div>
+          <div>启动时打开的项目：{autoOpenSaved ?? ''} · 仓库状态显示：{repoVisible === '' ? '未设置' : repoVisible}</div>
+          <div>项目编号：{projectId ?? '未打开'}</div>
           <div>设置、远程连接和页面读取的诊断信息</div>
         </div>
       </details>
@@ -188,7 +188,7 @@ export function SettingsPage() {
       <div className="panel info">
         <div className="row tight"><strong>其他设置</strong></div>
         <div className="row tight wrap" style={{ marginTop: 6 }}>
-          <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>远程访问变更（原界面）</button>
+          <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>远程访问变更，进入原界面</button>
         </div>
       </div>
     </div>

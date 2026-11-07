@@ -152,7 +152,7 @@ export function GeneratedFiles({
             className={`inline-file-chip${attachment.kind === 'image_file' ? ' is-image' : ''}${attachment.detailMarkdown ? ' is-detail' : ''}${isDocument ? ' is-document' : ''}`}
             data-zs-artifact-id={attachment.artifactId}
             data-zs-document={isDocument ? '1' : undefined}
-            title={`打开 ${attachment.filename}（${isDocument ? attachment.purpose ?? '文档' : attachment.detailMarkdown ? '详情文档' : kindLabel}${size != null ? ` · ${size}` : ''}）· 只读预览，不发送给 AI`}
+            title={`打开 ${attachment.filename} · ${isDocument ? attachment.purpose ?? '文档' : attachment.detailMarkdown ? '详情文档' : kindLabel}${size != null ? ` · ${size}` : ''} · 只读预览，不发送给 AI`}
             onClick={() => onOpen?.(attachment)}
           >
             <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={12} />

@@ -89,17 +89,17 @@ describe('R107 pre-dispatch failure detail display', () => {
     const html = renderToStaticMarkup(createElement(PreDispatchFailureFacts, { detail: value }));
     expect(html).toContain('data-zs-pre-dispatch-state="NOT_STARTED"');
     expect(html).toContain('data-zs-pre-dispatch-failure="write-baseline-incomplete"');
-    expect(html).toContain('<strong>Claude</strong> · NOT_STARTED · 模型尚未被调用');
+    expect(html).toContain('<strong>Claude</strong> · 尚未开始 · 模型尚未被调用');
     expect(html).toContain(failure.event.message);
     expect(html).toContain(failure.action.instruction);
-    expect(html).toContain('事件 #437 · task.contextAssemblyFailed');
+    expect(html).toContain('事件 #437 · 执行诊断');
     expect(html).toContain('运行 0 · 执行轮次 0 · 真实模型调用 0');
-    expect(html).toContain('outbox done');
+    expect(html).toContain('发件箱状态');
     expect(html).not.toContain('<button');
     expect(html).not.toContain('href="#run');
 
     const guidance = taskRunGuidance(value);
-    expect(guidance).toContain('Claude尚未开始调用（NOT_STARTED）');
+    expect(guidance).toContain('Claude尚未开始调用：');
     expect(guidance).toContain(failure.event.message);
     expect(guidance).toContain('按原消息重新提交');
     expect(guidance).not.toContain('查看活动与运行诊断中的具体原因');

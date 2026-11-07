@@ -12,6 +12,7 @@
  *    不触发模型派发；版本锚定在引用卡内），不再是原型 toast 模拟。
  */
 import { getState, recordWrite, setState, toast } from './store';
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { addFileRefToDraft, queueDraftInsert, conversationOfDraftKey } from './store';
 import {
   audienceAllows, closeTab as closeTabPure,
@@ -204,7 +205,7 @@ export function openPreview(
     return false;
   }
   if (!audienceAllows(res.audience, openedFrom.target)) {
-    toast('当前上下文无权查看这份资源（私信附件不能跨会话共享）', 'error');
+    toast('当前上下文无权查看这份资源；私信附件不能跨会话共享', 'error');
     recordWrite('preview.open.denied', `resource=${resourceId} audience=${res.audience.kind} → 拒绝：同 projectId 不是共享许可`);
     return false;
   }
@@ -275,7 +276,7 @@ export function closePreviewTab(key: string) {
   recordWrite('preview.tab.close', `key=${key} 剩余标签=${tabs.length}${tabs.length === 0 ? ' → 退出预览并恢复上下文' : ''}`);
   if (target) {
     const res = resourceOf(s, target.resourceId);
-    toast(`已关闭 ${res?.title ?? key}${tabs.length === 0 ? '（预览已退出）' : ''}`, 'info');
+    toast(`已关闭 ${res?.title ?? key}${tabs.length === 0 ? '，预览已退出' : ''}`, 'info');
   }
 }
 
@@ -359,7 +360,7 @@ export function applyWorktreeRead(
       const content = data.notPreviewable != null
         ? { kind: 'unsupported' as const, reason: data.notPreviewable === 'binary' ? 'binary' as const : 'too_large' as const, note: data.note ?? '不可预览' }
         : data.binaryKind != null
-          ? { kind: 'unsupported' as const, reason: 'binary' as const, note: `二进制阅读类（${data.binaryKind}）——正文由格式视图按原字节渲染` }
+          ? { kind: 'unsupported' as const, reason: 'binary' as const, note: '二进制文件，正文由格式视图按原字节渲染' }
           : ext === 'md' || data.binaryKind === 'markdown'
             ? { kind: 'markdown' as const, text: data.text ?? '' }
             : ext === 'csv' || ext === 'tsv'
@@ -457,7 +458,7 @@ export function quoteResource(
     return false;
   }
   if (res.formalWorktree != null) {
-    toast('工作区文件未上传为会话附件——不能直接引用进草稿（打开只是只读预览；需要引用请先把文件拖入输入区上传）', 'warn');
+    toast('工作区文件未上传为会话附件，不能直接引用进草稿；打开只是只读预览，需要引用请先把文件拖入输入区上传', 'warn');
     return false;
   }
   if (res.formalDelivery != null) {
@@ -485,7 +486,7 @@ export function quoteResource(
     hash: rev.hash.startsWith('(') ? undefined : rev.hash,
   });
   if (!r.ok) {
-    toast(`引用失败：${r.error ?? '未知错误'}（未写入）`, 'error');
+    toast(`引用失败：${userFacingSystemText(r.error ?? '未知错误')}；未写入`, 'error');
     return false;
   }
   if (excerpt != null && excerpt.trim().length > 0) {
@@ -493,7 +494,7 @@ export function quoteResource(
   }
   recordWrite('preview.quote', `resource=${resourceId} revision=${revision} → 目标草稿 ${targetDraftKey}（固定版本；正文保持用户文字）`);
   toast(r.existed === true
-    ? `「${res.title}」已在「${targetLabel}」引用（同文件同版本不重复）`
+    ? `「${res.title}」已在「${targetLabel}」引用，同文件同版本不重复`
     : `已引用「${res.title}」到「${targetLabel}」的输入区`, 'success');
   return true;
 }
@@ -658,5 +659,5 @@ export async function createFileCommentBridge(resourceId: string, body: string):
   if (r.status === 'ok') { settleOutbound(draftKey, env, { recordThread: true }); return { ok: true }; }
   if (r.status === 'failed') { dropOutbound(draftKey, env); return { ok: false, error: r.error }; }
   confirmOutboundUnknown(draftKey, env);
-  return { ok: false, error: `结果未知（${r.error ?? ''}）——可在输入区横幅人工确认，评论不会重复提交` };
+  return { ok: false, error: `结果未知：${userFacingSystemText(r.error ?? '')}；可在输入区横幅人工确认，评论不会重复提交` };
 }

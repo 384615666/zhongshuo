@@ -740,7 +740,7 @@ function RoomPool({
         {room && enabledRoomAgentIds.length === 0 ? (
           <div className="panel warning" style={{ marginBottom: 10 }}>
             <div className="panel-title"><Icon name="users" size={13} /> 这个房间还没有可用 AI</div>
-            未发现已配置的可用 AI。请先安装并配置支持的 CLI，再到成员页点「添加 AI」（会先扫描本机已配置的 CLI）或手动添加；输入与草稿会保留。
+            未发现已配置的可用 AI。请先安装并配置支持的渠道，再到成员页点「添加 AI」或手动添加；添加前会先扫描本机已配置的渠道。输入与草稿会保留。
             <div className="panel-actions">
               <button className="btn sm primary" onClick={onOpenSettings}>
                 <Icon name="user-plus" size={12} /> 添加 AI
@@ -778,7 +778,7 @@ function RoomPool({
           sendDisabledReason={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
           sendDisabledLabel={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
           onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-            if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（上次发送记录）', 'success'); }
+            if (r.status === 'ok') { void loadRoomPool(roomId); toast('已按上次发送记录重发成功', 'success'); }
             return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })}
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -895,9 +895,9 @@ export function RootCard({
     ?? delivery?.feedback?.[0];
   const deliveryIssue = delivery?.issueResolutions?.find((item) => item.status === 'needs_user')
     ?? delivery?.issueResolutions?.find((item) => item.status === 'insufficient_evidence');
-  const deliveryDetail = delivery?.question || (deliveryFeedback?.question ? `${deliveryFeedback.question}${deliveryFeedback.owner ? `（责任方：${deliveryFeedback.owner}）` : ''}` : '')
+  const deliveryDetail = delivery?.question || (deliveryFeedback?.question ? `${deliveryFeedback.question}${deliveryFeedback.owner ? `，责任方：${deliveryFeedback.owner}` : ''}` : '')
     || deliveryFeedback?.revisionRequest || deliveryFeedback?.reason
-    || (deliveryIssue?.question ? `${deliveryIssue.question}${deliveryIssue.owner ? `（责任方：${deliveryIssue.owner}）` : ''}` : '')
+    || (deliveryIssue?.question ? `${deliveryIssue.question}${deliveryIssue.owner ? `，责任方：${deliveryIssue.owner}` : ''}` : '')
     || deliveryIssue?.reason
     || (delivery?.unresolvedIssues?.length ? `${delivery.unresolvedIssues.length} 项未解决，打开详情查看` : '');
   const deliveryLabel = delivery == null ? null
@@ -1033,7 +1033,7 @@ export function RootCard({
                 key={att.artifactId}
                 data-zs-artifact-id={att.artifactId}
                 className="msg-attach"
-                title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不会创建任务或发送消息`}
+                title={`打开 ${att.filename}，${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}；只读预览，不会创建任务或发送消息`}
                 onClick={(e) => {
                   e.stopPropagation();
                   openAttachment(att, {
@@ -1155,7 +1155,7 @@ export function RootCard({
               key={att.artifactId}
               data-zs-artifact-id={att.artifactId}
               className={`inline-file-chip${att.kind === 'image_file' ? ' is-image' : ''}`}
-              title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不发送给 AI`}
+              title={`打开 ${att.filename}，${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}；只读预览，不发送给 AI`}
               onClick={(e) => {
                 e.stopPropagation();
                 openAttachment(att, {
@@ -1524,7 +1524,7 @@ function ThreadPanel({
       const tk = t.rootTaskId ? s.tasks.find((x) => x.id === t.rootTaskId) : undefined;
       out.push({
         id: t.id,
-        label: tk ? `#${tk.roomTaskNumber} ${tk.title}` : '记录（无任务号）',
+        label: tk ? `#${tk.roomTaskNumber} ${tk.title}` : '记录，无任务号',
         unread: unreadCount(s, t.id),
       });
     }
@@ -1716,7 +1716,7 @@ function ThreadPanel({
       }
       setComposerQuote({ id: Date.now(), quote: quoted.quote });
     } else {
-      setComposerInsert({ id: Date.now(), text: '更正（针对上一条消息）：' });
+      setComposerInsert({ id: Date.now(), text: '更正，针对上一条消息：' });
     }
     recordLocalOnly(
       `message.${kind}`,
@@ -1758,10 +1758,10 @@ function ThreadPanel({
           label={poolCollapsedByFile && !narrow ? '主池' : narrow ? '返回' : '收起'}
           ariaLabel={narrow || poolCollapsedByFile ? '返回主池' : '收起回复串'}
           title={poolCollapsedByFile && !narrow
-            ? '返回主池（可在主池里选其他回复串；当前文件与草稿都保留）'
+            ? '返回主池，可在主池里选其他回复串；当前文件与草稿都保留'
             : narrow
-              ? '返回主池（不会停止任务，草稿保留）'
-              : '收起回复串（保留主池；不会停止任务，草稿保留）'}
+              ? '返回主池，不会停止任务，草稿保留'
+              : '收起回复串，保留主池；不会停止任务，草稿保留'}
           onClick={backToPool}
         />
 
@@ -1788,7 +1788,7 @@ function ThreadPanel({
               className={`thread-tab${view === 'artifacts' ? ' on' : ''}`}
               onClick={() => changeTab('artifacts')}
               title={isDiscussion
-                ? '这条记录携带的附件与产物（文件正文在共享预览里打开）'
+                ? '这条记录携带的附件与产物，文件正文在共享预览里打开'
                 : '本串成果与附件；文件正文在共享预览里打开，不替换列表'}
             >
               <Icon name="file-text" size={13} /> {isDiscussion ? '附件' : '成果'}
@@ -1902,7 +1902,7 @@ function ThreadPanel({
           ) : null}
           <MenuItem
             icon="copy"
-            title="复制应用内直达链接（不是公网分享链接）"
+            title="复制应用内直达链接，不是公网分享链接"
             onClick={() => {
               const link = `zhongshuo://#/thread/${thread.id}`;
               void navigator.clipboard?.writeText(link);
@@ -1927,7 +1927,7 @@ function ThreadPanel({
         <div className="panel warning" style={{ margin: '8px 12px 0' }}>
           <div className="panel-title">
             <Icon name="clock" size={13} />
-            等 {memberLabel(byId(s.members, absence.memberId))}（已等 {Math.round((Date.now() - absence.since) / 60000)} 分钟，最多等待 {Math.round(absence.graceMs / 60000)} 分钟）
+            等 {memberLabel(byId(s.members, absence.memberId))}，已等 {Math.round((Date.now() - absence.since) / 60000)} 分钟，最多等待 {Math.round(absence.graceMs / 60000)} 分钟
           </div>
           超过等待时间后会先带着现有成果继续，不会打断仍在工作的成员。需要它继续参与时，可在串里重新 @ 它。
         </div>
@@ -1980,7 +1980,7 @@ function ThreadPanel({
                     <span className="small">加载历史失败：{userFacingSystemText(historyFeedback.error)}</span>
                     <button className="btn sm" onClick={() => highlightMessageId ? setLocateAttempt(n => n + 1) : void loadEarlier()}>重试{highlightMessageId ? '定位' : ''}</button>
                   </>
-                  : historyFeedback.missing ? <span className="small faint">已到历史起点，未找到目标消息（可能已删除或不可访问）</span>
+                  : historyFeedback.missing ? <span className="small faint">已到历史起点，未找到目标消息；可能已删除或不可访问</span>
                   : history.exhausted ? <span className="small faint">已到历史起点</span>
                   : <button className="btn sm" onClick={() => void loadEarlier()}>加载更早消息</button>}
               </div>
@@ -2018,7 +2018,7 @@ function ThreadPanel({
                       onReact={(e) => void reactMessageReal(m.id, e, threadId)}
                       onSave={() => {
                         void toggleSavedMessage(m, s.projects.find((pr) => pr.id === s.activeProjectId)?.id ?? null).then((r) => {
-                          if (r.ok) toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏', 'success');
+                          if (r.ok) toast(r.saved ? '已收藏，独立保存，不改动原内容' : '已取消收藏', 'success');
                           else if (r.busy !== true) toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}`, 'error');
                         });
                       }}
@@ -2132,7 +2132,7 @@ function ThreadPanel({
             : undefined}
           onClearSubtask={() => setSubtaskTarget(undefined)}
           onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-            if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（上次发送记录）', 'success'); }
+            if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('已按上次发送记录重发成功', 'success'); }
             return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })}
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -2356,7 +2356,7 @@ function ThreadOverview({
         </div>
         <dl className="kv">
           <dt>标题</dt>
-          <dd>{task ? task.title : '记录串（未创建任务）'}</dd>
+          <dd>{task ? task.title : '记录串，未创建任务'}</dd>
           {task ? (
             <>
               <dt>任务号</dt>
@@ -2388,7 +2388,7 @@ function ThreadOverview({
 
       {/* 完整原始要求：不裁剪、不折叠，长文本完整可读（原消息身份与定位能力保留） */}
       <div className="card tight">
-        <div className="section-title">原始要求（原消息）</div>
+        <div className="section-title">原始要求，即原消息</div>
         <div className="row tight">
           <Avatar name="我" color="var(--m-human)" size={18} subject="user" />
           <span className="strong">你</span>
@@ -2610,8 +2610,8 @@ function ThreadArtifacts({
   }
   return (
     <div className="msg-list">
-      {data.attErr != null ? <div className="panel warning">附件列表读取失败：{data.attErr}（可切回回复再进重试）</div> : null}
-      {data.delErr != null ? <div className="panel warning">交付列表读取失败：{data.delErr}</div> : null}
+      {data.attErr != null ? <div className="panel warning">附件列表读取失败：{userFacingSystemText(data.attErr)}；可切回回复再进重试</div> : null}
+      {data.delErr != null ? <div className="panel warning">交付列表读取失败：{userFacingSystemText(data.delErr)}</div> : null}
 
       {data.attachments.length > 0 ? (
         <>
@@ -2695,9 +2695,9 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
     <>
     <div className="card tight">
       <div className="section-title">任务当前状态</div>
-      <div className="small">{recentRun != null ? `最近运行：${RUN_STATUS_LABEL[recentRun.status] ?? recentRun.status}` : formal != null ? '尚无运行' : detail?.activeRun != null ? `最近运行：${RUN_STATUS_LABEL[detail.activeRun.status] ?? detail.activeRun.status}` : '正在读取运行状态'}</div>
+      <div className="small">{recentRun != null ? `最近运行：${RUN_STATUS_LABEL[recentRun.status] ?? '状态待确认'}` : formal != null ? '尚无运行' : detail?.activeRun != null ? `最近运行：${RUN_STATUS_LABEL[detail.activeRun.status] ?? '状态待确认'}` : '正在读取运行状态'}</div>
       {detail?.lastStartupFailureMessage != null ? (
-        <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div>
+        <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{userFacingSystemText(detail.lastStartupFailureMessage)}</div>
       ) : null}
       <div className="row tight" style={{ marginTop: 8 }}>
         <button
@@ -2776,7 +2776,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
               <div style={{ marginTop: 8 }}>
                 {stale ? (
                   <div className="panel warning">
-                    交付已更新（打开时查看的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{pending.revision}）——本框已作废，请对新版本重新操作。
+                    交付已更新，打开时查看的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{pending.revision}；本框已作废，请对新版本重新操作。
                     <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setReviewBox(null)}>关闭</button>
                   </div>
                 ) : (
@@ -2820,7 +2820,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
                     try {
                       const r = await executeTaskRework(snapshot, threadId);
                       if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前状态`, 'error'); void loadThread(threadId); return; }
-                      toast('返工执行已入队（完成后交付升级为新待验收版本）', 'success');
+                      toast('返工执行已入队，完成后交付升级为新待验收版本', 'success');
                       void loadThread(threadId);
                     } finally { setBusyRework(false); }
                   })();
@@ -3127,7 +3127,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
               setSaveBusy(true);
               void roomArchiveReal(room.id, room.revision, 'archive').then((r) => {
                 setSaveBusy(false);
-                if (r.ok) { toast('房间已归档（历史保留·只读）——可在房间 ⋯ 菜单取消归档', 'success'); onClose(); }
+                if (r.ok) { toast('房间已归档，历史保留，只读；可在房间 ⋯ 菜单取消归档', 'success'); onClose(); }
                 else toast(`归档被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
               });
             }}
@@ -3149,7 +3149,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
               }).then((r) => {
                 setSaveBusy(false);
                 if (r.ok) { toast('房间设置已保存', 'success'); onClose(); }
-                else { toast(`保存失败：${userFacingSystemText(r.error ?? '')}（输入已保留）`, 'error'); }
+                else { toast(`保存失败：${userFacingSystemText(r.error ?? '')}；输入已保留`, 'error'); }
               });
             }}
           >
@@ -3208,7 +3208,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
                     <span className="strong">{memberLabel(m)}</span>
                     {isCoord ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                   </span>
-                  <span className="small faint" title={m.model?`完整模型 ID：${m.model}`:undefined}>{[m.model?runtimeModelDisplayName({id:m.model,label:m.model}):'',m.workStateReason].map((part)=>part?.trim()).filter(Boolean).join(' · ')||(m.enabled?'可用':'已停用')}</span>
+                  <span className="small faint" title={m.model?`完整模型编号：${m.model}`:undefined}>{[m.model?runtimeModelDisplayName({id:m.model,label:m.model}):'',m.workStateReason].map((part)=>part?.trim()).filter(Boolean).join(' · ')||(m.enabled?'可用':'已停用')}</span>
                 </span>
               </span>
               <button
@@ -3280,7 +3280,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
                 title="打开任务对话串，在输入区或详情中停止执行"
                 onClick={() => navigate(`/project/${s.activeProjectId}/room/${t.roomId}?thread=${t.conversationThreadId}&tab=task`)}
               >
-                停止 #{t.roomTaskNumber}（去线程）
+                停止 #{t.roomTaskNumber}，去线程
               </button>
             ))}
           </div>

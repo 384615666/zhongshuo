@@ -102,7 +102,7 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:144
   await click('重命名…');await js('r153.rename("更名后的私信")');await pause(30);await click('保存');await until('r153.snapshot().dmTitles.includes("更名后的私信")','rename');
   s=await snap();check('rename-uses-conversation-and-cas',s.calls.some(c=>c.method==='conversation.rename'&&c.params.conversationId==='c'&&c.params.expectedRevision===2&&c.params.title==='更名后的私信'));
   for(const [format,label]of [['md','Markdown'],['html','HTML'],['docx','DOCX']]){
-   await menu();await click('导出会话记录（'+label+'）…');await pause(60);s=await snap();
+   await menu();await click('导出 '+label+' 记录…');await pause(60);s=await snap();
    check('export-'+format+'-real-target',s.calls.some(c=>c.method==='export.create'&&c.params.format===format&&c.params.target.kind==='conversation'&&c.params.target.conversationId==='c'&&c.params.target.projectId==='p'));
    check('export-'+format+'-opens-receipt-directory',s.opened.includes('synthetic-exports/'+format));
   }

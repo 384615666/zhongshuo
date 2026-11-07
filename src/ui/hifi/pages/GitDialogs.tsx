@@ -70,7 +70,7 @@ export function NewBranchModal({
         <span className="field-label">分支名</span>
         <input
           className="input"
-          placeholder="例如 zs/task-15-refactor"
+          placeholder="例如 修复/登录问题"
           value={name}
           disabled={busy || guard.invalid}
           onChange={(e) => setName(e.target.value)}
@@ -79,7 +79,7 @@ export function NewBranchModal({
       <div className="small faint" style={{ marginTop: 8 }}>
         基于 <span className="mono-sm">{head?.slice(0,8) ?? base}</span> 创建；该提交变化时会拒绝操作。工作区未提交改动会一并带入。
       </div>
-      <button className="btn ghost sm" disabled={busy || guard.invalid || !!pending.item} onClick={() => void reread()}>重新读取当前提交（保留名称）</button>
+      <button className="btn ghost sm" disabled={busy || guard.invalid || !!pending.item} onClick={() => void reread()}>重新读取当前提交，保留名称</button>
     </Modal>
   );
 }
@@ -145,24 +145,24 @@ export function ConflictModal({
       </div>
 
       <div className="section">
-        <div className="section-title">共同祖先（base）</div>
+        <div className="section-title">共同祖先</div>
         <pre className="conflict-pre">{tri ? tri.base ?? '该冲突没有共同祖先版本' : '尚未读取三方内容'}</pre>
       </div>
       <div className="section">
         <div className="section-title">
-          我的版本（ours）
+          我的版本
           <div className="spacer" />
           <button className="btn ghost sm" disabled={!tri || tri.ours == null || reading || !!readError || busy || guard.invalid} onClick={() => { edited.current = true; setManualText(tri!.ours!); }}>放入编辑区</button>
         </div>
-        <pre className="conflict-pre">{tri ? tri.ours ?? '这一方的文件不存在（删除）' : '尚未读取三方内容'}</pre>
+        <pre className="conflict-pre">{tri ? tri.ours ?? '这一方没有这个文件，按删除处理' : '尚未读取三方内容'}</pre>
       </div>
       <div className="section">
         <div className="section-title">
-          对方版本（theirs）
+          对方版本
           <div className="spacer" />
           <button className="btn ghost sm" disabled={!tri || tri.theirs == null || reading || !!readError || busy || guard.invalid} onClick={() => { edited.current = true; setManualText(tri!.theirs!); }}>放入编辑区</button>
         </div>
-        <pre className="conflict-pre">{tri ? tri.theirs ?? '这一方的文件不存在（删除）' : '尚未读取三方内容'}</pre>
+        <pre className="conflict-pre">{tri ? tri.theirs ?? '这一方没有这个文件，按删除处理' : '尚未读取三方内容'}</pre>
       </div>
 
       <div className="section">

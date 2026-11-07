@@ -137,7 +137,7 @@ describe('MessageView readingAids', () => {
   it('keeps an inline detail fallback readable after the folded prose', () => {
     const html = render(agent(LONG, { detailMarkdown: '# 完整详情\n\nR93_INLINE_FALLBACK_TAIL' }), true);
     expect(html).toContain('msg-fold is-folded');
-    expect(html).toContain('完整详情（附件不可用，原文已保留）');
+    expect(html).toContain('完整详情：附件不可用，原文已保留');
     expect(html).toContain('R93_INLINE_FALLBACK_TAIL');
     expect(html.indexOf('msg-fold-toggle')).toBeLessThan(html.indexOf('msg-detail-fallback'));
   });

@@ -4,6 +4,7 @@ import { command, bridgeErrorFacts } from '../bridge';
 import { getState, useStore } from '../data/store';
 import { DetailFold } from './SettingsRow';
 import { readingStorageCode } from '../data/readingPositions';
+import { runtimeChannelLabel } from '../lib/format';
 type Local={build:{buildId:string;commit:string;dirty:boolean}|null;connection:{phase:string;code:string|null;updatedAt:number;monitorTimers:number;inFlight:number;attempts:number};dataRootIdentity:string;daemon:{spawned:boolean;exit:unknown;shuttingDown:boolean};at:number};
 type Service={at:number;service:string;runtime:Array<{memberId:string;channel:string|null;kind:string|null;model:string|null;status:string;configuration:string;source:string;reason:string;identityKey:string|null}>;truncated:boolean;protection:{dispatchGateHeld:boolean;unknownTurns:number;pendingDispatches:number}};
 /** Only structured allowlisted facts are copied. Raw errors and draft payloads never enter the report. */
@@ -25,13 +26,13 @@ export function LocalDiagnostics(){
   return <div className="card" data-zs-local-diagnostics="1"><div className="row wrap tight"><button className="btn sm" disabled={facts.loading} onClick={()=>{setOpened(true);void refresh();}}>查看诊断 / 刷新</button><button className="btn sm" disabled={!opened} onClick={()=>void copy()}>复制诊断</button></div>
     <div className="small faint">只在本机读取；复制内容不含正文、提示词、密钥、图片或完整私密路径。</div>
     {copyState?<div role="status">{copyState}</div>:null}
-    {opened?<><div>连接：{conn} · 服务：{service?.service??'尚未读取'} · 更新：{facts.at?new Date(facts.at).toLocaleString():'尚未成功读取'}</div>
+    {opened?<><div>连接：{({online:'已连接',offline:'已断开',recovering:'正在恢复',failed:'连接失败',suspended:'已暂停'} as Record<string,string>)[conn] ?? '状态未知'} · 服务：{service?.service??'尚未读取'} · 更新：{facts.at?new Date(facts.at).toLocaleString():'尚未成功读取'}</div>
       {facts.error?<div className="panel warning">诊断读取失败；保留上次读取结果。确认连接可用后点刷新，必要时正常关窗重开。不会重发或继续任务。</div>:null}
-      <div>BUILD：{facts.local?.build?.buildId??'未提供'} · 源码：{facts.local?.build?.commit??'未提供'}</div><div>数据目录标识：{facts.local?.dataRootIdentity??'尚未读取'}</div>
+      <div>构建：{facts.local?.build?.buildId??'未提供'} · 源码：{facts.local?.build?.commit??'未提供'}</div><div>数据目录标识：{facts.local?.dataRootIdentity??'尚未读取'}</div>
       <div>草稿存储：{draft.mode === 'on' ? '正常' : draft.mode === 'locked' ? '锁定' : '不可用'}{draft.error?' · 保存失败，输入保留在当前窗口；恢复存储后明确重试':' ' } · 未知发送：{unknownCount()}</div>
       <div>恢复保护：{service?service.protection.dispatchGateHeld?'继续派发需显式确认':'正常':'未读取'} · 未知执行：{service?.protection.unknownTurns??'未读取'}</div>
-      {readingStorageCode?<div className="panel warning">阅读位置存储不可用（{readingStorageCode}）；当前窗口的位置仍保留，旧键不覆盖。恢复存储后再保存位置。</div>:null}
-      {service?.runtime.map((r,i)=><div key={r.memberId} className="small">成员 {i+1}：{r.kind??'未配置'} · 渠道 {r.channel??'无法确定'} · 模型ID {r.model??'未指定'} · 配置 {r.configuration} / {r.source} · 图片 {r.status}（{userFacingSystemText(r.reason ?? '')}）</div>)}{service?.truncated?<div>仅显示前 20 位成员。</div>:null}
+      {readingStorageCode?<div className="panel warning">阅读位置存储不可用；当前窗口的位置仍保留，旧键不覆盖。恢复存储后再保存位置。</div>:null}
+      {service?.runtime.map((r,i)=><div key={r.memberId} className="small">成员 {i+1}：{r.kind!=null?runtimeChannelLabel(r.kind):'未配置'} · 渠道 {r.channel??'无法确定'} · 模型标识 {r.model??'未指定'} · 配置 {r.configuration} / {r.source} · 图片能力 {({supported:'可用',unsupported:'不可用',unknown:'未能确认'} as Record<string,string>)[r.status] ?? '状态未知'}{r.reason?`：${userFacingSystemText(r.reason)}`:''}</div>)}{service?.truncated?<div>仅显示前 20 位成员。</div>:null}
       <DetailFold summary="脱敏技术详情"><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{JSON.stringify(report(),null,2)}</pre></DetailFold></>:null}
   </div>;
 }

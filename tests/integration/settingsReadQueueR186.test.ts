@@ -122,7 +122,7 @@ describe('R186 settings reads during slow IPC operations', () => {
 
   it('requires authentication before accepting independent settings reads', async () => {
     const f = await fixture();
-    await expect(connectPipe(f.pipe, { token: 'wrong-token', connectTimeoutMs: 1000 })).rejects.toThrow('握手被拒');
+    await expect(connectPipe(f.pipe, { token: 'wrong-token', connectTimeoutMs: 1000 })).rejects.toThrow('握手凭据无效');
     expect(f.order).toEqual([]);
     await expect(f.read('authenticated')).resolves.toMatchObject({ ok: true, data: { values: { [f.key]: null } } });
   });

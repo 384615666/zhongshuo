@@ -366,12 +366,12 @@ export function GitPage({
       <textarea
         className="composer-input git-commit-input"
         rows={2}
-        placeholder="提交信息（首行为标题）…"
+        placeholder="提交信息，首行为标题…"
         value={git.commitMessage}
         onChange={(ev) => setCommitMessage(projectId, ev.target.value)}
       />
       <div className="small faint">{commitReason}</div>
-      <details className="small faint"><summary>提交方式</summary>产品内提交不会执行 Git hooks；如果项目要求提交钩子，请先在自己的 Git 工具完成检查。</details>
+      <details className="small faint"><summary>提交方式</summary>产品内提交不会执行 Git 提交钩子；如果项目要求提交钩子，请先在自己的 Git 工具完成检查。</details>
     </div>
   );
 
@@ -440,7 +440,7 @@ export function GitPage({
                           key={gitEntryKey(e)}
                           active={activeEntry != null && gitEntryKey(activeEntry) === gitEntryKey(e)}
                           onClick={() => pick(gitEntryKey(e))}
-                          title={`${e.path} · 已暂存（选中可在右侧复核）`}
+                          title={`${e.path} · 已暂存，选中可在右侧复核`}
                           action={
                             <button
                               type="button"
@@ -552,7 +552,7 @@ export function GitPage({
                         onClick={() => pick(c.hash)}
                         /* agent 提交在列表里也要能扫到（图标 + 行说明），
                            不能只在选中后的详情里才看得见（§10.5：只说明来源，不是审批结论） */
-                        title={c.authoredBy === 'agent' ? `${c.subject} · agent 提交` : c.subject}
+                        title={c.authoredBy === 'agent' ? `${c.subject} · AI 成员提交` : c.subject}
                       >
                         {c.authoredBy === 'agent' ? <Icon name="cpu" size={11} className="faint" /> : null}
                         <span className="git-list-path">{c.subject}</span>
@@ -676,25 +676,25 @@ export function GitPage({
                   ) : entryDiff.binary ? (
                     <div className="panel">
                       <div className="panel-title"><Icon name="info" size={13} /> 二进制文件</div>
-                      不生成逐行 diff；显示路径与增删行数统计。
+                      不生成逐行差异；显示路径与增删行数统计。
                     </div>
                   ) : entryDiff.hunks.length > 0 ? (
                     <>
                       <DiffView hunks={entryDiff.hunks} />
-                      {entryDiff.truncated ? <div className="small faint" style={{ marginTop: 4 }}>diff 正文超上限已截断——完整差异请用 git 客户端。</div> : null}
+                      {entryDiff.truncated ? <div className="small faint" style={{ marginTop: 4 }}>差异正文超上限已截断；完整差异请用 Git 客户端。</div> : null}
                     </>
                   ) : (
                     <div className="panel">
-                      <div className="panel-title"><Icon name="info" size={13} /> 没有可展示的文本 diff</div>
+                      <div className="panel-title"><Icon name="info" size={13} /> 没有可展示的文本差异</div>
                       {activeEntry.state === 'deleted'
                         ? '该文件已删除。'
-                        : '二进制、超大文件或未跟踪的新文件没有文本 diff。'}
+                        : '二进制、超大文件或未跟踪的新文件没有文本差异。'}
                     </div>
                   )}
                 </div>
               ) : (
                 <div className="card">
-                  <div className="small faint">左侧没有待处理的改动。选中一个文件可看它的 diff 与操作。</div>
+                  <div className="small faint">左侧没有待处理的改动。选中一个文件可看它的差异与操作。</div>
                 </div>
               )}
             </div>
@@ -708,7 +708,7 @@ export function GitPage({
                     <div className="row tight wrap">
                       <Icon name="git-commit" size={14} className="faint" />
                       <span className="strong" style={{ fontSize: 12.5 }}>{activeCommit.subject}</span>
-                      {activeCommit.authoredBy === 'agent' ? <Tag tone="info" icon="cpu">agent 提交</Tag> : null}
+                      {activeCommit.authoredBy === 'agent' ? <Tag tone="info" icon="cpu">AI 成员提交</Tag> : null}
                       {activeCommit.refs.filter((r) => r !== 'HEAD').map((r) => (
                         <Tag key={r} plain icon="git-branch">{r}</Tag>
                       ))}
@@ -798,9 +798,9 @@ export function GitPage({
                       {commitData!.parentsMeta!.map(p => <button key={p.oid} className={`chip${commitData?.comparedParent === p.oid ? ' on' : ''}`} onClick={() => setCommitParent({ oid: activeCommit.hash, parent: p.oid })}>{p.oid.slice(0,8)} · {p.subject}</button>)}
                     </div> : null}
                     {commitData?.mergeNote ? <div className="panel info">{commitData.mergeNote}</div> : null}
-                    {commitData?.comparedParent ? <div className="small faint">相对父 {commitData.comparedParent.slice(0,8)}</div> : null}
+                    {commitData?.comparedParent ? <div className="small faint">相对父提交 {commitData.comparedParent.slice(0,8)}</div> : null}
                     {commitFiles.length === 0 ? (
-                      commitError || commitData?.mergeNote ? null : <div className="small faint">{commitFilesLoaded ? '该提交没有文件改动（空提交）。' : '正在读取提交差异…'}</div>
+                      commitError || commitData?.mergeNote ? null : <div className="small faint">{commitFilesLoaded ? '该提交没有文件改动，是空提交。' : '正在读取提交差异…'}</div>
                     ) : (
                       commitFiles.map((f) => {
                         const key = `h:${activeCommit.hash}:${f.path}`;
@@ -817,12 +817,12 @@ export function GitPage({
                               <div className="spacer" />
                               <button className="btn ghost sm" onClick={() => toggleDiff(key)}>
                                 <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-                                {open ? '收起 diff' : '查看 diff'}
+                                {open ? '收起差异' : '查看差异'}
                               </button>
                             </div>
                             {open ? (
                               f.diff.length > 0 ? <DiffView hunks={f.diff} /> : (
-                                <div className="small faint" style={{ padding: '4px 0' }}>{f.binary ? '二进制文件（无逐行 diff）。' : f.truncated ? 'diff 已截断。' : '无文本 diff。'}</div>
+                                <div className="small faint" style={{ padding: '4px 0' }}>{f.binary ? '二进制文件，无逐行差异。' : f.truncated ? '差异已截断。' : '无文本差异。'}</div>
                               )
                             ) : null}
                           </div>
@@ -943,7 +943,7 @@ export function GitPage({
   const branchModalNode = branchModal && !onRequestBranch ? (
     <NewBranchModal
       projectId={projectId}
-      base={git.commits[0]?.shortHash ?? '(空仓库)'}
+      base={git.commits[0]?.shortHash ?? '空仓库'}
       onClose={() => setBranchModal(false)}
     />
   ) : null;

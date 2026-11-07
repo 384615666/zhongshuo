@@ -36,9 +36,9 @@ class Document implements PptxPreviewDocument {
     this.pageSize = { width: presentation.width, height: presentation.height };
   }
   renderPage(pageIndex: number, container: HTMLElement): PptxRenderHandle {
-    if (this.disposed) throw new Error('PptxPreviewDocument 已释放');
+    if (this.disposed) throw new Error('幻灯片预览已释放');
     const slide = this.presentation.slides[pageIndex];
-    if (slide == null) throw new RangeError(`页码越界：${pageIndex}`);
+    if (slide == null) throw new RangeError(`页码超出范围：${pageIndex}`);
     const upstream = this.lib.renderSlide(this.presentation, slide);
     container.append(upstream.element);
     let disposedOnce = false;

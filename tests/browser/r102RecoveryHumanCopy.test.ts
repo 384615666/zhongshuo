@@ -31,7 +31,9 @@ describe('R102 recovery next steps in human language', () => {
     expect(top).toContain('继续任务');
     expect(top).not.toContain('继续这次请求');
     for (const term of ['UNKNOWN', 'turn_123', '租约', 'releaseProtection', '人工退款', '物理写入']) expect(top).not.toContain(term);
-    expect(html).toContain(raw);
+    expect(html).toContain('结果待确认');
+    expect(html).not.toContain('UNKNOWN');
+    expect(html).not.toContain('releaseProtection');
     expect(html).toContain('<details');
     expect(html).not.toMatch(/<details[^>]*\bopen/);
   });
@@ -59,8 +61,8 @@ describe('R102 recovery next steps in human language', () => {
     expect(top).not.toContain('data-zs-continue-task="root_task"');
     expect(top).not.toContain('retained');
     expect(top).not.toContain('UNKNOWN');
-    expect(html).toContain(raw);
-    expect(html).toContain('retained');
+    expect(html).toContain('租约保留');
+    expect(html).not.toContain('retained');
   });
 
   it('keeps live member occupancy distinct from interrupted/unknown work', () => {
@@ -103,7 +105,8 @@ describe('R102 recovery next steps in human language', () => {
     expect(top).not.toContain('租约');
     expect(top).not.toContain('UNKNOWN');
     expect(top).not.toContain('退出与保护');
-    expect(html).toContain(raw);
+    expect(html).toContain('结果待确认');
+    expect(html).not.toContain('UNKNOWN');
     expect(html).not.toMatch(/<details[^>]*\bopen/);
     const numbered = renderToStaticMarkup(createElement(ExecutionWaitActions, {blocker}));
     expect(visible(numbered)).toContain('上次写作 · #12');

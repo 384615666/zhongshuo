@@ -76,7 +76,7 @@ describe('R98 preview reading width and action order', () => {
     expect(previewPane).toContain('aria-label="放大预览"');
     expect(previewPane).toContain('aria-label="还原预览大小"');
     expect(previewPane).toContain('aria-label="收起预览区"');
-    expect(previewPane).toContain('title="收起预览区（保留全部标签与阅读位置）"');
+    expect(previewPane).toContain('title="收起预览区：保留全部标签与阅读位置，稍后可重开，不会关闭文件"');
   });
 
   it('exposes the optional reading measure without replacing document content', () => {

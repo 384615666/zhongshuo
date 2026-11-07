@@ -8,6 +8,7 @@
  * porcelain 分类（staged/unstaged/untracked）呈现；taskIds/changeSetIds 仅在服务端返回时展示。
  */
 import { command } from '../bridge';
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { gitWrite, pendingGitWrites } from './gitWrites';
 import type { BridgeFailed, BridgeUnknown } from '../bridge';
 import { getState, setState, toast, recordWrite } from './store';
@@ -144,7 +145,7 @@ export async function refreshGitState(projectId: string): Promise<void> {
       projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, isGit: true } : pr)),
       git: { ...s.git, [projectId]: next },
     }));
-    if (status.truncated) markOp('git.status', true, '状态条目超过 200 已截断（porcelain 上限）');
+    if (status.truncated) markOp('git.status', true, '状态条目超过 200，已截断显示');
     recordWrite('git.status', `分支 ${status.branch} · ${statusEntries.length} 个未提交改动`);
   } catch (e) {
     if (!current()) return;
@@ -162,7 +163,7 @@ export async function refreshGitState(projectId: string): Promise<void> {
           git: { ...s.git, [projectId]: { ...emptyGit(), commitMessage: cur2.commitMessage, reflog: cur2.reflog, notARepo: true, lastOp: undefined } },
         };
       });
-      recordWrite('git.status', '此文件夹未初始化 Git（中性状态）——文件阅读与预览不受影响');
+      recordWrite('git.status', '此文件夹未初始化 Git，属正常状态，文件阅读与预览不受影响');
       return;
     }
     // 真实 Git 执行错误：权威失败——旧的非 Git 中性标记一并失效（红失败面板取代中性面板）。
@@ -263,13 +264,13 @@ export async function stageByOwner(projectId: string, owner: 'agent' | 'user' | 
         ...(owner.taskId != null ? { taskId: owner.taskId } : {}),
         ...(owner.changeSetId != null ? { changeSetId: owner.changeSetId } : {}),
       });
-      await afterWrite(projectId, 'git.stageTask', `已按${owner.taskId != null ? '任务' : '改动集'}暂存 ${r.staged?.length ?? 0} 个文件${(r.skippedUserPreExisting?.length ?? 0) > 0 ? `（跳过你的既有改动 ${r.skippedUserPreExisting?.length} 个）` : ''}`);
+      await afterWrite(projectId, 'git.stageTask', `已按${owner.taskId != null ? '任务' : '改动集'}暂存 ${r.staged?.length ?? 0} 个文件${(r.skippedUserPreExisting?.length ?? 0) > 0 ? `；跳过你的既有改动 ${r.skippedUserPreExisting?.length} 个` : ''}`);
       return;
     } catch (e) { gitFail(projectId, 'git.stageTask', e); return; }
   }
   // R65（review §6）：owner 字符串形态**不再降级为全部路径**——状态条目无归属标注，
   // 全量暂存会绕开「按任务/改动集」与用户改动保护语义。明确拒绝并指路真实通道。
-  toast('状态条目不带归属标注——不按 owner 全量暂存。请用任务分组的「暂存本任务改动」（git.stageTask，服务端按改动集圈定并跳过你的既有改动）或逐文件「暂存」', 'warn');
+  toast('状态条目不带归属标注，不能按归属全量暂存。请用任务分组的「暂存本任务改动」，服务端会按改动集圈定并跳过你的既有改动；或逐文件「暂存」', 'warn');
   void owner;
 }
 
@@ -298,7 +299,7 @@ export async function commit(projectId: string): Promise<void> {
   try {
     const preview = await command<CommitPreviewData>('git.commitPreview', { projectId });
     if (preview.canCommit !== true) {
-      toast(`暂不能提交：${preview.blockers.join('；') || '索引为空或存在冲突'}`, 'error');
+      toast(`暂不能提交：${preview.blockers.map(b => userFacingSystemText(b)).join('；') || '索引为空或存在冲突'}`, 'error');
       return;
     }
     await writeCommand('git.commit', {
@@ -314,11 +315,11 @@ export async function commit(projectId: string): Promise<void> {
 export async function push(projectId: string, remoteName = 'origin'): Promise<void> {
   const g = getGit(projectId);
   const branch = g?.currentBranch;
-  if (branch == null || branch.length === 0) { toast('当前不在分支上（detached HEAD）——不能推送', 'error'); return; }
+  if (branch == null || branch.length === 0) { toast('当前不在分支上，不能推送', 'error'); return; }
   try {
     const head = (g?.commits[0]?.hash) ?? null;
     const rh = await command<{ remote: string; branch: string; head: string | null; url: string }>('git.remoteHead', { projectId, remote: remoteName, branch });
-    if (head == null) { toast('本地 HEAD 未知（先刷新历史）', 'error'); return; }
+    if (head == null) { toast('本地提交状态未知，请先刷新历史', 'error'); return; }
     await writeCommand('git.push', { projectId, remote: remoteName, branch, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
     await afterWrite(projectId, 'git.push', `已推送 ${remoteName}/${branch}`);
   } catch (e) { gitFail(projectId, 'git.push', e); }
@@ -327,12 +328,12 @@ export async function push(projectId: string, remoteName = 'origin'): Promise<vo
 export async function pull(projectId: string, remoteName = 'origin'): Promise<void> {
   const g = getGit(projectId);
   const branch = g?.currentBranch;
-  if (branch == null || branch.length === 0) { toast('当前不在分支上（detached HEAD）——不能拉取', 'error'); return; }
+  if (branch == null || branch.length === 0) { toast('当前不在分支上，不能拉取', 'error'); return; }
   try {
     const head = g?.commits[0]?.hash;
-    if (head == null) { toast('本地 HEAD 未知（先刷新历史）', 'error'); return; }
+    if (head == null) { toast('本地提交状态未知，请先刷新历史', 'error'); return; }
     const r = await writeCommand<{ from: string; to: string; pulledCount: number }>('git.pull', { projectId, remote: remoteName, branch, expectedHead: head });
-    await afterWrite(projectId, 'git.pull', `已拉取 ${r.pulledCount} 个提交（${remoteName}/${branch}）`);
+    await afterWrite(projectId, 'git.pull', `已拉取 ${r.pulledCount} 个提交，来源 ${remoteName}/${branch}`);
   } catch (e) { gitFail(projectId, 'git.pull', e); }
 }
 
@@ -356,7 +357,7 @@ export async function createBranch(projectId: string, name: string, expectedHead
 export async function undoLastCommit(projectId: string, approved: { commitOid: string; expectedHead: string; expectedBranch: string }): Promise<GitActionResult> {
   try {
     await writeCommand('git.commit.undo', { projectId, ...approved });
-    await afterWrite(projectId, 'git.commit.undo', '已撤销最近一次本产品提交（保留工作区内容）');
+    await afterWrite(projectId, 'git.commit.undo', '已撤销最近一次本产品提交，保留工作区内容');
     return { status: 'ok' };
   } catch (e) { gitFail(projectId, 'git.commit.undo', e); return failedResult(e); }
 }
@@ -367,7 +368,7 @@ export async function replayPendingGitOperation(projectId: string): Promise<GitA
   const outcome = await gitWrite(projectId, prior.method, prior.params, true);
   if (outcome.status !== 'ok') { const error = new GitWriteFailure(outcome); gitFail(projectId, prior.method, error); return failedResult(error); }
   if (prior.method === 'git.commit' && getGit(projectId)?.commitMessage.trim() === prior.params.message) setCommitMessage(projectId, '');
-  await afterWrite(projectId, prior.method, '原 Git 操作已按同号回执确认；未换身份重建');
+  await afterWrite(projectId, prior.method, '原 Git 操作已确认，未更换身份重建');
   return { status: 'ok' };
 }
 
@@ -387,5 +388,5 @@ function gitFail(projectId: string, op: string, e: unknown): void {
   const msg = e instanceof Error ? e.message : String(e);
   const unknown = e instanceof GitWriteFailure && e.outcome.status === 'unknown';
   setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), lastOp: { op, ok: false, outcome: unknown ? 'unknown' : 'failed', detail: msg, at: Date.now() } } } }));
-  toast(`${gitOperationLabel(op)}${unknown ? '结果待确认' : '未完成'}：${msg}`, unknown ? 'warn' : 'error');
+  toast(`${gitOperationLabel(op)}${unknown ? '结果待确认' : '未完成'}：${userFacingSystemText(msg)}`, unknown ? 'warn' : 'error');
 }

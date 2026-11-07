@@ -235,14 +235,14 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const archiveCard = (c: BoardCard) => {
     hideTask(c.taskId);
     setLastArchive({ taskIds: [c.taskId] });
-    toast('已从看板归档（任务本身保留，仍可在原对话串打开）', 'info');
+    toast('已从看板归档；任务本身保留，仍可在原对话串打开', 'info');
   };
   /** 「撤销」：只恢复最近一次归档操作涉及的卡片；撤销后入口消失，不做恢复全部。 */
   const undoLastArchive = () => {
     if (lastArchive == null) return;
     unhideTasks(lastArchive.taskIds);
     setLastArchive(null);
-    toast('已撤销上一次归档，卡片已放回看板（任务本身一直保留）', 'info');
+    toast('已撤销上一次归档，卡片已放回看板；任务本身一直保留', 'info');
   };
   /** 「归档本项目」：二次确认后归档该项目当前全部可见卡片（不删任务）。 */
   const archiveProject = (projectId: string, taskIds: string[]) => {
@@ -252,7 +252,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     if (taskIds.length === 0) return;
     hideTasks(taskIds);
     setLastArchive({ taskIds });
-    toast(`已从看板归档 ${taskIds.length} 项（任务本身保留，仍可在原对话串打开）`, 'info');
+    toast(`已从看板归档 ${taskIds.length} 项；任务本身保留，仍可在原对话串打开`, 'info');
   };
   /** 「归档全部」：二次确认后归档当前范围内所有可见卡片（不删任务）。 */
   const archiveAllCards = () => {
@@ -261,7 +261,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     if (visibleTaskIds.length === 0) return;
     hideTasks(visibleTaskIds);
     setLastArchive({ taskIds: visibleTaskIds });
-    toast(`已从看板归档 ${visibleTaskIds.length} 项（任务本身保留，仍可在原对话串打开）`, 'info');
+    toast(`已从看板归档 ${visibleTaskIds.length} 项；任务本身保留，仍可在原对话串打开`, 'info');
   };
 
   return (
@@ -278,7 +278,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                 className={`project-card is-all-scope${scope === 'all' ? ' is-current' : ''}`}
                 data-zs-board-scope-all="1"
                 aria-current={scope === 'all' ? 'page' : undefined}
-                title="显示全部项目的任务（只含侧栏当前可见的项目）"
+                title="显示全部项目的任务，只含侧栏当前可见的项目"
                 onClick={selectAllScope}
               >
                 <span className="project-card-name">
@@ -308,7 +308,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                     className={`project-card${current ? ' is-current' : ''}`}
                     data-zs-board-project={p.id}
                     aria-current={current ? 'page' : undefined}
-                    title={current ? `${p.displayName}（看板当前项目）` : `只看 ${p.displayName} 的任务`}
+                    title={current ? `${p.displayName}，看板当前项目` : `只看 ${p.displayName} 的任务`}
                     onClick={() => selectProjectScope(p.id)}
                   >
                     <span className="project-card-name" title={p.displayName}>{p.displayName}</span>
@@ -448,11 +448,11 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                     <div className="board-card-top">
                                       {c.roomTaskNumber != null ? <span className="root-task-no">#{c.roomTaskNumber}</span> : null}
                                       <TaskStatusTag status={c.taskStatus as 'OPEN'} />
-                                      {c.runStatus != null && c.runStatus !== c.taskStatus ? <Tag plain icon="activity">{RUN_STATUS_COPY[c.runStatus] ?? c.runStatus}</Tag> : null}
+                                      {c.runStatus != null && c.runStatus !== c.taskStatus ? <Tag plain icon="activity">{RUN_STATUS_COPY[c.runStatus] ?? '运行状态待确认'}</Tag> : null}
                                       {c.exitUnconfirmed ? <Tag tone="warning" icon="help-circle" title="运行已中断，结果未确认；可在线程详情中确认">退出未确认</Tag> : null}
                                       {c.pendingDelivery != null ? <Tag tone="warning" icon="eye" title={`待验收交付 v${c.pendingDelivery.revision}——在对话串详情验收`}>待验收 v{c.pendingDelivery.revision}</Tag> : null}
                                     </div>
-                                    <div className="board-card-title clamp-2">{c.title || '（标题暂不可用，进线程查看）'}</div>
+                                    <div className="board-card-title clamp-2">{c.title || '标题暂不可用，请进线程查看'}</div>
                                     <div className="board-card-meta">
                                       {scope === 'all' ? (
                                         <>
@@ -464,7 +464,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                       {c.statusReason != null ? (
                                         <>
                                           <span className="board-card-sep" aria-hidden="true">·</span>
-                                          <span className="board-card-reason" title={c.statusReason}>{c.statusReason}</span>
+                                          <span className="board-card-reason" title={userFacingSystemText(c.statusReason)}>{userFacingSystemText(c.statusReason)}</span>
                                         </>
                                       ) : null}
                                     </div>

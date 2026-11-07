@@ -55,6 +55,8 @@ const EMPTY: never[] = [];
 const FORMAL_LIMITS = {
   access: '按项目授权和成员配置访问文件',
 } as const;
+/** 导出格式的用户口径（R191：格式名保留，但不带括号）。 */
+const EXPORT_FORMAT_LABEL: Record<'md' | 'html' | 'docx', string> = { md: 'Markdown', html: 'HTML', docx: 'DOCX' };
 
 export function DmPage() {
   const route = useHashRoute();
@@ -251,7 +253,7 @@ export function DmPage() {
     // 提交前核对：框属于哪个会话就用哪个会话的快照（捕获的 conversationId/revision）——
     // 切走后当前 active 不是目标=作废零提交（r57 跨会话误提交修复）。
     const target = dms.find((d) => d.id === renaming.conversationId);
-    if (target == null) { toast('重命名目标已不可用（会话已切换或移除）——已关闭重命名框', 'warn'); setRenaming(null); return; }
+    if (target == null) { toast('重命名目标已不可用，会话已切换或移除；已关闭重命名框', 'warn'); setRenaming(null); return; }
     setBusy('rename');
     try {
       await command('conversation.rename', { conversationId: renaming.conversationId, title: renameText.trim(), expectedRevision: renaming.revision });
@@ -308,7 +310,7 @@ export function DmPage() {
     try {
       const r = await command<{ enqueued: number | boolean }>('dm.resume', { conversationId: active.id });
       recordWrite('dm.resume', `继续队列（泵 ${typeof r.enqueued === 'number' ? r.enqueued : Number(r.enqueued)} 条）`);
-      toast(`已继续队列（本次发出 ${typeof r.enqueued === 'number' ? r.enqueued : r.enqueued ? 1 : 0} 条排队消息）`, 'success');
+      toast(`已继续队列，本次发出 ${typeof r.enqueued === 'number' ? r.enqueued : r.enqueued ? 1 : 0} 条排队消息`, 'success');
       await reloadAll();
     } catch (e) { toast(`继续失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
@@ -339,7 +341,7 @@ export function DmPage() {
         || active.pendingReview.taskId !== reviewBox.snapshot.taskId
         || active.pendingReview.deliveryId !== reviewBox.snapshot.deliveryId
         || active.pendingReview.revision !== reviewBox.snapshot.deliveryRevision;
-      toast(`提交失败：${userFacingSystemText(r.error ?? '')}${stale ? '（交付已变化——验收框已失效，请对新版本重新操作）' : '（意见已保留，可修正后重提）'}`, 'error');
+      toast(`提交失败：${userFacingSystemText(r.error ?? '')}${stale ? '；交付已变化，验收框已失效，请对新版本重新操作' : '；意见已保留，可修正后重提'}`, 'error');
       if (stale) setReviewBox(null);
       await reloadAll().catch(() => { /* 同上：刷新失败不阻断忙态释放 */ });
     } finally {
@@ -359,7 +361,7 @@ export function DmPage() {
         ...(it.lastRunId != null ? { sourceRunId: it.lastRunId } : {}),
       });
       recordWrite('task.redispatch', `${it.formatRepair ? '私信输出格式修复' : '私信中断恢复'} task ${it.taskId.slice(0, 10)}…（来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`);
-      toast(it.formatRepair ? '格式修复请求已提交（不会重做交付内容）' : '继续请求已提交', 'success');
+      toast(it.formatRepair ? '格式修复请求已提交，不会重做交付内容' : '继续请求已提交', 'success');
       await reloadAll();
     } catch (e) { toast(`恢复被拒：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
@@ -410,8 +412,8 @@ export function DmPage() {
     try {
       const r = await command<{ exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number; missing: number } }>('export.create', { target: { kind: 'conversation', projectId: active.projectId, conversationId: active.id }, format });
       recordWrite('export.create', `导出私信会话记录 ${format}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
-      toast(`已导出会话记录 ${format.toUpperCase()}（${r.stats.messages} 消息 · ${r.files.length} 文件）`, 'success');
-      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${userFacingSystemText((e as Error).message ?? '')}（目录 ${r.dir}）`, 'error'));
+      toast(`已导出 ${EXPORT_FORMAT_LABEL[format]} 会话记录，${r.stats.messages} 条消息 · ${r.files.length} 个文件`, 'success');
+      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${userFacingSystemText((e as Error).message ?? '')}；目录 ${r.dir}`, 'error'));
     } catch (e) { toast(`导出失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setBusy(null); }
   };
@@ -533,7 +535,7 @@ export function DmPage() {
                     ) : null}
                     <button
                       className="icon-btn sm"
-                      title="会话操作（重命名 / 归档 / 导出会话记录 / 任务记录）"
+                      title="会话操作：重命名、归档、导出会话记录、任务记录"
                       aria-haspopup="menu"
                       data-zs-dm-ops="hifi"
                       onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setOpsAt({ x: r.right - 260, y: r.bottom + 4 }); }}
@@ -545,7 +547,7 @@ export function DmPage() {
                     <div className="row tight" style={{ marginTop: 8 }}>
                       <input
                         className="composer-input" style={{ minWidth: 200 }}
-                        placeholder="会话标题（1–120 字）"
+                        placeholder="会话标题，1–120 字"
                         value={renameText}
                         onChange={(e) => setRenameText(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void doRename(); } if (e.key === 'Escape') setRenaming(null); }}
@@ -581,13 +583,13 @@ export function DmPage() {
                             || p.manifestHash !== reviewBox.snapshot.manifestHash;
                           return stale ? (
                             <>
-                              <div className="panel warning">交付已变化（打开时 v{reviewBox.snapshot.deliveryRevision}，当前 {p != null ? `v${p.revision}` : '无待验收交付'}）——验收框已失效。</div>
+                              <div className="panel warning">交付已变化，打开时 v{reviewBox.snapshot.deliveryRevision}，当前 {p != null ? `v${p.revision}` : '无待验收交付'}；验收框已失效。</div>
                               <div className="row tight">
                                 <button className="btn ghost sm" onClick={() => setReviewBox(null)}>关闭</button>
                               </div>
                             </>
                           ) : reviewBox.mode === 'rework' ? (
-                            <textarea className="composer-input" style={{ width: '100%', minHeight: 56 }} placeholder="修改意见（必填）" value={reviewBox.note} onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })} />
+                            <textarea className="composer-input" style={{ width: '100%', minHeight: 56 }} placeholder="修改意见，必填" value={reviewBox.note} onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })} />
                           ) : (
                             <div className="faint small">将验收通过 v{reviewBox.snapshot.deliveryRevision}。</div>
                           );
@@ -612,7 +614,7 @@ export function DmPage() {
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-rework="hifi" data-zs-dm-rework-state={active.reworkPending.queued ? 'executing' : 'recorded'}>
                     <div className="row tight wrap">
                       <Icon name="refresh" size={13} />
-                      <strong>{active.reworkPending.queued ? '返工执行中（已入队/派发）' : '返工意见已记录、尚未执行'}</strong>
+                      <strong>{active.reworkPending.queued ? '返工执行中，已入队或已派发' : '返工意见已记录、尚未执行'}</strong>
                       <Tag tone="warning">v{active.reworkPending.deliveryRevision} 被要求修改</Tag>
                       <span style={{ flex: 1 }} />
                       {active.reworkPending.queued ? (
@@ -631,7 +633,7 @@ export function DmPage() {
                 {showFailedPanel ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">
                     <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>失败任务待处理</strong><span className="faint small">任务尚未完成；继续需要明确点击，旧结果不会自动重发</span></div>
-                    {failedView.error != null ? <div className="small" style={{ marginTop: 5 }}>失败任务读取失败：{userFacingSystemText(failedView.error ?? '')}（保留上次读取的内容）</div> : null}
+                    {failedView.error != null ? <div className="small" style={{ marginTop: 5 }}>失败任务读取失败：{userFacingSystemText(failedView.error ?? '')}；保留上次读取的内容</div> : null}
                     {failedItemsWithoutRecoveryDuplicate.map((it) => <div key={it.taskId} style={{ marginTop: 7 }}>
                       <div className="row tight wrap">
                         <span style={{ flex: 1, minWidth: 0 }}>{it.title}</span><Tag tone="danger">运行失败</Tag>
@@ -647,7 +649,7 @@ export function DmPage() {
                 <div className="msg-list is-replies" ref={listRef} onScroll={markRendered} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                   {readError != null ? (
                     <div className="panel info" style={{ borderColor: 'var(--warning)' }} data-zs-dm-readerror="1">
-                      读取失败：{userFacingSystemText(readError ?? '')}（保留上次读取的内容）
+                      读取失败：{userFacingSystemText(readError ?? '')}；保留上次读取的内容
                       <button className="btn ghost sm" style={{ marginLeft: 8 }} disabled={busy != null} title="立即重读本会话" onClick={() => { void loadDmHistory(activeId).catch(() => { /* 失败仍由面板呈现 */ }); }}>重试</button>
                     </div>
                   ) : null}
@@ -661,9 +663,9 @@ export function DmPage() {
                         forceExpanded={m.id === latestReadableAgentId}
                         onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话', revisionHint: att.revision, hashHint: att.hash })}
                         onSave={() => void toggleSavedMessage(m, active.projectId).then((r) => {
-                          if (r.ok) { toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏（原消息不受影响）', 'success'); return; }
+                          if (r.ok) { toast(r.saved ? '已收藏，独立保存，不改动原内容' : '已取消收藏，原消息不受影响', 'success'); return; }
                           if (r.busy === true) return;
-                          toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}（状态未变）`, 'error');
+                          toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}；状态未变`, 'error');
                         })}
                         onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); }}
                         onQuote={(_message, selectedText) => {
@@ -707,7 +709,7 @@ export function DmPage() {
                     insertQuote={insertQuote ?? undefined}
                     attachmentUpload={{ conversationId: active.id }}
                     onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-                      if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('重发成功（上次发送记录）', 'success'); }
+                      if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('已按上次发送记录重发成功', 'success'); }
                       return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
                     })}
                     onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -766,14 +768,14 @@ export function DmPage() {
           <div className="menu-label">{dmTitle} · 会话操作</div>
           <MenuItem icon="edit" title="重命名私信" onClick={() => { setRenameText(active?.title ?? ''); setRenaming({ conversationId: activeId, revision: active?.revision ?? 0 }); setOpsAt(null); }}>重命名…</MenuItem>
           {active?.archivedAt != null ? (
-            <MenuItem icon="refresh" title="取消归档（不自动续跑）" onClick={() => { setOpsAt(null); void doRestore(); }}>取消归档</MenuItem>
+            <MenuItem icon="refresh" title="取消归档，不自动续跑" onClick={() => { setOpsAt(null); void doRestore(); }}>取消归档</MenuItem>
           ) : (
             <MenuItem icon="archive" title="归档后可查看历史；正在执行的任务会停止。" onClick={() => { setOpsAt(null); setArchiveConfirm(activeId); }}>归档会话…</MenuItem>
           )}
           <div className="menu-sep" />
-          <MenuItem icon="download" title="导出这条会话的消息记录及已保存的附件" onClick={() => { setOpsAt(null); void doExport('md'); }}>导出会话记录（Markdown）…</MenuItem>
-          <MenuItem icon="download" title="导出这条会话的 HTML 记录" onClick={() => { setOpsAt(null); void doExport('html'); }}>导出会话记录（HTML）…</MenuItem>
-          <MenuItem icon="download" title="导出这条会话的 DOCX 记录" onClick={() => { setOpsAt(null); void doExport('docx'); }}>导出会话记录（DOCX）…</MenuItem>
+          <MenuItem icon="download" title="导出这条会话的消息记录及已保存的附件" onClick={() => { setOpsAt(null); void doExport('md'); }}>导出 Markdown 记录…</MenuItem>
+          <MenuItem icon="download" title="导出这条会话的 HTML 记录" onClick={() => { setOpsAt(null); void doExport('html'); }}>导出 HTML 记录…</MenuItem>
+          <MenuItem icon="download" title="导出这条会话的 DOCX 记录" onClick={() => { setOpsAt(null); void doExport('docx'); }}>导出 DOCX 记录…</MenuItem>
           <div className="menu-sep" />
           <MenuItem icon="terminal" onClick={()=>{setOpsAt(null);setRecordsFor(activeId);}}>任务记录…</MenuItem>
         </Menu>
@@ -799,7 +801,7 @@ function DmListRow({dm,selected,now,onSelect,projectName}:{dm:DmConversation;sel
     <span style={{flex:1,minWidth:0}}>
       <span className="dm-row-heading"><span className="truncate" style={{fontSize:12.5,fontWeight:dm.unread>0?600:400}}>{dm.title||dm.peerDisplayName||'成员'}</span>
         {time?<time className="small faint" dateTime={new Date(at).toISOString()} title={new Date(at).toLocaleString()}>{time}</time>:null}</span>
-      <span className="small faint truncate" style={{display:'block',marginTop:1}}>{dm.lastMessagePreview||'（暂无消息）'}</span>
+      <span className="small faint truncate" style={{display:'block',marginTop:1}}>{dm.lastMessagePreview||'暂无消息'}</span>
       {projectName?<span className="pin-project-label">{projectName}</span>:null}
     </span>
     <NavUnreadCount count={dm.unread} where={dm.title||dm.peerDisplayName||'私信'}/>

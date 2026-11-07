@@ -6,7 +6,8 @@ import { RUNTIME_CHANNELS, runtimeExecutable, type RuntimeKind } from '../../../
 import {runtimeChannelPatch} from '../../../contracts/runtimeSelection';
 import {RuntimeModel} from './RuntimeModel';
 import {RuntimeEffort} from './RuntimeEffort';
-import { runtimePermissionHint, runtimePermissionOptions } from '../lib/runtimePermissions';
+import { runtimePermissionHint, runtimePermissionLabel, runtimePermissionOptions } from '../lib/runtimePermissions';
+import { effortLabel, runtimeChannelLabel } from '../lib/format';
 import { RuntimeChannelHelp } from './RuntimeChannelHelp';
 import { AvatarPicker } from './AvatarPicker';
 import { findAvatarPreset, presetForDataUrl } from '../data/avatarPresets';
@@ -60,7 +61,7 @@ function useWriteForm(scope: string, projectId?: string, scopeProjectId?: string
       if(result.status==='ok'){
         setCommitted(true);readBack.current=done;
         try{await done(guard.valid,result.data);}catch(e){if(guard.valid())setError(`已提交，但最新状态读取失败：${userFacingSystemText((e as Error).message ?? '')}。只重试读取，不会重新创建或修改。`);}
-      }else setError(result.status==='unknown'?`结果未知：${userFacingSystemText(result.error ?? '')}。原操作请求已保留，可在成员页「未知成员操作」中重试。`:`${result.code}：${userFacingSystemText(result.error ?? '')}。输入已保留。`);
+      }else setError(result.status==='unknown'?`结果未知：${userFacingSystemText(result.error ?? '')}。原操作请求已保留，可在成员页「未知成员操作」中重试。`:`${userFacingSystemText(result.error ?? '') || '操作未完成'}。输入已保留。`);
     }
     pending.current=false;if(guard.alive.current)setBusy(false);
   };
@@ -124,11 +125,11 @@ export function EditTemplateModal({ template: t, scopeProjectId, onClose, onSave
     <FormFeedback state={f}/>{f.invalid ? <div className="panel warning">页面已切换，表单作废。</div> : null}
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} maxLength={60} value={form.name} onChange={e => setForm(s => ({ ...s, name: e.target.value }))}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={form.description} onChange={e => setForm(s => ({ ...s, description: e.target.value }))}/></label>
     <label className="field"><span className="field-label">模板状态</span><Select disabled={f.busy||f.committed} value={form.enabled ? 'enabled' : 'disabled'} ariaLabel="模板状态" options={[{ value: 'enabled', label: '启用 · 可创建' }, { value: 'disabled', label: '停用 · 已有成员不变' }]} onChange={v => setForm(s => ({ ...s, enabled: v === 'enabled' }))}/></label>
-    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[...RUNTIME_CHANNELS, ...(fake ? [{ value: 'fake', label: '测试 AI' }] : [])]} onChange={v => config(runtimeChannelPatch(v as RuntimeKind))}/></label>
+    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[...RUNTIME_CHANNELS.map(channel => ({ value: channel.value, label: runtimeChannelLabel(channel.value) })), ...(fake ? [{ value: 'fake', label: '测试 AI' }] : [])]} onChange={v => config(runtimeChannelPatch(v as RuntimeKind))}/></label>
     <RuntimeChannelHelp kind={form.config.kind}/>
-    {projectId&&form.config.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.config.kind} executable={form.config.executable} value={form.config.model??''} disabled={f.busy||f.committed} onChange={model=>config({model:model||null,effort:null})}/>:<label className="field"><span className="field-label">模型 ID</span><input className="input" disabled={f.busy||f.committed} value={form.config.model??''} onChange={e=>config({model:e.target.value||null})}/></label>}
+    {projectId&&form.config.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.config.kind} executable={form.config.executable} value={form.config.model??''} disabled={f.busy||f.committed} onChange={model=>config({model:model||null,effort:null})}/>:<label className="field"><span className="field-label">模型标识</span><input className="input" disabled={f.busy||f.committed} value={form.config.model??''} onChange={e=>config({model:e.target.value||null})}/></label>}
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
-    {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}（打开项目后可选）</div>}
+    {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort!=null?effortLabel(form.config.effort):'渠道默认'}；打开项目后可选</div>}
     <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">{runtimePermissionHint(form.config.kind)}</div>
     <AvatarPicker value={avatar} disabled={f.busy||f.committed} allowCustom={false} onChange={setAvatar}/>
   </Modal>;
@@ -165,7 +166,7 @@ export function TemplatePanel({ projectId, scopeProjectId, readOnly, onCreateFro
     } };
     useEffect(() => { alive.current=true;void load(); const changed = () => void load(); window.addEventListener('zs-member-changed', changed); return () => { alive.current=false;queued.current=false;seq.current++; window.removeEventListener('zs-member-changed', changed); }; }, []);
     return <><div className="section-title" style={{ marginTop: 22 }}>可复用的成员模板 <button className="btn ghost sm" onClick={() => void load()}>刷新模板</button></div>
-    {error ? <div className="panel warning">模板读取失败：{userFacingSystemText(error ?? '')}（保留上次结果）</div> : null}
+    {error ? <div className="panel warning">模板读取失败：{userFacingSystemText(error ?? '')}；保留上次结果</div> : null}
     {rows === null && !error ? <div className="panel info">正在读取模板…</div> : rows?.length === 0 ? <div className="panel">暂无配置模板。先配置成员，再从该成员保存模板。</div> : null}
     <div className="grid grid-3" data-zs-template-list>{rows?.map(t => (
       /* R183 第 7 项：卡片只留名称、渠道/模型和两个入口——启用态不写「启用」，
@@ -175,7 +176,7 @@ export function TemplatePanel({ projectId, scopeProjectId, readOnly, onCreateFro
           <span className="strong" style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }} title={t.name}>{t.name}</span>
           {t.enabled ? null : <span className="faint small" title="已停用：不能用来创建新成员；已有成员不受影响">已停用</span>}
         </div>
-        <div className="small faint">{t.config.kind} · {t.config.model ?? '渠道默认模型'}</div>
+        <div className="small faint">{runtimeChannelLabel(t.config.kind)} · {t.config.model ?? '渠道默认模型'}</div>
         <div className="row tight wrap" style={{ marginTop: 10 }}>
           <button className="btn ghost sm" data-zs-template-edit={t.id} onClick={() => setEdit(t)}>编辑…</button>
           <button
@@ -213,9 +214,9 @@ export function UnknownMemberOperations() {
                 window.dispatchEvent(new CustomEvent('zs-member-changed'));
         }
         else
-            setError(r.status === 'failed' ? `${r.code}：${userFacingSystemText(r.error ?? '')}` : `结果仍未知：${userFacingSystemText(r.error ?? '')}`);
+            setError(r.status === 'failed' ? `${userFacingSystemText(r.error ?? '') || '操作未完成'}` : `结果仍未知：${userFacingSystemText(r.error ?? '')}`);
     } };
     if (!items.length && !error)
         return null;
-    return <div className="panel warning" data-zs-member-unknown><div className="strong">待确认与未知成员操作</div><div className="small">这里保留结果待确认的成员操作。重新连接或打开页面后，可查看原操作记录并决定是否重试。</div>{error ? <div>{userFacingSystemText(error ?? '')}</div> : null}{memberWriteStorageError?<div>{userFacingSystemText(memberWriteStorageError ?? '')}</div>:null}{items.map(p => <div className="row tight wrap" key={p.commandId}><span className="small">{memberWriteState(p)==='pending'?'等待确认':memberWriteState(p)==='ok'?'已成功':memberWriteState(p)==='failed'?'已拒绝':'结果未知'} · {({ 'project.writeAccess.set': '修改项目授权', 'member.create': '添加成员', 'member.update': '修改成员资料', 'member.setRuntime': '修改 AI 配置', 'member.setEnabled': '更改成员启用状态', 'memberTemplate.saveFromMember': '保存成员模板', 'memberTemplate.update': '修改成员模板', 'memberTemplate.createMember': '从模板添加成员' } as Record<string, string>)[p.method] ?? '成员操作'} · {String(p.params.displayName ?? p.params.name ?? p.params.templateId ?? (typeof p.params.memberId==='string'?`#${memberShortId(p.params.memberId)}`:'成员操作'))} · 项目 {String(p.params.projectId ?? '全局模板')}</span><details className="small faint"><summary>原操作与目标</summary><div>项目：{String(p.params.projectId??'全局模板')} · 成员：{String(p.params.memberId??'创建新身份')} · 模板：{String(p.params.templateId??'未引用模板')}</div>{p.method==='member.setRuntime'?<div>渠道 {String(p.params.kind)} · 模型 {String(p.params.model??'渠道默认')} · 权限 {String(p.params.permissionMode??'渠道默认')} · 程序 {String(p.params.executable??'渠道默认')}</div>:null}{p.method==='member.setEnabled'?<div>原操作：{p.params.enabled===true?'启用':'停用'}</div>:null}</details><button className="btn sm" data-zs-member-replay={p.commandId} disabled={busy !== null||memberWriteState(p)==='pending'} onClick={() => void replay(p)}>使用原记录重试</button></div>)}</div>;
+    return <div className="panel warning" data-zs-member-unknown><div className="strong">待确认与未知成员操作</div><div className="small">这里保留结果待确认的成员操作。重新连接或打开页面后，可查看原操作记录并决定是否重试。</div>{error ? <div>{userFacingSystemText(error ?? '')}</div> : null}{memberWriteStorageError?<div>{userFacingSystemText(memberWriteStorageError ?? '')}</div>:null}{items.map(p => <div className="row tight wrap" key={p.commandId}><span className="small">{memberWriteState(p)==='pending'?'等待确认':memberWriteState(p)==='ok'?'已成功':memberWriteState(p)==='failed'?'已拒绝':'结果未知'} · {({ 'project.writeAccess.set': '修改项目授权', 'member.create': '添加成员', 'member.update': '修改成员资料', 'member.setRuntime': '修改 AI 配置', 'member.setEnabled': '更改成员启用状态', 'memberTemplate.saveFromMember': '保存成员模板', 'memberTemplate.update': '修改成员模板', 'memberTemplate.createMember': '从模板添加成员' } as Record<string, string>)[p.method] ?? '成员操作'} · {String(p.params.displayName ?? p.params.name ?? p.params.templateId ?? (typeof p.params.memberId==='string'?`#${memberShortId(p.params.memberId)}`:'成员操作'))} · 项目 {String(p.params.projectId ?? '全局模板')}</span><details className="small faint"><summary>原操作与目标</summary><div>项目：{String(p.params.projectId??'全局模板')} · 成员：{String(p.params.memberId??'创建新身份')} · 模板：{String(p.params.templateId??'未引用模板')}</div>{p.method==='member.setRuntime'?<div>渠道 {runtimeChannelLabel(String(p.params.kind))} · 模型 {String(p.params.model??'渠道默认')} · 权限 {runtimePermissionLabel(typeof p.params.permissionMode==='string'?p.params.permissionMode:null, typeof p.params.kind==='string'?p.params.kind:null)} · 程序 {String(p.params.executable??'渠道默认')}</div>:null}{p.method==='member.setEnabled'?<div>原操作：{p.params.enabled===true?'启用':'停用'}</div>:null}</details><button className="btn sm" data-zs-member-replay={p.commandId} disabled={busy !== null||memberWriteState(p)==='pending'} onClick={() => void replay(p)}>使用原记录重试</button></div>)}</div>;
 }

@@ -51,7 +51,7 @@ export function TurnDeadlineField({ value, effective, onCommit, disabled = false
     <div className="pset-row-label">
       <div className="pset-row-name">单轮最长运行</div>
       <div className="pset-row-hint">默认不设总时长上限；启用后达到设定时间会中断；只对之后开始的执行生效。</div>
-      <div className="pset-row-hint">留空表示继承；0 表示明确关闭。当前实际生效：{effective.ms == null ? '不设总时长上限' : `${deadlineSecondsText(effective.ms)} 秒`}{effective.source === 'global' ? '（来自全局设置）' : ''}。</div>
+      <div className="pset-row-hint">留空表示继承；0 表示明确关闭。当前实际生效：{effective.ms == null ? '不设总时长上限' : `${deadlineSecondsText(effective.ms)} 秒`}{effective.source === 'global' ? '，来自全局设置' : ''}。</div>
     </div>
     <div className="row tight">
       <input
@@ -62,7 +62,7 @@ export function TurnDeadlineField({ value, effective, onCommit, disabled = false
         step={0.001}
         value={draft}
         placeholder="继承"
-        aria-label="单轮最长运行（秒）"
+        aria-label="单轮最长运行秒数"
         aria-invalid={error ? true : undefined}
         aria-busy={disabled ? true : undefined}
         disabled={disabled}
@@ -134,7 +134,7 @@ export function ProjectWriteConcurrencyPanel({ projectId, readOnly = false }: { 
         const override = e.target.value === 'default' ? null : e.target.value as WriteConcurrencyOverride;
         void save({ id: `write-concurrency-${crypto.randomUUID()}`, override, expectedRevision: settings.revision });
       }}>
-      <option value="default">跨对话串并行（默认）</option>
+      <option value="default">跨对话串并行，默认</option>
       <option value="single_writer">单写者</option>
       <option value="parallel_writers">允许成员并行</option>
     </select> : <span className="small faint">{error ? '读取失败' : '读取中…'}</span>}
@@ -225,7 +225,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
     try {
       const result = await collabSet(id, patch, collab.revision);
       if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) {
-        toast(`「${targetName}」协作限制${result.ok ? '保存已提交，可重新进入原项目查看结果' : `保存失败：${result.error}`}（当前页面已切换/关闭）`, result.ok ? 'warn' : 'error');
+        toast(`「${targetName}」协作限制${result.ok ? '保存已提交，可重新进入原项目查看结果' : `保存失败：${result.error}`}；当前页面已切换或关闭`, result.ok ? 'warn' : 'error');
         return;
       }
       if (!result.ok) { setCollabError(`保存失败：${userFacingSystemText(result.error ?? '')}`); toast(`保存失败：${userFacingSystemText(result.error ?? '')}`, 'error'); return; }
@@ -285,12 +285,12 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
     setSaveErr(null);
     const r = await updateProjectReal(id, project.revision, { displayName: nameDraft.trim(), description: descDraft });
     if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) {
-      toast(`「${targetName}」项目信息${r.ok ? '已保存' : `保存失败：${r.error}`}（当前页面已切换/关闭）`, r.ok ? 'info' : 'error');
+      toast(`「${targetName}」项目信息${r.ok ? '已保存' : `保存失败：${r.error}`}；当前页面已切换或关闭`, r.ok ? 'info' : 'error');
       return;
     }
     setBusy(false);
     if (r.ok) toast('项目信息已保存', 'success');
-    else { setSaveErr(r.error ?? '未知错误'); toast(`保存失败：${userFacingSystemText(r.error ?? '')}（输入已保留）`, 'error'); }
+    else { setSaveErr(r.error ?? '未知错误'); toast(`保存失败：${userFacingSystemText(r.error ?? '')}；输入已保留`, 'error'); }
   };
 
   return (
@@ -312,14 +312,14 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
               <input className="input" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder="项目显示名" />
             </div>
             <div className="field" style={{ flex: '2 1 280px', minWidth: 200 }}>
-              <label className="field-label">描述（可选）</label>
+              <label className="field-label">描述，可选</label>
               <input className="input" value={descDraft} onChange={(e) => setDescDraft(e.target.value)} placeholder="例如：订单表回填与数据修复" />
             </div>
             <button className="btn sm primary" disabled={busy || !nameDraft.trim() || !dirtyInfo} onClick={() => void saveInfo()}>保存</button>
           </div>
           {saveErr != null ? <div className="panel warning" style={{ marginTop: 8 }}>保存失败：{userFacingSystemText(saveErr ?? '')}。输入已保留，请刷新后重试。</div> : null}
           <div className="small faint" style={{ marginTop: 6 }}>
-            只改应用里的显示信息，<strong>不会</strong>重命名磁盘目录（{project.rootPath}）。
+            只改应用里的显示信息，<strong>不会</strong>重命名磁盘目录，路径 {project.rootPath}。
           </div>
         </div>
 
@@ -392,7 +392,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                 <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
                   退出日常项目列表、历史保留只读；其下房间不再收消息、不建任务、不被唤醒。磁盘文件不受影响。
                   {unfinishedCount != null ? unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束，需要先处理。</> : <> 没有未结束的任务。</> : <> 未结束任务数读取中。</>}
-                  {unfinishedReadError != null ? <> 最近一次任务数读取失败：{userFacingSystemText(unfinishedReadError ?? '')}（请先到任务看板查看最新状态）。</> : null}
+                  {unfinishedReadError != null ? <> 最近一次任务数读取失败：{userFacingSystemText(unfinishedReadError ?? '')}；请先到任务看板查看最新状态。</> : null}
                 </div>
               </div>
               <button className="btn sm" disabled={Boolean(project.archivedAt)} onClick={() => setArchiveOpen(true)}>
@@ -449,12 +449,12 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                   setBusy(true);
                   void projectLifecycleReal(targetId, project.revision, 'archive').then((r) => {
                     if (!mounted.current || routeGeneration !== routeIdentity.current.generation || targetId !== routeIdentity.current.id) {
-                      toast(`「${targetName}」归档${r.ok ? '完成' : `失败：${r.error}`}（当前页面已切换/关闭）`, r.ok ? 'info' : 'error');
+                      toast(`「${targetName}」归档${r.ok ? '完成' : `失败：${r.error}`}；当前页面已切换或关闭`, r.ok ? 'info' : 'error');
                       return;
                     }
                     setBusy(false);
                     setArchiveOpen(false);
-                    if (r.ok) { toast('项目已归档（历史保留只读）——可在项目设置的归档管理中恢复', 'success'); navigate(`/project/${targetId}`); }
+                    if (r.ok) { toast('项目已归档，历史保留只读；可在项目设置的归档管理中恢复', 'success'); navigate(`/project/${targetId}`); }
                     else toast(`归档被拒：${userFacingSystemText(r.error ?? '')}`, 'error');
                   });
                 }}
@@ -491,7 +491,7 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                     setBusy(false);
                     setRemoveOpen(false);
                     if (r.ok) {
-                      toast('「' + targetName + '」已移除关联（磁盘与历史不动；重新打开同目录即可恢复）', 'success');
+                      toast('「' + targetName + '」已移除关联；磁盘与历史不动，重新打开同目录即可恢复', 'success');
                       navigate('/welcome');
                     } else {
                       toast('移除被拒：' + userFacingSystemText(r.error ?? ''), 'error');
@@ -531,12 +531,12 @@ export function ProjectSettingsPage({ projectId }: { projectId: string; query: R
                   setBusy(true);
                   void stopAllProjectReal(targetId).then((r) => {
                     if (!mounted.current || routeGeneration !== routeIdentity.current.generation || targetId !== routeIdentity.current.id) {
-                      toast(`「${targetName}」全停完成（当前页面已切换/关闭）：停止 ${r.stopped} 个；失败 ${r.failed.length} 个`, r.failed.length > 0 ? 'warn' : 'info');
+                      toast(`「${targetName}」全停完成；当前页面已切换或关闭。停止 ${r.stopped} 个；失败 ${r.failed.length} 个`, r.failed.length > 0 ? 'warn' : 'info');
                       return;
                     }
                     setBusy(false);
                     setStopAllOpen(false);
-                    toast(`项目全停完成：停止 ${r.stopped} 个${r.failed.length > 0 ? `；失败 ${r.failed.length} 个（${r.failed.slice(0, 3).join('；')}）` : ''}`, r.failed.length > 0 ? 'warn' : 'success');
+                    toast(`项目全停完成：停止 ${r.stopped} 个${r.failed.length > 0 ? `；失败 ${r.failed.length} 个，失败项：${r.failed.slice(0, 3).map((x) => userFacingSystemText(x)).join('；')}` : ''}`, r.failed.length > 0 ? 'warn' : 'success');
                   });
                 }}
               >

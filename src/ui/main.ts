@@ -105,12 +105,22 @@ function resolveWindowIconPath(): string | null {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
+/** main 显示层的最小清洗：去掉错误码前缀与括号说明（与中央清洗同口径；mainTrayLifecycleR152
+ *  的依赖白名单不允许 main.ts 新增 contracts 导入，故在此保留等价的最小实现）。 */
+function userFacingDisplayText(value: string): string {
+  let text = value.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '').replace(/^Error:\s*/, '');
+  text = text.replace(/^(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|ERROR)\s*[:：]\s*/, '');
+  let previous = '';
+  while (previous !== text) { previous = text; text = text.replace(/（[^（）]*）/g, '').replace(/\([^()]*\)/g, ''); }
+  return text.replace(/[（(]\s*[）)]/g, '').replace(/\s+([，。；：、！？])/g, '$1').trim();
+}
+
 async function failDesktopStartup(error: unknown): Promise<void> {
   if (startupFailureShown) return;
   startupFailureShown = true;
   const detail = error instanceof Error ? error.message : String(error);
   process.stderr.write(`[zhongshuo-ui] 启动失败：${detail}\n`);
-  if (installedDesktop) await dialog.showMessageBox({ type: 'error', title: '众说无法启动', message: '没有打开众说。', detail: `${detail}\n\n诊断日志：${startupLog ?? '日志目录不可写'}`, buttons: ['关闭'], noLink: true });
+  if (installedDesktop) await dialog.showMessageBox({ type: 'error', title: '众说无法启动', message: '没有打开众说。', detail: `${userFacingDisplayText(detail)}\n\n诊断日志：${startupLog ?? '日志目录不可写'}`, buttons: ['关闭'], noLink: true });
   if (daemonAuthed && ownsRunningDaemon()) await shutdownDaemon();
   else if (daemonProcess != null && daemonProcess.exitCode == null) daemonProcess.kill();
   app.exit(1);
@@ -186,7 +196,7 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
     // 状态继续（空管道重连永远失败=挂死窗口，比明确退出更糟）。
     if (!daemonShuttingDown && code !== 0) {
       process.stderr.write('[zhongshuo-ui] daemon 异常退出——应用退出（明确失败，不降级）\n');
-      void failDesktopStartup(Error(`后台服务异常退出（${code}）。请查看诊断日志中的具体原因。`));
+      void failDesktopStartup(Error(`后台服务异常退出，退出码 ${code}。请查看诊断日志中的具体原因。`));
     }
   });
   daemonProcess.once('close', () => { daemonClosed = true; });
@@ -356,7 +366,7 @@ if (!ownsDesktopInstance || installedConfigurationError != null) {
     reconcileInterruptedDataOperation(baseDataRoot);
     const active = readActiveDataOperation(baseDataRoot);
     if (active != null && processAlive(active.workerPid)) {
-      throw Error('DATA_OPERATION_IN_PROGRESS：有一项数据操作正在进行，完成前不会打开这份数据。');
+      throw Error('有一项数据操作正在进行，完成前不会打开这份数据。');
     }
     appDataDir = readDataLocation(baseDataRoot);
   } catch (error) {
@@ -381,10 +391,10 @@ const readyAbort = new AbortController();
 
 async function ensureConnection(): Promise<void> {
   if (pipe != null && !pipe.closed) return;
-  if (daemonPipe.length === 0) throw new Error('daemon 未启动（管道名未定）');
-  if (spawnError != null) throw new Error(`daemon 启动失败：${spawnError}`);
+  if (daemonPipe.length === 0) throw new Error('后台服务尚未就绪，请稍后重试');
+  if (spawnError != null) throw new Error(`后台服务启动失败：${spawnError}`);
   const exitFacts = readDaemonExitFacts();
-  if (exitFacts != null && !daemonShuttingDown) throw new Error(`daemon 已退出（code=${exitFacts.code}）——连接不可用`);
+  if (exitFacts != null && !daemonShuttingDown) throw new Error(`后台服务已退出，退出码 ${exitFacts.code}；连接不可用`);
   // 并发共享：同一段时间内所有请求等同一次连接过程（不各自重试放大负载）。
   if (connectInFlight != null) return connectInFlight;
   const deadline = performance.now() + READY_DEADLINE_MS;
@@ -393,7 +403,7 @@ async function ensureConnection(): Promise<void> {
     for (;;) {
       if (performance.now() > deadline) break;
       const ex = readDaemonExitFacts();
-      if (ex != null && !daemonShuttingDown) throw new Error(`daemon 启动中退出（code=${ex.code}）——连接中止`);
+      if (ex != null && !daemonShuttingDown) throw new Error(`后台服务启动中退出，退出码 ${ex.code}；连接中止`);
       try {
         // 剩余时间传入连接/握手时限（第二十二轮三）：最后一次握手不额外超出截止。
         pipe = await connectPipe(daemonPipe, {
@@ -410,12 +420,12 @@ async function ensureConnection(): Promise<void> {
         connectionMonitor.connected();
         return;
       } catch (error) {
-        if (readyAbort.signal.aborted) throw new Error(`daemon 连接已取消（应用退出/关停）：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+        if (readyAbort.signal.aborted) throw new Error(`后台服务连接已取消，应用正在退出或关停：${error instanceof Error ? error.message : String(error)}`, { cause: error });
         lastError = error;
         await new Promise((r) => setTimeout(r, 250));
       }
     }
-    throw lastError instanceof Error ? lastError : new Error(`daemon 连接截止超时（${READY_DEADLINE_MS}ms）`);
+    throw lastError instanceof Error ? lastError : new Error(`后台服务连接超时，等待 ${READY_DEADLINE_MS} 毫秒`);
   })().finally(() => { connectInFlight = null; });
   return connectInFlight;
 }
@@ -503,7 +513,7 @@ const desktopLifecycle = new WindowsTrayLifecycle({
     // Unparented: the error remains visible even when the window is minimized.
     void dialog.showMessageBox({
       type: 'error', title: '众说', message: '托盘或退出操作未完成。',
-      detail: `窗口将保留在任务栏；请重新打开窗口后重试。\n${error instanceof Error ? error.message : String(error)}`,
+      detail: `窗口将保留在任务栏；请重新打开窗口后重试。\n${userFacingDisplayText(error instanceof Error ? error.message : String(error))}`,
       buttons: ['确定'], noLink: true,
     });
   },
@@ -693,12 +703,12 @@ let dataOperationStarting = false;
   ipcMain.handle('zs:openPath', async (event, target: unknown) => {
     assertTrustedSender(event);
     // 导出目录打开（第三十轮五）：仅允许应用数据区 exports/ 内路径——外部任意路径不打开。
-    if (typeof target !== 'string' || target.length === 0) throw new Error('openPath 需要路径');
+    if (typeof target !== 'string' || target.length === 0) throw new Error('打开路径需要提供具体路径');
     const resolved = resolve(String(target));
     const exportsRoot = resolve(join(appDataDir, 'exports'));
     const sep2 = sep;
     if (resolved !== exportsRoot && !resolved.startsWith(exportsRoot + sep2)) {
-      throw new Error(`仅允许打开导出目录（${exportsRoot}）内的路径`);
+      throw new Error(`仅允许打开导出目录 ${exportsRoot} 内的路径`);
     }
     const { shell } = await import('electron');
     shell.showItemInFolder(join(resolved, '.'));
@@ -817,7 +827,7 @@ let dataOperationStarting = false;
     // 无边框窗口（第五十四轮 H3 §3）：默认自绘标题栏接管外壳；--no-hifi（legacy 专项对照，
     // 无自绘栏）保留系统原生框——窗口控制不因换装失败/对照模式失去可达性。
     frame: process.argv.includes('--no-hifi'),
-    ...(simMode ? { title: '众说（模拟验证模式——真实派发已防护，不会发出真实模型请求）' } : {}),
+    ...(simMode ? { title: '众说 · 模拟验证模式：真实派发已防护，不会发出真实模型请求' } : {}),
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -942,10 +952,10 @@ let dataOperationStarting = false;
     assertTrustedSender(event);
     const p = payload as { suggestedName?: unknown; contentBase64?: unknown };
     if (typeof p?.suggestedName !== 'string' || p.suggestedName.length === 0) {
-      throw new Error('另存为参数无效（文件名不能为空）');
+      throw new Error('另存为参数无效：文件名不能为空');
     }
     if (typeof p?.contentBase64 !== 'string') {
-      throw new Error('另存为参数无效（contentBase64 缺失）');
+      throw new Error('另存为参数无效：文件内容缺失');
     }
     // suggestedName 只作默认文件名：统一清洗路径字符和 Windows 非法名称。
     const {safeFilename}=await import('../contracts/safeFilename.ts');
@@ -1135,7 +1145,7 @@ async function startDataOperationFromUi(action: 'backup'|'import', win: BrowserW
     if (destinationParent == null) return { ok: false as const, cancelled: true as const };
     return launchDataJob({ action, currentRoot, selectedSource: currentRoot, destinationParent });
   }
-  const selectedSource = await pickDataDirectory(win, '选择已有的众说数据（旧包、数据文件夹或完整备份）');
+  const selectedSource = await pickDataDirectory(win, '选择已有的众说数据，可以是旧包、数据文件夹或完整备份');
   if (selectedSource == null) return { ok: false as const, cancelled: true as const };
   const destinationParent = await pickDataDirectory(win, '选择保存新数据副本的位置');
   if (destinationParent == null) return { ok: false as const, cancelled: true as const };
@@ -1147,14 +1157,14 @@ async function showStartupDataLocationFailure(message: string): Promise<void> {
     type: 'error',
     title: '无法打开保存的数据位置',
     message: '上次选择的数据文件夹不可用。',
-    detail: `${message}\n\n不会自动打开空数据，也不会改动原数据。请选择已有的数据文件夹或完整备份；新副本验证完成后才会切换。`,
+    detail: `${userFacingDisplayText(message)}\n\n不会自动打开空数据，也不会改动原数据。请选择已有的数据文件夹或完整备份；新副本验证完成后才会切换。`,
     buttons: ['选择已有数据', '退出'],
     defaultId: 0,
     cancelId: 1,
     noLink: true,
   });
   if (answer.response !== 0) { app.quit(); return; }
-  const selectedSource = await pickDataDirectory(null, '选择已有的众说数据（旧包、数据文件夹或完整备份）');
+  const selectedSource = await pickDataDirectory(null, '选择已有的众说数据，可以是旧包、数据文件夹或完整备份');
   const destinationParent = selectedSource == null ? null : await pickDataDirectory(null, '选择保存新数据副本的位置');
   if (selectedSource == null || destinationParent == null) { app.quit(); return; }
   let currentRoot = selectedSource;
@@ -1163,7 +1173,7 @@ async function showStartupDataLocationFailure(message: string): Promise<void> {
     await launchDataJob({action:'import',currentRoot,selectedSource,destinationParent});
     app.quit();
   } catch (error) {
-    await dialog.showMessageBox({type:'error',title:'无法开始数据恢复',message:'数据没有切换。',detail:error instanceof Error?error.message:String(error),buttons:['退出'],noLink:true});
+    await dialog.showMessageBox({type:'error',title:'无法开始数据恢复',message:'数据没有切换。',detail:userFacingDisplayText(error instanceof Error?error.message:String(error)),buttons:['退出'],noLink:true});
     app.quit();
   }
 }
@@ -1173,11 +1183,11 @@ function dataProgressText(status: DataJobStatus | null, action: DataCopyJob['act
   if (status.state === 'waiting-close') return {title:'正在等待众说完全关闭',body:'关闭完成后才会读取数据；不会强制结束任务。',tone:'wait'};
   if (status.state === 'copying') {
     const p=status.progress;
-    return {title:'正在复制完整数据',body:p == null ? '正在读取文件…' : `已复制 ${p.files}/${p.totalFiles} 个文件 · ${Math.floor(p.bytes/1048576)}/${Math.max(1,Math.ceil(p.totalBytes/1048576))} MB`,tone:'work'};
+    return {title:'正在复制完整数据',body:p == null ? '正在读取文件…' : `已复制 ${p.files}/${p.totalFiles} 个文件 · ${Math.floor(p.bytes/1048576)}/${Math.max(1,Math.ceil(p.totalBytes/1048576))} 兆字节`,tone:'work'};
   }
   if (status.state === 'succeeded') return {title:'数据操作完成',body:action === 'import' ? '新副本已验证；众说将使用新的数据位置重新打开。' : '完整备份已验证；原件保持不动。',tone:'ok'};
-  if (status.state === 'failed') return {title:'数据操作未完成',body:status.error ?? '原件保留，请回到众说查看下一步。',tone:'bad'};
-  return {title:'上次数据操作未确认完成',body:status.error ?? '原数据位置没有切换；未完成的副本已保留。',tone:'bad'};
+  if (status.state === 'failed') return {title:'数据操作未完成',body:(status.error == null ? null : userFacingDisplayText(status.error)) ?? '原件保留，请回到众说查看下一步。',tone:'bad'};
+  return {title:'上次数据操作未确认完成',body:(status.error == null ? null : userFacingDisplayText(status.error)) ?? '原数据位置没有切换；未完成的副本已保留。',tone:'bad'};
 }
 
 async function showDataProgressWindow(jobFile: string): Promise<void> {

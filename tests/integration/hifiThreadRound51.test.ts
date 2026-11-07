@@ -305,7 +305,7 @@ describe('第五十一轮 H2：回复串/任务详情/附件/深链（真实链�
       // ── task.stop 绑定：无活跃 run → 明确失败（不伪造停止） ──
       const stopNone = await h.bundle.loader.stopThreadTask(th.id);
       expect(stopNone.ok).toBe(false);
-      expect(stopNone.error).toContain('已终态'); // DONE 后不再伪造停止入口
+      expect(stopNone.error).toContain('任务已结束'); // DONE 后不再伪造停止入口
     } finally {
       h.close();
     }

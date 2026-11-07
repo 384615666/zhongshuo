@@ -1,4 +1,5 @@
 import type {TaskExecutionBlocker} from '../../../contracts/executionBlockers';
+import {userFacingSystemText} from '../../../contracts/userFacingText';
 import {ContinueTaskButton} from './ContinueTaskButton';
 
 /** Root-card recovery action and evidence; no guessed room number for DM tasks. */
@@ -12,7 +13,7 @@ export function ExecutionWaitActions({blocker,taskId,projectId}: {blocker: TaskE
       ? <ContinueTaskButton key={`${taskId}:${blocker.blockingTurnId}`} className="btn ghost sm" projectId={projectId} binding={{taskId}}/>
       : blockingTaskId ? <a className="btn ghost sm" href={`#task=${blockingTaskId}`}>查看上次任务</a> : null
       : null}
-    <details><summary>诊断详情</summary><div>{blocker.note}</div>
+    <details><summary>诊断详情</summary><div>{userFacingSystemText(blocker.note)}</div>
     </details>
   </div>;
 }

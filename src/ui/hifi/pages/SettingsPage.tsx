@@ -535,7 +535,7 @@ export function CallBudgetSettingsRow() {
           className="small faint"
           data-zs-call-budget-defaults={`DIRECT:${DEFAULT_CALL_BUDGET_LIMITS.DIRECT},AUTO:${DEFAULT_CALL_BUDGET_LIMITS.AUTO},DELIBERATE:${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}`}
         >
-          默认上限：单人执行 {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次 · 自动协作 {DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次 · 双人独立研讨 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次（随人数调整）
+          默认上限：单人执行 {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次 · 自动协作 {DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次 · 双人独立研讨 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次，随人数调整
         </div>
       </SettingsRow>
       {readError != null ? (
@@ -604,7 +604,7 @@ function SectionData() {
     if (!r.ok) { toast(userFacingSystemText(r.error ?? '清理失败'), 'error'); return; }
     if (!r.hadKey) { setCleared('没有已保存的草稿'); toast('没有已保存的草稿', 'info'); return; }
     recordWrite('drafts.clear', `清空本地草稿（内存与保存快照同步清除；未确认发送保留保护）`);
-    setCleared(`${new Date().toLocaleTimeString()} 已清除本地草稿（之后输入会重新保存）`);
+    setCleared(`${new Date().toLocaleTimeString()} 已清除本地草稿，之后输入会重新保存`);
     toast('本地草稿已清除', 'success');
   };
   const legacy = draftPersist.legacyImport;
@@ -615,14 +615,14 @@ function SectionData() {
       if (!r.ok) { toast(userFacingSystemText(r.error ?? '导入失败'), 'error'); return; }
       const o = r.outcome;
       const refusedCount = o?.refusedVersions.length ?? 0;
-      toast(`已从 ${dir} 导入旧草稿 ${o?.mergedDrafts ?? 0} 条、待确认发送 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、跳过不支持的 ${refusedCount} 个来源（原文件保留）` : ''}——原文件不动`, 'success');
+      toast(`已从 ${dir} 导入旧草稿 ${o?.mergedDrafts ?? 0} 条、待确认发送 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、跳过不支持的 ${refusedCount} 个来源，原文件保留` : ''}——原文件不动`, 'success');
       recordWrite('draft.inherit', `用户确认导入旧目录 ${dir}（原文件保留）`);
     } finally { setImportBusy(null); }
   };
   return (
     <SectionShell section="data" title="数据与存储" sub="数据位置、备份、草稿与归档。" cardAttrs={{ 'data-zs-data-guide': '1' }}>
       <SettingsGroup title="数据位置与备份">
-        <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '（读取中…）'} />
+        <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '读取中…'} />
         <SettingsRow id="备份全部数据" label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
           <button className="btn primary sm" disabled={dataOpBusy != null} data-zs-data-backup="1" onClick={() => void startDataOp('backup')}>
             <Icon name="download" size={13} /> {dataOpBusy === 'backup' ? '正在准备…' : '备份全部数据'}
@@ -647,18 +647,18 @@ function SectionData() {
         } />
       </SettingsGroup>
       <SettingsGroup title="草稿">
-        <SettingsRow id="草稿保存" label="草稿保存" hint="草稿和未确认发送的保存状态（刷新或崩溃后仍保留；普通草稿 24 小时过期）">
+        <SettingsRow id="草稿保存" label="草稿保存" hint="草稿和未确认发送的保存状态；刷新或崩溃后仍保留，普通草稿 24 小时过期">
           <div className="small" style={{ lineHeight: 1.7 }}>
             {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
-            {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定（草稿已保留、不会被覆盖；发送暂不可用）</Tag> : null}
-            {draftPersist.mode === 'off' ? <Tag tone="warning" icon="alert-triangle">不可用（{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}）</Tag> : null}
-            {draftPersist.mode === 'on' && draftPersist.error != null ? <Tag tone="warning" icon="alert-triangle">写入失败（{userFacingSystemText(draftPersist.error ?? '')}）</Tag> : null}
+            {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定：草稿已保留、不会被覆盖；发送暂不可用</Tag> : null}
+            {draftPersist.mode === 'off' ? <Tag tone="warning" icon="alert-triangle">不可用：{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}</Tag> : null}
+            {draftPersist.mode === 'on' && draftPersist.error != null ? <Tag tone="warning" icon="alert-triangle">写入失败：{userFacingSystemText(draftPersist.error ?? '')}</Tag> : null}
           </div>
         </SettingsRow>
         {draftPersist.recoveryNote != null ? (
           <div className="small faint settings-note" data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div>
         ) : null}
-        <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿（不可恢复）" control={
+        <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿，不可恢复" control={
           <div className="row tight">
             <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试保存</button>
             <button className="btn sm" disabled={draftPersist.mode==='locked'} onClick={()=>setClearConfirm(true)}>清理本地草稿</button>
@@ -666,7 +666,7 @@ function SectionData() {
         } />
         {clearConfirm?<Modal title="清理本地草稿" onClose={()=>setClearConfirm(false)} footer={<><button className="btn" onClick={()=>setClearConfirm(false)}>取消</button><button className="btn primary" onClick={clearDrafts}>确认清理</button></>}><p>将清除当前数据目录的本地草稿，无法恢复。发送结果尚未确认或处于保全锁定时会拒绝清理。</p></Modal>:null}
         <SettingsRow label="清理存储" hint="回收七天前无引用的变更前像、清理九十天前的回执正文；保留历史、撤销与防重复记录" control={<button className="btn sm" disabled={cleanupBusy} onClick={()=>{
-          setCleanupBusy(true);void command<{reclaimedBytes:number;expiredReceipts:number;skippedActive:boolean}>('app.storage.cleanup',{}).then(r=>setCleanupResult(r.skippedActive?'仍有执行或待核对占用，请结束后重试':`已释放 ${(r.reclaimedBytes/1024/1024).toFixed(1)} MB，清理 ${r.expiredReceipts} 条过期回执正文`)).catch(e=>toast(userFacingSystemText(e.message),'error')).finally(()=>setCleanupBusy(false));
+          setCleanupBusy(true);void command<{reclaimedBytes:number;expiredReceipts:number;skippedActive:boolean}>('app.storage.cleanup',{}).then(r=>setCleanupResult(r.skippedActive?'仍有执行或待核对占用，请结束后重试':`已释放 ${(r.reclaimedBytes/1024/1024).toFixed(1)} 兆字节，清理 ${r.expiredReceipts} 条过期回执正文`)).catch(e=>toast(userFacingSystemText(e.message),'error')).finally(()=>setCleanupBusy(false));
         }}>{cleanupBusy?'清理中…':'清理存储'}</button>}/>
         {cleanupResult?<div className="small faint settings-note">{cleanupResult}</div>:null}
         {cleared != null ? <div className="small faint settings-note">{cleared}</div> : null}
@@ -716,7 +716,7 @@ function SectionData() {
             <ArchiveManager embedded />
           </div>
         </SettingsRow>
-        <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目" control={
+        <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除只解除应用里的关联，磁盘与历史不动；在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目" control={
           <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
         } />
       </SettingsGroup>
@@ -727,7 +727,7 @@ function SectionData() {
 /* ============================================================ 分区：帮助与关于 ============================================================ */
 
 const APP_LINKS: Array<{ target: AppLinkTarget; row: string; label: string; hint: string; action: string }> = [
-  { target: 'manual', row: 'open-manual', label: '操作手册', hint: '用系统默认浏览器打开随程序附带的离线手册（与当前版本一致）', action: '打开手册' },
+  { target: 'manual', row: 'open-manual', label: '操作手册', hint: '用系统默认浏览器打开随程序附带的离线手册，内容与当前版本一致', action: '打开手册' },
   { target: 'github', row: 'open-github', label: 'GitHub 仓库', hint: 'https://github.com/384615666/zhongshuo', action: '打开 GitHub' },
   { target: 'homepage', row: 'open-homepage', label: '产品主页', hint: 'https://zhongshuo.lsjx.xyz', action: '打开主页' },
 ];
@@ -770,7 +770,7 @@ function SectionHelp() {
       </SettingsGroup>
       <SettingsGroup title="版本">
         <ReadOnlyRow id="版本与构建" label="应用" value="众说 · 本地多成员协作工作台" />
-        <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />
+        <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '读取中…'} />
       </SettingsGroup>
       <SettingsGroup title="诊断">
         {/* LocalDiagnostics 自带 .card：在卡片内摊平，避免卡中卡。 */}

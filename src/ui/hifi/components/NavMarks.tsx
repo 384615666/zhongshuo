@@ -48,7 +48,7 @@ const STATE_COPY: Record<NavTaskState, { label: string; icon: IconName; hint: st
  */
 function titleOf(summary: NavTaskStateSummary): string {
   const text = summary.counts.map((c) => `${STATE_COPY[c.state].label} ${c.count} 个`).join(' · ');
-  if (summary.counts.length === 1 && summary.state) return `${text}（${STATE_COPY[summary.state].hint}）`;
+  if (summary.counts.length === 1 && summary.state) return `${text}，${STATE_COPY[summary.state].hint}`;
   return text;
 }
 
@@ -85,7 +85,7 @@ export function NavTaskMark({
  */
 export function NavUnreadDot({ count, where, hint }: { count: number; where: string; hint?: string }) {
   if (count <= 0) return null;
-  const text = hint ? `${hint}（共 ${count} 条未读）` : `${count} 条未读`;
+  const text = hint ? `${hint}，共 ${count} 条未读` : `${count} 条未读`;
   return <span className="side-unread-dot" title={text} aria-label={`${where}：${text}`} />;
 }
 

@@ -25,7 +25,7 @@ import {
   audienceAllows, openedFromAddsInfo, originLabel,
   resourceOf, revisionLabel, revisionOf as revOf,
 } from '../lib/resource';
-import { formatBytes, fullTime } from '../lib/format';
+import { formatByteSize, fullTime } from '../lib/format';
 import { command } from '../bridge';
 import type { ContextTarget, PreviewResource, ResourceRevision } from '../data/types';
 import { MarkdownView } from './MarkdownView';
@@ -105,7 +105,7 @@ function PreviewNavControl({
         icon="arrow-left"
         label="对话"
         ariaLabel="返回对话"
-        title="返回对话（预览标签与阅读位置保留）"
+        title="返回对话，预览标签与阅读位置保留"
         onClick={onBackToContext}
       />
     );
@@ -116,7 +116,7 @@ function PreviewNavControl({
       icon="chevron-right"
       label="收起预览"
       ariaLabel="收起预览区"
-      title="收起预览区：保留全部标签与阅读位置，稍后可重开（不会关闭文件）"
+      title="收起预览区：保留全部标签与阅读位置，稍后可重开，不会关闭文件"
       onClick={onCollapse}
     />
   );
@@ -380,39 +380,39 @@ export function PreviewPane({
         const r = await command<{ filename: string | null; hash: string; bytes: number; bytesBase64: string }>('attachment.originalFile', { attachmentId: fa.attachmentId, conversationId: fa.conversationId ?? '' });
         name = r.filename ?? resource.title;
         contentBase64 = r.bytesBase64;
-        fact = `原件 ${r.bytes}B`;
+        fact = `原件 ${formatByteSize(r.bytes)}`;
       } else if (isWorktree) {
         const snap = worktreeSnapshots.get(`${resource.id}:${active.revision}`);
-        if (snap == null) { toast('这份工作区文件的读取内容不可用（重新打开文件后再保存）', 'warn'); return; }
-        if (resource.mutable && active.pendingRevision) { toast('磁盘上的文件已更新——请先点上方「重新加载」再保存（不静默另存新字节）', 'warn'); return; }
+        if (snap == null) { toast('这份工作区文件的读取内容不可用，请重新打开文件后再保存', 'warn'); return; }
+        if (resource.mutable && active.pendingRevision) { toast('磁盘上的文件已更新，请先点上方「重新加载」再保存，不会静默另存新字节', 'warn'); return; }
         contentBase64 = snap.bytesBase64;
-        fact = `原文件 ${snap.bytes}B`;
+        fact = `原文件 ${formatByteSize(snap.bytes)}`;
       } else if (isDelivery) {
         const fd = resource.formalDelivery!;
         const doc = deliveryDocs.get(`${resource.id}:${active.revision}`);
-        if (doc == null || doc.text == null) { toast('这份交付没有可读文档（无正文可保存）', 'warn'); return; }
+        if (doc == null || doc.text == null) { toast('这份交付没有可读文档，无正文可保存', 'warn'); return; }
         const bytes = new TextEncoder().encode(doc.text);
         let bin = '';
         for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
         contentBase64 = btoa(bin);
         name = resource.title.endsWith('.md') ? resource.title : `${resource.title}.md`;
-        fact = `交付文档 v${fd.revision} · ${doc.bytes}B${doc.hashMatch === false ? '（内容与交付记录不同，请查看文件信息）' : ''}`;
+        fact = `交付文档 v${fd.revision} · ${formatByteSize(doc.bytes)}${doc.hashMatch === false ? '；内容与交付记录不同，请查看文件信息' : ''}`;
       } else {
-        toast('这种来源暂不支持保存原文件（会话导出在会话头部菜单）', 'warn');
+        toast('这种来源暂不支持保存原文件；会话导出在会话头部菜单', 'warn');
         return;
       }
       const dl = (window as unknown as { zsDownload?: { saveAs(p: { suggestedName: string; contentBase64: string }): Promise<{ ok: boolean; cancelled?: boolean; path?: string; bytes?: number }> } }).zsDownload;
       if (dl != null) {
         const r = await dl.saveAs({ suggestedName: name, contentBase64 });
         if (r.cancelled === true) { toast('已取消另存为', 'info'); return; }
-        if (!r.ok || r.path == null) { setDownloadError({ resourceId: resource.id, text: '另存为失败（主进程拒绝）；原件保留，可重试' }); return; }
-        toast(`已保存原文件：${r.path}（${fact}）`, 'success');
+        if (!r.ok || r.path == null) { setDownloadError({ resourceId: resource.id, text: '另存为失败，主进程拒绝；原件保留，可重试' }); return; }
+        toast(`已保存原文件：${r.path}；${fact}`, 'success');
       } else {
         const a = document.createElement('a');
         a.href = `data:application/octet-stream;base64,${contentBase64}`;
         a.download = name;
         a.click();
-        toast(`已触发浏览器下载「${name}」（${fact}）`, 'success');
+        toast(`已触发浏览器下载「${name}」；${fact}`, 'success');
       }
     } catch (e: unknown) {
       setDownloadError({ resourceId: resource.id, text: `保存原文件失败：${userFacingSystemText((e as Error).message ?? '')}。原件保留，可重试。` });
@@ -462,7 +462,7 @@ export function PreviewPane({
                 <button
                   className="preview-tab-close"
                   aria-label={`关闭 ${shown}${ver ? ` ${ver}` : ''}`}
-                  title="关闭这个文件（不影响其他标签）"
+                  title="关闭这个文件，不影响其他标签"
                   onClick={() => { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); closePreviewTab(t.key); }}
                 >
                   <Icon name="x" size={10} />
@@ -473,7 +473,7 @@ export function PreviewPane({
         </div>
         <span className="preview-tabs-actions">
           {singleRegion && onBackToContext ? (
-            <button className="preview-icon-btn" title="返回对话（预览标签与阅读位置保留）" aria-label="返回对话" onClick={onBackToContext}>
+            <button className="preview-icon-btn" title="返回对话，预览标签与阅读位置保留" aria-label="返回对话" onClick={onBackToContext}>
               <Icon name="arrow-left" size={13} />
             </button>
           ) : null}
@@ -481,8 +481,8 @@ export function PreviewPane({
             <button
               className="preview-icon-btn"
               title={hiddenCount > 0
-                ? `已打开 ${tabs.length} 个标签，另有 ${hiddenCount} 个在当前上下文不可见（已暂藏）`
-                : `已打开 ${tabs.length} 个标签（标签条放不下，点这里看全部）`}
+                ? `已打开 ${tabs.length} 个标签，另有 ${hiddenCount} 个在当前上下文不可见，已暂藏`
+                : `已打开 ${tabs.length} 个标签，标签条放不下，点这里看全部`}
               aria-label="已打开的文件"
               onClick={(e) => setOpenList(anchorFromElement(e.currentTarget))}
             >
@@ -503,7 +503,7 @@ export function PreviewPane({
           {session.maximized ? (
             <button
               className="preview-icon-btn"
-              title="还原预览大小（回到与对话并排）"
+              title="还原预览大小，回到与对话并排"
               aria-label="还原预览大小"
               aria-pressed
               data-preview-action="restore"
@@ -514,7 +514,7 @@ export function PreviewPane({
           ) : (
             <button
               className="preview-icon-btn"
-              title="放大预览（临时占满内容区，便于细读）"
+              title="放大预览，临时占满内容区，便于细读"
               aria-label="放大预览"
               data-preview-action="maximize"
               onClick={togglePreviewMaximized}
@@ -524,7 +524,7 @@ export function PreviewPane({
           )}
           <button
             className="preview-icon-btn"
-            title="收起预览区（保留全部标签与阅读位置）"
+            title="收起预览区，保留全部标签与阅读位置"
             aria-label="收起预览区"
             data-preview-action="collapse"
             onClick={hidePreview}
@@ -557,7 +557,7 @@ export function PreviewPane({
         {canChooseReading ? (
           <button
             className="btn ghost sm preview-read"
-            title={`切换阅读方式（当前：${viewMode === 'source' ? '源码' : '阅读'}）`}
+            title={`切换阅读方式，当前为${viewMode === 'source' ? '源码' : '阅读'}`}
             onClick={() => setViewMode((v) => (v === 'source' ? 'preview' : 'source'))}
           >
             <Icon name={viewMode === 'source' ? 'align-left' : 'eye'} size={11} />
@@ -631,7 +631,7 @@ export function PreviewPane({
             {targetPath != null ? (
               <>
                 <MenuItem icon="folder" title="在系统文件管理器中选中这个文件" onClick={() => { setTabMenu(null); void revealLocalFile(targetPath).then((r) => { if (!r.ok) toast(`打开文件夹失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}>打开文件夹</MenuItem>
-                <MenuItem icon="external-link" title="用系统默认程序打开这个文件（不会改动内容）" onClick={() => { setTabMenu(null); void openLocalFileDefault(targetPath).then((r) => { if (!r.ok) toast(`打开失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}>按默认程序打开</MenuItem>
+                <MenuItem icon="external-link" title="用系统默认程序打开这个文件，不会改动内容" onClick={() => { setTabMenu(null); void openLocalFileDefault(targetPath).then((r) => { if (!r.ok) toast(`打开失败：${userFacingSystemText(r.error ?? '')}`, 'error'); }); }}>按默认程序打开</MenuItem>
                 <div style={{ height: 1, margin: '4px 6px', background: 'var(--border-subtle)' }} />
               </>
             ) : null}
@@ -648,7 +648,7 @@ export function PreviewPane({
 
       {openList ? (
         <Menu anchor={openList} onClose={() => setOpenList(null)}>
-          <div className="menu-label">已打开的文件（{tabs.length}{hiddenCount > 0 ? ` · ${hiddenCount} 个已暂藏` : ''}）</div>
+          <div className="menu-label">已打开的文件：{tabs.length} 个{hiddenCount > 0 ? `，其中 ${hiddenCount} 个已暂藏` : ''}</div>
           {tabs.map((t) => {
             const r = resourceOf(s, t.resourceId);
             return (
@@ -690,12 +690,12 @@ export function PreviewPane({
             </MenuItem>
           ) : null}
           {canChooseReading ? (
-            <MenuItem icon="align-left" title="长行是否折行显示（只影响源码/纯文本视图）" hint={wrapSource ? '当前：换行' : '当前：不换行'} onClick={() => { setWrapSource((v) => !v); setMoreAt(null); }}>
+            <MenuItem icon="align-left" title="长行是否折行显示，只影响源码和纯文本视图" hint={wrapSource ? '当前：换行' : '当前：不换行'} onClick={() => { setWrapSource((v) => !v); setMoreAt(null); }}>
               {wrapSource ? '取消自动换行' : '自动换行'}
             </MenuItem>
           ) : null}
           {singleRegion ? (
-            <MenuItem icon="chevron-right" title="保留全部标签与阅读位置，稍后可重开（不会关闭文件）" onClick={() => { hidePreview(); setMoreAt(null); }}>收起预览</MenuItem>
+            <MenuItem icon="chevron-right" title="保留全部标签与阅读位置，稍后可重开，不会关闭文件" onClick={() => { hidePreview(); setMoreAt(null); }}>收起预览</MenuItem>
           ) : null}
           <MenuItem icon="x" title="只关闭当前这个标签，其他标签不受影响" onClick={() => { dropLoadedCache(active.resourceId); clearReaderState(active.resourceId); closePreviewTab(active.key); setMoreAt(null); }}>关闭此文件</MenuItem>
           <MenuItem icon="panel-right" title="清空全部标签、退出预览；不会删除磁盘文件" onClick={() => { for (const t of tabs) { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); } closeAllPreviews(); setMoreAt(null); }}>关闭所有文件</MenuItem>
@@ -761,6 +761,15 @@ function flavorByExt(filename: string, formalKind: string): FileFlavor {
   if (formalKind === 'code_file') return 'code';
   if (formalKind === 'text_file' || formalKind === '') return 'text';
   return 'binary';
+}
+
+/** 编码展示名：内部编码标识不上屏（真实检测结果仍保留在数据里）。 */
+function encodingLabel(encoding: string): string {
+  const key = encoding.toLowerCase().replace(/_/g, '-');
+  if (key === 'utf-8' || key === 'utf8') return '通用文本编码';
+  if (key === 'utf-16le' || key === 'utf-16' || key === 'utf-16be') return '双字节文本编码';
+  if (key === 'gb18030' || key === 'gbk' || key === 'gb2312') return '中文编码';
+  return '自动检测编码';
 }
 
 /* ============================================================
@@ -872,7 +881,7 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onDownlo
       </div>
     );
   }
-  if (loaded == null) return <div className="panel info" data-zs-file-loading="1">正在读取文件（只读）…</div>;
+  if (loaded == null) return <div className="panel info" data-zs-file-loading="1">正在读取文件，只读…</div>;
 
   const revLabel = revisionLabel(resource, revision.revision);
   const dl = onDownload;
@@ -926,10 +935,10 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, onDownlo
     return (
       <div className="preview-empty" data-zs-empty-file="1">
         <Icon name="file-text" size={22} className="faint" />
-        <div className="strong" style={{ marginTop: 8 }}>空文件（0 字节）</div>
+        <div className="strong" style={{ marginTop: 8 }}>空文件，0 字节</div>
         <div className="small faint" style={{ marginTop: 4, maxWidth: 420, lineHeight: 1.7 }}>
-          这份文件没有任何内容（0B）——已按原件保存，可另存 0 字节副本。{loaded.encoding ? `编码检测：${loaded.encoding}。` : ''}
-          发送给 AI 不会带上任何可用文本（输入区会提示可行操作）。
+          这份文件没有任何内容，0 字节；已按原件保存，可另存 0 字节副本。{loaded.encoding ? `编码检测：${encodingLabel(loaded.encoding)}。` : ''}
+          发送给 AI 不会带上任何可用文本，输入区会提示可行操作。
         </div>
         <div className="panel-actions">
           <button className="btn sm" onClick={dl}><Icon name="download" size={12} /> 另存 0 字节原件</button>
@@ -955,7 +964,7 @@ function BytesUnavailableView({ reason, onDownload, revLabel }: { reason: string
     <div className="preview-unsupported" data-zs-bytes-unavailable={reason.slice(0, 40)}>
       <Icon name="alert-triangle" size={20} className="faint" />
       <div className="strong" style={{ marginTop: 8 }}>无法读取原件</div>
-      <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{reason}——这份文件（{revLabel}）已保存，可下载原件；提取文字见「文件信息」。</div>
+      <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(reason)}；这份文件 {revLabel} 已保存，可下载原件；提取文字见「文件信息」。</div>
       <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
     </div>
   );
@@ -1013,7 +1022,7 @@ function SourceView({ text, language, wrap }: { text: string; language: string; 
 /** CSV 表格视图（真实 CSV 规则：引号内逗号/换行同格）。 */
 function CsvView({ text }: { text: string }) {
   const rows = useMemo(() => parseCsv(text), [text]);
-  if (rows.length === 0) return <div className="small faint">（空文件）</div>;
+  if (rows.length === 0) return <div className="small faint">空文件</div>;
   const [head, ...body] = rows;
   return (
     <div className="preview-csv-wrap">
@@ -1092,7 +1101,7 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
         <Icon name="file-text" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>这份交付没有可读文档</div>
         <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>
-          这份交付没有可读文档（v{fd.revision}）；验收与引用仍可在「详情」中使用。
+          这份交付第 {fd.revision} 版没有可读文档；验收与引用仍可在「详情」中使用。
         </div>
       </div>
     );
@@ -1105,12 +1114,12 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
   if (viewMode === 'preview' && tc != null) {
     return (
       <div className="preview-read-doc" data-zs-delivery-doc="1">
-        <MarkdownView text={tc.changeSummary ?? '（未提供说明）'} />
+        <MarkdownView text={tc.changeSummary ?? '未提供说明'} />
         {tc.files != null && tc.files.length > 0 ? (
-          <div className="small" style={{ marginTop: 10 }} data-zs-delivery-files="1"><strong>涉及文件（点击打开）</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => (
+          <div className="small" style={{ marginTop: 10 }} data-zs-delivery-files="1"><strong>涉及文件，点击打开</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => (
             <li key={i} className="mono-sm">
               {f}
-              <button className="btn ghost sm" style={{ marginLeft: 6 }} data-zs-delivery-file={f} title="以项目文件打开（只读）" onClick={() => onOpenWorktreeFile(f, 0)}>打开文件</button>
+              <button className="btn ghost sm" style={{ marginLeft: 6 }} data-zs-delivery-file={f} title="以项目文件打开，只读" onClick={() => onOpenWorktreeFile(f, 0)}>打开文件</button>
             </li>
           ))}</ul></div>
         ) : null}
@@ -1160,7 +1169,7 @@ function FileInfoBody({ resource, revision }: { resource: PreviewResource; revis
         {revisionLabel(resource, revision.revision)}
         <span className="faint"> · {resource.mutable ? '随磁盘更新，需手动重新加载' : '固定版本'}</span>
       </dd>
-      <dt>大小</dt><dd>{formatBytes(revision.sizeBytes)}</dd>
+      <dt>大小</dt><dd>{formatByteSize(revision.sizeBytes)}</dd>
       <dt>类型</dt><dd className="mono-sm">{resource.formalAttachment ? KIND_LABEL[resource.formalAttachment.kind] ?? resource.formalAttachment.kind : resource.mimeType}</dd>
       <dt>版本时间</dt><dd>{fullTime(revision.createdAt)}</dd>
       <dt>来源</dt><dd>{originLabel(s, resource)}</dd>
@@ -1183,7 +1192,7 @@ export function PreviewReopenButton({ compact }: { compact?: boolean } = {}) {
     <button
       className="preview-reopen"
       onClick={showPreview}
-      title={`重新打开文件预览（${s.preview.tabs.length} 个标签与阅读位置都还在）`}
+      title={`重新打开文件预览，${s.preview.tabs.length} 个标签与阅读位置都还在`}
       aria-label={`重新打开文件预览，共 ${s.preview.tabs.length} 个标签`}
     >
       <Icon name="panel-right" size={12} />

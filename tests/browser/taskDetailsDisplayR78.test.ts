@@ -61,7 +61,7 @@ describe('R78 run detail rendering', () => {
     expect(html.indexOf('历史运行 · 已定位')).toBeLessThan(html.indexOf('最近运行'));
     expect(html).toContain('工具结束 · 工具活动失败');
     expect(html).toContain('工具 read_1');
-    expect(html).toContain('输入 7 tokens');
+    expect(html).toContain('输入 7 词元');
     expect(html).toContain('工程失败说明，需先修复渠道');expect(html).toContain('等待补充输入 · 请确认输出目录');
     const latestHtml = renderToStaticMarkup(createElement(RunExtraFacts, { detail: detail('REVIEW', [newest, old]) }));
     expect(latestHtml).toContain('仅显示这次运行最近 120 条事件');

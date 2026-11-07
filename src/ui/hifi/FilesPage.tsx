@@ -145,7 +145,7 @@ export function FilesPage() {
       const r = await command<GitDiff>('git.diff', { projectId, staged });
       if (gen !== genRef.current) return;
       setDiff(r);
-    } catch (e) { toast(`diff 失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
+    } catch (e) { toast(`差异读取失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { if (gen === genRef.current) setBusy(false); }
   };
 
@@ -178,8 +178,8 @@ export function FilesPage() {
           {group != null ? (
             <>
               <div className="panel info" style={{ marginTop: 0 }}>
-                <div className="row tight"><strong>项目文件</strong><span className="faint small">（项目根目录一层；文本文件可预览）</span></div>
-                {group.projectFilesNote != null ? <div className="panel warning" style={{ marginTop: 6 }}>{group.projectFilesNote}</div> : null}
+                <div className="row tight"><strong>项目文件</strong><span className="faint small">项目根目录一层，文本文件可预览</span></div>
+                {group.projectFilesNote != null ? <div className="panel warning" style={{ marginTop: 6 }}>{userFacingSystemText(group.projectFilesNote)}</div> : null}
                 <div className="row tight wrap" style={{ marginTop: 6 }}>
                   {group.projectFiles.map((f) => {
                     const isText = !f.dir && TEXT_EXTS.has((f.name.slice(f.name.lastIndexOf('.')).toLowerCase()));
@@ -190,32 +190,32 @@ export function FilesPage() {
                       </span>
                     );
                   })}
-                  {group.projectFiles.length === 0 ? <span className="faint small">（空目录）</span> : null}
+                  {group.projectFiles.length === 0 ? <span className="faint small">空目录</span> : null}
                 </div>
                 {snapshotErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>预览失败：{userFacingSystemText(snapshotErr ?? '')}</div> : null}
                 {snapshot != null ? (
                   <div style={{ marginTop: 8 }}>
-                    <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes}B{snapshot.truncated ? ' · 内容未完整读取' : ''} · 只读</span></div>
+                    <div className="row tight"><strong>{snapshot.name}</strong><span className="faint small">{snapshot.bytes} 字节{snapshot.truncated ? ' · 内容未完整读取' : ''} · 只读</span></div>
                     <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 12, maxHeight: 320, overflow: 'auto', marginTop: 6, border: '1px solid var(--border,#dbe2ea)', padding: 8, background: '#fff' }}>{snapshot.content}</pre>
                   </div>
                 ) : null}
               </div>
               <div className="panel info">
-                <div className="row tight"><strong>托管附件</strong><span className="faint small">（会话附件——点击预览；私信附件仅你可见）</span></div>
+                <div className="row tight"><strong>托管附件</strong><span className="faint small">会话附件，点击预览；私信附件仅你可见</span></div>
                 <div className="row tight wrap" style={{ marginTop: 6 }}>
                   {group.attachments.map((a) => (
-                    <span key={a.attachmentId} className="chip mono" title={`${a.filename} · ${KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · ${a.audience === 'dm' ? '私信（仅本人可见）' : '房间'}`}>
+                    <span key={a.attachmentId} className="chip mono" title={`${a.filename} · ${KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · ${a.audience === 'dm' ? '私信，仅本人可见' : '房间'}`}>
                       <Icon name="paperclip" size={11} />
                       {a.filename}
                       {a.audience === 'dm' ? <Tag tone="neutral">私信</Tag> : null}
                       <button onClick={() => openPreview({ attachmentId: a.attachmentId, filename: a.filename, kind: a.kind, conversationId: a.conversationId, origin: a.audience === 'dm' ? '私信附件' : '房间附件', hashHint: a.hash, revisionHint: a.revision })}>预览</button>
                     </span>
                   ))}
-                  {group.attachments.length === 0 ? <span className="faint small">（暂无）</span> : null}
+                  {group.attachments.length === 0 ? <span className="faint small">暂无</span> : null}
                 </div>
               </div>
               <div className="panel info">
-                <div className="row tight"><strong>Agent 草稿</strong><span className="faint small">（点击定位到任务）</span></div>
+                <div className="row tight"><strong>AI 成员草稿</strong><span className="faint small">点击定位到任务</span></div>
                 <div style={{ marginTop: 6 }}>
                   {group.drafts.map((d) => (
                     <button key={d.changeSetId} className="root-card" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }} onClick={() => locate(d.locate)}>
@@ -223,11 +223,11 @@ export function FilesPage() {
                       <span className="faint small"> · {DRAFT_STATUS_LABEL[d.applicationStatus] ?? d.applicationStatus}</span>
                     </button>
                   ))}
-                  {group.drafts.length === 0 ? <span className="faint small">（暂无）</span> : null}
+                  {group.drafts.length === 0 ? <span className="faint small">暂无</span> : null}
                 </div>
               </div>
               <div className="panel info">
-                <div className="row tight"><strong>交付成果</strong><span className="faint small">（点击定位到交付验收）</span></div>
+                <div className="row tight"><strong>交付成果</strong><span className="faint small">点击定位到交付验收</span></div>
                 <div style={{ marginTop: 6 }}>
                   {group.deliveries.map((d) => (
                     <button key={d.deliveryId} className="root-card" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }} onClick={() => locate(d.locate)}>
@@ -235,7 +235,7 @@ export function FilesPage() {
                       <span className="faint small"> · v{d.revision}{d.reviewedAt != null ? ` · 已复核 ${new Date(d.reviewedAt).toLocaleString()}` : ' · 待验收'}{d.audience === 'dm' ? ' · 私信' : ''}</span>
                     </button>
                   ))}
-                  {group.deliveries.length === 0 ? <span className="faint small">（暂无）</span> : null}
+                  {group.deliveries.length === 0 ? <span className="faint small">暂无</span> : null}
                 </div>
               </div>
             </>
@@ -244,15 +244,15 @@ export function FilesPage() {
       ) : (
         <>
           {git == null ? <div className="panel info">{busy ? '正在读取仓库状态…' : '尚未读取'}</div> : git.ok === false ? (
-            <div className="panel warning">仓库状态不可用：{git.message}</div>
+            <div className="panel warning">仓库状态不可用：{userFacingSystemText(git.message)}</div>
           ) : (
             <>
               <div className="panel info" style={{ marginTop: 0 }}>
-                <div className="row tight"><strong>分支 {git.branch}</strong>{git.projectRootIsWorktreeRoot ? null : <span className="faint small">（仓库根：{git.worktreeRoot}）</span>}</div>
-                <div className="faint small" style={{ marginTop: 4 }}>暂存 {git.staged.length} · 未暂存 {git.unstaged.length} · 未跟踪 {git.untracked.length}{git.truncated ? '（状态条目超限已截断）' : ''}</div>
+                <div className="row tight"><strong>分支 {git.branch}</strong>{git.projectRootIsWorktreeRoot ? null : <span className="faint small">仓库根：{git.worktreeRoot}</span>}</div>
+                <div className="faint small" style={{ marginTop: 4 }}>暂存 {git.staged.length} · 未暂存 {git.unstaged.length} · 未跟踪 {git.untracked.length}{git.truncated ? '，状态条目超限已截断' : ''}</div>
                 <div className="row tight" style={{ marginTop: 6 }}>
-                  <button className="btn ghost sm" disabled={busy} onClick={() => void loadDiff(false)}>未暂存 diff</button>
-                  <button className="btn ghost sm" disabled={busy} onClick={() => void loadDiff(true)}>已暂存 diff</button>
+                  <button className="btn ghost sm" disabled={busy} onClick={() => void loadDiff(false)}>未暂存差异</button>
+                  <button className="btn ghost sm" disabled={busy} onClick={() => void loadDiff(true)}>已暂存差异</button>
                   <button className="btn ghost sm" title="在原有界面执行暂存、提交、推送" onClick={() => takeLegacy('git')}>在原界面执行 Git 操作</button>
                 </div>
               </div>
@@ -277,16 +277,16 @@ export function FilesPage() {
               {diff != null ? (
                 <div className="panel info">
                   <div className="row tight">
-                    <strong>diff 正文</strong>
+                    <strong>差异正文</strong>
                     {diff.truncatedOverall ? <Tag tone="warning" icon="alert-triangle">部分截断/省略</Tag> : null}
-                    {diff.filesOmitted != null && diff.filesOmitted > 0 ? <span className="faint small">未读取正文 {diff.filesOmitted} 项（文件名仍列出）</span> : null}
+                    {diff.filesOmitted != null && diff.filesOmitted > 0 ? <span className="faint small">未读取正文 {diff.filesOmitted} 项，文件名仍列出</span> : null}
                   </div>
                   {diff.patches.map((p) => (
                     <div key={p.path + p.change} style={{ marginTop: 8 }}>
                       <div className="row tight">
                         <Tag tone="neutral">{p.change}</Tag>
                         <span className="mono small" style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.oldPath != null ? `${p.oldPath} → ${p.path}` : p.path}</span>
-                        {p.stat === 'binary' ? <Tag tone="info">二进制（无文本差异）</Tag> : p.stat === 'unknown' ? <Tag tone="neutral">统计不可用</Tag> : p.addedCount != null || p.deletedCount != null ? <span className="faint small">+{p.addedCount ?? 0}/-{p.deletedCount ?? 0}</span> : null}
+                        {p.stat === 'binary' ? <Tag tone="info">二进制，无文本差异</Tag> : p.stat === 'unknown' ? <Tag tone="neutral">统计不可用</Tag> : p.addedCount != null || p.deletedCount != null ? <span className="faint small">+{p.addedCount ?? 0}/-{p.deletedCount ?? 0}</span> : null}
                         {p.truncated ? <Tag tone="warning">单文件截断</Tag> : null}
                         {p.source === 'worktree-content' ? <span className="faint small">未跟踪内容</span> : null}
                       </div>
@@ -295,32 +295,32 @@ export function FilesPage() {
                       ) : null}
                     </div>
                   ))}
-                  {diff.patches.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>（无差异条目）</div> : null}
+                  {diff.patches.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>无差异条目</div> : null}
                 </div>
               ) : null}
               <div className="panel info" data-zs-git-history="hifi">
                 <div className="row tight">
                   <strong>提交历史</strong>
-                  <span className="faint small">（只读提交历史；合并提交可选择要比较的父提交）</span>
+                  <span className="faint small">只读提交历史；合并提交可选择要比较的父提交</span>
                   <span className="spacer" style={{ flex: 1 }} />
                   <button className="btn ghost sm" disabled={busy} onClick={() => void loadHistory()}>刷新历史</button>
                 </div>
                 {historyErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>历史读取失败：{userFacingSystemText(historyErr ?? '')}</div> : null}
                 {history == null && historyErr == null ? <div className="faint small" style={{ marginTop: 6 }}>正在读取历史…</div> : null}
-                {history != null && history.items.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>（空历史——尚无提交）</div> : null}
+                {history != null && history.items.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>空历史，尚无提交</div> : null}
                 {history != null && history.items.length > 0 ? (
                   <div style={{ marginTop: 6, maxHeight: 260, overflow: 'auto' }}>
                     {history.items.map((h) => (
                       <div key={h.oid} className="row tight" style={{ padding: '4px 2px', borderBottom: '1px solid var(--border,#eef2f7)' }} data-zs-git-commit={h.oid.slice(0, 8)}>
                         <span className="mono small" style={{ color: 'var(--text-3)' }}>{h.oid.slice(0, 8)}</span>
                         {h.parents.length > 1 ? <Tag tone="info">合并提交 · {h.parents.length} 个父提交</Tag> : null}
-                        {history.head === h.oid ? <Tag tone="success">HEAD</Tag> : null}
+                        {history.head === h.oid ? <Tag tone="success">当前提交</Tag> : null}
                         <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.subject}</span>
                         <span className="faint small">{h.authorName} · {new Date(h.timestamp * 1000).toLocaleDateString()}</span>
                         <button className="btn ghost sm" data-zs-git-diffbtn={h.oid.slice(0, 8)} title="查看该提交相对所选父提交的差异" onClick={() => void loadCommitDiff(h.oid)}>对比</button>
                       </div>
                     ))}
-                    {history.hasMore ? <div className="faint small" style={{ marginTop: 4 }}>（仅显示最近 {history.items.length} 条；更早的历史请用 Git 客户端查看）</div> : null}
+                    {history.hasMore ? <div className="faint small" style={{ marginTop: 4 }}>仅显示最近 {history.items.length} 条；更早的历史请用 Git 客户端查看</div> : null}
                   </div>
                 ) : null}
               </div>
@@ -331,7 +331,7 @@ export function FilesPage() {
                     <strong>提交差异</strong>
                     <span className="mono small">{commitDiff.commit.oid.slice(0, 8)}</span>
                     <span className="small" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{commitDiff.commit.subject}</span>
-                    {commitDiff.comparedParent != null ? <Tag tone="neutral">相对父 {commitDiff.comparedParent.slice(0, 8)}</Tag> : null}
+                    {commitDiff.comparedParent != null ? <Tag tone="neutral">相对父提交 {commitDiff.comparedParent.slice(0, 8)}</Tag> : null}
                   </div>
                   {(commitDiff.parentsMeta ?? []).length > 1 ? (
                     <div className="row tight wrap" style={{ marginTop: 6 }} data-zs-git-parents="1">
@@ -342,7 +342,7 @@ export function FilesPage() {
                           className={`chip mono${commitDiff.comparedParent === pm.oid ? ' on' : ''}`}
                           style={commitDiff.comparedParent === pm.oid ? { borderColor: 'var(--accent,#2563eb)', fontWeight: 600 } : undefined}
                           data-zs-git-parent={pm.oid.slice(0, 8)}
-                          title={`父 ${pm.oid.slice(0, 8)} · ${pm.subject}`}
+                          title={`父提交 ${pm.oid.slice(0, 8)} · ${pm.subject}`}
                           onClick={() => void loadCommitDiff(commitDiff.commit.oid, pm.oid)}
                         >
                           {pm.oid.slice(0, 8)} {pm.subject.slice(0, 24)}
@@ -356,7 +356,7 @@ export function FilesPage() {
                       <div className="row tight">
                         <Tag tone="neutral">{p.change}</Tag>
                         <span className="mono small" style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.oldPath != null ? `${p.oldPath} → ${p.path}` : p.path}</span>
-                        {p.binary ? <Tag tone="info">二进制（无文本差异）</Tag> : null}
+                        {p.binary ? <Tag tone="info">二进制，无文本差异</Tag> : null}
                         {p.truncated ? <Tag tone="warning">内容过长，未完整显示</Tag> : null}
                       </div>
                       {!p.binary && p.text.length > 0 ? (
@@ -364,7 +364,7 @@ export function FilesPage() {
                       ) : null}
                     </div>
                   ))}
-                  {commitDiff.patches.length === 0 && commitDiff.mergeNote == null ? <div className="faint small" style={{ marginTop: 6 }}>（无差异条目）</div> : null}
+                  {commitDiff.patches.length === 0 && commitDiff.mergeNote == null ? <div className="faint small" style={{ marginTop: 6 }}>无差异条目</div> : null}
                 </div>
               ) : null}
               <div className="faint small">未提交的内容会保留；提交或推送请点击上方按钮进入原界面。</div>

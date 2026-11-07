@@ -38,6 +38,8 @@ const STATUS_LABEL: Record<string, string> = {
   ACTIVE: '执行中', WAITING_USER: '待你处理', BLOCKED: '受阻', REVIEW: '待验收', DONE: '已完成',
   CANCELLED: '已取消', FAILED: '失败', RUNNING: '运行中', WAITING: '排队中', STOPPING: '停止中',
 };
+/** 导出格式的用户口径（R191：格式名保留，但不带括号）。 */
+const EXPORT_FORMAT_LABEL: Record<'md' | 'html' | 'docx', string> = { md: 'Markdown', html: 'HTML', docx: 'DOCX' };
 
 /** These existing tab links open the same thread in the current room page. */
 const DETAIL_SECTIONS = [
@@ -101,7 +103,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       const r = await command<{ followed: boolean; muted: boolean }>('thread.subscribe', { threadId, ...patch });
       setSub({ followed: r.followed, muted: r.muted });
       recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
-      toast(patch.mute === true ? '已静音（新回复不提醒；待办保留）' : patch.follow === true ? '已关注（会在活动流中保留）' : '订阅已更新', 'success');
+      toast(patch.mute === true ? '已静音；新回复不提醒，待办保留' : patch.follow === true ? '已关注，会在活动流中保留' : '订阅已更新', 'success');
     } catch (e) { toast(`订阅更新失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
     finally { setSubBusy(false); }
   };
@@ -149,7 +151,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           next.attachments = r.items ?? [];
         } catch (e) { if (gen === artGenRef.current) next.attErr = (e as Error).message; }
       } else {
-        next.attErr = '线程归属会话未知（conversationId 缺失）';
+        next.attErr = '线程归属会话未知，缺少会话编号';
       }
       if (!cancelled && gen === artGenRef.current) setArtifacts({ ...next }); // 先上附件（交付慢不阻塞）
       if (task?.id != null && projectIdOfRoom != null) {
@@ -161,7 +163,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       } else if (task == null) {
         next.delErr = null; // 记录串无任务——没有交付是事实，不是错误
       } else {
-        next.delErr = '所属项目未知（无法按任务过滤交付）';
+        next.delErr = '所属项目未知，无法按任务过滤交付';
       }
       if (!cancelled && gen === artGenRef.current) setArtifacts({ ...next });
     })();
@@ -195,20 +197,20 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       }
       rounds += 1;
       if (rounds > 6) {
-        toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）不在可补读范围（500 条）内——未定位', 'warn');
+        toast('目标消息 ' + highlightMessageId.slice(0, 14) + '… 不在可补读范围 500 条内，未定位', 'warn');
         return;
       }
       // 补读一轮更早历史（首条已装载回复的 seq 之前），到头（返回 0）即如实说明。
       const first = (replies ?? [])[0];
       if (first == null || (first.threadMessageSeq ?? 0) <= 1) {
-        toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）不在本线程历史内——未定位', 'warn');
+        toast('目标消息 ' + highlightMessageId.slice(0, 14) + '… 不在本线程历史内，未定位', 'warn');
         return;
       }
       void loadThreadOlder(threadId, first.threadMessageSeq ?? 1).then((added) => {
         if (cancelled) return;
-        if (added === 0) { toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）已到历史尽头仍未见——未定位', 'warn'); return; }
+        if (added === 0) { toast('目标消息 ' + highlightMessageId.slice(0, 14) + '… 已到历史尽头仍未见，未定位', 'warn'); return; }
         window.setTimeout(locate, 300);
-      }).catch(() => { if (!cancelled) toast('补读历史失败——未定位（可稍后重试）', 'warn'); });
+      }).catch(() => { if (!cancelled) toast('补读历史失败，未定位；可稍后重试', 'warn'); });
     };
     const t = window.setTimeout(locate, 200);
     return () => { cancelled = true; window.clearTimeout(t); };
@@ -240,7 +242,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     return (
       <div className="page-stack" style={{ padding: 16 }}>
         {readError != null ? (
-          <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——可返回主池重进）</div>
+          <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}；保留上次内容，可返回主池重进</div>
         ) : (
           <div className="panel info">正在打开回复串…</div>
         )}
@@ -297,18 +299,18 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const saveMessage = async (m: { id: string; body: string }) => {
     const r = await toggleSavedMessage(m, projectIdOfRoom);
     if (r.ok) {
-      toast(r.saved ? '已收藏（独立保存，不改动原内容——侧栏「搜索与收藏」页可见）' : '已取消收藏（原消息不受影响）', 'success');
+      toast(r.saved ? '已收藏，独立保存，不改动原内容；侧栏「搜索与收藏」页可见' : '已取消收藏，原消息不受影响', 'success');
       return;
     }
     if (r.busy === true) return; // 快速连点：忽略后到点击——第一笔在途，回执后再看状态
-    toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}（状态未变）`, 'error');
+    toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}；状态未变`, 'error');
   };
 
   /** 消息引用（r56：插入草稿——只改变草稿，不直接派发）。 */
   const quoteMessage = (m: { id: string; body: string; authorType?: string }) => {
     const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
     setInsertText({ id: Date.now(), text: `> 引用${m.authorType==='human'?'你':'回复'}：${excerpt}` });
-    toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
+    toast('已插入引用到输入框，引用不直接触发新任务', 'success');
   };
   /** 消息表情（r56：message.react 正式命令——toggle 幂等；本地用户操作，不作为共识）。 */
   const reactMessage = async (m: { id: string }, emoji: string) => {
@@ -319,12 +321,12 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   };
   /** 导出本线程（r56：export.create thread 目标——快照事务固定消息+附件；打开导出目录走白名单）。 */
   const exportThread = async (format: 'md' | 'html' | 'docx') => {
-    if (projectIdOfRoom == null || conversationId === '') { toast('线程归属未装载（项目/会话缺失）——稍后重试', 'error'); return; }
+    if (projectIdOfRoom == null || conversationId === '') { toast('线程归属未装载，项目或会话缺失；稍后重试', 'error'); return; }
     try {
       const r = await command<{ exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number } }>('export.create', { target: { kind: 'thread', projectId: projectIdOfRoom, conversationId, threadId }, format });
       recordWrite('export.create', `导出线程 ${format}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
-      toast(`已导出 ${format.toUpperCase()}（${r.stats.messages} 消息 · ${r.files.length} 文件）`, 'success');
-      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${userFacingSystemText((e as Error).message ?? '')}（目录 ${r.dir}）`, 'error'));
+      toast(`已导出 ${EXPORT_FORMAT_LABEL[format]} 记录，${r.stats.messages} 条消息 · ${r.files.length} 个文件`, 'success');
+      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${userFacingSystemText((e as Error).message ?? '')}；目录 ${r.dir}`, 'error'));
     } catch (e) { toast(`导出失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); }
   };
 
@@ -336,13 +338,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   };
   const submitReview = async () => {
     if (reviewBox == null) return;
-    if (reviewBox.threadId !== threadId) { toast('验收目标已切换（框属其它线程）——作废零提交', 'warn'); setReviewBox(null); return; }
+    if (reviewBox.threadId !== threadId) { toast('验收目标已切换，框属其它线程；作废零提交', 'warn'); setReviewBox(null); return; }
     if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) {
       toast('请填写修改意见，AI 会据此继续修改。', 'warn');
       return;
     }
     const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined, threadId);
-    if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过（任务完成）' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success'); setReviewBox(null); void loadThread(threadId); }
+    if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过，任务完成' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success'); setReviewBox(null); void loadThread(threadId); }
     else { toast(`提交失败：${userFacingSystemText(r.error ?? '')}——意见已保留可修正重提；若交付已变化本框将作废`, 'error'); }
   };
   /** 执行返工（r58 验收与执行分离；r59 完整身份）：点击时冻结 reworkPending 快照——
@@ -356,7 +358,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       try {
         const r = await executeTaskRework(snapshot, threadId);
         if (!r.ok) { toast(`执行返工被拒：${userFacingSystemText(r.error ?? '')}——已刷新为当前状态`, 'error'); void loadThread(threadId); return; }
-        toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
+        toast('返工执行已入队，同任务新执行；完成后交付升级为新待验收版本', 'success');
         void loadThread(threadId);
       } finally { setBusyRework(false); }
     })();
@@ -373,7 +375,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     <div className="page-stack" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
       {/* 单行紧凑导航（减负 §2 既有形态）：收起/返回 + 回复/成果/详情视图键。 */}
       <div className="thread-nav" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderBottom: '1px solid var(--border)' }}>
-        <button className="btn ghost sm" title="收起回复串，返回房间主池（不会停止任务，草稿保留）" onClick={backToPool}>
+        <button className="btn ghost sm" title="收起回复串，返回房间主池；不会停止任务，草稿保留" onClick={backToPool}>
           <Icon name="arrow-left" size={13} /> 返回主池
         </button>
         <button role="tab" aria-selected={tab === 'replies'} className={`btn ghost sm${tab === 'replies' ? '' : ''}`} style={tab === 'replies' ? { fontWeight: 600 } : undefined} onClick={() => setTab('replies')}>
@@ -382,7 +384,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         <button role="tab" aria-selected={tab === 'task'} className="btn ghost sm" style={tab === 'task' ? { fontWeight: 600 } : undefined} onClick={() => setTab('task')}>
           <Icon name="list" size={13} /> 详情
         </button>
-        <button role="tab" aria-selected={tab === 'artifacts'} className="btn ghost sm" style={tab === 'artifacts' ? { fontWeight: 600 } : undefined} onClick={() => setTab('artifacts')} title="本线程的附件与本任务交付成果（可预览）">
+        <button role="tab" aria-selected={tab === 'artifacts'} className="btn ghost sm" style={tab === 'artifacts' ? { fontWeight: 600 } : undefined} onClick={() => setTab('artifacts')} title="本线程的附件与本任务交付成果，可预览">
           <Icon name="file-text" size={13} /> 成果与附件
         </button>
         {/* 人的阅读订阅（r56：thread.subscribe——与 Agent 执行名单分列；纯偏好写）。 */}
@@ -390,7 +392,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           className="btn ghost sm"
           disabled={subBusy}
           data-zs-thread-follow={sub?.followed ? '1' : '0'}
-          title={sub?.followed === true ? '已关注：会在活动流中保留（点击取消）' : '关注本线程：有新回复会在活动流中保留'}
+          title={sub?.followed === true ? '已关注：会在活动流中保留，点击取消' : '关注本线程：有新回复会在活动流中保留'}
           onClick={() => void toggleSub({ follow: !(sub?.followed ?? false) })}
         >
           <Icon name="star" size={13} />{sub?.followed === true ? '已关注' : '关注'}
@@ -399,7 +401,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           className="btn ghost sm"
           disabled={subBusy}
           data-zs-thread-mute={sub?.muted ? '1' : '0'}
-          title={sub?.muted === true ? '已静音：新回复不提醒（待办保留）——点击取消' : '静音：新回复不提醒，待办保留'}
+          title={sub?.muted === true ? '已静音：新回复不提醒，待办保留；点击取消' : '静音：新回复不提醒，待办保留'}
           onClick={() => void toggleSub({ mute: !(sub?.muted ?? false) })}
         >
           <Icon name={sub?.muted === true ? 'eye-off' : 'eye'} size={13} />{sub?.muted === true ? '已静音' : '静音'}
@@ -407,8 +409,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         <details className="menu-wrap" style={{ display: 'inline-block' }}>
           <summary className="btn ghost sm" style={{ listStyle: 'none' }}><Icon name="download" size={13} /> 导出聊天</summary>
           <div className="menu" style={{ right: 0, left: 'auto' }}>
-            <button className="menu-item" onClick={() => void exportThread('md')}>聊天记录（Markdown）</button>
-            <button className="menu-item" onClick={() => void exportThread('docx')}>聊天记录（Word）</button>
+            <button className="menu-item" onClick={() => void exportThread('md')}>Markdown 聊天记录</button>
+            <button className="menu-item" onClick={() => void exportThread('docx')}>Word 聊天记录</button>
           </div>
         </details>
         <div className="spacer" style={{ flex: 1 }} />
@@ -417,7 +419,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           : statusLabel != null ? <Tag tone={statusTone} icon="activity">{taskNo} {statusLabel}</Tag> : null}
       </div>
 
-      {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——重试=切换视图或等待自动刷新）</div> : null}
+      {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}；保留上次内容，可切换视图或等待自动刷新</div> : null}
 
       {tab === 'replies' ? (
         <>
@@ -431,7 +433,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               {(anchor?.formalAttachments ?? []).length > 0 ? (
                 <div className="msg-inline-attachments" data-zs-inline-attachments="1">
                   {(anchor?.formalAttachments ?? []).map((a) => (
-                    <button key={a.artifactId} className={`inline-file-chip${a.kind === 'image_file' ? ' is-image' : ''}`} title={`预览 ${a.filename}（只读，不发送给 AI）`} onClick={() => openPreviewAtt(a)}>
+                    <button key={a.artifactId} className={`inline-file-chip${a.kind === 'image_file' ? ' is-image' : ''}`} title={`预览 ${a.filename}；只读，不发送给 AI`} onClick={() => openPreviewAtt(a)}>
                       <Icon name={a.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
                       <span className="truncate">{a.filename}</span>
                       {/* r55：与回复芯片同一 kind 映射（此前只认 code/text——PPT 显示成「文本」）。 */}
@@ -467,7 +469,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             insertText={insertText ?? undefined}
             attachmentUpload={conversationId !== '' ? { conversationId } : undefined}
             onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-              if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（上次发送记录）', 'success'); }
+              if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('已按上次发送记录重发成功', 'success'); }
               return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
             })}
             onSend={(p): Promise<FormalSendOutcome> => (async () => {
@@ -475,7 +477,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               const draftKey = `thread:${threadId}`;
               const refs = attachmentRefsFromDraft(draftKey, intent);
               if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-              if (conversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
+              if (conversationId === '') return { status: 'failed', error: '线程归属未装载，缺少会话编号；稍后重试' };
               const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, {
                 mentionIds:p.mentionIds,
                 ...(p.collaboration?{collaboration:p.collaboration}:{}),
@@ -495,7 +497,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               else confirmOutboundUnknown(draftKey, env);
               if (r.status === 'ok') {
                 void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-                toast('已跟进（延续当前任务）', 'success');
+                toast('已跟进，延续当前任务', 'success');
                 return { status: 'ok' };
               }
               return r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
@@ -511,10 +513,10 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               <div className="panel info">
                 <div className="row tight wrap">
                   <strong>#{detail.roomTaskNumber} {detail.title}</strong>
-                  <Tag tone={detail.status === 'DONE' ? 'success' : detail.status === 'REVIEW' ? 'info' : 'neutral'} icon="activity">{STATUS_LABEL[detail.status] ?? detail.status}</Tag>
-                  {detail.activeRun != null ? <span className="faint small">运行 {STATUS_LABEL[detail.activeRun.status] ?? detail.activeRun.status}</span> : <span className="faint small">无进行中的运行</span>}
+                  <Tag tone={detail.status === 'DONE' ? 'success' : detail.status === 'REVIEW' ? 'info' : 'neutral'} icon="activity">{STATUS_LABEL[detail.status] ?? '状态待确认'}</Tag>
+                  {detail.activeRun != null ? <span className="faint small">运行 {STATUS_LABEL[detail.activeRun.status] ?? '状态待确认'}</span> : <span className="faint small">无进行中的运行</span>}
                 </div>
-                {detail.lastStartupFailureMessage != null ? <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div> : null}
+                {detail.lastStartupFailureMessage != null ? <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{userFacingSystemText(detail.lastStartupFailureMessage)}</div> : null}
                 <div className="row tight" style={{ marginTop: 8 }}>
                   {stoppable ? (
                     <button className="btn ghost sm" disabled={stopping || runStopping} title="停止当前执行；如果任务状态已更新，请刷新后再试" onClick={() => void doStop()}>
@@ -558,7 +560,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                       <div style={{ marginTop: 8 }}>
                         {pendingDeliveryStale ? (
                           <div className="panel warning">
-                            交付已更新（打开时查看的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{detail.pendingDelivery?.revision ?? '?'}）——本框已作废，请对新版本重新操作。
+                            交付已更新，打开时查看的是 v{reviewBox.snapshot.deliveryRevision}，当前为 v{detail.pendingDelivery?.revision ?? '?'}；本框已作废，请对新版本重新操作。
                             <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setReviewBox(null)}>关闭</button>
                           </div>
                         ) : (
@@ -623,7 +625,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               <span className="faint small">点击打开，不改变原件。</span>
             </div>
             {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : artifacts.attErr != null ? (
-              <div className="panel warning" style={{ marginTop: 6 }}>附件列表读取失败：{artifacts.attErr}（可切回其它标签再进重试）</div>
+              <div className="panel warning" style={{ marginTop: 6 }}>附件列表读取失败：{userFacingSystemText(artifacts.attErr)}；可切回其它标签再进重试</div>
             ) : artifacts.attachments.length === 0 ? (
               <div className="faint small" style={{ marginTop: 6 }}>本会话暂无托管附件。</div>
             ) : (
@@ -652,9 +654,9 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : isRecordThread ? (
               <div className="faint small" style={{ marginTop: 6 }}>历史记录串没有任务与交付；继续回复会创建新的 AI 请求。</div>
             ) : artifacts.delErr != null ? (
-              <div className="panel warning" style={{ marginTop: 6 }}>交付列表读取失败：{artifacts.delErr}</div>
+              <div className="panel warning" style={{ marginTop: 6 }}>交付列表读取失败：{userFacingSystemText(artifacts.delErr)}</div>
             ) : artifacts.deliveries.length === 0 ? (
-              <div className="faint small" style={{ marginTop: 6 }}>本任务暂无交付记录（交付产生后在此列出各版本）。</div>
+              <div className="faint small" style={{ marginTop: 6 }}>本任务暂无交付记录；交付产生后在此列出各版本。</div>
             ) : (
               <div style={{ marginTop: 6 }}>
                 {artifacts.deliveries.map((d) => (

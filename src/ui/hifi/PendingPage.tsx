@@ -116,10 +116,10 @@ export function PendingPage() {
         <div className="page-filters">
           <div className="seg" role="group" aria-label="范围" data-zs-pending-scope={scope}>
             <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')} title="查看全部可访问项目的待办；隐藏项目里的待办也会保留">
-              全部可访问项目{data != null ? `（${totalCount(data.projects)}）` : ''}
+              全部可访问项目{data != null ? ` ${totalCount(data.projects)}` : ''}
             </button>
             <button className={scope === 'project' ? 'on' : ''} onClick={() => setScope('project')} title="只看当前项目的待办；其它项目的待办不会消失">
-              当前项目{scope === 'project' && data != null ? `（${totalCount(sections)}）` : ''}
+              当前项目{scope === 'project' && data != null ? ` ${totalCount(sections)}` : ''}
             </button>
           </div>
           <span className="filter-note">点击卡片查看详情；执行或验收请在详情页操作。</span>
@@ -127,7 +127,7 @@ export function PendingPage() {
           <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
         </div>
         {scope === 'project' && omittedProjects.length > 0 ? (
-          <div className="faint small" style={{ marginBottom: 6 }}>当前只显示本项目——另有 {omittedProjects.length} 个项目的待办未显示（切换到「全部可访问项目」可见，不会被清掉）。</div>
+          <div className="faint small" style={{ marginBottom: 6 }}>当前只显示本项目，另有 {omittedProjects.length} 个项目的待办未显示；切换到「全部可访问项目」可见，不会被清掉。</div>
         ) : null}
         {projectMissing ? <div className="panel info">尚未打开项目；请选择项目或切回「全部可访问项目」。全部待办仍保留。</div> : null}
         {err != null ? <div className="panel warning">加载失败：{userFacingSystemText(err ?? '')}。当前显示上次读取的列表，可刷新重试。</div> : null}
@@ -153,7 +153,7 @@ export function PendingPage() {
               {p.reminderAwaits.map((r) => (
                 <Row key={occKey(r)}>
                   <Icon name="clock" size={13} />
-                  <span style={{ flex: 1 }}>待确认提醒{r.title != null ? `：「${r.title}」` : ''}<span className="faint small">（{new Date(r.scheduledAt).toLocaleString()}{r.missedCount > 0 ? ` · 错过 ${r.missedCount} 次` : ''}{r.notifyMuted ? ' · 通知已静音（待办保留）' : ''}）</span></span>
+                  <span style={{ flex: 1 }}>待确认提醒{r.title != null ? `：「${r.title}」` : ''}<span className="faint small">，{new Date(r.scheduledAt).toLocaleString()}{r.missedCount > 0 ? ` · 错过 ${r.missedCount} 次` : ''}{r.notifyMuted ? ' · 通知已静音，待办保留' : ''}</span></span>
                   <button className="btn ghost sm" onClick={() => locate(r.locate)}>定位</button>
                   <button className="btn sm" disabled={confirming === occKey(r)} title="执行本次提醒" onClick={() => void confirmReminder(r)}>{confirming === occKey(r) ? '确认中…' : '确认执行'}</button>
                 </Row>

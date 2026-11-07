@@ -31,7 +31,7 @@ export function ProjectWriteAccessPanel({projectId,name,path}:{projectId:string;
   return <div data-zs-project-write>
     <strong>项目范围编辑授权</strong>{' '}<Tag tone={facts?.authorized?'warning':'neutral'}>{facts==null?'尚未读取':facts.authorized?'项目内文件编辑：已授权':'项目内文件编辑：未授权'}</Tag>
     <p className="small faint">新任务权限由成员配置决定，不受本项限制；已有任务保持创建时的权限。</p>
-    <p className="small faint">仅对「项目内文件编辑」档生效，授权目录为「{name}」：只能创建和编辑文件，不开放 Shell、网络工具或委派；撤销本项不会影响完整权限。</p>
+    <p className="small faint">仅对「项目内文件编辑」档生效，授权目录为「{name}」：只能创建和编辑文件，不开放命令行、网络工具或委派；撤销本项不会影响完整权限。</p>
     {facts?.authorized?<div className="small mono" style={{overflowWrap:'anywhere'}}>允许目录：{facts.root}</div>:null}
     {error?<div role="alert" className="small">{userFacingSystemText(error ?? '')}</div>:null}
     <div className="row" style={{marginTop:8}}>

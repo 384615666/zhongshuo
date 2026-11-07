@@ -86,7 +86,7 @@ export function LiveProgressCard({
       {text.length > 0 ? <div className="live-progress-text">{text}</div> : null}
       {activityDetail.length > 0 ? (
         <details className="live-progress-details">
-          <summary>展开活动（{activityDetail.length} 项）</summary>
+          <summary>展开活动，共 {activityDetail.length} 项</summary>
           <ol>
             {activityDetail.map((activity) => (
               <li key={activity.toolCallId} data-zs-activity-status={activity.status}>

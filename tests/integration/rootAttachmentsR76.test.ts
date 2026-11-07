@@ -162,7 +162,7 @@ describe('R76 atomic attachment roots', () => {
       bridge.command=env=>env.method==='thread.history'?Promise.resolve({ok:false,error:{code:'STORAGE_UNAVAILABLE',message:'R76 read failure'}}):h.raw(env.method,env.params,env.commandId);
       await h.bundle.loader.loadThread(th.id);expect(current()).toEqual([ids[0]]);expect(h.bundle.store.getState().readErrors[`thread:${th.id}`]).toContain('R76 read failure');
       bridge.command=env=>env.method==='room.pool'?Promise.resolve({ok:false,error:{code:'STORAGE_UNAVAILABLE',message:'pool failed'}}):h.raw(env.method,env.params,env.commandId);
-      await h.bundle.loader.loadRoomPool(room.id);expect(current()).toEqual([ids[0]]);expect(h.bundle.store.getState().readErrors[room.id]).toContain('pool failed');
+      await h.bundle.loader.loadRoomPool(room.id);expect(current()).toEqual([ids[0]]);expect(h.bundle.store.getState().readErrors[room.id]).toContain('pool 失败');
       // Reverse direction: old thread.get must not seed a stale anchor that older-history hydration resurrects.
       captured=undefined;release=undefined;
       bridge.command=async env=>{const r=await h.raw(env.method,env.params,env.commandId);if(env.method==='thread.get'){captured=r;await new Promise<void>(res=>{release=res;});}return r;};

@@ -24,6 +24,7 @@ import { recordWrite } from '../data/store';
 import { useFormGuard } from '../lib/useFormGuard';
 import { memberWrite } from '../data/memberWrites';
 import { runtimePermissionHint, runtimePermissionOptions } from '../lib/runtimePermissions';
+import { runtimeChannelLabel } from '../lib/format';
 
 /** 弹窗只需要房间的这几个字段（实际数据来自本项目 room.list 的完整行）。 */
 export interface AddMemberRoom { id: string; name: string; archivedAt?: number | null }
@@ -79,9 +80,9 @@ export function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, 
   const stale = formGuard.invalid || scopeProjectId !== projectId; // 打开后本页切走——旧表单作废
   const submit = async () => {
     if (inFlight.current) return;
-    if (stale || !formGuard.valid()) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
-    if (runtime.kind === 'claude' && !runtime.model.trim()) { setErr('请选择模型；若渠道未返回清单，可在高级设置指定模型 ID。'); return; }
-    if (name.trim().length === 0) { setErr('请填写成员名称（不能为空白）'); return; }
+    if (stale || !formGuard.valid()) { setErr('项目已切换，本表单已作废；针对旧项目的输入不再提交，关闭后请在新项目重新添加'); return; }
+    if (runtime.kind === 'claude' && !runtime.model.trim()) { setErr('请选择模型；若渠道未返回清单，可在高级设置指定模型标识。'); return; }
+    if (name.trim().length === 0) { setErr('请填写成员名称，不能为空白'); return; }
     inFlight.current = true; setBusy(true); setErr(null);
     try {
       const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`, 'member.create', {
@@ -98,10 +99,10 @@ export function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, 
         },
         useAsDefault,
       });
-      if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试` : `${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+      if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试` : (userFacingSystemText(outcome.error ?? '') || '添加未确认，请重试'));
       const r = outcome.data;
       if (!formGuard.valid()) return;
-      recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间）`);
+      recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}，加入 ${r.roomsJoined} 个未归档房间`);
       // 成员已创建，头像单独写；写失败只提示，不让已经建好的成员变成"添加未确认"。
       try {
         await saveAvatar(`member:${r.memberId}`, avatar);
@@ -122,7 +123,7 @@ export function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, 
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">{stale ? '本页已切到别的项目——表单作废' : rooms == null ? '正在读取本项目的房间名单…' : `创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
+          <span className="small faint">{stale ? '本页已切到别的项目——表单作废' : rooms == null ? '正在读取本项目的房间名单…' : `创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `：${joinable.map((r) => r.name).join('、')}` : ''}`}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn primary sm" disabled={busy || stale} data-zs-member-addsave={projectId} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
@@ -131,7 +132,7 @@ export function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, 
     >
       <div className="col" style={{ gap: 12 }}>
         {stale ? (
-          <div className="panel warning" data-zs-member-addstale={projectId}>本页已切换到别的项目（不再是 {projectName}）——本表单已作废：为避免把旧输入写进别的项目，提交已禁用。请关闭后在新项目重新「添加成员」。</div>
+          <div className="panel warning" data-zs-member-addstale={projectId}>本页已切换到别的项目，不再是 {projectName}。本表单已作废：为避免把旧输入写进别的项目，提交已禁用。请关闭后在新项目重新「添加成员」。</div>
         ) : null}
         <div className="field">
           <label className="field-label">成员名称</label>
@@ -139,11 +140,11 @@ export function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, 
           <div className="field-hint">名称可以重复；同名成员各自独立。</div>
         </div>
         <div className="field">
-          <label className="field-label">说明（它会做什么）</label>
+          <label className="field-label">说明</label>
           <input className="input" value={desc} placeholder="例如 实现与重构，偏好直接给结论" onChange={(e) => setDesc(e.target.value)} />
           <div className="field-hint">出现在成员卡与 @ 选择里，帮模型判断该找谁。</div>
         </div>
-        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind => { setRuntime(f => ({ ...f, kind: kind as RealRuntimeKind, model: '', executable: runtimeExecutable(kind), effort: '' })); if (!avatarTouched.current) setAvatar(defaultAiAvatarPreset(kind).dataUrl); }} options={[...RUNTIME_CHANNELS]} /></label>
+        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind => { setRuntime(f => ({ ...f, kind: kind as RealRuntimeKind, model: '', executable: runtimeExecutable(kind), effort: '' })); if (!avatarTouched.current) setAvatar(defaultAiAvatarPreset(kind).dataUrl); }} options={RUNTIME_CHANNELS.map(channel => ({ value: channel.value, label: runtimeChannelLabel(channel.value) }))} /></label>
         <RuntimeChannelHelp kind={runtime.kind} />
         <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model => setRuntime(f => ({ ...f, model, effort: '' }))} />
         <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort => setRuntime(f => ({ ...f, effort }))} />
@@ -154,7 +155,7 @@ export function AddMemberModal({ projectId, projectName, scopeProjectId, rooms, 
         />
         <label className="row tight"><input type="checkbox" checked={useAsDefault} disabled={busy} onChange={e => setUseAsDefault(e.target.checked)} />在没有可用协调者的房间中，默认由它接收消息</label>
         <details><summary>高级：执行程序与权限</summary>
-          <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" disabled={busy} value={runtime.executable} placeholder="留空使用本机 CLI" onChange={e => setRuntime(f => ({ ...f, executable: e.target.value }))} /></label>
+          <label className="field"><span className="field-label">执行程序，自动查找</span><input className="input" disabled={busy} value={runtime.executable} placeholder="留空则自动查找本机程序" onChange={e => setRuntime(f => ({ ...f, executable: e.target.value }))} /></label>
           <label className="field"><span className="field-label">执行权限</span><Select ariaLabel="新成员执行权限" value={runtime.permissionMode} disabled={busy} onChange={permissionMode => setRuntime(f => ({ ...f, permissionMode }))} options={runtimePermissionOptions(runtime.permissionMode, runtime.kind)} /></label>
           <div className="field-hint">{runtimePermissionHint(runtime.kind)}</div>
         </details>

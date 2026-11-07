@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import type { TaskExecutionStatus } from '../../src/contracts/executionStatus';
+import { userFacingSystemText } from '../../src/contracts/userFacingText';
 import { ExecutionStatus, taskExecutionStatusSummary } from '../../src/ui/hifi/components/ExecutionStatus';
 import { ErrorState, IntentTag } from '../../src/ui/hifi/components/ui';
 import { MarkdownView } from '../../src/ui/hifi/preview/MarkdownView';
@@ -14,6 +15,30 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../src/ui/hifi
 function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
     ? files(join(dir, entry.name)) : entry.name.endsWith('.tsx') ? [join(dir, entry.name)] : []);
+}
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? sourceFiles(join(dir, entry.name)) : /\.(tsx?|ts)$/.test(entry.name) ? [join(dir, entry.name)] : []);
+}
+/** R191: all hifi user-facing prompt surfaces (pages, components, data helpers). */
+function copyFiles(): string[] {
+  return sourceFiles(root).filter(file => !file.endsWith('.d.ts'));
+}
+const promptCallees = new Set(['toast', 'setErr', 'setError', 'setSaveErr', 'setSaveError', 'setCollabError', 'setReadError',
+  'setLoadError', 'setFilesErr', 'setSnapshotErr', 'setHistoryErr', 'setSavedErr', 'setVisibleSearchErr', 'setDmError',
+  'setSendError', 'setSendErrorFor', 'setLocateError', 'setCleared', 'setRemoteErr']);
+const promptAttrs = new Set(['title', 'detail', 'placeholder', 'subtitle', 'hint', 'ariaLabel', 'aria-label', 'note',
+  'description', 'emptyText', 'confirmText', 'help']);
+const productNames = new Set(['Git', 'AI', 'PDF', 'Word', 'Office', 'Markdown', 'HTML', 'DOCX', 'XLSX', 'CSV', 'JSON',
+  'PNG', 'JPEG', 'WebP', 'GitHub', 'DeepSeek', 'Claude', 'Codex', 'Kimi', 'GLM', 'Gemini', 'Pi', 'Harness', 'App', 'APP']);
+/** Literal text only: template expressions are values, not copy. */
+function copyTexts(node: ts.Node): string[] {
+  if (ts.isStringLiteralLike(node)) return [node.text];
+  if (ts.isTemplateExpression(node)) return [node.head.text, ...node.templateSpans.map(span => span.literal.text)];
+  if (ts.isConditionalExpression(node)) return [...copyTexts(node.whenTrue), ...copyTexts(node.whenFalse)];
+  if (ts.isParenthesizedExpression(node)) return copyTexts(node.expression);
+  if (ts.isBinaryExpression(node)) return [...copyTexts(node.left), ...copyTexts(node.right)];
+  return [];
 }
 const businessText = '请按文档（§6.4）核对 INDEPENDENT / RATIFY；R119 是业务编号。';
 function status(): TaskExecutionStatus {
@@ -110,5 +135,62 @@ describe('R119 program-generated UI copy', () => {
     const error = renderToStaticMarkup(createElement(ErrorState, { code: 'OUTPUT_INVALID', detail: '全员无有效输入（§6.4）' }));
     expect(visible(error)).not.toMatch(/OUTPUT_INVALID|§/);
     expect(error).toContain('data-zs-error-code="OUTPUT_INVALID"');
+  });
+
+  it('keeps R191 user-facing prompts free of parentheses, error-code prefixes and technical identifiers', () => {
+    const found: string[] = [];
+    for (const file of copyFiles()) {
+      const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
+        file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+      function visit(node: ts.Node): void {
+        let texts: string[] = [];
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && promptCallees.has(node.expression.text) && node.arguments.length > 0) {
+          texts = copyTexts(node.arguments[0]!);
+        } else if (ts.isJsxAttribute(node) && promptAttrs.has(node.name.getText(source)) && node.initializer != null) {
+          const init = node.initializer;
+          if (ts.isStringLiteral(init)) texts = [init.text];
+          else if (ts.isJsxExpression(init) && init.expression != null) texts = copyTexts(init.expression);
+        }
+        for (const text of texts) {
+          const withoutPaths = text.replace(/[A-Za-z]:[\\/][^\s，。；：、（）()"'<>|]*/g, '');
+          const tokens = (withoutPaths.match(/[A-Za-z][A-Za-z0-9_.:/-]*/g) ?? [])
+            .filter(token => token.length >= 2 && !productNames.has(token));
+          // R136 keeps `aria-label="runtime 渠道"` as its component selector (R191 forbids changing test selectors).
+          if (ts.isJsxAttribute(node) && node.name.getText(source) === 'ariaLabel' && text === 'runtime 渠道') continue;
+          if (/[（）]/.test(text) || /\([^)]*\)/.test(text) || /错误码\s*[：:]/.test(text) || tokens.length > 0) {
+            found.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: ${text.trim()}`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      }
+      visit(source);
+    }
+    expect(found).toEqual([]);
+  });
+
+  it('never interpolates a raw outcome code into displayed copy', () => {
+    const found: string[] = [];
+    for (const file of sourceFiles(root)) {
+      readFileSync(file, 'utf8').split(/\r?\n/).forEach((line, index) => {
+        if (/\$\{[^}]*\.code\}\s*[：:]/.test(line)) found.push(`${file}:${index + 1}: ${line.trim()}`);
+      });
+    }
+    expect(found).toEqual([]);
+    expect(userFacingSystemText('VALIDATION_INVALID：协调者不可停用')).toBe('协调者不可停用');
+    expect(readFileSync(join(root, 'MembersPage.tsx'), 'utf8')).toContain('操作失败：${userFacingSystemText');
+  });
+
+  it('uses bracket-free export format labels', () => {
+    const dm = readFileSync(join(root, 'DmPage.tsx'), 'utf8');
+    const thread = readFileSync(join(root, 'ThreadPage.tsx'), 'utf8');
+    expect(dm).toContain('导出 Markdown 记录…');
+    expect(dm).toContain('导出 HTML 记录…');
+    expect(dm).toContain('导出 DOCX 记录…');
+    expect(thread).toContain('Markdown 聊天记录');
+    expect(thread).toContain('Word 聊天记录');
+    for (const source of [dm, thread]) {
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      expect(code).not.toMatch(/导出会话记录（|聊天记录（Markdown）|聊天记录（Word）/);
+    }
   });
 });

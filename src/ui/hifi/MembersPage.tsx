@@ -46,7 +46,7 @@ import { command } from './bridge';
 import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
 import { memberWrite } from './data/memberWrites';
-import { fullTime, runtimeModelDisplayName } from './lib/format';
+import { fullTime, runtimeChannelLabel, runtimeModelDisplayName } from './lib/format';
 import { runtimePermissionHint, runtimePermissionOptions } from './lib/runtimePermissions';
 import { RuntimeChannelHelp } from './components/RuntimeChannelHelp';
 import { AvatarPicker } from './components/AvatarPicker';
@@ -61,6 +61,11 @@ export interface MemberRow { id: string; displayName: string; principalType: str
 /** room.list 行：R171 起成员页自己按页内项目取房间名单（不再用全局 store.rooms）。 */
 export interface PageRoomRow { id: string; name: string; conversationId?: string; coordinatorMemberId?: string | null; description?: string | null; archivedAt?: number | null; revision?: number }
 const EMPTY_ROOMS: PageRoomRow[] = [];
+/** 渠道内部值 → 用户可见名称（R191：提示里不直接摊英文值；产品名保留）。 */
+const channelDisplay = (kind: string): string => {
+  if (kind === 'fake') return '测试环境';
+  return RUNTIME_CHANNELS.find((channel) => channel.value === kind)?.label.replace(/ CLI$/, '') ?? kind;
+};
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
 export interface RuntimeInfo {
   binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null;effort?:string|null };
@@ -234,11 +239,11 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
     setBusyId(m.id);
     try {
       const outcome=await memberWrite(`member.setEnabled:${projectId}:${m.id}`,'member.setEnabled',{projectId,memberId:m.id,expectedRevision:m.revision,enabled:!m.enabled});
-      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试`:`${userFacingSystemText(outcome.error ?? '')}`);
       // R171：页内独立——只要本页还停在这个项目就回读，不因全局 active 不同而丢弃结果。
       if(selectedRef.current!==projectId)return;
       recordWrite('member.setEnabled', `${m.displayName} → ${!m.enabled ? '启用' : '停用'}（只影响之后的新派发）`);
-      toast(`已${!m.enabled ? '启用' : '停用'} ${m.displayName}（作用范围：之后的新派发）`, 'success');
+      toast(`已${!m.enabled ? '启用' : '停用'} ${m.displayName}，作用范围：之后的新派发`, 'success');
       await reload();
     } catch (e) {
       toast(`操作失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error'); // 协调者拒绝等真实原因上屏
@@ -339,8 +344,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       // R171：页内独立——全局投影读失败不影响本页刷新，如实记进扫描说明。
       const refreshNotes: string[] = [];
       await Promise.all([
-        refreshMembers(targetProjectId).catch((e: unknown) => { refreshNotes.push(`成员投影刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
-        refreshRooms(targetProjectId).catch((e: unknown) => { refreshNotes.push(`房间索引刷新失败：${userFacingSystemText((e as Error).message ?? '')}（将在下次装载时重试）`); }),
+        refreshMembers(targetProjectId).catch((e: unknown) => { refreshNotes.push(`成员投影刷新失败：${userFacingSystemText((e as Error).message ?? '')}；将在下次装载时重试`); }),
+        refreshRooms(targetProjectId).catch((e: unknown) => { refreshNotes.push(`房间索引刷新失败：${userFacingSystemText((e as Error).message ?? '')}；将在下次装载时重试`); }),
       ]);
       // R183：discoverDefaults 对每个未创建的真实渠道各回一条 skipped 说明，内容常常相同
       // （如「真实派发防护已开启…」），直接平铺会在页面重复 4 行；按内容去重、保留首次出现顺序。
@@ -405,7 +410,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         const noModel = eff.kind === 'claude' && (eff.model == null || eff.model.length === 0);
         const modelName = eff.model ? runtimeModelDisplayName({ id: eff.model, label: eff.model }) : '';
         return {
-          text: `使用本机默认 ${eff.kind}${modelName?` · ${modelName}`:''}${noModel?' · 需要选择模型':''}`,
+          text: `使用本机默认 ${channelDisplay(eff.kind)}${modelName?` · ${modelName}`:''}${noModel?' · 需要选择模型':''}`,
           problem: true,
           effective: eff.kind,
           modelId: eff.model ?? undefined,
@@ -414,7 +419,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       return { text: '尚未单独配置，打开「AI 设置」选择模型', problem: true };
     }
     if (rt.installation == null) return { text: '配置暂不可用，打开成员详情查看', problem: true };
-    const kind = rt.installation.kind === 'fake' ? '测试环境' : rt.installation.kind;
+    const kind = channelDisplay(rt.installation.kind);
     const modelId = rt.binding?.model ?? '';
     const modelName = modelId ? runtimeModelDisplayName({ id: modelId, label: modelId }) : '';
     if(rt.executableStatus?.status==='missing')return {text:`${kind}${modelName?' · '+modelName:''} · 执行程序未找到`,problem:true,modelId};
@@ -445,7 +450,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     className={`project-card${current ? ' is-current' : ''}`}
                     data-zs-members-project={p.id}
                     aria-current={current ? 'page' : undefined}
-                    title={current ? `${p.displayName}（本页当前项目）` : `在成员管理里查看 ${p.displayName}（不切换侧栏项目）`}
+                    title={current ? `${p.displayName}，本页当前项目` : `在成员管理里查看 ${p.displayName}，不切换侧栏项目`}
                     onClick={() => openProject(p.id)}
                   >
                     <span className="project-card-name">{p.displayName}</span>
@@ -496,7 +501,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             {/* R183 第 3 项：归档/移除仍要如实提示，但用轻量 note，不再恢复项目名大标题。 */}
             {projArchived || projRemoved ? (
               <div className="faint small" data-zs-members-readonly-note={projectId}>
-                {projArchived ? '项目已归档（只读）——不能添加成员或修改成员配置。' : '项目已移除——不能添加成员或修改成员配置。'}
+                {projArchived ? '项目已归档，只读；不能添加成员或修改成员配置。' : '项目已移除——不能添加成员或修改成员配置。'}
               </div>
             ) : null}
 
@@ -509,7 +514,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             {projectId == null || projectId === '' ? (
               <div className="panel info">尚未选择项目——从左侧选择一个项目，或从侧栏项目菜单进入。</div>
             ) : null}
-            {scopeErr != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(scopeErr)}（可刷新重试）</div> : null}
+            {scopeErr != null ? <div className="panel warning">成员装载失败：{userFacingSystemText(scopeErr)}；可刷新重试</div> : null}
             {workload.error ? <div className="panel warning">成员工作量读取失败：{userFacingSystemText(workload.error ?? '')}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的数据。` : '尚未取得工作量数据。'}</div> : null}
             {workload.data?.truncated ? <div className="faint small">工作量仅统计前 500 名成员。</div> : null}
             {membersInScope == null && scopeErr == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
@@ -540,19 +545,19 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                         </div>
                         <div className="small faint" style={{ marginTop: 3 }}>
                           {description != null ? <div>{description}</div> : null}
-                          {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }} title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span> : <span title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span>}
+                          {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }} title={rt.modelId?`完整模型编号：${rt.modelId}`:undefined}>当前配置：{rt.text}</span> : <span title={rt.modelId?`完整模型编号：${rt.modelId}`:undefined}>当前配置：{rt.text}</span>}
                         </div>
                       </div>
                     </div>
                     <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
                       {running ? `负责未结束任务 ${running.unfinishedTasks} · 在途执行 ${running.activeTurns} · 待核对结果 ${running.unknownTurns}` : '成员工作量尚未读到'}
-                      {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
+                      {m.principalType === 'agent' ? '' : '；本地用户不可停用'}
                     </div>
                     {m.principalType === 'agent' ? (
                       <div className="row tight wrap" style={{ marginTop: 10 }}>
                         <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimeOf(m.id)?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
                         <button className="btn ghost sm" disabled={projArchived||projRemoved||busyId === m.id} onClick={() => void toggle(m)}
-                          title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
+                          title={m.enabled ? '停用：不再参与之后派发，在途不受影响' : '启用：恢复参与之后的派发'}>
                           {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
                         </button>
                         <button className="btn ghost sm" data-zs-member-bind={m.id} disabled={projArchived||projRemoved} title="配置该成员的渠道与模型；名称与说明也在这里修改" onClick={() => openBind(m)}>
@@ -569,8 +574,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             <TemplatePanel projectId={projectId} scopeProjectId={projectId} readOnly={projArchived||projRemoved} onCreateFromTemplate={openAddFromTemplate}/>
             <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
             <div className="panel">
-              <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员（★=该房间协调者；新建房间默认全员加入）。</div>
-              {roomsErr?.projectId === projectId ? <div className="small" style={{ marginBottom: 8, color: 'var(--warning)' }}>房间名单读取失败：{userFacingSystemText(roomsErr.message)}（保留上次结果，可点「刷新」重试）</div> : null}
+              <div className="faint small" style={{ marginBottom: 8 }}>各房间的成员。★ 表示该房间协调者；新建房间默认全员加入。</div>
+              {roomsErr?.projectId === projectId ? <div className="small" style={{ marginBottom: 8, color: 'var(--warning)' }}>房间名单读取失败：{userFacingSystemText(roomsErr.message)}；保留上次结果，可点「刷新」重试</div> : null}
               {!hasRoomsTruth && roomsErr?.projectId !== projectId ? <div className="faint small">正在读取本项目的房间名单…</div> : null}
               {rooms.map((room) => {
                 const list = roomMembers[room.id] ?? roomMembersCache.current.get(`${projectId}:${room.id}`);
@@ -580,12 +585,12 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     <div className="row tight">
                       <Icon name="message-circle" size={12} />
                       <span className="small" style={{ fontWeight: 600 }}>{room.name}</span>
-                      <span className="faint small">{failure != null ? `名单读取失败（${failure}——保留上次结果，可刷新重试）` : list == null ? '（装载中…）' : `${list.length} 位`}</span>
+                      <span className="faint small">{failure != null ? `名单读取失败：${userFacingSystemText(failure)}；保留上次结果，可刷新重试` : list == null ? '装载中…' : `${list.length} 位`}</span>
                     </div>
                     {list != null ? (
                       <div className="row tight wrap" style={{ marginTop: 4 }}>
                         {list.map((m) => (
-                          <span key={m.id} className="chip" title={`${m.displayName}${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
+                          <span key={m.id} className="chip" title={`${m.displayName}${m.enabled ? '' : '，已停用'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
                             {m.displayName}{room.coordinatorMemberId === m.id ? ' ★' : ''}
                           </span>
                         ))}
@@ -594,7 +599,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                   </div>
                 );
               })}
-              {hasRoomsTruth && rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
+              {hasRoomsTruth && rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>本项目没有房间</div> : null}
             </div>
           </section>
         </div>
@@ -699,7 +704,7 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
     if (savePending.current || !formGuard.valid() || (allowProfileEdit && nothingChanged)) return;
     if (allowProfileEdit && nextName.length === 0) { toast('成员名称不能为空白', 'warn'); return; }
     // 只在配置真的要写时才要求 claude 有模型：只改名称/说明不应被未绑定的配置挡住。
-    if (shouldWriteConfig && form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 需要选择模型', 'warn'); return; }
+    if (shouldWriteConfig && form.kind === 'claude' && form.model.trim().length === 0) { toast('Claude 需要选择模型', 'warn'); return; }
     savePending.current = true; setBusy(true); setSaveError(null);
     let profileSaved = false;
     try {
@@ -709,7 +714,7 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
           projectId: targetProject, memberId: member.id, expectedRevision: revision,
           displayName: nextName, description: nextDescription,
         });
-        if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试` : `${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+        if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；请在未知成员操作区使用原记录重试` : `${userFacingSystemText(outcome.error ?? '')}`);
         if (!formGuard.valid()) return;
         revision = typeof outcome.data?.revision === 'number' ? outcome.data.revision : revision + 1;
         revisionRef.current = revision;
@@ -729,7 +734,7 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
           ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
           ...(form.effort ? { effort: form.effort } : {}),
         });
-        if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试` : `${outcome.code}：${userFacingSystemText(outcome.error ?? '')}`);
+        if (outcome.status !== 'ok') throw Error(outcome.status === 'unknown' ? `结果未知：${userFacingSystemText(outcome.error ?? '')}；原操作请求已保存，可在成员页重试` : `${userFacingSystemText(outcome.error ?? '')}`);
         if (!formGuard.valid()) return;
         configSaved = true;
         const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
@@ -746,9 +751,9 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
       }
       if (mounted.current) {
         const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
-        if (profileSaved && configSaved) toast(`已保存 ${nextName} 的资料与 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
+        if (profileSaved && configSaved) toast(`已保存 ${nextName} 的资料与 AI 设置：${channelDisplay(form.kind)}${modelName ? ' · ' + modelName : ''}`, 'success');
         else if (profileSaved) toast(`已保存成员名称与说明：${nextName}`, 'success');
-        else if (configSaved) toast(`已保存 ${member.displayName} 的 AI 设置（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
+        else if (configSaved) toast(`已保存 ${member.displayName} 的 AI 设置：${channelDisplay(form.kind)}${modelName ? ' · ' + modelName : ''}`, 'success');
         else toast(`已更新 ${member.displayName} 的头像`, 'success');
         await onSaved();
       }
@@ -787,12 +792,12 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
           <span className="field-label">渠道</span>
           <Select
             value={form.kind}
-            ariaLabel="runtime 渠道"
+            ariaLabel="运行渠道"
             disabled={busy}
             onChange={(v) => setForm((f) => ({ ...f, kind: v as typeof f.kind,model:'',executable:runtimeExecutable(v),effort:'' }))}
             options={[
-              ...RUNTIME_CHANNELS,
-              ...(guard?.fakeAllowed === true ? [{ value: 'fake', label: 'fake（仅演练环境）' }] : []),
+              ...RUNTIME_CHANNELS.map(channel => ({ value: channel.value, label: runtimeChannelLabel(channel.value) })),
+              ...(guard?.fakeAllowed === true ? [{ value: 'fake', label: '测试 AI，仅演练环境' }] : []),
             ]}
           />
         </label>
@@ -805,7 +810,7 @@ export function BindRuntimeModal({ member, projectId, scopeProjectId, initial, g
           onChange={setAvatar}
         />
         <details><summary>高级：执行程序与权限</summary>
-        <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" placeholder="留空使用本机 CLI" value={form.executable} onChange={e=>setForm(f=>({...f,executable:e.target.value}))}/></label>
+        <label className="field"><span className="field-label">执行程序，自动查找</span><input className="input" placeholder="留空使用本机默认程序" value={form.executable} onChange={e=>setForm(f=>({...f,executable:e.target.value}))}/></label>
         <label className="field" title="只影响之后新建的任务；已有任务保持原权限">
           <span className="field-label">保存的权限模式</span>
           <Select

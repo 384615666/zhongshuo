@@ -121,7 +121,7 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
         parsed = JSON.parse(line);
       } catch {
         socket.destroy();
-        rejectConnect(new Error(`握手响应不是合法 JSON：${line.slice(0, 80)}`));
+        rejectConnect(new Error('后台服务握手响应无法识别，请重新打开众说'));
         return true;
       }
       const auth = parsed as { type?: string; error?: { message?: string } };
@@ -141,7 +141,7 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
             if (closed) return Promise.reject(new Error('管道连接已关闭'));
             const commandId = (envelope as { commandId?: string })?.commandId;
             if (typeof commandId !== 'string' || commandId.length === 0) {
-              return Promise.reject(new Error('信封缺少 commandId，无法关联响应'));
+              return Promise.reject(new Error('请求缺少关联编号，无法匹配响应'));
             }
             const timeoutMs = sendOptions?.timeoutMs ?? requestTimeoutMs;
             if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) return Promise.reject(new Error('请求超时参数无效'));
@@ -151,7 +151,7 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
                 // 超时：从关联表移除；服务端稍后的迟到响应因无等待者被丢弃（见 data 处理），
                 // 不会错配给下一个请求。连接保持（FIFO 语义仍按 commandId 精确配对）。
                 pendingByCommandId.delete(commandId);
-                reject(new Error(`请求超时（${timeoutMs}ms）：${(envelope as { method?: string }).method ?? commandId}`));
+                reject(new Error('请求超时，请稍后重试'));
               }, timeoutMs);
               pending.timer.unref?.();
               pendingByCommandId.set(commandId, pending);
@@ -166,7 +166,7 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
         return true;
       }
       socket.destroy();
-      rejectConnect(new Error(`管道握手被拒：${auth?.error?.message ?? line.slice(0, 80)}`));
+      rejectConnect(new Error(`后台服务拒绝了连接：${auth?.error?.message ?? '原因未知'}`));
       return true;
     };
 
@@ -207,20 +207,20 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
     if (options.signal != null) {
       if (options.signal.aborted) {
         socket.destroy();
-        rejectConnect(new Error('管道连接已取消（abort 先于连接）'));
+        rejectConnect(new Error('连接已取消：连接前收到取消请求'));
         return;
       }
       abortListener = () => {
         if (connectTimer != null) clearTimeout(connectTimer);
         socket.destroy();
-        failAll(new Error('管道连接已取消（外部 abort）'));
+        failAll(new Error('连接已取消：收到外部取消请求'));
       };
       options.signal.addEventListener('abort', abortListener, { once: true });
     }
     // 连接+握手总时限（auth.ok 到达才清除）。
     connectTimer = setTimeout(() => {
       socket.destroy();
-      if (!settled) { settled = true; rejectConnect(new Error(`管道连接/握手超时：${pipeName}`)); }
+      if (!settled) { settled = true; rejectConnect(new Error('后台服务连接超时')); }
     }, options.connectTimeoutMs ?? 10_000);
     connectTimer.unref?.();
   });

@@ -634,7 +634,7 @@ export function Select({
       </button>
       {open ? (
         <div className="select-pop" ref={listRef}>
-          {searchable?<input className="input" autoFocus role="searchbox" aria-label={`搜索${ariaLabel??'选项'}`} placeholder="搜索名称或模型 ID" value={query} onChange={e=>{setQuery(e.target.value);setActiveIdx(0);}} onKeyDown={e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Escape'||e.key==='Enter'||e.key==='Tab')onBtnKeyDown(e);}}/>:null}
+          {searchable?<input className="input" autoFocus role="searchbox" aria-label={`搜索${ariaLabel??'选项'}`} placeholder="搜索名称或模型标识" value={query} onChange={e=>{setQuery(e.target.value);setActiveIdx(0);}} onKeyDown={e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Escape'||e.key==='Enter'||e.key==='Tab')onBtnKeyDown(e);}}/>:null}
           <div role="listbox" id={listId} aria-label={ariaLabel??title??'选项'}>
           {shownOptions.length===0?<div className="small faint" style={{padding:10}}>没有匹配项</div>:null}
           {shownOptions.map((o, i) => (

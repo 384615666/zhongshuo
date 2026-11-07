@@ -184,7 +184,7 @@ describe('R96 delivery facts and model documents', () => {
       },
     };
     const userHtml = renderMessage(needsUser);
-    expect(userHtml).toContain('请确认生产窗口（责任方：用户）');
+    expect(userHtml).toContain('请确认生产窗口；责任方：用户');
     expect(userHtml).toContain('等待你补充');
     const revisionHtml = renderMessage(needsRevision);
     expect(revisionHtml).toContain('补充回滚步骤');

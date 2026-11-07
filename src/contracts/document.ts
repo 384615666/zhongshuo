@@ -15,7 +15,7 @@ export function isSafeDocumentFilename(filename: string): boolean {
 
 export const documentSchema = z.strictObject({
   /** Business-facing basename only; never a path. */
-  filename: z.string().refine(isSafeDocumentFilename, '文档文件名必须是安全的 .md basename'),
+  filename: z.string().refine(isSafeDocumentFilename, '文档文件名必须是不含路径的 Markdown 文件名'),
   /** Why this document is useful to the user. */
   purpose: z.string().min(1),
   /** Exact model-authored Markdown bytes; empty means no attachment. */

@@ -38,7 +38,8 @@ describe('R78 Git 部分只读失败保留事实', () => {
     const partial = getState().git.p1 as GitState;
     expect(partial.status.map((e) => e.path)).toEqual(['after.md']);
     expect([partial.branches.length, partial.commits.length, partial.remotes.length]).toEqual([1, 1, 1]);
-    expect(partial.readErrors).toMatchObject({ branches: expect.stringContaining('git.branch.list 故障'), history: expect.stringContaining('git.history 故障'), remotes: expect.stringContaining('git.remote.list 故障') });
+    expect(partial.readErrors).toMatchObject({ branches: expect.stringContaining('故障'), history: expect.stringContaining('故障'), remotes: expect.stringContaining('故障') });
+    for (const message of Object.values(partial.readErrors ?? {})) expect(message).not.toMatch(/git\.(?:branch|history|remote)/);
     phase = 'empty';
     await refreshGitState('p1');
     const empty = getState().git.p1 as GitState;

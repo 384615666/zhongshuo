@@ -242,7 +242,7 @@ export function LibraryPage() {
     try {
       await command('saved.remove', { kind: it.kind, ref: it.ref });
       recordWrite('saved.remove', `取消收藏${SAVED_KIND_LABEL[it.kind] ?? it.kind}「${it.title ?? it.ref.slice(0, 16)}…」（原消息不动）`);
-      toast('已取消收藏（原内容不受影响）', 'success');
+      toast('已取消收藏，原内容不受影响', 'success');
       await loadSaved();
       // r61 G6：消息行书签按钮与收藏页同步——取消后线程/私信里的已收藏标记同批消失。
       if (it.kind === 'message') void refreshSavedMessageRefs();
@@ -275,7 +275,7 @@ export function LibraryPage() {
                 className={`project-card is-all-scope${scope === 'visible' ? ' is-current' : ''}`}
                 data-zs-library-scope-all="1"
                 aria-current={scope === 'visible' ? 'page' : undefined}
-                title="在全部项目里搜索/查看收藏（只含侧栏当前可见的项目；不切换当前项目）"
+                title="在全部项目里搜索或查看收藏；只含侧栏当前可见的项目，不切换当前项目"
                 onClick={selectAllProjects}
               >
                 <span className="project-card-name">
@@ -294,7 +294,7 @@ export function LibraryPage() {
                     className={`project-card${current ? ' is-current' : ''}`}
                     data-zs-library-project={p.id}
                     aria-current={current ? 'page' : undefined}
-                    title={current ? `${p.displayName}（搜索与收藏页当前项目）` : `只看「${p.displayName}」，并把当前项目切到它`}
+                    title={current ? `${p.displayName}，搜索与收藏页当前项目` : `只看「${p.displayName}」，并把当前项目切到它`}
                     onClick={() => selectProject(p.id)}
                   >
                     <span className="project-card-name" title={p.displayName}>{p.displayName}</span>
@@ -365,7 +365,7 @@ export function LibraryPage() {
                         <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
                       </label>
                       {scope === 'project' && rooms.length > 0 ? (
-                        <label className="field inline" title="限定会话（当前项目的房间）">
+                        <label className="field inline" title="限定会话，仅当前项目的房间">
                           <span className="field-label">会话</span>
                           <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
                         </label>
@@ -443,8 +443,8 @@ export function LibraryPage() {
                     ) : null}
                     {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && noActiveProject) ? (
                       <div className="panel info">
-                        当前范围没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}
-                        {linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联，不在项目范围显示（收藏仍保留）` : ''}。
+                        当前范围没有收藏{otherHidden > 0 ? `，另有 ${otherHidden} 条其它项目的收藏` : ''}
+                        {linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联，不在项目范围显示，收藏仍保留` : ''}。
                         {otherHidden > 0 ? '可点左栏「全部项目」查看侧栏可见项目。' : ''}
                       </div>
                     ) : null}
@@ -458,7 +458,7 @@ export function LibraryPage() {
                             <div className="spacer" />
                             <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
                             {it.kind === 'link' ? (
-                              <button className="btn ghost sm" title="复制链接（应用内不自动打开外部网址）" onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}>复制链接</button>
+                              <button className="btn ghost sm" title="复制链接，应用内不自动打开外部网址" onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}>复制链接</button>
                             ) : it.status === 'ok' ? (
                               <button className="btn ghost sm" title="回到原处" onClick={() => locate(it.locate)}>回原处</button>
                             ) : it.status === 'missing' ? (
@@ -466,7 +466,7 @@ export function LibraryPage() {
                             ) : (
                               <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
                             )}
-                            <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（不会删除原内容）">取消收藏</button>
+                            <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏，不会删除原内容">取消收藏</button>
                           </div>
                         </div>
                       ))}

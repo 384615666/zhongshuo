@@ -125,7 +125,7 @@ export function RelocateButton({ projectId }: { projectId: string }) {
           setBusy(true);
           const r = await projectLifecycleReal(projectId, p?.revision ?? 0, 'relocate', d);
           setBusy(false);
-          if (r.ok) toast('已重新定位（projectId 与历史保持不变）', 'success');
+          if (r.ok) toast('已重新定位，项目编号与历史保持不变', 'success');
           else toast(`重新定位失败：${userFacingSystemText(r.error ?? '')}`, 'error');
         })();
       }}
@@ -213,11 +213,11 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
           </div>
           <ErrorState
             code="PROJECT_MISSING"
-            detail="磁盘上找不到这个目录。历史任务、成果与报告都还在，重新定位会保留原 projectId。"
+            detail="磁盘上找不到这个目录。历史任务、成果与报告都还在，重新定位会保留原项目编号。"
             actions={<RelocateButton projectId={p.id} />}
           />
           <div className="panel" style={{ marginTop: 14 }}>
-            不会因为在错误目录运行而丢数据：定位失败时保持暂停派发；重新定位后所有 threadId、任务号与成果引用保持不变。
+            不会因为在错误目录运行而丢数据：定位失败时保持暂停派发；重新定位后所有回复串编号、任务号与成果引用保持不变。
           </div>
         </div>
       </div>
@@ -260,7 +260,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
                     <Icon name="chevron-right" size={13} className="faint" />
                   </div>
                   <div className="row tight wrap small faint" style={{ marginTop: 6 }}>
-                    <span>协调者 {coord != null ? memberLabel(coord) : '（未设置——首个成员接单）'}</span>
+                    <span>协调者 {coord != null ? memberLabel(coord) : '未设置，由首个成员接单'}</span>
                     <span>· {r.memberIds.length} 名成员</span>
                   </div>
                 </div>
@@ -270,7 +270,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
 
           <div>
             <div className="section-title">活跃任务<span className="count">{tasks?.length ?? '…'}</span><button className="btn ghost sm" onClick={() => refreshBoard.current()}>刷新</button></div>
-            {taskError != null ? <div className="panel warning">任务概况读取失败：{userFacingSystemText(taskError ?? '')}（保留本项目上次已确认的任务列表，可刷新重试）</div> : null}
+            {taskError != null ? <div className="panel warning">任务概况读取失败：{userFacingSystemText(taskError ?? '')}；保留本项目上次已确认的任务列表，可刷新重试</div> : null}
             {tasks == null && taskError == null ? <div className="panel info">正在读取本项目任务概况…</div> : tasks != null && tasks.length === 0 ? (
               <div className="panel">当前没有活跃任务。房间里的任务看板会保留已完成与已取消的记录。</div>
             ) : tasks != null ? (
@@ -286,7 +286,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
                     <TaskStatusTag status={t.status} />
                     <div className="spacer" />
                   </div>
-                  <div className="strong" style={{ marginTop: 5, fontSize: 12.5 }}>{t.title || '（标题未装载——进线程查看）'}</div>
+                  <div className="strong" style={{ marginTop: 5, fontSize: 12.5 }}>{t.title || '标题未装载，请进线程查看'}</div>
                 </div>
               ))
             ) : null}
@@ -296,7 +296,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
               <div key={m.id} className="member-row" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
                 <Avatar name={m.displayName} color={memberColor(m.id)} size={22} subject={`member:${m.id}`} />
                 <span className="member-row-name">{memberLabel(m)}</span>
-                <span className="member-row-state" title={m.model?`完整模型 ID：${m.model}`:undefined}>{m.model?runtimeModelDisplayName({id:m.model,label:m.model}):''}</span>
+                <span className="member-row-state" title={m.model?`完整模型编号：${m.model}`:undefined}>{m.model?runtimeModelDisplayName({id:m.model,label:m.model}):''}</span>
               </div>
             ))}
           </div>

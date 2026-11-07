@@ -6,7 +6,25 @@
  *  - §17.5 状态必须文字 + 图标，不能只靠颜色
  */
 
+import { RUNTIME_CHANNELS } from '../../../contracts/runtimeKinds.ts';
 import type { Consensus, ErrorCode, RouteMode, TaskStatus, TurnStatus, RunStatus } from '../data/types.js';
+
+/* ---------- 渠道与思考等级：内部枚举只用于数据，不上屏 ---------- */
+
+/** 运行渠道的中文展示名；内部枚举值（claude/codex/deepseek-harness/pi/fake）不上屏。 */
+export function runtimeChannelLabel(kind: string): string {
+  if (kind === 'fake') return '测试 AI';
+  return RUNTIME_CHANNELS.find((channel) => channel.value === kind)?.label.replace(/ CLI$/, '') ?? '其他渠道';
+}
+
+const effortCopy: Record<string, string> = {
+  none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高',
+};
+
+/** 思考等级的中文展示名；未知等级不把英文枚举值上屏。 */
+export function effortLabel(effort: string): string {
+  return effortCopy[effort] ?? '渠道未列出';
+}
 
 /* ---------- 费用（RT-17） ---------- */
 
@@ -17,8 +35,8 @@ export function formatCost(quality: 'reported' | 'estimated' | 'unknown', amount
 }
 
 export function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} 百万`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)} 千`;
   return String(n);
 }
 
@@ -82,7 +100,7 @@ export function runtimeModelPickerOptions(
 
 export const consensusCopy: Record<Consensus, { label: string; icon: string; tone: Tone }> = {
   unanimous: { label: '全体确认一致', icon: 'check-circle', tone: 'success' },
-  qualified: { label: '有条件同意（保留条件）', icon: 'alert-circle', tone: 'warning' },
+  qualified: { label: '有条件同意，保留条件', icon: 'alert-circle', tone: 'warning' },
   disputed: { label: '存在未解决反对', icon: 'scale', tone: 'danger' },
   unconfirmed: { label: '有成员未确认', icon: 'help-circle', tone: 'neutral' },
 };
@@ -97,7 +115,7 @@ export function consensusLabel(
   lateMemberIds: string[] = [],
 ): string {
   if (absentMemberIds.length > 0) return '有成员缺席，不构成全体一致';
-  if (consensus === 'unanimous' && lateMemberIds.length > 0) return '全体确认（含迟到纳入）';
+  if (consensus === 'unanimous' && lateMemberIds.length > 0) return '全体确认，含迟到纳入';
   return consensusCopy[consensus]?.label ?? consensus;
 }
 
@@ -179,8 +197,8 @@ export const routeModeCopy: Record<RouteMode, { label: string; detail: string }>
 /* ---------- 19 个错误码（§16.5） ---------- */
 
 export const errorCopy: Record<ErrorCode, { title: string; action: string }> = {
-  RUNTIME_NOT_FOUND: { title: '找不到该 CLI', action: '指定 CLI 路径，或安装后重新检测' },
-  AUTH_REQUIRED: { title: '需要登录', action: '按 CLI 官方方式登录后重试' },
+  RUNTIME_NOT_FOUND: { title: '找不到执行程序', action: '指定执行程序路径，或安装后重新检测' },
+  AUTH_REQUIRED: { title: '需要登录', action: '按官方方式登录后重试' },
   CAPABILITY_UNSUPPORTED: { title: '能力不支持', action: '本模式所需能力不支持，已列出可用方案' },
   PROVIDER_LIMITED: { title: '模型服务限流或额度不足', action: '任务已保留，稍后重试' },
   PROJECT_MISSING: { title: '项目目录不存在', action: '重新定位项目目录' },
@@ -219,7 +237,7 @@ export const stageCopy: Record<string, string> = {
 
 /** 主界面不裸露 ISSUE_DISCUSSION 这类内部枚举（评审意见 5） */
 export function stageLabel(stage: string): string {
-  return stageCopy[stage] ?? stage;
+  return stageCopy[stage] ?? '其他阶段';
 }
 
 /* ---------- 时间 ---------- */
@@ -246,6 +264,13 @@ export function formatBytes(n: number): string {
   if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${n} B`;
+}
+
+/** 提示文案里的文件大小：只用中文单位（数据表格仍沿用 formatBytes 的短单位）。 */
+export function formatByteSize(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} 兆字节`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} 千字节`;
+  return `${n} 字节`;
 }
 
 export function formatDuration(ms: number): string {

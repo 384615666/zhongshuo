@@ -109,7 +109,7 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId
         renderTaskRef.current = task;
         try { await task.promise; } finally { try { page.cleanup?.(); } catch { /* document already disposed */ } }
       } catch (e) {
-        if (!cancelled) setErr(`页面渲染失败：${String((e as Error).message).slice(0, 120)}`);
+        if (!cancelled) setErr(`页面渲染失败：${userFacingSystemText(String((e as Error).message).slice(0, 120))}`);
       } finally {
         if (!cancelled) renderTaskRef.current = null;
       }
@@ -147,7 +147,7 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId
       <div className="preview-unsupported" data-zs-pdf-error={err.slice(0, 40)}>
         <Icon name="alert-triangle" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>PDF 渲染失败</div>
-        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}——原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}；原件已保存，版本 {revisionLabel}；可下载后用系统工具打开。</div>
         <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
       </div>
     );
@@ -156,7 +156,7 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId
     <div className="pdf-view" data-zs-pdf-view="1" data-zs-pdf-pages={doc?.numPages ?? ''} data-zs-pdf-page={pageNumber} data-zs-pdf-zoom={zoomMode === 'fit' ? 'fit' : `${zoomMode}%`}>
       <div className="pdf-stage" ref={stageRef}>
         <div className="pdf-stage-inner">
-          {doc == null ? <div className="panel info" data-zs-pdf-loading="1">正在打开 PDF（{filename}）…</div> : (
+          {doc == null ? <div className="panel info" data-zs-pdf-loading="1">正在打开 PDF：{filename}…</div> : (
             <canvas ref={canvasRef} className="pdf-canvas" data-zs-pdf-canvas="r70" />
           )}
         </div>
@@ -182,7 +182,7 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId
         <button className="preview-icon-btn" aria-label="放大" onClick={zoomIn}><Icon name="zoom-in" size={14} /></button>
         <button className="preview-icon-btn" aria-label="适应面板宽度" title="按面板实际宽高适应显示" onClick={() => setZoomMode('fit')}><Icon name="maximize" size={13} /></button>
         <span className="pptx-bar-sep" />
-        <button className="preview-icon-btn" aria-label="下载原文件" title="保存这份 PDF 的原件字节（另存为）" onClick={onDownload}><Icon name="download" size={14} /></button>
+        <button className="preview-icon-btn" aria-label="下载原文件" title="保存这份 PDF 的原件，可另存为" onClick={onDownload}><Icon name="download" size={14} /></button>
       </div>
     </div>
   );

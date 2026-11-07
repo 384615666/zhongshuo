@@ -70,7 +70,7 @@ describe('R98 AI 设置里的调用预算开关', () => {
     expect(html).toContain('更改对新请求生效');
     expect(html).toContain(`单人执行 ${DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次`);
     expect(html).toContain(`自动协作 ${DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次`);
-    expect(html).toContain(`双人独立研讨 ${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次（随人数调整）`);
+    expect(html).toContain(`双人独立研讨 ${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次，随人数调整`);
     const text = html.replace(/<[^>]*>/g, '');
     expect(text).not.toMatch(/DIRECT|AUTO|DELIBERATE/);
     expect(text.match(/默认上限/g)).toHaveLength(1);

@@ -34,7 +34,7 @@ const key='thread:t1';
 let target={kind:'thread',roomId:'r1',threadId:'t1'};
 let conversationId,disabled;
 function render(){root.render(createElement(Composer,{target,draftKey:key,formalLimits:{access:'由正式权限决定'},attachmentUpload:conversationId?{conversationId}:undefined,sendDisabledReason:disabled,onSend:async payload=>{sends.push(payload);return {status:'failed',error:'发送授权复查拒绝'};}}));}
-function resolveRead(index,reason='CLI 完整权限'){reads[index].resolve({ok:true,data:{modificationAuthorized:true,fullAccess:true,willDispatch:true,reason}});}
+function resolveRead(index,reason='命令行完整权限'){reads[index].resolve({ok:true,data:{modificationAuthorized:true,fullAccess:true,willDispatch:true,reason}});}
 function failRead(index){reads[index].resolve({ok:false,error:{code:'QUERY_UNAVAILABLE',message:'权限查询现场测试错误'}});}
 const settings=()=>document.querySelector('[aria-label="本次运行设置"]').click();
 const revision=n=>store.setState(s=>({...s,threadTasks:{t1:{...s.threadTasks.t1,revision:n}}}));
@@ -54,7 +54,7 @@ window.run=async()=>{
  check('existing_menu_displays_actual_failure',document.body.innerText.includes('权限查询现场测试错误'));
  settings();await sleep(20);
  tick();await until(()=>reads.length===2);resolveRead(1);await sleep(30);
- settings();await until(()=>document.body.innerText.includes('CLI 完整权限'));
+ settings();await until(()=>document.body.innerText.includes('命令行完整权限'));
  check('successful_poll_recovers_without_stale_error',!document.body.innerText.includes('权限查询现场测试错误'));
  settings();await sleep(20);
  tick();await until(()=>reads.length===3);

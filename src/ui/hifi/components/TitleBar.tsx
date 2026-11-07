@@ -55,11 +55,11 @@ class TitleBarBoundary extends Component<{ children: ReactNode }, { failed: bool
       return (
         <div className="zs-titlebar" data-zs-titlebar-rendered="react" data-zs-titlebar-degraded="1">
           <span className="zs-tb-name">众说</span>
-          <span className="zs-tb-stat" title="标题栏显示异常；主界面不受影响（重启应用可恢复完整标题栏）">标题栏已降级</span>
+          <span className="zs-tb-stat" title="标题栏显示异常；主界面不受影响，重启应用可恢复完整标题栏">标题栏已降级</span>
           <div className="zs-tb-drag" title="拖动窗口；双击最大化/还原" onDoubleClick={() => { void d?.toggleMaximize(); }} />
           <button type="button" className="zs-winbtn" title="最小化" aria-label="最小化" onClick={() => { void d?.minimize(); }}><Icon name="minus" size={12} /></button>
           <button type="button" className="zs-winbtn" title="最大化/还原" aria-label="最大化或还原" onClick={() => { void d?.toggleMaximize(); }}><Icon name="maximize" size={11} /></button>
-          <button type="button" className="zs-winbtn close" title="关闭窗口（经既有优雅停机链）" aria-label="关闭窗口" onClick={() => { void d?.close(); }}><Icon name="x" size={12} /></button>
+          <button type="button" className="zs-winbtn close" title="关闭窗口，正常退出程序" aria-label="关闭窗口" onClick={() => { void d?.close(); }}><Icon name="x" size={12} /></button>
         </div>
       );
     }
@@ -160,7 +160,7 @@ export function TitleBar() {
           data-project-status={project?.status ?? 'none'}
           ref={projectTrigger}
           title={project != null
-            ? `切换项目、显示项目或打开文件夹\n当前项目：${project.displayName}（${project.rootPath}）`
+            ? `切换项目、显示项目或打开文件夹\n当前项目：${project.displayName}\n项目路径：${project.rootPath}`
             : '打开文件夹添加项目'}
           aria-label={project != null ? `项目管理，当前项目：${project.displayName}` : '项目管理，尚未选择项目'}
           aria-haspopup="menu"
@@ -180,7 +180,7 @@ export function TitleBar() {
           title="拖动窗口；双击最大化/还原"
           onDoubleClick={() => { void d?.toggleMaximize().then((r) => { if (r.ok && typeof r.maximized === 'boolean') setState((s) => ({ ...s, maximized: r.maximized as boolean })); }); }}
         />
-        <button type="button" className="zs-winbtn" title={d == null ? '最小化（桌面客户端可用）' : '最小化'} aria-label="最小化" onClick={() => { void d?.minimize(); }}>
+        <button type="button" className="zs-winbtn" title={d == null ? '最小化；桌面客户端可用' : '最小化'} aria-label="最小化" onClick={() => { void d?.minimize(); }}>
           <Icon name="minus" size={12} />
         </button>
         <button type="button" className="zs-winbtn" title={state.maximized ? '还原' : '最大化'} aria-label={state.maximized ? '还原窗口' : '最大化窗口'} onClick={() => { void d?.toggleMaximize().then((r) => { if (r.ok && typeof r.maximized === 'boolean') setState((s) => ({ ...s, maximized: r.maximized as boolean })); }); }}>
@@ -235,7 +235,7 @@ function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: numb
             <button
               className={`menu-check${isVisible ? ' on' : ''}${isCurrent ? ' locked' : ''}`}
               aria-pressed={isVisible}
-              title={isCurrent ? '当前项目不能隐藏，切换到其他项目后可隐藏' : isVisible ? '从侧栏隐藏（只影响显示）' : '显示在侧栏'}
+              title={isCurrent ? '当前项目不能隐藏，切换到其他项目后可隐藏' : isVisible ? '从侧栏隐藏，只影响显示' : '显示在侧栏'}
               onClick={(e) => { e.stopPropagation(); toggleProjectVisible(p.id); }}
             >
               <Icon name={isVisible ? 'check-square' : 'square'} size={13} />
@@ -267,7 +267,7 @@ function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: numb
         <Icon name="plus" size={13} /> 打开本地文件夹…
       </button>
       <button className="menu-item" onClick={() => { onClose(); if (activeId !== '') navigate(`/project/${activeId}`); }}>
-        <Icon name="refresh" size={13} /> 项目主页（目录失效时重新定位）
+        <Icon name="refresh" size={13} /> 项目主页，目录失效时重新定位
       </button>
     </Menu>
   );

@@ -187,12 +187,12 @@ export function PptxView({ bytes, filename, revisionLabel, onDownload, resourceI
       <div className="preview-unsupported" data-zs-pptx-error={err.slice(0, 40)}>
         <Icon name="alert-triangle" size={20} className="faint" />
         <div className="strong" style={{ marginTop: 8 }}>幻灯片渲染失败</div>
-        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}——原件已保存（{revisionLabel}），可下载后用系统工具打开；提取文本见「文件信息」。</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{userFacingSystemText(err ?? '')}；原件已保存，版本 {revisionLabel}；可下载后用系统工具打开；提取文本见「文件信息」。</div>
         <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
       </div>
     );
   }
-  if (doc == null) return <div className="panel info" data-zs-pptx-loading="1">正在打开幻灯片（解析 {filename}）…</div>;
+  if (doc == null) return <div className="panel info" data-zs-pptx-loading="1">正在打开幻灯片，正在解析 {filename}…</div>;
   if (doc.pageCount === 0) return <div className="panel info">这份演示文稿没有幻灯片。</div>;
 
   return (
@@ -227,7 +227,7 @@ export function PptxView({ bytes, filename, revisionLabel, onDownload, resourceI
           <span className="pptx-zoom-label">{zoomPercent}%</span>
           <button className="preview-icon-btn" aria-label="放大" disabled={zoomPercent >= 400} onClick={() => setZoomPercent((z) => Math.min(400, z + 25))}><Icon name="zoom-in" size={14} /></button>
           <span className="pptx-bar-sep" />
-          <button className="preview-icon-btn" aria-label="下载原文件" title="保存这份 PPT 的原件字节（另存为）" onClick={onDownload}><Icon name="download" size={14} /></button>
+          <button className="preview-icon-btn" aria-label="下载原文件" title="保存这份演示文稿的原件，可另存为" onClick={onDownload}><Icon name="download" size={14} /></button>
         </div>
       </div>
     </div>

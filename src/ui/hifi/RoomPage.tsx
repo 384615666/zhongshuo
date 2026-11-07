@@ -63,14 +63,14 @@ export function RoomPage({ roomId }: { roomId: string }) {
         <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="打开本房间的消息、任务与成果" onClick={() => navigate(`/project/${room.projectId}/room/${room.id}`)}>打开房间</button>
       </div>
       <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
-        {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}（保留上次内容——重试=切换视图或等待自动刷新）</div> : null}
+        {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{userFacingSystemText(readError ?? '')}。已保留上次内容，可切换视图或等待自动刷新。</div> : null}
         {cards.length === 0 && readError == null ? <div className="panel info">还没有消息，发送第一条开始交流。</div> : null}
         {cards.map((c) => (
           <div
             key={c.threadId}
             className="root-card"
             style={{ cursor: 'pointer' }}
-            title={c.taskId != null ? `打开回复串（任务 ${c.taskId}）` : '打开记录串（无任务——发送仅保存）'}
+            title={c.taskId != null ? `打开回复串，任务 ${c.taskId}` : '打开记录串：无任务，发送仅保存'}
             onClick={(e) => {
               // 文本选择不算点击（拖选复制不进线程——原型同一保护）。
               const sel = window.getSelection();
@@ -87,13 +87,13 @@ export function RoomPage({ roomId }: { roomId: string }) {
               <span style={{ flex: 1 }} />
               <span className="small faint">{c.createdAt > 0 ? new Date(c.createdAt).toLocaleString() : '时间未知'}</span>
             </div>
-            <div className="root-body clamp-2" style={{ marginTop: 4 }}>{c.body || '（正文无法读取）'}</div>
+            <div className="root-body clamp-2" style={{ marginTop: 4 }}>{c.body || '正文无法读取'}</div>
             {c.delivery?.feedback?.find((item) => item.status === 'needs_revision' || item.status === 'needs_user') ? (
               <div className="small faint" style={{ marginTop: 4 }}>
                 {(() => {
                   const item = c.delivery!.feedback!.find((entry) => entry.status === 'needs_revision')
                     ?? c.delivery!.feedback!.find((entry) => entry.status === 'needs_user')!;
-                  return item.question ? `${item.question}${item.owner ? `（责任方：${item.owner}）` : ''}` : item.revisionRequest;
+                  return item.question ? `${item.question}${item.owner ? `，责任方：${item.owner}` : ''}` : item.revisionRequest;
                 })()}
               </div>
             ) : null}
@@ -118,15 +118,15 @@ export function RoomPage({ roomId }: { roomId: string }) {
         formalLimits={FORMAL_LIMITS}
         attachmentUpload={room.conversationId != null && room.conversationId !== '' ? { conversationId: room.conversationId } : undefined}
         onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-          if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（上次发送记录）', 'success'); }
-          return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${userFacingSystemText(r.error ?? '')}` } : { status: 'unknown', error: r.error };
+          if (r.status === 'ok') { void loadRoomPool(roomId); toast('已按上次发送记录重发成功', 'success'); }
+          return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: userFacingSystemText(r.error ?? '') } : { status: 'unknown', error: r.error };
         })}
         onSend={(p): Promise<FormalSendOutcome> => (async () => {
           // 发送前用唯一正式 builder 固化完整信封（含 projectId/conversationId/roomId——
           // 不从 UI 目标重造，review-r48 §3）；unknown 时按发起键冻结这份原信封。
           const intent = p.sendAs === 'record' ? 'record_only' : 'default';
           if (roomMembers.length === 0 && intent === 'default') {
-            return { status: 'failed', error: '该房间没有启用成员——无法发送（可先用「仅记录」保存）' };
+            return { status: 'failed', error: '该房间没有启用成员，无法发送；可先用「仅记录」保存' };
           }
           const draftKey = `room:${roomId}`;
           const refs = attachmentRefsFromDraft(draftKey, intent);
@@ -142,10 +142,10 @@ export function RoomPage({ roomId }: { roomId: string }) {
           else confirmOutboundUnknown(draftKey, env);
           if (r.status === 'ok') {
             void loadRoomPool(roomId).catch(() => { /* 读取失败另有呈现 */ });
-            toast(intent === 'record_only' ? '已仅记录（不会发送给 AI）' : '已发送', 'success');
+            toast(intent === 'record_only' ? '已仅记录，不会发送给 AI' : '已发送', 'success');
             return { status: 'ok' };
           }
-          return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${userFacingSystemText(r.error ?? '')}` } : { status: 'unknown', error: r.error };
+          return r.status === 'failed' ? { status: 'failed', error: userFacingSystemText(r.error ?? '') } : { status: 'unknown', error: r.error };
         })()}
       />
     </div>

@@ -6,6 +6,7 @@
  */
 import { command } from '../bridge';
 import { setState, toast, recordWrite } from './store';
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import type { getState } from './store';
 import { markThreadReadIfAllowed, stopThreadTask, loadThread, refreshRooms, refreshMembers } from '../loader';
 import type { Task } from './types';
@@ -19,9 +20,9 @@ export async function toggleThreadSubscription(threadId: string, patch: { follow
       subscriptions: { ...s.subscriptions, [threadId]: { followed: r.followed, muted: r.muted } },
     }));
     recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
-    toast(patch.mute === true ? '已静音（未读/通知聚合排除；待办保留）' : patch.follow === true ? '已关注（有新回复会在活动流中保留）' : '订阅已更新', 'success');
+    toast(patch.mute === true ? '已静音；未读和通知聚合排除，待办保留' : patch.follow === true ? '已关注；有新回复会在活动流中保留' : '订阅已更新', 'success');
   } catch (e) {
-    toast(`订阅更新失败：${(e as Error).message}`, 'error');
+    toast(`订阅更新失败：${userFacingSystemText((e as Error).message)}`, 'error');
   }
 }
 
@@ -36,7 +37,7 @@ export async function reactMessageReal(messageId: string, emoji: string, threadI
     await command('message.react', { messageId, emoji });
     if (threadId != null) void loadThread(threadId).catch(() => { /* 刷新失败另有呈现 */ });
   } catch (e) {
-    toast(`表情失败：${(e as Error).message}`, 'error');
+    toast(`表情失败：${userFacingSystemText((e as Error).message)}`, 'error');
   }
 }
 
@@ -50,11 +51,12 @@ export async function exportThreadReal(target: { kind: 'thread'; projectId: stri
   const { openExportDir } = await import('../bridge');
   try {
     const r = await command<{ exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number } }>('export.create', { target, format });
-    recordWrite('export.create', `导出线程 ${format}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
-    toast(`已导出 ${format.toUpperCase()}（${r.stats.messages} 消息 · ${r.files.length} 文件）`, 'success');
-    void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${(e as Error).message}（目录 ${r.dir}）`, 'error'));
+    const formatLabel = ({ md: 'Markdown', html: 'HTML', docx: 'Word' } as Record<string, string>)[format] ?? '文档';
+    recordWrite('export.create', `导出线程 ${formatLabel}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
+    toast(`已导出 ${formatLabel}：${r.stats.messages} 消息 · ${r.files.length} 文件`, 'success');
+    void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${userFacingSystemText((e as Error).message)}；目录 ${r.dir}`, 'error'));
   } catch (e) {
-    toast(`导出失败：${(e as Error).message}`, 'error');
+    toast(`导出失败：${userFacingSystemText((e as Error).message)}`, 'error');
   }
 }
 
@@ -67,7 +69,7 @@ export async function createRoomReal(projectId: string, name: string): Promise<s
     toast(`已创建房间「${name}」`, 'success');
     return r.room.id;
   } catch (e) {
-    toast(`创建房间失败：${(e as Error).message}`, 'error');
+    toast(`创建房间失败：${userFacingSystemText((e as Error).message)}`, 'error');
     return null;
   }
 }

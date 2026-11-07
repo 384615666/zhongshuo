@@ -160,7 +160,7 @@ window.run=async()=>{
   check('read_error_toolbar_quiet',document.querySelector('[data-zs-call-budget]')==null);
   openRunSettings();
   await until(()=>document.querySelector('[data-zs-call-budget-read-error="1"]')!=null);
-  check('read_error_kept_useful',document.querySelector('[data-zs-call-budget-read-error="1"]').textContent.includes('settings read failed'));
+  check('read_error_kept_useful',document.querySelector('[data-zs-call-budget-read-error="1"]').textContent.includes('调用次数预算设置读取失败'));
   await editBody('send despite unreadable setting');
   document.querySelector('.composer-send').click();
   await until(()=>payloads.length===1);

@@ -30,6 +30,6 @@ export function DiffText({left,right,leftLabel,rightLabel}:{left:string|null|und
         <span className="preview-diff-sign">{line.type==='add'?'+':line.type==='del'?'−':' '}</span>
         <span className="preview-diff-text">{line.text||' '}</span>
       </div>)}</div>
-    {rows.length>limit?<button className="btn sm" onClick={()=>setLimit(value=>value+500)}>显示更多（还有 {rows.length-limit} 行）</button>:null}
+    {rows.length>limit?<button className="btn sm" onClick={()=>setLimit(value=>value+500)}>显示更多，还有 {rows.length-limit} 行</button>:null}
   </div>;
 }

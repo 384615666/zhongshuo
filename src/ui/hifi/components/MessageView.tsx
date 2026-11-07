@@ -13,7 +13,7 @@ import {chatAnswer} from '../../../contracts/chatAnswer';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
-import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageCopy, stageLabel } from '../lib/format';
+import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageCopy, stageLabel, turnStatusCopy } from '../lib/format';
 import type { CollaborationStage, Message, ProjectMember, RouteMode } from '../data/types';
 import { recordLocalOnly, stripInlineAttachmentTokens, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
@@ -61,8 +61,7 @@ export function messageSelectionText(root: Node | null, selection: Selection | n
  */
 export function collaborationStageText(mark: CollaborationStage): string {
   const shifted = mark.stage.toUpperCase();
-  const mapped = stageLabel(shifted);
-  const readable = Object.values(stageCopy).includes(mapped) || /[\u4e00-\u9fff]/.test(mapped) ? mapped : '研讨发言';
+  const readable = stageCopy[shifted] ?? '研讨发言';
   const round = typeof mark.roundNo === 'number' && Number.isFinite(mark.roundNo) && mark.roundNo > 0 ? ` · 第${Math.floor(mark.roundNo)}轮` : '';
   return `${readable}${round}`;
 }
@@ -101,14 +100,14 @@ function MessageAttachments({
             : rev?.content.kind === 'markdown' ? 'Markdown'
               : rev?.content.kind === 'csv' ? 'CSV'
                 : rev?.content.kind === 'code' ? '代码'
-                  : rev?.content.kind === 'diff' ? 'diff'
+                  : rev?.content.kind === 'diff' ? '差异'
                     : rev?.content.kind === 'unsupported' ? '不支持预览'
                       : '文本';
         return (
           <button
             key={link.id}
             className="msg-attach"
-            title={`打开 ${res.title}（v${link.revision}）· 只读预览，不发送给 AI`}
+            title={`打开 ${res.title} v${link.revision} · 只读预览，不发送给 AI`}
             onClick={() => onOpen?.(link.resourceId, link.revision)}
           >
             <Icon name="file-text" size={12} />
@@ -141,9 +140,9 @@ function DeliveryFacts({ delivery }: { delivery?: Message['delivery'] }) {
     ?? delivery.feedback?.find((item) => item.status === 'needs_user');
   const issue = delivery.issueResolutions?.find((item) => item.status === 'needs_user')
     ?? delivery.issueResolutions?.find((item) => item.status === 'insufficient_evidence');
-  const action = delivery.question || (feedback?.question ? `${feedback.question}${feedback.owner ? `（责任方：${feedback.owner}）` : ''}` : '')
+  const action = delivery.question || (feedback?.question ? `${feedback.question}${feedback.owner ? `；责任方：${feedback.owner}` : ''}` : '')
     || feedback?.revisionRequest
-    || (issue?.question ? `${issue.question}${issue.owner ? `（责任方：${issue.owner}）` : ''}` : '')
+    || (issue?.question ? `${issue.question}${issue.owner ? `；责任方：${issue.owner}` : ''}` : '')
     || feedback?.reason || issue?.reason;
   return (
     <div className="row tight wrap" data-zs-delivery-state={delivery.status}>
@@ -244,7 +243,7 @@ export function MessageView({
       <MessageBody message={message} mode={mode} readingAids={readingAids === true} forceExpanded={forceExpanded === true} hasDetail={hasDetail} memberName={author?.displayName} onOpenSubtask={onOpenSubtask} onOpenArtifact={onOpenArtifact} onApproval={onApproval} />
       {typeof message.detailMarkdown === 'string' && message.detailMarkdown.trim().length > 0 ? (
         <details className="msg-detail-fallback">
-          <summary>完整详情（附件不可用，原文已保留）</summary>
+          <summary>完整详情：附件不可用，原文已保留</summary>
           <div className="msg-detail-fallback-body"><MarkdownView text={message.detailMarkdown} specTables={readingAids === true} headingAnchors={readingAids === true} /></div>
         </details>
       ) : null}
@@ -792,7 +791,7 @@ function SystemCard({
                 if (a.api === 'task.retry') onRetry?.();
                 else if (a.api === 'run.allowMissing') onAllowMissing?.();
                 else if (a.api === 'task.steer') onSteer?.();
-                else recordLocalOnly(a.api, `${a.label}（演示）`);
+                else recordLocalOnly(a.api, `${a.label}，演示`);
               }}
             >
               {a.label}
@@ -824,12 +823,12 @@ export function TurnUsageLine({
       <span className="strong">{memberName}</span>
       {/* 阶段与状态都走中文标签，不裸露内部枚举（评审意见 5） */}
       <Tag plain icon="layers">{stageLabel(stage)}</Tag>
-      <Tag plain>{status}</Tag>
+      <Tag plain>{ (turnStatusCopy as Record<string,{label:string}>)[status]?.label ?? '状态未知'}</Tag>
       {durationMs ? <span className="faint">{formatDuration(durationMs)}</span> : null}
       {usage ? (
         <>
           <span className="faint mono-sm">
-            入 {formatTokens(usage.inputTokens)}（缓存 {formatTokens(usage.cachedInputTokens)}）· 出 {formatTokens(usage.outputTokens)}
+            入 {formatTokens(usage.inputTokens)}，缓存 {formatTokens(usage.cachedInputTokens)} · 出 {formatTokens(usage.outputTokens)}
           </span>
           {/* RT-17：未知费用不显示为 0 */}
           <CostText quality={usage.costQuality} amount={usage.costAmount} />

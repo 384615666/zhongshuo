@@ -7,6 +7,16 @@ import type {
 } from '../../../contracts/executionStatus.ts';
 import { Icon, type IconName } from './Icon';
 import { Tag } from './ui';
+import { taskStatusCopy } from '../lib/format';
+
+const MEMBER_STATUS_COPY: Record<string, string> = {
+  PENDING: '待派发', DISPATCHING: '正在派发', RUNNING: '运行中', WAITING_APPROVAL: '等待授权',
+  WAITING_INPUT: '等待输入', STOPPING: '正在停止', SUCCEEDED: '成功', FAILED: '失败',
+  CANCELLED: '已取消', UNKNOWN: '结果不明',
+};
+const CHANGE_APPLICATION_COPY: Record<string, string> = {
+  applied: '已应用', not_applied: '未应用', reverted: '已撤销', partial: '部分应用',
+};
 
 type TagTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'accent';
 
@@ -180,7 +190,7 @@ function resultText(status: TaskExecutionStatus): string {
   ].filter((part): part is string => part != null);
   if (parts.length === 0 && results.changeSets.length === 0) return '还没有成果';
   const current = results.currentDelivery;
-  return `${parts.join(' · ')}${current == null ? '' : ` · 当前 v${current.revision}（${current.reviewStatus === 'pending' ? '待验收' : current.reviewStatus === 'accepted' ? '已验收' : current.reviewStatus === 'changes_requested' ? '要求修改' : current.reviewStatus === 'superseded' ? '已被替代' : '无需验收'}）`}`;
+  return `${parts.join(' · ')}${current == null ? '' : ` · 当前 v${current.revision}，${current.reviewStatus === 'pending' ? '待验收' : current.reviewStatus === 'accepted' ? '已验收' : current.reviewStatus === 'changes_requested' ? '要求修改' : current.reviewStatus === 'superseded' ? '已被替代' : '无需验收'}`}`;
 }
 
 export interface ExecutionStatusProps {
@@ -318,16 +328,16 @@ export function ExecutionStatus({
               <div>最后业务活动：{status.lastBusinessActivity == null ? '无可确认活动' : `${status.lastBusinessActivity.summary} · ${timeText(status.lastBusinessActivity.at)}`}</div>
               <div>成果：{resultText(status)}</div>
               {status.actualPerformingMembers.map(member => (
-                <div key={`actual:${member.memberId}:${member.turnId ?? ''}`}>{memberText(member)} · {member.status} · {member.turnId ?? '暂无执行记录'}</div>
+                <div key={`actual:${member.memberId}:${member.turnId ?? ''}`}>{memberText(member)} · {MEMBER_STATUS_COPY[member.status] ?? '状态未知'} · {member.turnId ?? '暂无执行记录'}</div>
               ))}
               {status.waitingMembers.map(member => (
                 <div key={`waiting:${member.memberId}:${member.turnId ?? member.runId ?? ''}`}>{memberText(member)} · {userFacingSystemText(member.reason ?? '')}</div>
               ))}
-              <div>事件 #{status.evidence.sourceHighWatermark} · 任务 {status.evidence.taskStatus} · 版本 {status.evidence.taskRevision} · 停止次数 {status.evidence.stopGeneration}</div>
+              <div>事件 #{status.evidence.sourceHighWatermark} · 任务 {(taskStatusCopy as Record<string,{label:string}>)[status.evidence.taskStatus]?.label ?? '状态未知'} · 版本 {status.evidence.taskRevision} · 停止次数 {status.evidence.stopGeneration}</div>
               <div>运行 {status.evidence.runCount} · 执行轮次 {status.evidence.turnCount} · 进行中 {status.evidence.activeRunIds.length} · 待确认结果 {status.evidence.unknownTurnIds.length}</div>
               <div>排队待执行 {status.evidence.outbox?.pendingCount ?? 0}</div>
               {status.existingResults.changeSets.map(change => (
-                <div key={change.id}>变更集 {change.id} · {change.applicationStatus}</div>
+                <div key={change.id}>变更集 {change.id} · {CHANGE_APPLICATION_COPY[change.applicationStatus] ?? '状态未知'}</div>
               ))}
             </div>
           </details>

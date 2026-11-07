@@ -130,7 +130,7 @@ export function AvatarPicker({
       </div>
       <div className="field-hint">
         {allowCustom
-          ? 'PNG、JPEG 或 WebP，≤ 384 KiB。点已选中的预置图可取消选择。'
+          ? 'PNG、JPEG 或 WebP 图片，大小不超过 384 千字节。点已选中的预置图可取消选择。'
           : '模板只保存预设头像；上传的图片属于具体成员，不会写进模板。点已选中的预置图可取消选择。'}
       </div>
     </div>

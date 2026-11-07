@@ -146,7 +146,7 @@ describe('第五十二轮 H2：附件归属/字节合同/深链分列/信封冻�
 
       // ── ② fatal UTF-8：坏字节零上传/零 artifact（File.text() 有损路径已废） ──
       const bad = new File([Uint8Array.from([0x41, 0xc3, 0x28])], 'invalid-utf8.md', { type: 'text/markdown' });
-      await expect(h.bundle.loader.uploadAttachmentFile('convA', bad)).rejects.toThrow('UTF-8');
+      await expect(h.bundle.loader.uploadAttachmentFile('convA', bad)).rejects.toThrow('文本编码');
       expect(h.sent.filter((e) => e.method === 'attachment.uploadText')).toHaveLength(0); // 零上传命令
       expect((h.db.prepare('SELECT count(*) c FROM artifacts').get() as { c: number }).c).toBe(0); // 零 artifact
       // 合法中文文本照常上传。
@@ -179,7 +179,8 @@ describe('第五十二轮 H2：附件归属/字节合同/深链分列/信封冻�
       // 图片门作用于**派发路由**（房间根消息 @成员）——记录串零派发不设门（合同口径）。
       const noAck = await h.bundle.loader.sendEnvelope({ commandId: `cmd_${randomUUID().slice(0, 8)}`, method: 'message.submit', params: { target: { kind: 'room_root', projectId: projId, conversationId: 'convA', roomId: 'roomA' }, body: '带图片的派发（无确认）', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [upImg.attachmentId] } });
       expect(noAck.status).toBe('failed');
-      expect(noAck.error).toContain('IMAGE_INPUT_UNVERIFIED');
+      expect(noAck.error).toContain('模型图片输入能力未认证');
+      expect(noAck.error).not.toContain('IMAGE_INPUT_UNVERIFIED');
       const withAckRaw = await h.bundle.loader.sendEnvelope({ commandId: `cmd_${randomUUID().slice(0, 8)}`, method: 'message.submit', params: { target: { kind: 'room_root', projectId: projId, conversationId: 'convA', roomId: 'roomA' }, body: '带图片的派发（仅发送文字确认）', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [upImg.attachmentId], imageAck: 'omit-images' } });
       if (withAckRaw.status !== 'ok') console.log('WITHACK_ERR=', JSON.stringify(withAckRaw));
       expect(withAckRaw.status).toBe('ok');

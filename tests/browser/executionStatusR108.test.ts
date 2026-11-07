@@ -688,9 +688,11 @@ app.whenReady().then(async () => {
     );
     const electron = resolve('node_modules/electron/dist/electron.exe');
     let stderr = '';
+    const electronEnv: NodeJS.ProcessEnv = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' };
+    delete electronEnv.ELECTRON_RUN_AS_NODE;
     await new Promise<void>((resolvePromise, rejectPromise) => {
       const child = spawn(electron, [mainPath], {
-        env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+        env: electronEnv,
         stdio: ['ignore', 'ignore', 'pipe'],
       });
       child.stderr.on('data', data => { stderr += data.toString(); });

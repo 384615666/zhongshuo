@@ -18,8 +18,28 @@ const zs = window.zs;
 
 // 任务/运行状态 → 展示文案与样式类（终态与非终态分组）。
 const TASK_STATUS_TEXT = {
-  ACTIVE: '进行中', DONE: '已完成', BLOCKED: '待处理', FAILED: '失败', CANCELLED: '已停止',
+  OPEN: '待开始', ACTIVE: '进行中', WAITING_USER: '待你处理', REVIEW: '待验收',
+  DONE: '已完成', BLOCKED: '待处理', FAILED: '失败', CANCELLED: '已停止',
 };
+// 程序值 → 用户文案（能力三态/运行渠道/预算处置/轮次状态/进程检查结果）。
+const SUPPORT_TEXT = { supported: '支持', unsupported: '不支持', unverified: '未验证' };
+const RUNTIME_KIND_TEXT = { claude: 'Claude', codex: 'Codex', fake: '模拟渠道' };
+const BUDGET_MARK_TEXT = { settled: '已结算', refunded: '已退还' };
+const TURN_STATUS_TEXT = {
+  ACTIVE: '执行中', RUNNING: '执行中', FAILED: '失败', UNKNOWN: '结果待确认', COMPLETED: '已完成',
+  CANCELLED: '已取消', BLOCKED: '受阻', DONE: '已完成', STOPPING: '停止中', QUEUED: '排队中',
+};
+const PROBE_RESULT_TEXT = {
+  exited: '已退出', alive: '仍在运行', unknown: '无法确认',
+  'no-os-process': '系统中未找到进程', 'identity-missing': '缺少进程身份记录',
+};
+const supportText = (value) => SUPPORT_TEXT[value] ?? '未验证';
+const capabilityText = (value) => String(value ?? '').startsWith('supported') ? '已支持' : String(value ?? '').startsWith('unsupported') ? '不支持' : '未验证';
+const latePumpText = (value) => String(value ?? '').includes('已验证') ? '模拟渠道已验证，真实渠道待补证' : '未验证';
+const runtimeKindText = (kind) => RUNTIME_KIND_TEXT[kind] ?? '未设置';
+const budgetMarkText = (mark) => BUDGET_MARK_TEXT[mark] ?? '未记录';
+const turnStatusText = (status) => TURN_STATUS_TEXT[status] ?? '未知';
+const probeResultText = (result) => PROBE_RESULT_TEXT[result] ?? '无法确认';
 const RUN_STATUS_TEXT = {
   QUEUED: '排队中', RUNNING: '执行中', WAITING: '等待成员', WAITING_APPROVAL: '等待授权',
   WAITING_INPUT: '等待输入', STOPPING: '停止中', SUCCEEDED: '已完成', PARTIAL: '部分完成',
@@ -171,7 +191,7 @@ async function loadProject(path, opts) {
   // 本次却返回空——数据矛盾，保留旧列表+标注（不清空、不冒充空项目）；跨项目切换不受限。
   if (rooms.items.length === 0 && prevProjectId === state.projectId && list.children.length > 0) {
     navAuditPush({ what: 'loadProject.emptyRoomsRetained', gen, path, projectId: state.projectId, kept: list.children.length });
-    el('project-name').textContent = `${data.project.displayName} · ${path}（房间列表读取异常，已保留原列表）`;
+    el('project-name').textContent = `${data.project.displayName} · ${path} · 房间列表读取异常，已保留原列表`;
   } else {
     list.innerHTML = '';
     for (const room of rooms.items) {
@@ -291,7 +311,7 @@ async function openThread(threadId, taskId, anchorText) {
 
 // ---------- 私信（DEV-22：1 对 1 会话——conversation.* 命令面；无 @ 派工/无任务号） ----------
 
-const DM_STATE_TEXT = { idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务' };
+const DM_STATE_TEXT = { idle: '', running: '运行中…', queued: '排队等待，依次执行', paused: '队列已暂停', interrupted: '有中断待恢复的任务' };
 
 async function renderDmSidebar() {
   if (state.projectId == null) return;
@@ -321,14 +341,14 @@ async function renderDmSidebar() {
     const btn = document.createElement('button');
     btn.className = 'room' + (c.conversationId === state.openDmId ? ' active' : '');
     btn.dataset.conversationId = c.conversationId; // 换装壳定向接管按会话 ID 定位（review-r48 §4）
-    const stateText = c.archivedAt != null ? '（已归档）' : DM_STATE_TEXT[c.execState] ?? '';
+    const stateText = c.archivedAt != null ? ' · 已归档' : DM_STATE_TEXT[c.execState] ?? '';
     // 同成员多会话区分（第三十八轮 #6）：会话标题（有则用）→最近消息预览——一串相同成员名
     // 不可辨认是现场卡死路径之一（用户始终误入空白会话）。
     const distinguish = c.title != null && c.title.length > 0
       ? ` · ${c.title}`
       : (c.lastMessagePreview != null && c.lastMessagePreview.length > 0 ? ` · ${c.lastMessagePreview}` : '');
     btn.textContent = `${c.peerDisplayName}${distinguish}${stateText}${c.unread > 0 ? ` ·${c.unread}` : ''}`;
-    btn.title = c.archivedAt != null ? '已归档：只读（可取消归档）'
+    btn.title = c.archivedAt != null ? '已归档，只读；可取消归档'
       : (c.title != null && c.title.length > 0 ? c.title : '一对一私信：发送即交给该成员');
     btn.onclick = () => void openDm(c.conversationId).catch((e) => showError(`打开私信失败：${e.message}`));
     nav.append(btn);
@@ -448,7 +468,7 @@ function renderAttachChips(kind) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'chip';
-    chip.textContent = `📎 ${att.filename}${att.truncated ? '（已截断）' : ''}`;
+    chip.textContent = `📎 ${att.filename}${att.truncated ? ' · 已截断' : ''}`;
     chip.title = '点击预览已发送的副本；原文件修改不影响已发内容';
     chip.onclick = () => void previewAttachment(att.attachmentId, att.filename, att.kind).catch((e) => showError(`预览失败：${e.message}`));
     frag.append(chip);
@@ -565,11 +585,11 @@ async function projectFilePreview(projectId, name) {
   const r = await command('project.file.read', { projectId, path: name });
   if (myGen !== previewGeneration) return; // 迟到作废
   const box = el('attach-preview');
-  if (box == null) { showError(`项目文件（${name}）：${r.bytes}B——预览面板不可用，请刷新后重试`); return; }
+  if (box == null) { showError(`项目文件 ${name}：${r.bytes} 字节，预览面板不可用，请刷新后重试`); return; }
   showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `🗂 项目文件 · ${r.baseName} · ${r.bytes}B${r.truncated ? `（超 64KB 截断）` : ''} · 文件预览（不会发送给 AI）`;
+  head.textContent = `🗂 项目文件 · ${r.baseName} · ${r.bytes} 字节${r.truncated ? ' · 超过 64 千字节已截断' : ''} · 文件预览，不会发送给 AI`;
   const close = document.createElement('button');
   close.className = 'chip';
   close.textContent = '关闭预览';
@@ -609,7 +629,7 @@ const mdInstance = (() => {
   md.renderer.rules.image = (tokens, idx) => {
     const t = tokens[idx];
     const alt = (t.content || '').slice(0, 60);
-    return `[图片占位：${alt}（远程图片不加载）]`;
+    return `[图片占位：${alt} · 远程图片不加载]`;
   };
   return md;
 })();
@@ -673,7 +693,7 @@ function wirePreviewTools(wrap, { filename, revision, pre }) {
   const copyBtn = document.createElement('button');
   copyBtn.className = 'chip';
   copyBtn.textContent = '复制引用';
-  copyBtn.title = '复制引用（文件名与版本）';
+  copyBtn.title = '复制引用，含文件名与版本';
   copyBtn.onclick = () => void (async () => {
     const ref = revision != null ? `${filename} v${revision}` : filename;
     await navigator.clipboard.writeText(ref);
@@ -716,14 +736,14 @@ function structurePreviewLines(pre, filename) {
     const no = document.createElement('span');
     no.className = 'preview-line-no';
     no.textContent = String(i + 1);
-    no.title = '点击把行引用插入当前输入框（仅草稿——不发送）';
+    no.title = '点击把行引用插入当前输入框，仅草稿不发送';
     no.onclick = () => {
       const input = currentView() === 'dm' ? el('dm-input') : el('composer-input');
       if (input == null) return;
       const quote = `> ${filename}:L${i + 1} ${text.trim().slice(0, 60)}`;
       input.value = input.value.length > 0 ? `${input.value}${String.fromCharCode(10)}${quote}` : quote;
       input.focus();
-      showError(`已插入行引用（草稿）：${filename}:L${i + 1}`);
+      showError(`已插入行引用，仅草稿：${filename}:L${i + 1}`);
     };
     const span = document.createElement('span');
     span.textContent = text.length === 0 ? ' ' : text;
@@ -751,15 +771,15 @@ function attachMsgActions(div, message) {
   };
   actions.append(
     mk('复制', '复制消息正文', () => void navigator.clipboard.writeText(bodyText).then(() => showError('已复制消息正文'), (e) => showError(`复制失败：${e.message}`))),
-    mk('引用', '把引用插入当前输入框（草稿——不发送）', () => {
+    mk('引用', '把引用插入当前输入框，仅草稿不发送', () => {
       const input = currentView() === 'dm' ? el('dm-input') : el('composer-input');
       if (input == null) return;
       const quote = `> ${bodyText.split(String.fromCharCode(10))[0]?.slice(0, 80) ?? ''}`;
       input.value = input.value.length > 0 ? `${input.value}${String.fromCharCode(10)}${quote}` : quote;
       input.focus();
-      showError('已插入引用（草稿）');
+      showError('已插入引用，仅草稿');
     }),
-    mk('😊', '表情反应（点击拉取/切换——本地用户操作）', () => {
+    mk('😊', '表情反应，点击拉取或切换，仅本机操作', () => {
       const existing = div.querySelector('.msg-emoji-layer');
       if (existing != null && !existing.classList.contains('hidden')) { existing.classList.add('hidden'); openEmojiLayers.delete(message.id); return; }
       openEmojiLayers.add(message.id);
@@ -783,7 +803,7 @@ async function buildEmojiLayer(div, message) {
   for (const r of reactions?.items ?? []) {
     const chip = document.createElement('span');
     chip.className = 'chip';
-    chip.textContent = `${r.emoji}${r.mine ? '（我）' : ''}`;
+    chip.textContent = `${r.emoji}${r.mine ? ' · 我' : ''}`;
     layer.append(chip);
   }
   for (const emoji of ['👍', '❤️', '😂', '🎉', '👀', '⚠️']) {
@@ -811,7 +831,7 @@ async function renderActivity(more = false) {
   if (more && cursor == null) return;
   const base = scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId } : { scope: 'all' };
   const data = await command('activity.list', { ...base, limit: 80, ...(cursor != null ? { before: cursor.at, beforeSeq: cursor.seq } : {}) }).catch((e) => null);
-  if (data == null) { if (!more) box.textContent = `Activity 读取失败：${scope}`; return; }
+  if (data == null) { if (!more) box.textContent = '动态读取失败，请稍后重试'; return; }
   if (!more) box.textContent = '';
   const items = data.items ?? [];
   delete box.dataset.cursor;
@@ -858,7 +878,7 @@ async function renderActivity(more = false) {
 async function runExport(target, format, label) {
   try {
     const r = await command('export.create', { target, format });
-    showError(`导出完成（${label} · ${format}）：${(r.files ?? []).length} 个文件——${r.dir}`);
+    showError(`导出完成：${label}，${(r.files ?? []).length} 个文件，保存到 ${r.dir}`);
     const open = el('export-open-last');
     if (open != null) {
       open.classList.remove('hidden');
@@ -904,7 +924,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const pdf = await command('attachment.previewPdf', { attachmentId, page: 1, includeBytes: true });
     if (!alive()) return;
     const pbox = el('attach-preview');
-    if (pbox == null) { showError(`PDF 预览（${pdf.filename ?? filename}）：共 ${pdf.totalPages} 页——预览面板不可用，请刷新后重试`); return; }
+    if (pbox == null) { showError(`PDF 预览 ${pdf.filename ?? filename}：共 ${pdf.totalPages} 页，预览面板不可用，请刷新后重试`); return; }
     showAttachPreviewPanel();
     const bytesKey = `${attachmentId}:${pdf.hash}:v${pdf.revision}`;
     if (pdf.bytesBase64 != null) {
@@ -984,10 +1004,10 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       void renderVisual(pg.page, canvas); // 视觉层异步（文本层先呈现——不互相阻塞）
       const pre = document.createElement('pre');
       pre.className = 'attach-preview-text';
-      pre.textContent = pg.text.length === 0 ? '（本页无可提取文字，请查看上方页面预览）' : pg.text;
+      pre.textContent = pg.text.length === 0 ? '本页无可提取文字，请查看上方页面预览' : pg.text;
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `页面预览 · 暂不支持文字识别 · 文本截断：${pg.truncated ? '本页提取文本超 64KB 已截断' : '无'}`;
+      note.textContent = `页面预览 · 暂不支持文字识别 · 文本截断：${pg.truncated ? '本页提取文本超过 64 千字节，已截断' : '无'}`;
       wrapP.append(head2, nav, canvas, pre, note);
       pbox.replaceChildren(wrapP);
     };
@@ -1006,11 +1026,11 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const img = await command('attachment.previewImage', { attachmentId });
     if (!alive()) return;
     const ibox = el('attach-preview');
-    if (ibox == null) { showError(`图片预览（${img.filename ?? filename}）：${img.width}×${img.height} ${img.bytes}B——预览面板不可用，请刷新后重试`); return; }
+    if (ibox == null) { showError(`图片预览 ${img.filename ?? filename}：${img.width}×${img.height}，${img.bytes} 字节，预览面板不可用，请刷新后重试`); return; }
     showAttachPreviewPanel();
     const ihead = document.createElement('div');
     ihead.className = 'meta';
-    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.width}×${img.height} · 原件 ${img.bytes}B · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.width}×${img.height} · 原件 ${img.bytes} 字节 · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
     const iclose = document.createElement('button');
     iclose.className = 'chip';
     iclose.textContent = '关闭预览';
@@ -1054,12 +1074,12 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const doc = await command('attachment.previewOffice', { attachmentId, includeBytes: true });
     if (!alive()) return;
     const obox = el('attach-preview');
-    if (obox == null) { showError(`Office 预览（${doc.filename ?? filename}）——预览面板不可用，请刷新后重试`); return; }
+    if (obox == null) { showError(`Office 预览 ${doc.filename ?? filename}：预览面板不可用，请刷新后重试`); return; }
     showAttachPreviewPanel();
     const owrap = document.createElement('div');
     const ohead = document.createElement('div');
     ohead.className = 'meta';
-    const kindLabel = doc.kind === 'docx_file' ? 'DOCX 文档' : doc.kind === 'sheet_file' ? `表格（${doc.sourceFormat === 'csv' ? `CSV · ${doc.encoding}` : 'XLSX'}）` : 'PPTX 幻灯片';
+    const kindLabel = doc.kind === 'docx_file' ? 'DOCX 文档' : doc.kind === 'sheet_file' ? (doc.sourceFormat === 'csv' ? 'CSV 表格' : 'XLSX 表格') : '幻灯片';
     ohead.textContent = `📘 ${doc.filename ?? filename} · ${kindLabel} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
     const oclose = document.createElement('button');
     oclose.className = 'chip';
@@ -1099,7 +1119,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         } catch (e) {
           const w = document.createElement('div');
           w.className = 'meta warn';
-          w.textContent = `视觉预览不可用（${String(e?.message ?? e).slice(0, 160)}）；可查看下方文字预览`;
+          w.textContent = `视觉预览不可用：${userFacingSystemText(String(e?.message ?? e)).slice(0, 160)}；可查看下方文字预览`;
           owrap.append(w);
         }
       }
@@ -1124,7 +1144,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         tbl.className = 'sheet-grid';
         const win = document.createElement('div');
         win.className = 'meta';
-        win.textContent = `工作表「${sheet.name}」· ${sheet.rowCount}×${sheet.colCount}${sheet.rowTruncated || sheet.colTruncated ? '（仅显示部分内容）' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 部分公式没有可用结果（不会重新计算）' : ''}`;
+        win.textContent = `工作表「${sheet.name}」· ${sheet.rowCount}×${sheet.colCount}${sheet.rowTruncated || sheet.colTruncated ? '，仅显示部分内容' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 部分公式没有可用结果，不会重新计算' : ''}`;
         const cap = Math.ceil(sheet.colCount / 26) > 1 ? 'A' : 'A';
         void cap;
         for (let r = 0; r < sheet.cells.length; r += 1) {
@@ -1155,7 +1175,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       rangeRow.className = 'sheet-range-row';
       const rangeInput = document.createElement('input');
       rangeInput.id = 'sheet-range-input';
-      rangeInput.placeholder = '发送范围，如 Sheet1!A1:D20（留空使用默认范围）';
+      rangeInput.placeholder = '发送范围，如 Sheet1!A1:D20，留空使用默认范围';
       const rangeBtn = document.createElement('button');
       rangeBtn.className = 'chip';
       rangeBtn.textContent = '设为发送范围';
@@ -1174,7 +1194,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       rangeBtn.onclick = () => {
         const entry = currentDraftEntry();
         const spec = rangeInput.value.trim();
-        if (entry == null) { rangeNote.textContent = '该附件不在当前草稿（已发送/其他会话）——范围仅对随消息发送的草稿附件生效'; return; }
+        if (entry == null) { rangeNote.textContent = '该附件不在当前草稿，可能已发送或属于其他会话；范围仅对随消息发送的草稿附件生效'; return; }
         if (spec.length === 0) { delete entry.range; rangeNote.textContent = '已清除范围，发送时使用默认范围'; }
         else { entry.range = spec; rangeNote.textContent = `发送范围已设：${spec}`; }
         renderAttachChips(state.openDmId != null && currentView() === 'dm' ? 'dm' : 'composer');
@@ -1194,10 +1214,10 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         card.className = 'slide-card';
         const head3 = document.createElement('div');
         head3.className = 'meta';
-        head3.textContent = `幻灯片 ${sl.slide}${sl.truncated ? '（本页文本超预算已截断）' : ''}`;
+        head3.textContent = `幻灯片 ${sl.slide}${sl.truncated ? '，本页文本超预算已截断' : ''}`;
         const body3 = document.createElement('pre');
         body3.className = 'attach-preview-text';
-        body3.textContent = sl.text.length === 0 ? '（本页无文字）' : sl.text;
+        body3.textContent = sl.text.length === 0 ? '本页无文字' : sl.text;
         card.append(head3, body3);
         if (sl.notes.trim().length > 0) {
           const notes = document.createElement('div');
@@ -1209,7 +1229,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = '发送给 AI 的内容为提取文字（含备注）';
+      note.textContent = '发送给 AI 的内容为提取文字，含备注';
       owrap.append(listBox, note);
       // ---- 视觉页预览（第四十轮·选型决定 A）：pptx-renderer 渲染器侧本地渲染 ----
       // 原件字节经 previewOffice includeBytes（audience+实根+sha256 核验+20MiB 前置上限）；
@@ -1292,13 +1312,13 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         } catch (e) {
           const pnote = document.createElement('div');
           pnote.className = 'meta warn';
-          pnote.textContent = `视觉页预览不可用（${String(e?.message ?? e).slice(0, 200)}）；可查看提取文字`;
+          pnote.textContent = `视觉页预览不可用：${userFacingSystemText(String(e?.message ?? e)).slice(0, 200)}；可查看提取文字`;
           owrap.append(pnote);
         }
       } else {
         const pnote = document.createElement('div');
         pnote.className = 'meta warn';
-        pnote.textContent = `视觉页预览不可用（${doc.visualBytesReason ?? '原文件读取失败'}）；可查看提取文字`;
+        pnote.textContent = `视觉页预览不可用：${doc.visualBytesReason ?? '原文件读取失败'}；可查看提取文字`;
         owrap.append(pnote);
       }
     }
@@ -1312,11 +1332,11 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   const r = await command('attachment.previewText', { attachmentId });
   if (!alive()) return; // 迟到作废：已关闭/被新预览取代/已切换会话——不重开不覆盖
   const box = el('attach-preview');
-  if (box == null) { showError(`附件预览（${filename}）：原文 ${r.originalBytes}B${r.truncated ? `——截断，提取前 ${r.excerptBytes}B` : ''}\n${r.text.slice(0, 2000)}`); return; }
+  if (box == null) { showError(`附件预览 ${filename}：原文 ${r.originalBytes} 字节${r.truncated ? `，已截断，提取前 ${r.excerptBytes} 字节` : ''}\n${r.text.slice(0, 2000)}`); return; }
   showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · 原始 ${r.originalBytes}B${r.truncated ? ` · 已截断（显示前 64KB）` : ' · 全文'} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? ' · 代码' : ''} · 原始 ${r.originalBytes} 字节${r.truncated ? ' · 已截断，显示前 64 千字节' : ' · 全文'} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
   const close = document.createElement('button');
   close.className = 'chip';
   close.textContent = '关闭预览';
@@ -1370,23 +1390,23 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     sec.className = 'attach-comments';
     const secHead = document.createElement('div');
     secHead.className = 'meta';
-    secHead.textContent = `评论（${(comments.items ?? []).length}）——评论固定在所评版本；文件更新后标为旧版评论（行号针对旧版）`;
+    secHead.textContent = `评论 ${(comments.items ?? []).length} 条：评论固定在所评版本；文件更新后标为旧版评论，行号针对旧版`;
     sec.append(secHead);
     for (const c of comments.items ?? []) {
       const row = document.createElement('div');
       row.className = 'meta';
       const anchor = c.lineFrom != null ? `第 ${c.lineFrom}${c.lineTo != null ? `-${c.lineTo}` : ''} 行` : '';
-      row.textContent = `v${c.anchoredTo.revision}${anchor ? ` · ${anchor}` : ''}${c.stale ? ' · 【旧版评论——资源已更新，行号针对 v' + c.anchoredTo.revision + '】' : ''}${c.quote != null ? ` · 引「${c.quote.slice(0, 40)}」` : ''}：${c.body}`;
+      row.textContent = `第 ${c.anchoredTo.revision} 版${anchor ? ` · ${anchor}` : ''}${c.stale ? ' · 【旧版评论——资源已更新，行号针对第 ' + c.anchoredTo.revision + ' 版】' : ''}${c.quote != null ? ` · 引「${c.quote.slice(0, 40)}」` : ''}：${c.body}`;
       sec.append(row);
     }
     const bodyInput = document.createElement('input');
     bodyInput.placeholder = '评论正文…';
     bodyInput.className = 'attach-comment-input';
     const fromInput = document.createElement('input');
-    fromInput.placeholder = '行(起)';
+    fromInput.placeholder = '起始行';
     fromInput.className = 'attach-comment-line';
     const toInput = document.createElement('input');
-    toInput.placeholder = '行(止)';
+    toInput.placeholder = '结束行';
     toInput.className = 'attach-comment-line';
     const add = document.createElement('button');
     add.className = 'chip';
@@ -1469,15 +1489,15 @@ function wireAttach(kind) {
       } else {
         let content;
         try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-        catch { showError(`「${file.name}」不是有效 UTF-8 文本——请另存为 UTF-8 后重试（图片选 PNG/JPEG/GIF/WebP；Office 选 .docx/.xlsx/.pptx；表格文本选 .csv）`); return; }
+        catch { showError(`「${file.name}」不是可识别的文本文件，请另存为通用文本编码后重试。图片请选 PNG、JPEG 或 WebP；Office 文档请选 DOCX、XLSX 或演示文稿；表格文本请选 CSV。`); return; }
         r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
         kindHint = 'text_file';
       }
       if (!draftAttachments.has(targetKey)) draftAttachments.set(targetKey, []);
       draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: kindHint });
       if (attachDraftKey(kind) === targetKey) renderAttachChips(kind); // 仍在发起目标才重绘
-      const extra = r.pages != null ? `（${r.pages} 页——提取文本已缓存）` : r.width != null ? `（${r.width}×${r.height}）` : r.slides != null ? `（${r.slides} 页幻灯片）` : r.sheets != null ? `（${r.sheets} 个工作表${r.sourceFormat === 'csv' ? ` · ${r.encoding}` : ''}）` : r.paragraphCount != null ? `（${r.paragraphCount} 段）` : '';
-      showError(`附件已保存副本：${file.name}${r.truncated ? '（内容过长，预览和发送时仅保留部分内容）' : extra}`);
+      const extra = r.pages != null ? ` · ${r.pages} 页，提取文本已缓存` : r.width != null ? ` · ${r.width}×${r.height}` : r.slides != null ? ` · ${r.slides} 页幻灯片` : r.sheets != null ? ` · ${r.sheets} 个工作表` : r.paragraphCount != null ? ` · ${r.paragraphCount} 段` : '';
+      showError(`附件已保存副本：${file.name}${r.truncated ? '，内容过长，预览和发送时仅保留部分内容' : extra}`);
     } catch (e) { showError(`附件上传失败：${e.message}`); }
   })().catch(() => {});
 }
@@ -1485,7 +1505,7 @@ function wireAttach(kind) {
 // ---------- DEV-19 看板与协作视图首包（第二十六轮四）----------
 // 只读聚合：board.view——状态分列（waiting/running/review/blocked/stopped；退出未确认如实
 // 标注）；卡片点击 #task= 定位原串；打开看板零运行零唤醒。协作视图=thread.collaborators
-// 四列（人的关注/Agent 跟进/冻结参与者/实时执行）在线程头部行内呈现。
+// 四列（人的关注/AI 跟进/冻结参与者/实时执行）在线程头部行内呈现。
 const BOARD_COLUMNS = [
   { key: 'waiting', label: '等待' },
   { key: 'running', label: '执行中' },
@@ -1535,7 +1555,7 @@ async function renderBoard() {
             wrap.className = 'board-card-wrap';
             const card = document.createElement('button');
             card.className = 'board-card' + (c.exitUnconfirmed ? ' exit-unknown' : '');
-            card.textContent = `${c.title}${c.exitUnconfirmed ? '（退出未确认）' : ''}${c.pendingDelivery != null ? `（待验收 v${c.pendingDelivery.revision}）` : ''}`;
+            card.textContent = `${c.title}${c.exitUnconfirmed ? ' · 退出未确认' : ''}${c.pendingDelivery != null ? ` · 待验收第 ${c.pendingDelivery.revision} 版` : ''}`;
             card.title = '点击定位原串';
             card.onclick = () => { if (c.locate != null) location.hash = String(c.locate).slice(1); };
             wrap.append(card);
@@ -1558,12 +1578,12 @@ async function renderBoard() {
               const accept = document.createElement('button');
               accept.className = 'chip';
               accept.textContent = '通过验收';
-              accept.title = `验收当前交付（v${c.pendingDelivery.revision}；如需修改，请在线程内填写意见）`;
+              accept.title = `验收当前交付，第 ${c.pendingDelivery.revision} 版；如需修改，请在线程内填写意见`;
               accept.onclick = () => void (async () => {
                 accept.disabled = true;
                 try {
                   const r = await command('task.review', { taskId: c.taskId, deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash, decision: 'accept' });
-                  showError(`验收通过：交付 v${r.deliveryRevision ?? c.pendingDelivery.revision}——任务${TASK_STATUS_TEXT[r.taskStatusAfter] ?? r.taskStatusAfter ?? ''}`);
+                  showError(`验收通过：交付第 ${r.deliveryRevision ?? c.pendingDelivery.revision} 版；任务${TASK_STATUS_TEXT[r.taskStatusAfter] ?? '状态未知'}`);
                 } catch (e) { showError(`验收失败：${e.message}`); accept.disabled = false; }
                 await renderBoard().catch(() => {});
               })().catch(() => {});
@@ -1593,7 +1613,7 @@ async function renderFiles() {
   if (box == null || !filesVisible) return;
   const scope = el('files-scope')?.value ?? 'project';
   let data;
-  try { data = await command('files.view', scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId } : { scope: 'all' }); } catch (e) { showError(`Files 读取失败：${e.message}`); return; }
+  try { data = await command('files.view', scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId } : { scope: 'all' }); } catch (e) { showError(`文件读取失败：${e.message}`); return; }
   const frag = document.createDocumentFragment();
   for (const g of data.groups ?? []) {
     const gEl = document.createElement('div');
@@ -1608,7 +1628,7 @@ async function renderFiles() {
       row.textContent = text;
       row.title = title ?? text;
       if (locate != null) row.onclick = () => { location.hash = String(locate).slice(1); };
-      else { row.disabled = true; row.title = `${title ?? ''}（从所属会话进入）`; }
+      else { row.disabled = true; row.title = `${title ?? ''} · 从所属会话进入`; }
       const wrap = document.createElement('div');
       wrap.className = 'board-room';
       const tag = document.createElement('span');
@@ -1621,7 +1641,7 @@ async function renderFiles() {
       if (rows.length === 0) return null;
       const head = document.createElement('div');
       head.className = 'meta';
-      head.textContent = `${title}（${rows.length}）`;
+      head.textContent = `${title} ${rows.length} 项`;
       const wrapEl = document.createElement('div');
       wrapEl.className = 'board-room';
       wrapEl.append(head, ...rows);
@@ -1631,8 +1651,8 @@ async function renderFiles() {
     const attRows = (g.attachments ?? []).map((a) => {
       const row = document.createElement('button');
       row.className = 'chip';
-      row.textContent = `📎 ${a.filename}${a.audience === 'dm' ? '（私信）' : ''}`;
-      row.title = `${a.audience === 'dm' ? '私信资源（仅本人可见）' : '房间会话'}——点击预览`;
+      row.textContent = `📎 ${a.filename}${a.audience === 'dm' ? ' · 私信' : ''}`;
+      row.title = `${a.audience === 'dm' ? '私信资源，仅本人可见' : '房间会话'}——点击预览`;
       row.onclick = () => void previewAttachment(a.attachmentId, a.filename, a.kind).catch((e) => showError(`预览失败：${e.message}`));
       const wrap = document.createElement('div');
       wrap.className = 'board-room';
@@ -1642,13 +1662,13 @@ async function renderFiles() {
       wrap.append(tag, row);
       return wrap;
     });
-    const draftRows = (g.drafts ?? []).map((d) => mkRow('Agent 草稿', `草稿「${d.taskTitle ?? '未命名任务'}」· ${({ applied: '已应用', reverted: '已还原', not_applied: '尚未应用', partial: '部分应用' })[d.applicationStatus] ?? d.applicationStatus}`, d.locate));
-    const delRows = (g.deliveries ?? []).map((d) => mkRow('交付成果', `📦 ${d.title} v${d.revision}${d.audience === 'dm' ? '（私信）' : ''}`, d.locate));
+    const draftRows = (g.drafts ?? []).map((d) => mkRow('AI 草稿', `草稿「${d.taskTitle ?? '未命名任务'}」· ${({ applied: '已应用', reverted: '已还原', not_applied: '尚未应用', partial: '部分应用' })[d.applicationStatus] ?? d.applicationStatus}`, d.locate));
+    const delRows = (g.deliveries ?? []).map((d) => mkRow('交付成果', `📦 ${d.title} 第 ${d.revision} 版${d.audience === 'dm' ? ' · 私信' : ''}`, d.locate));
     const pfRow = (() => {
       if ((g.projectFiles ?? []).length === 0 && g.projectFilesNote == null) return null;
       const row = document.createElement('div');
       row.className = 'meta';
-      row.textContent = g.projectFilesNote != null ? `项目文件：${g.projectFilesNote}` : `项目文件（${g.projectFiles.length} 项）：${g.projectFiles.slice(0, 20).map((f) => f.dir ? `${f.name}/` : f.name).join('、')}${g.projectFiles.length > 20 ? ' …' : ''}`;
+      row.textContent = g.projectFilesNote != null ? `项目文件：${g.projectFilesNote}` : `项目文件 ${g.projectFiles.length} 项：${g.projectFiles.slice(0, 20).map((f) => f.dir ? `${f.name}/` : f.name).join('、')}${g.projectFiles.length > 20 ? ' …' : ''}`;
       const wrapEl = document.createElement('div');
       wrapEl.className = 'board-room';
       wrapEl.append(row);
@@ -1657,19 +1677,19 @@ async function renderFiles() {
         const b = document.createElement('button');
         b.className = 'chip';
         b.textContent = f.name;
-        b.title = '点击预览（只读）；二进制文件请用 Git 或系统工具打开';
+        b.title = '点击预览，只读；二进制文件请用 Git 或系统工具打开';
         b.onclick = () => void projectFilePreview(g.projectId, f.name).catch((e) => showError(`项目文件读取失败：${e.message}`));
         wrapEl.append(b);
       }
       return wrapEl;
     })();
-    for (const s of [sec('托管附件', attRows), sec('Agent 草稿', draftRows), sec('交付成果', delRows), pfRow]) {
+    for (const s of [sec('托管附件', attRows), sec('AI 草稿', draftRows), sec('交付成果', delRows), pfRow]) {
       if (s != null) gEl.append(s);
     }
     if (gEl.childElementCount === 1) {
       const empty = document.createElement('div');
       empty.className = 'meta';
-      empty.textContent = '（无附件/草稿/交付）';
+      empty.textContent = '暂无附件、草稿或交付';
       gEl.append(empty);
     }
     frag.append(gEl);
@@ -1686,7 +1706,7 @@ async function renderCollaborators() {
   if (box == null || state.openThreadId == null) return;
   let data;
   try { data = await command('thread.collaborators', { threadId: state.openThreadId }); } catch { return; }
-  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · Agent 跟进 ${(data.agentFollowers ?? []).length} 位 · 本次参与 ${(data.frozenParticipants ?? []).length} 位 · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).length + ' 位' : '无'}`;
+  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · AI 跟进 ${(data.agentFollowers ?? []).length} 位 · 本次参与 ${(data.frozenParticipants ?? []).length} 位 · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).length + ' 位' : '无'}`;
   box.classList.remove('hidden');
 }
 
@@ -1700,16 +1720,16 @@ async function renderPendingList() {
   for (const p of data.projects ?? []) {
     for (const t of p.reviewTasks ?? []) {
       rows.push({
-        label: `【${p.displayName}】待验收：${t.task_kind === 'dm_turn' ? '私信任务' : '任务'}${t.revision != null ? `（v${t.revision}）` : ''}${t.actionable === false ? '（无待验收交付——需检查状态）' : ''}`,
+        label: `【${p.displayName}】待验收：${t.task_kind === 'dm_turn' ? '私信任务' : '任务'}${t.revision != null ? ` · 第 ${t.revision} 版` : ''}${t.actionable === false ? ' · 无待验收交付，需检查状态' : ''}`,
         title: t.actionable === false
           ? `暂无可验收交付，请打开任务查看状态`
-          : `验收当前交付（版本 ${t.revision}）`,
+          : `验收当前交付，版本 ${t.revision}`,
         projectId: p.projectId, conversationId: t.conversation_id, taskId: t.task_id,
         deliveryId: t.delivery_id, revision: t.revision, manifestHash: t.manifest_hash, kind: 'review',
       });
     }
     for (const u of p.dmUnread ?? []) {
-      rows.push({ label: `【${p.displayName}】未读私信：${u.title ?? u.conversation_id.slice(0, 8)} ·${u.unread}`, title: '点击进入会话（读到的才算已读）', projectId: p.projectId, conversationId: u.conversation_id, kind: 'dm' });
+      rows.push({ label: `【${p.displayName}】未读私信：${u.title ?? u.conversation_id.slice(0, 8)} ·${u.unread}`, title: '点击进入会话，读到才算已读', projectId: p.projectId, conversationId: u.conversation_id, kind: 'dm' });
     }
     for (const b of p.blockedTasks ?? []) {
       // 受阻原因（第三十八轮 #4：无解释的「被阻塞」行——用户无法自助诊断；原因来自服务端
@@ -1721,7 +1741,7 @@ async function renderPendingList() {
     notifyReminderAwaits(p.reminderAwaits);
     for (const w of p.reminderAwaits ?? []) {
       rows.push({
-        label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminderId}${(w.missedCount ?? 0) > 0 ? `（合并 ${w.missedCount} 次错过）` : ''} → 确认执行`,
+        label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminderId}${(w.missedCount ?? 0) > 0 ? ` · 合并 ${w.missedCount} 次错过` : ''} → 确认执行`,
         title: '点击确认后执行提醒任务',
         projectId: p.projectId, conversationId: w.conversationId, kind: 'reminder-await', reminderId: w.reminderId, scheduledAt: w.scheduledAt,
       });
@@ -1730,7 +1750,7 @@ async function renderPendingList() {
     for (const f of p.followedThreads ?? []) {
       rows.push({
         label: `【${p.displayName}】关注的线程有 ${f.unread} 条新回复`,
-        title: '阅读订阅（非执行名单）——点击进入原线程',
+        title: '阅读订阅，非执行名单；点击进入原线程',
         projectId: p.projectId, conversationId: null, kind: 'followed',
         locate: f.root_task_id != null ? `task=${f.root_task_id}` : `msg=${f.anchor_message_id}`,
       });
@@ -1742,7 +1762,7 @@ async function renderPendingList() {
   const frag = document.createDocumentFragment();
   const head = document.createElement('div');
   head.className = 'sidebar-sec';
-  head.textContent = rows.length > 0 ? `共 ${rows.length} 项（全部显示）` : '暂无待办';
+  head.textContent = rows.length > 0 ? `共 ${rows.length} 项，全部显示` : '暂无待办';
   frag.append(head);
   for (const r of rows) {
     const btn = document.createElement('button');
@@ -1822,15 +1842,15 @@ function renderSearchResults() {
   };
   for (const m of r.messages ?? []) addRow(`【${m.projectName}】消息：${m.snippet}`, `${new Date(m.createdAt).toLocaleString()} · 作者 ${m.authorId}`, m.locate?.slice(1));
   for (const t of r.threads ?? []) addRow(`【${t.projectName}】线程：${t.snippet}`, `锚于 ${new Date(t.createdAt).toLocaleString()}`, t.locate?.slice(1));
-  for (const t of r.tasks ?? []) addRow(`【${t.projectName}】任务：${t.title}（${t.status}）`, '点击定位原任务', t.locate?.slice(1));
+  for (const t of r.tasks ?? []) addRow(`【${t.projectName}】任务：${t.title} · ${TASK_STATUS_TEXT[t.status] ?? '状态未知'}`, '点击定位原任务', t.locate?.slice(1));
   if (frag.childElementCount === 0) {
     const empty = document.createElement('div');
     empty.className = 'meta';
-    empty.textContent = `无结果（第 ${r.page} 页）——他人私信不进入结果；附件按所在消息文件名检索`;
+    empty.textContent = `无结果，第 ${r.page} 页；他人私信不进入结果；附件按所在消息文件名检索`;
     frag.append(empty);
   }
   box.replaceChildren(frag);
-  el('search-page-info').textContent = `第 ${r.page} 页（每页 ${r.pageSize}）`;
+  el('search-page-info').textContent = `第 ${r.page} 页，每页 ${r.pageSize} 条`;
 }
 
 /** 收藏（saved_refs）：独立持久；取消不删原内容；失效/越权如实呈现；跳转复用正式深链。 */
@@ -1843,13 +1863,13 @@ async function renderSaved() {
   if ((data.items ?? []).length === 0) {
     const empty = document.createElement('div');
     empty.className = 'meta';
-    empty.textContent = '暂无收藏（消息行 ☆ 收藏）';
+    empty.textContent = '暂无收藏，可在消息行点 ☆ 收藏';
     frag.append(empty);
     nav.replaceChildren(frag);
     return;
   }
   const KIND_LABEL = { message: '消息', task: '任务', delivery: '交付', link: '链接' };
-  const STATUS_LABEL = { ok: '', missing: '（目标已删除）', forbidden: '（无权限访问）' };
+  const STATUS_LABEL = { ok: '', missing: ' · 目标已删除', forbidden: ' · 无权限访问' };
   for (const it of data.items) {
     const row = document.createElement('div');
     row.className = 'room';
@@ -1858,7 +1878,7 @@ async function renderSaved() {
     label.className = 'chip';
     label.style.marginRight = '6px';
     label.textContent = it.status === 'ok' && it.locate != null ? `${KIND_LABEL[it.kind] ?? it.kind}：${it.title ?? it.ref}` : `${KIND_LABEL[it.kind] ?? it.kind}：${it.title ?? String(it.ref).slice(0, 48)}${STATUS_LABEL[it.status] ?? ''}`;
-    label.title = it.kind === 'link' ? '链接收藏（点击复制地址）' : it.locate != null ? '打开原内容' : '目标不可达——仅呈现';
+    label.title = it.kind === 'link' ? '链接收藏，点击复制地址' : it.locate != null ? '打开原内容' : '目标不可达——仅呈现';
     label.disabled = !(it.status === 'ok');
     label.onclick = () => {
       if (it.kind === 'link') { void navigator.clipboard?.writeText(it.ref).then(() => showError('链接已复制')).catch(() => showError(`链接：${it.ref}`)); return; }
@@ -1921,27 +1941,27 @@ function notifyReminderAwaits(awaits) {
     notifiedReminders.add(key);
     try { localStorage.setItem('zs-notified-rem', JSON.stringify([...notifiedReminders].slice(-500))); } catch { /* 进程内去重兜底 */ }
     if (w.notifyMuted === true) { notifyLog(key, 'muted', '目标线程静音——不发系统通知（待办保留）'); continue; } // 提醒通知过滤（独立于未读聚合）
-    const body = `${w.title ?? '提醒'}${w.missedCount > 0 ? `（合并 ${w.missedCount} 次错过）` : ''}——到点待确认执行`;
+    const body = `${w.title ?? '提醒'}${w.missedCount > 0 ? ` · 合并 ${w.missedCount} 次错过` : ''}——到点待确认执行`;
     const locate = typeof w.locate === 'string' && w.locate.startsWith('#') ? w.locate.slice(1) : null;
     try {
       if (typeof Notification === 'undefined') {
         notifyLog(key, 'error', '无 Notification API');
-        showError(`提醒待确认（系统通知不可用——待我处理仍列出）：${body}`);
+        showError(`提醒待确认：系统通知不可用，待我处理仍列出。${body}`);
         continue;
       }
       notifyLog(key, 'permission', Notification.permission);
       if (Notification.permission === 'denied') {
         notifyLog(key, 'error', 'permission denied');
-        showError(`提醒待确认（通知权限被拒——待我处理仍列出）：${body}`);
+        showError(`提醒待确认：通知权限被拒，待我处理仍列出。${body}`);
         continue;
       }
       const n = new Notification('众说：提醒待确认', { body, tag: key });
       notifyLog(key, 'created');
       n.onshow = () => notifyLog(key, 'shown'); // 送达事件（不等于 Windows 中心已显示的证明）
-      n.onerror = () => { notifyLog(key, 'error', 'delivery'); showError(`系统通知送达失败（执行不受影响）：${body}`); };
+      n.onerror = () => { notifyLog(key, 'error', 'delivery'); showError(`系统通知送达失败，执行不受影响。${body}`); };
       n.onclose = () => notifyLog(key, 'close'); // 用户关闭：不重发（去重集已登记）
       n.onclick = () => { window.focus(); if (locate != null) location.hash = locate; }; // 只定位（准确深链）——不确认执行
-    } catch (e) { notifyLog(key, 'error', e instanceof Error ? e.message : String(e)); showError(`系统通知创建失败（待我处理仍列出）：${e instanceof Error ? e.message : String(e)}`); }
+    } catch (e) { notifyLog(key, 'error', e instanceof Error ? e.message : String(e)); showError(`系统通知创建失败，待我处理仍列出。${userFacingSystemText(e instanceof Error ? e.message : String(e))}`); }
   }
 }
 // 首次使用请求权限（Electron 通常默认授予；拒绝=退化为页内提示——不阻塞任何执行链）。
@@ -1972,7 +1992,7 @@ async function renderReminderPanel() {
   if (items.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'meta';
-    empty.textContent = '暂无提醒（在私信会话点 ⏰ 设置每日提醒）';
+    empty.textContent = '暂无提醒，可在私信会话点 ⏰ 设置每日提醒';
     frag.append(empty);
     nav.replaceChildren(frag);
     return;
@@ -1985,10 +2005,10 @@ async function renderReminderPanel() {
     const planText = sched.kind === 'once'
       ? `一次 · ${sched.at != null ? new Date(sched.at).toLocaleString() : '?'}`
       : sched.kind === 'weekly'
-        ? `每周${WEEKDAY_LABELS[sched.weekday] ?? '?'} ${sched.time ?? '?'}（${it.timezone ?? 'UTC'}）`
-        : `每天 ${sched.time ?? '?'}（${it.timezone ?? 'UTC'}）`;
+        ? `每周${WEEKDAY_LABELS[sched.weekday] ?? '?'} ${sched.time ?? '?'} · 时区 ${it.timezone ?? '本机时区'}`
+        : `每天 ${sched.time ?? '?'} · 时区 ${it.timezone ?? '本机时区'}`;
     const budgetText = it.budgetLimit != null ? `预算 ${it.budgetLimit.sum} 次执行` : '无预算上限';
-    const statusText = it.status === 'active' ? (it.autoDispatch ? '进行中·自动执行' : '进行中·到点待确认') : it.status === 'paused' ? `已暂停${it.pausedReason != null ? `（${it.pausedReason}）` : ''}` : ({ cancelled: '已取消' })[it.status] ?? it.status;
+    const statusText = it.status === 'active' ? (it.autoDispatch ? '进行中·自动执行' : '进行中·到点待确认') : it.status === 'paused' ? `已暂停${it.pausedReason != null ? `，原因：${it.pausedReason}` : ''}` : ({ cancelled: '已取消' })[it.status] ?? '状态未知';
     const head = document.createElement('div');
     head.textContent = `${it.title ?? '提醒'} · ${planText} · ${budgetText} · ${statusText} · 下次 ${it.nextAt != null ? new Date(it.nextAt).toLocaleString() : '—'}`;
     box.append(head);
@@ -2013,13 +2033,13 @@ async function renderReminderPanel() {
       actions.append(mkBtn('恢复', 'chip', async () => {
         try { await command('reminder.update', { reminderId: it.reminderId, expectedRevision: it.revision, schedule: it.schedule }); } catch (e) { showError(`恢复失败：${e.message}`); }
         await refresh();
-      }, '显式继续：重算下次触发（错过的批次不补跑；授权类暂停会在下次触发重查时再判定）'));
+      }, '显式继续：重算下次触发，错过的批次不补跑；授权类暂停会在下次触发重查时再判定'));
     }
     if (it.status === 'active' || it.status === 'paused') {
       actions.append(mkBtn('取消', 'danger', async () => {
         try { await command('reminder.cancel', { reminderId: it.reminderId }); } catch (e) { showError(`取消失败：${e.message}`); }
         await refresh();
-      }, '取消后不再触发（不可复活；待确认触发同时作废）'));
+      }, '取消后不再触发，不可复活；待确认触发同时作废'));
     }
     box.append(actions);
     // 编辑表单（details 展开式——revision CAS；once/daily/weekly+任意分钟+时区+自动执行）。
@@ -2044,9 +2064,9 @@ async function renderReminderPanel() {
     kindSel.value = sched.kind ?? 'daily';
     const timeInput = document.createElement('input');
     timeInput.className = 'git-input';
-    timeInput.placeholder = 'HH:mm（如 09:17）';
+    timeInput.placeholder = '时:分，如 09:17';
     timeInput.value = sched.time ?? '';
-    kindSel.onchange = () => { timeInput.placeholder = kindSel.value === 'once' ? '未来时刻（ISO，如 2026-10-02T09:00）' : 'HH:mm（如 09:17）'; };
+    kindSel.onchange = () => { timeInput.placeholder = kindSel.value === 'once' ? '未来时刻，如 2026-10-02 09:00' : '时:分，如 09:17'; };
     const weekdaySel = document.createElement('select');
     WEEKDAY_LABELS.forEach((label, i) => {
       const o = document.createElement('option');
@@ -2057,14 +2077,14 @@ async function renderReminderPanel() {
     weekdaySel.value = String(sched.weekday ?? 1);
     const tzInput = document.createElement('input');
     tzInput.className = 'git-input';
-    tzInput.placeholder = 'IANA 时区（缺省 UTC）';
+    tzInput.placeholder = '时区名称，留空使用本机时区';
     tzInput.value = sched.tz ?? '';
     const autoChk = document.createElement('input');
     autoChk.type = 'checkbox';
     autoChk.checked = it.autoDispatch === true;
     const autoLabel = document.createElement('label');
     autoLabel.style.marginLeft = '6px';
-    autoLabel.append(autoChk, document.createTextNode('自动执行（不勾选=到点待我确认）'));
+    autoLabel.append(autoChk, document.createTextNode('自动执行，不勾选则到点待我确认'));
     const saveBtn = document.createElement('button');
     saveBtn.className = 'primary';
     saveBtn.textContent = '保存';
@@ -2074,16 +2094,16 @@ async function renderReminderPanel() {
       if (kind === 'once') {
         const atText = timeInput.value.trim();
         const atMs = Date.parse(atText);
-        if (!Number.isFinite(atMs) || atMs <= Date.now()) { showError('一次性提醒需填未来时刻（编辑框填 ISO 时刻）'); return; }
+        if (!Number.isFinite(atMs) || atMs <= Date.now()) { showError('一次性提醒需填写未来时刻，如 2026-10-02 09:00'); return; }
         schedule = { kind: 'once', at: atMs };
       } else {
-        if (!/^\d{1,2}:\d{2}$/.test(timeInput.value.trim())) { showError('时刻需为 HH:mm'); return; }
+        if (!/^\d{1,2}:\d{2}$/.test(timeInput.value.trim())) { showError('时刻格式需为时:分，如 09:17'); return; }
         schedule = kind === 'weekly' ? { kind, weekday: Number(weekdaySel.value), time: timeInput.value.trim() } : { kind, time: timeInput.value.trim() };
         if (tzInput.value.trim().length > 0) schedule.tz = tzInput.value.trim();
       }
       try {
         await command('reminder.update', { reminderId: it.reminderId, expectedRevision: it.revision, title: titleInput.value.trim().length > 0 ? titleInput.value.trim() : undefined, schedule, autoDispatch: autoChk.checked });
-        showError('已保存（下次触发已按新计划重算）');
+        showError('已保存，下次触发已按新计划重算');
       } catch (e) { showError(`保存失败：${e.message}`); }
       await refresh();
     })().catch(() => {});
@@ -2095,7 +2115,7 @@ async function renderReminderPanel() {
     if (hist.length > 0) {
       const h = document.createElement('div');
       h.className = 'meta';
-      h.textContent = `最近触发：${hist.slice(0, 5).map((o) => `${new Date(o.scheduled_at).toLocaleString()}→${REMINDER_OCCURRENCE_TEXT[o.outcome] ?? (typeof o.outcome === 'string' && o.outcome.startsWith('paused:') ? '已暂停' : o.outcome ?? REMINDER_OCCURRENCE_TEXT[o.status] ?? o.status)}${o.missed_count > 0 ? `（合并${o.missed_count}）` : ''}`).join('；')}`;
+      h.textContent = `最近触发：${hist.slice(0, 5).map((o) => `${new Date(o.scheduled_at).toLocaleString()}→${REMINDER_OCCURRENCE_TEXT[o.outcome] ?? (typeof o.outcome === 'string' && o.outcome.startsWith('paused:') ? '已暂停' : (o.outcome == null ? (REMINDER_OCCURRENCE_TEXT[o.status] ?? '状态未知') : '状态未知'))}${o.missed_count > 0 ? `，合并 ${o.missed_count} 次错过` : ''}`).join('；')}`;
       box.append(h);
     }
     frag.append(box);
@@ -2163,9 +2183,9 @@ async function renderDm() {
   el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}${fresh.title != null && fresh.title.length > 0 ? ` · ${fresh.title}` : ''}`;
   const queueNote = fresh.queuedCount > 0 && fresh.archivedAt == null && fresh.execState !== 'queued' ? ` · 排队 ${fresh.queuedCount}` : '';
   const interruptedNote = (fresh.interruptedTasks ?? []).length > 0
-    ? ` · 中断待恢复 ${fresh.interruptedTasks.length}（${fresh.interruptedTasks.map((t) => `${t.title}（上次运行${RUN_STATUS_TEXT[t.lastRunStatus] ?? '未知'}${t.recoverable === false && t.blockReason != null ? `——${t.blockReason}` : ''}）`).join('；')}）`
+    ? ` · 中断待恢复 ${fresh.interruptedTasks.length} 项：${fresh.interruptedTasks.map((t) => `${t.title}，上次运行${RUN_STATUS_TEXT[t.lastRunStatus] ?? '未知'}${t.recoverable === false && t.blockReason != null ? `——${t.blockReason}` : ''}`).join('；')}`
     : '';
-  el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}${interruptedNote}`;
+  el('dm-state').textContent = fresh.archivedAt != null ? '已归档，禁止新发或续跑' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}${interruptedNote}`;
   el('dm-stop-btn').classList.toggle('hidden', fresh.execState !== 'running');
   el('dm-resume-btn').classList.toggle('hidden', fresh.execState !== 'paused');
   const anyRecoverable = (fresh.interruptedTasks ?? []).some((t) => t.recoverable !== false);
@@ -2180,7 +2200,7 @@ async function renderDm() {
     : fresh.pendingReview;
   if (state.pendingFocus?.kind === 'review') state.pendingFocus = null; // 一次性消费
   el('dm-review-row').classList.toggle('hidden', review == null);
-  if (review != null) el('dm-review-revision').textContent = `${review.revision}${fresh.reviewCount > 1 ? `（共 ${fresh.reviewCount} 项待验收——见侧栏待我处理）` : ''}`;
+  if (review != null) el('dm-review-revision').textContent = `第 ${review.revision} 版${fresh.reviewCount > 1 ? ` · 共 ${fresh.reviewCount} 项待验收，见侧栏待我处理` : ''}`;
   el('dm-input').disabled = fresh.archivedAt != null;
   el('dm-send').disabled = fresh.archivedAt != null;
   state.dmActive = { ...fresh, currentReview: review }; // 停止/验收按钮的 task/run/delivery 来源（review=当前定位交付）
@@ -2217,7 +2237,7 @@ async function sendDm() {
     const remaining = (draftAttachments.get(dmKey) ?? []).filter((a) => !sentRefs.includes(a.attachmentId));
     if (remaining.length === 0) draftAttachments.delete(dmKey); else draftAttachments.set(dmKey, remaining);
     renderAttachChips('dm');
-    if (r.disposition === 'queued') el('dm-state').textContent = '已保存排队（当前运行结束后串行执行）';
+    if (r.disposition === 'queued') el('dm-state').textContent = '已保存排队，当前运行结束后依次执行';
     if (state.dmRecordOnly) { state.dmRecordOnly = false; el('dm-record').classList.remove('on'); }
   } catch (e) {
     input.value = text; // 发送失败恢复草稿（不丢字）
@@ -2232,7 +2252,7 @@ async function sendDm() {
 
 function taskChip(status) {
   if (status == null) return { text: '讨论', cls: '' }; // 记录串：无任务
-  const known = TASK_STATUS_TEXT[status] ?? status;
+  const known = TASK_STATUS_TEXT[status] ?? '状态未知';
   const cls = TASK_TERMINAL.includes(status) ? 'term' : status === 'BLOCKED' ? 'stop' : '';
   return { text: known, cls };
 }
@@ -2269,7 +2289,7 @@ async function renderPool() {
     body.textContent = item.body.text;
     const open = document.createElement('div');
     open.className = 'status';
-    open.textContent = `打开回复串（${item.replyCount} 条回复）→`;
+    open.textContent = `打开回复串，${item.replyCount} 条回复 →`;
     card.append(meta, body, open);
     // taskId 在打开时固定（R1：切线程不误停——每个线程快照自持）。
     card.onclick = () => void openThread(item.threadId, item.taskId, item.body.text).catch(showConnError);
@@ -2313,7 +2333,7 @@ async function renderDeliberation() {
   const round = data.stage === 'ISSUE_DISCUSSION' && data.roundNo ? ` 第 ${data.roundNo} 轮` : '';
   const budget = data.budget ? ` · 调用 ${data.budget.usedTurns}/${data.budget.runMaxTurns}` : '';
   const members = (data.participants || []).map((p) =>
-    `<span class="member ${p.status}" title="${p.displayName}（${MEMBER_STATUS_TEXT[p.status] ?? p.status}）">${p.displayName}·${MEMBER_STATUS_TEXT[p.status] ?? p.status}</span>`).join('');
+    `<span class="member ${p.status}" title="${p.displayName} · ${MEMBER_STATUS_TEXT[p.status] ?? '状态未知'}">${p.displayName}·${MEMBER_STATUS_TEXT[p.status] ?? '状态未知'}</span>`).join('');
   progress.innerHTML = `<span class="stage">研讨·${stage}${round}</span>${budget} · ${members}${(data.issues || []).length > 0 ? ` · 开放争议 ${data.issues.length} 项` : ''}`;
   progress.classList.remove('hidden');
   // 最终报告（存在即渲染）：逐结论确认状态与整体共识。
@@ -2326,9 +2346,9 @@ async function renderDeliberation() {
     return;
   }
   const claims = (rep.claimResults || []).map((c) =>
-    `<div class="claim"><span class="consensus ${c.consensus}">${CONSENSUS_TEXT[c.consensus] ?? c.consensus}</span><span>${c.statement || c.claimId}${c.missing > 0 ? `（${c.missing} 人未确认）` : ''}${c.objects > 0 ? `（${c.objects} 人反对）` : ''}</span></div>`).join('');
+    `<div class="claim"><span class="consensus ${c.consensus}">${CONSENSUS_TEXT[c.consensus] ?? '未确认'}</span><span>${c.statement || c.claimId}${c.missing > 0 ? ` · ${c.missing} 人未确认` : ''}${c.objects > 0 ? ` · ${c.objects} 人反对` : ''}</span></div>`).join('');
   const disputed = (rep.disputedClaims || []).map((d) => `<div>分歧：${d.statement}——${d.disagreementSummary}</div>`).join('');
-  report.innerHTML = `<div>最终报告（整体共识：<b class="consensus ${rep.overallConsensus}">${CONSENSUS_TEXT[rep.overallConsensus] ?? rep.overallConsensus ?? '-'}</b>）</div>${claims}${disputed ? `<div class="disputed-list">${disputed}</div>` : ''}`;
+  report.innerHTML = `<div>最终报告 · 整体共识：<b class="consensus ${rep.overallConsensus}">${CONSENSUS_TEXT[rep.overallConsensus] ?? '未确认'}</b></div>${claims}${disputed ? `<div class="disputed-list">${disputed}</div>` : ''}`;
   report.classList.remove('hidden');
 }
 
@@ -2348,7 +2368,7 @@ async function renderToolCalls(box) {
   section.dataset.section = 'tool-audit';
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `工具调用记录（${items.length} 条）`;
+  head.textContent = `工具调用记录 ${items.length} 条`;
   section.appendChild(head);
   for (const t of items) {
     const row = document.createElement('div');
@@ -2356,7 +2376,7 @@ async function renderToolCalls(box) {
     row.dataset.toolCallId = t.toolCallId;
     const outcome = t.outcome ?? (t.startedAt != null && t.completedAt == null ? '进行中' : '未知');
     const when = t.startedAt != null ? new Date(t.startedAt).toLocaleTimeString() : '';
-    row.textContent = `${t.toolName ?? '工具'} · ${TOOL_OUTCOME_TEXT[t.outcome] ?? outcome}${when ? ' · ' + when : ''}`;
+    row.textContent = `${t.toolName ?? '工具'} · ${TOOL_OUTCOME_TEXT[t.outcome] ?? (t.outcome == null ? outcome : '状态未知')}${when ? ' · ' + when : ''}`;
     section.appendChild(row);
   }
   box.appendChild(section);
@@ -2432,7 +2452,7 @@ async function renderThread() {
     }
   } else {
     updateStopUi(null);
-    el('thread-status').textContent = '讨论串（仅记录，不派发）';
+    el('thread-status').textContent = '讨论串，仅记录，不派发';
   }
   void refreshThreadSubButtons().catch(() => {}); // 关注/静音按钮随线程刷新（第二十五轮四）
   void renderCollaborators().catch(() => {}); // 协作视图四列（第二十六轮四）
@@ -2457,20 +2477,20 @@ async function renderChangeSets() {
   block.className = 'changeset-block';
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `变更记录 ${data.items.length} 组（可在恢复中心继续撤销）`;
+  head.textContent = `变更记录 ${data.items.length} 组，可在恢复中心继续撤销`;
   block.appendChild(head);
   for (const cs of data.items) {
     const row = document.createElement('div');
     row.className = 'changeset-row';
     row.dataset.changeSetId = cs.id;
-    const UNDO_LABEL = { in_progress: '撤销进行中', failed: '撤销中断（待恢复续跑）', succeeded: '已撤销', conflict: '撤销冲突（不可自动继续）' };
-    const undoText = cs.undoStatus != null ? `；撤销=${UNDO_LABEL[cs.undoStatus] ?? cs.undoStatus}` : '';
+    const UNDO_LABEL = { in_progress: '撤销进行中', failed: '撤销中断，待恢复续跑', succeeded: '已撤销', conflict: '撤销冲突，不可自动继续' };
+    const undoText = cs.undoStatus != null ? `；撤销状态：${UNDO_LABEL[cs.undoStatus] ?? '状态未知'}` : '';
     const label = document.createElement('div');
-    label.textContent = `${APP_STATUS[cs.applicationStatus] ?? cs.applicationStatus} · ${cs.fileCount} 文件${undoText}`;
+    label.textContent = `${APP_STATUS[cs.applicationStatus] ?? '状态未知'} · ${cs.fileCount} 文件${undoText}`;
     row.appendChild(label);
     const files = document.createElement('div');
     files.className = 'recovery-facts';
-    files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path}（${CHANGE_FILE_STATE_TEXT[f.state] ?? f.state}）`).join(String.fromCharCode(10));
+    files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path} · ${CHANGE_FILE_STATE_TEXT[f.state] ?? '状态未知'}`).join(String.fromCharCode(10));
     row.appendChild(files);
     // 前像可用性（第九轮）：撤销/恢复依赖改前内容快照——不可得（unknown）的文件如实标注。
     const beforeFiles = cs.files.filter((f) => f.role === 'before');
@@ -2478,14 +2498,14 @@ async function renderChangeSets() {
       const available = beforeFiles.filter((f) => f.state === 'present').length;
       const pre = document.createElement('div');
       pre.className = 'recovery-facts';
-      pre.textContent = `改前内容可用：${available}/${beforeFiles.length}${available < beforeFiles.length ? '（部分改前内容未知，对应文件无法自动撤销）' : ''}`;
+      pre.textContent = `改前内容可用：${available}/${beforeFiles.length}${available < beforeFiles.length ? ' · 部分改前内容未知，对应文件无法自动撤销' : ''}`;
       row.appendChild(pre);
     }
     // 撤销详情（第八轮）：恢复进度/冲突原因（不可撤销的具体说明）——只读呈现，续跑走撤销命令。
     if (cs.undo != null) {
       const undoDetail = document.createElement('div');
       undoDetail.className = 'recovery-facts';
-      const lines = [`撤销进度：${cs.undo.doneSteps}/${cs.undo.totalSteps} 步（${UNDO_LABEL[cs.undo.status] ?? cs.undo.status}）`];
+      const lines = [`撤销进度：${cs.undo.doneSteps}/${cs.undo.totalSteps} 步 · ${UNDO_LABEL[cs.undo.status] ?? '状态未知'}`];
       if (cs.undo.failure != null) lines.push(`不可继续原因：${cs.undo.failure}`);
       if (cs.undo.resumable) lines.push('可在恢复中心继续撤销；遇到冲突会停止');
       undoDetail.textContent = lines.join(String.fromCharCode(10));
@@ -2511,7 +2531,7 @@ function updateStopUi(snapshot) {
   }
   const chip = taskChip(snapshot.status);
   const run = snapshot.activeRun;
-  const runText = run != null ? ` · ${RUN_STATUS_TEXT[run.status] ?? run.status}` : '';
+  const runText = run != null ? ` · ${RUN_STATUS_TEXT[run.status] ?? '状态未知'}` : '';
   const stopping = run != null && run.status === 'STOPPING';
   // 启动失败原因如实上屏（第十六轮四：验收防护拒绝等——「待处理」无解释=用户不可知）。
   const failNote = snapshot.lastStartupFailureMessage != null ? ` · ${userFacingSystemText(snapshot.lastStartupFailureMessage)}` : '';
@@ -2538,8 +2558,8 @@ function updateStopUi(snapshot) {
   acceptBtn.classList.toggle('hidden', !reviewable);
   rejectBtn.classList.toggle('hidden', !reviewable);
   if (reviewable) {
-    acceptBtn.textContent = `验收通过（第 ${pending.revision} 版）`;
-    rejectBtn.textContent = `要求修改（第 ${pending.revision} 版）`;
+    acceptBtn.textContent = `验收通过，第 ${pending.revision} 版`;
+    rejectBtn.textContent = `要求修改，第 ${pending.revision} 版`;
   }
   // 返工意见行（第十轮·三）：无待验收交付时一并收起。
   if (!reviewable) el('rework-note-row')?.classList.add('hidden');
@@ -2558,11 +2578,11 @@ async function reviewTask(decision, note) {
       decision,
       ...(decision === 'changes_requested' && note != null ? { note } : {}),
     });
-    state.reviewConfirm = `验收已记录：交付${REVIEW_STATUS_TEXT[r.reviewStatus] ?? r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务${TASK_STATUS_TEXT[r.taskStatusAfter] ?? r.taskStatusAfter}`;
+    state.reviewConfirm = `验收已记录：交付${REVIEW_STATUS_TEXT[r.reviewStatus] ?? '状态未知'}，第 ${r.deliveryRevision} 版 · 任务${TASK_STATUS_TEXT[r.taskStatusAfter] ?? '状态未知'}`;
     state.reviewConfirmFor = snap.taskId;
     el('thread-status').textContent = state.reviewConfirm;
   } catch (error) {
-    el('thread-status').textContent = `验收失败（第 ${pending.revision} 版）：${error.message}`;
+    el('thread-status').textContent = `验收失败，第 ${pending.revision} 版：${error.message}`;
   }
   el('rework-note-row').classList.add('hidden');
   await renderThread();
@@ -2595,7 +2615,7 @@ function showSendError(message, envelope) {
   box.appendChild(text);
   if (envelope != null) {
     const retry = document.createElement('button');
-    retry.textContent = '重试发送（不会重复执行）';
+    retry.textContent = '重试发送，不会重复执行';
     retry.onclick = () => { void retrySend(); };
     box.appendChild(retry);
   }
@@ -2623,7 +2643,7 @@ function showImageGate(kind, onConfirm) {
   text.textContent = '当前无法向 AI 发送图片，请选择：';
   const okBtn = document.createElement('button');
   okBtn.id = 'image-gate-confirm';
-  okBtn.textContent = '仅发送文字（不发送图片）';
+  okBtn.textContent = '仅发送文字，不发送图片';
   okBtn.onclick = () => { box.classList.add('hidden'); box.innerHTML = ''; onConfirm(); };
   const cancel = document.createElement('button');
   cancel.id = 'image-gate-cancel';
@@ -2650,7 +2670,7 @@ async function retrySend() {
     afterSendSuccess(view, state.recordOnly, envelope.params?.attachmentRefs, keyAtSend);
   } catch (transportError) {
     // 传输层仍失败：保留同 commandId 供再次重试。
-    showSendError(`发送未确认（连接异常）：${transportError.message}`, envelope);
+    showSendError(`发送未确认，连接异常：${transportError.message}`, envelope);
   }
 }
 
@@ -2737,7 +2757,7 @@ async function send() {
     afterSendSuccess(view, recordIntent, envelope.params?.attachmentRefs, keyAtSend);
   } catch (transportError) {
     // 传输层失败（超时/断连）：服务端可能已执行——保留同 commandId 重试，不自动改写文本重发。
-    showSendError(`发送未确认（连接异常）：${transportError.message}`, envelope);
+    showSendError(`发送未确认，连接异常：${transportError.message}`, envelope);
   } finally {
     state.inflightSend = null;
     el('send').disabled = false;
@@ -2766,13 +2786,13 @@ async function renderRuntimeStatus() {
   facts.className = 'recovery-facts';
   const lines = [];
   for (const b of data.memberBindings ?? []) {
-    lines.push(`${b.displayName}：${b.kind}${b.model ? ` · ${b.model}` : ''}`);
+    lines.push(`${b.displayName}：${runtimeKindText(b.kind)}${b.model ? ` · ${b.model}` : ''}`);
   }
-  lines.push(`进程检查：${data.daemonRecovery?.processTreeEvidence ?? '?'}`);
-  lines.push(`迟到成果接收：${data.daemonRecovery?.lateEventPump ?? '?'}`);
+  lines.push(`进程检查：${capabilityText(data.daemonRecovery?.processTreeEvidence)}`);
+  lines.push(`迟到成果接收：${latePumpText(data.daemonRecovery?.lateEventPump)}`);
   const claudeCap = data.capabilities?.claude?.keyAbilities;
   if (claudeCap != null) {
-    lines.push(`claude 能力（关键项）：结构化终态=${claudeCap.structuredFinal}；写入限制=${claudeCap.restrictWrites}；交互审批=${claudeCap.interactiveApprovals}`);
+    lines.push(`Claude 能力：结构化终态${supportText(claudeCap.structuredFinal)}；写入限制${supportText(claudeCap.restrictWrites)}；交互审批${supportText(claudeCap.interactiveApprovals)}`);
   }
   facts.textContent = lines.join(String.fromCharCode(10));
   box.appendChild(facts);
@@ -2795,7 +2815,7 @@ async function renderRepoStatus() {
     box.innerHTML = '';
     const line = document.createElement('div');
     line.className = 'meta';
-    line.textContent = `仓库状态：${error.message.includes('不是 git 仓库') ? '当前项目目录不是 git 仓库' : `查询失败（${error.message}）`}`;
+    line.textContent = `仓库状态：${error.message.includes('不是 git 仓库') ? '当前项目目录不是 Git 仓库' : `查询失败：${error.message}`}`;
     box.appendChild(line);
     return;
   }
@@ -2805,27 +2825,27 @@ async function renderRepoStatus() {
   box.innerHTML = '';
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `仓库状态（只读·分支 ${data.branch}）：已暂存 ${data.staged.length} · 未暂存 ${data.unstaged.length} · 未跟踪 ${data.untracked.length}${data.truncated ? '（列表截断）' : ''}`;
+  head.textContent = `仓库状态 · 只读 · 分支 ${data.branch}：已暂存 ${data.staged.length} · 未暂存 ${data.unstaged.length} · 未跟踪 ${data.untracked.length}${data.truncated ? ' · 列表已截断' : ''}`;
   box.appendChild(head);
   // 第十轮：项目根是仓库子目录时显式说明——范围不悄悄扩大到项目外（条目带（项目外）标注）。
   if (data.projectRootIsWorktreeRoot === false) {
     const scope = document.createElement('div');
     scope.className = 'meta';
-    scope.textContent = `项目根是仓库子目录（仓库根 ${data.worktreeRoot}）：下列条目为整个工作树状态，标注（项目外）者在项目目录之外`;
+    scope.textContent = `项目根是仓库子目录，仓库根 ${data.worktreeRoot}。下列条目为整个工作树状态，标注「项目外」者在项目目录之外`;
     box.appendChild(scope);
   }
   if (total === 0) {
     const clean = document.createElement('div');
     clean.className = 'recovery-facts';
-    clean.textContent = '工作区干净（相对最近提交无差异）';
+    clean.textContent = '工作区干净，相对最近提交无差异';
     box.appendChild(clean);
     return;
   }
   const list = document.createElement('div');
   list.className = 'recovery-facts';
-  const markOutside = (e) => (e.outsideProjectRoot === true ? '（项目外）' : '');
+  const markOutside = (e) => (e.outsideProjectRoot === true ? ' · 项目外' : '');
   const lines = [];
-  if (data.staged.length > 0) lines.push(`已暂存：${data.staged.map((e) => e.path + (e.renamedFrom != null ? `（← ${e.renamedFrom}）` : '') + markOutside(e)).join('、')}`);
+  if (data.staged.length > 0) lines.push(`已暂存：${data.staged.map((e) => e.path + (e.renamedFrom != null ? ` · 原路径 ${e.renamedFrom}` : '') + markOutside(e)).join('、')}`);
   if (data.unstaged.length > 0) lines.push(`未暂存：${data.unstaged.map((e) => e.path + markOutside(e)).join('、')}`);
   if (data.untracked.length > 0) lines.push(`未跟踪：${data.untracked.map((e) => e.path + markOutside(e)).join('、')}`);
   list.textContent = lines.join(String.fromCharCode(10));
@@ -2853,7 +2873,7 @@ async function renderRepoStatus() {
   if (data.untracked.length > 10) {
     const more = document.createElement('div');
     more.className = 'meta';
-    more.textContent = `（未跟踪共 ${data.untracked.length} 个，仅列前 10 个内容入口）`;
+    more.textContent = `未跟踪共 ${data.untracked.length} 个，仅列前 10 个内容入口`;
     box.appendChild(more);
   }
 }
@@ -2905,7 +2925,7 @@ async function toggleDiff(box, staged, btn) {
   if (r.patches.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'recovery-facts';
-    empty.textContent = '无差异（或仅有未跟踪文件）';
+    empty.textContent = '无差异，或仅有未跟踪文件';
     block.appendChild(empty);
   }
   appendPatches(block, r);
@@ -2918,10 +2938,10 @@ function appendPatches(block, r) {
   for (const patch of r.patches) {
     const head = document.createElement('div');
     head.className = 'meta';
-    const statNote = patch.stat === 'unknown' ? '（行数统计不可用）' : patch.binary ? '（二进制文件，无文本差异）' : '';
+    const statNote = patch.stat === 'unknown' ? ' · 行数统计不可用' : patch.binary ? ' · 二进制文件，无文本差异' : '';
     const sourceNote = patch.source === 'worktree-content' ? '〔未跟踪文件内容〕' : '';
-    const countNote = patch.source !== 'worktree-content' && patch.addedCount != null ? `（+${patch.addedCount}/-${patch.deletedCount ?? 0}）` : '';
-    head.textContent = `${sourceNote}${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${statNote}${countNote}${patch.truncated ? '（超限截断）' : ''}`;
+    const countNote = patch.source !== 'worktree-content' && patch.addedCount != null ? ` · 新增 ${patch.addedCount} 行，删除 ${patch.deletedCount ?? 0} 行` : '';
+    head.textContent = `${sourceNote}${CHANGE[patch.change] ?? '变更'} ${patch.path}${patch.oldPath != null ? ` · 原路径 ${patch.oldPath}` : ''}${statNote}${countNote}${patch.truncated ? ' · 超限截断' : ''}`;
     block.appendChild(head);
     if (r.numstatError != null && patch.stat === 'unknown') {
       const warn = document.createElement('div');
@@ -2973,7 +2993,7 @@ async function renderGitOps(force = false) {
     box.innerHTML = '';
     const line = document.createElement('div');
     line.className = 'meta';
-    line.textContent = `Git 操作：${error.message.includes('不是 git 仓库') ? '当前项目目录不是 git 仓库' : `不可用（${error.message}）`}`;
+    line.textContent = `Git 操作：${error.message.includes('不是 git 仓库') ? '当前项目目录不是 Git 仓库' : `不可用：${error.message}`}`;
     box.appendChild(line);
     return;
   }
@@ -2982,7 +3002,7 @@ async function renderGitOps(force = false) {
   box.innerHTML = '';
   const title = document.createElement('div');
   title.className = 'meta';
-  title.textContent = 'Git 操作（暂存/提交/历史 · 提交不等同任务验收，不会自动推送）';
+  title.textContent = 'Git 操作：暂存、提交、历史。提交不等同任务验收，不会自动推送';
   box.appendChild(title);
 
   const mkBtn = (label, titleText, onClick) => {
@@ -3008,14 +3028,14 @@ async function renderGitOps(force = false) {
     mkBtn(`取消暂存 ${wrapPath(entry.path)}`, '取消该文件暂存，保留文件内容', async () => {
       const r = await command('git.unstage', { projectId: state.projectId, paths: [entry.path] });
       await refreshGitViews();
-      say(`已取消暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}（${s.reason}）`).join('、')}` : ''}`);
+      say(`已取消暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}，原因 ${userFacingSystemText(s.reason)}`).join('、')}` : ''}`);
     });
   }
   for (const entry of [...status.unstaged, ...status.untracked].slice(0, 15)) {
-    mkBtn(`暂存 ${wrapPath(entry.path)}`, '把该文件当前内容加入暂存区（不动其他文件）', async () => {
+    mkBtn(`暂存 ${wrapPath(entry.path)}`, '把该文件当前内容加入暂存区，不动其他文件', async () => {
       const r = await command('git.stage', { projectId: state.projectId, paths: [entry.path] });
       await refreshGitViews();
-      say(`已暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}（${s.reason}）`).join('、')}` : ''}`);
+      say(`已暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}，原因 ${userFacingSystemText(s.reason)}`).join('、')}` : ''}`);
     });
   }
 
@@ -3033,7 +3053,7 @@ async function renderGitOps(force = false) {
     const opt = document.createElement('option');
     opt.value = t.taskId;
     const label = t.title.length > 26 ? `${t.title.slice(0, 26)}…` : t.title;
-    opt.textContent = `${label}（${taskChip(t.status).text}）`;
+    opt.textContent = `${label} · ${taskChip(t.status).text}`;
     taskSelect.appendChild(opt);
   }
   taskRow.appendChild(taskSelect);
@@ -3043,10 +3063,10 @@ async function renderGitOps(force = false) {
   batchBtn.title = '暂存该任务涉及的文件；任务开始前已存在的改动默认跳过，同一文件混合改动列为冲突、不自动分离';
   batchBtn.onclick = () => void (async () => {
     const taskId = taskSelect.value;
-    if (taskId === '') { say('请先选择任务（主池任务卡）——没有可选任务时，说明本项目还没有任务。'); return; }
+    if (taskId === '') { say('请先选择任务，即主池任务卡；没有可选任务时，说明本项目还没有任务。'); return; }
     const r = await command('git.stageTask', { projectId: state.projectId, taskId });
     await refreshGitViews();
-    say(`按任务暂存完成：纳入 ${r.included.length} 个${r.included.length > 0 ? `（${r.included.map(wrapPath).join('、')}）` : ''}；跳过 ${r.skipped.length} 个${r.skipped.length > 0 ? `（${r.skipped.map((s) => `${wrapPath(s.path)}：${s.reason}`).join('；')}）` : ''}；冲突 ${r.conflicts.length} 个${r.conflicts.length > 0 ? `（${r.conflicts.map((c) => `${wrapPath(c.path)}：${c.reason}`).join('；')}）` : ''}`);
+    say(`按任务暂存完成：纳入 ${r.included.length} 个${r.included.length > 0 ? `，${r.included.map(wrapPath).join('、')}` : ''}；跳过 ${r.skipped.length} 个${r.skipped.length > 0 ? `，${r.skipped.map((s) => `${wrapPath(s.path)}：${userFacingSystemText(s.reason)}`).join('；')}` : ''}；冲突 ${r.conflicts.length} 个${r.conflicts.length > 0 ? `，${r.conflicts.map((c) => `${wrapPath(c.path)}：${userFacingSystemText(c.reason)}`).join('；')}` : ''}`);
   })().catch(showConnError);
   taskRow.appendChild(batchBtn);
   box.appendChild(taskRow);
@@ -3082,7 +3102,7 @@ async function renderGitOps(force = false) {
   doBtn.className = 'chip';
   doBtn.textContent = '提交';
   doBtn.disabled = true;
-  doBtn.title = '按预览内容提交；预览后 HEAD 或暂存区变化会拒绝并要求重新预览';
+  doBtn.title = '按预览内容提交；预览后当前提交或暂存区变化会拒绝并要求重新预览';
   const previewBox = document.createElement('div');
   previewBox.className = 'git-result';
   previewBox.id = 'git-commit-preview';
@@ -3092,9 +3112,9 @@ async function renderGitOps(force = false) {
     doBtn.disabled = !p.canCommit;
     const stagedLines = p.staged.slice(0, 10).map((s) => `${s.xy} ${s.path}${s.renamedFrom != null ? `（← ${s.renamedFrom}）` : ''}`).join('\n');
     previewBox.textContent = [
-      `将提交（分支 ${p.branch ?? '（detached）'}）：`,
-      stagedLines || '（暂存区为空）',
-      p.staged.length > 10 ? `（另 ${p.staged.length - 10} 个）` : '',
+      `将提交，分支 ${p.branch ?? '未关联分支'}：`,
+      stagedLines || '暂存区为空',
+      p.staged.length > 10 ? `另有 ${p.staged.length - 10} 个` : '',
       p.canCommit ? '检查通过，可以提交。内容变化后需重新预览。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
       ...p.notes.map((n) => `· ${n}`),
     ].filter((s) => s !== '').join('\n');
@@ -3105,7 +3125,7 @@ async function renderGitOps(force = false) {
     const message = msgInput.value.trim();
     if (message === '') { previewBox.textContent = '请填写提交说明。'; return; }
     const p = state.gitCommitPreview;
-    if (p == null || p.indexTree == null || p.branch == null) { previewBox.textContent = '请先预览提交（提交绑定预览时的内容/分支）。'; return; }
+    if (p == null || p.indexTree == null || p.branch == null) { previewBox.textContent = '请先预览提交，提交绑定预览时的内容与分支。'; return; }
     const taskId = taskBind.value === '' ? undefined : taskBind.value;
     const r = await command('git.commit', {
       projectId: state.projectId, message,
@@ -3116,9 +3136,9 @@ async function renderGitOps(force = false) {
     doBtn.disabled = true;
     await refreshGitViews();
     const verifyNote = r.consistent === false
-      ? '（警告：提交后核对不一致——提交已成功，但仓库当前状态又被外部推进；不会自动回滚，请人工核对）'
+      ? ' · 警告：提交后核对不一致——提交已成功，但仓库当前状态又被外部推进；不会自动回滚，请人工核对'
       : '';
-    say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（已恢复已有提交）' : r.replayed === true ? '（已处理，显示原结果）' : ''}${verifyNote}`);
+    say(`已提交，提交编号 ${r.commit.slice(0, 8)}${r.recovered === true ? ' · 已恢复已有提交' : r.replayed === true ? ' · 已处理，显示原结果' : ''}${verifyNote}`);
     msgInput.value = '';
   })().catch((error) => { previewBox.textContent = `提交失败：${error.message}`; });
   commitRow.append(previewBtn, doBtn);
@@ -3142,7 +3162,7 @@ async function renderGitOps(force = false) {
     for (const item of b.branches) {
       const opt = document.createElement('option');
       opt.value = item.name;
-      opt.textContent = `${item.name}${item.name === b.current ? '（当前）' : ''}`;
+      opt.textContent = `${item.name}${item.name === b.current ? ' · 当前' : ''}`;
       branchSelect.appendChild(opt);
     }
     if (b.current != null) branchSelect.value = b.current;
@@ -3158,15 +3178,15 @@ async function renderGitOps(force = false) {
     branchRow.appendChild(b);
     return b;
   };
-  mkRowBtn('建分支', '在当前 HEAD 创建分支（不切换；HEAD 与确认一致才创建）', async () => {
+  mkRowBtn('建分支', '在当前提交创建分支，不切换；当前提交与确认一致才创建', async () => {
     const name = branchNameInput.value.trim();
     if (name === '') { say('请填写新分支名。'); return; }
     const r = await command('git.branch.create', { projectId: state.projectId, name, expectedHead: await currentHeadOfRepo() });
     await branchRefresh();
-    say(`已创建分支 ${r.name}（未切换）`);
+    say(`已创建分支 ${r.name}，未切换`);
     branchNameInput.value = '';
   });
-  mkRowBtn('切换分支', '切换到所选分支；未提交改动随行（不自动 stash，有冲突时停止切换）', async () => {
+  mkRowBtn('切换分支', '切换到所选分支；未提交改动随行，不自动暂存，有冲突时停止切换', async () => {
     const target = branchSelect.value;
     if (target === '') { say('请选择目标分支。'); return; }
     const b = await command('git.branch.list', { projectId: state.projectId });
@@ -3174,7 +3194,7 @@ async function renderGitOps(force = false) {
     const head = await currentHeadOfRepo();
     const r = await command('git.checkout', { projectId: state.projectId, branch: target, expectedHead: head, expectedBranch: b.current });
     await refreshGitViews();
-    say(`已切换到 ${r.branch}（未提交改动 ${r.carriedDirtyCount} 项随行——不自动 stash）`);
+    say(`已切换到 ${r.branch}，未提交改动 ${r.carriedDirtyCount} 项随行，不自动暂存`);
   });
   box.appendChild(branchRow);
 
@@ -3185,7 +3205,7 @@ async function renderGitOps(force = false) {
   remoteInput.className = 'git-input';
   remoteInput.id = 'git-remote-name';
   remoteInput.value = 'origin';
-  remoteInput.title = '远端名（git remote 配置的名称）';
+  remoteInput.title = '远端名称，取自 Git 配置';
   remoteRow.appendChild(remoteInput);
   const remoteBtn = (label, titleText, onClick) => {
     const b = document.createElement('button');
@@ -3195,21 +3215,21 @@ async function renderGitOps(force = false) {
     b.onclick = () => void onClick().catch((error) => { say(`${label}失败：${error.message}`); });
     remoteRow.appendChild(b);
   };
-  remoteBtn('推送', '推送当前分支到远端（仅快进、不强推；绑定本地 HEAD 与远端当前头，任一变化即拒绝）', async () => {
+  remoteBtn('推送', '推送当前分支到远端；仅快进、不强推；绑定本地当前提交与远端当前头，任一变化即拒绝', async () => {
     const remote = remoteInput.value.trim();
     const b = await command('git.branch.list', { projectId: state.projectId });
     const head = await currentHeadOfRepo();
     const rh = await command('git.remoteHead', { projectId: state.projectId, remote, branch: b.current });
     await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
-    say(`已推送 ${b.current}（远端 ${remote}）`);
+    say(`已推送 ${b.current} 到远端 ${remote}`);
   });
-  remoteBtn('拉取', '快进拉取当前分支（分叉时需手动合并）', async () => {
+  remoteBtn('拉取', '快进拉取当前分支，分叉时需手动合并', async () => {
     const remote = remoteInput.value.trim();
     const b = await command('git.branch.list', { projectId: state.projectId });
     const head = await currentHeadOfRepo();
     const r = await command('git.pull', { projectId: state.projectId, remote, branch: b.current, expectedHead: head });
     await refreshGitViews();
-    say(`已拉取 ${r.pulledCount} 个提交（远端 ${remote}）`);
+    say(`已拉取 ${r.pulledCount} 个提交，来自远端 ${remote}`);
   });
   box.appendChild(remoteRow);
 
@@ -3218,10 +3238,10 @@ async function renderGitOps(force = false) {
   if (conflicted.length > 0) {
     const conTitle = document.createElement('div');
     conTitle.className = 'meta';
-    conTitle.textContent = `冲突未解决（${conflicted.length} 个路径）——查看三方内容后手动提交解决文本：`;
+    conTitle.textContent = `冲突未解决，共 ${conflicted.length} 个路径；查看三方内容后手动提交解决文本：`;
     box.appendChild(conTitle);
     for (const path of conflicted) {
-      mkBtn(`三方内容 ${wrapPath(path)}`, 'base / ours / theirs 三方内容（只读）', async () => {
+      mkBtn(`三方内容 ${wrapPath(path)}`, '三方内容对照，只读', async () => {
         const tri = await command('git.conflict.content', { projectId: state.projectId, path });
         const existing = document.getElementById(`conflict-block-${path}`);
         if (existing != null) { existing.remove(); return; }
@@ -3231,7 +3251,7 @@ async function renderGitOps(force = false) {
         const mkPart = (label, text) => {
           const h = document.createElement('div');
           h.className = 'meta';
-          h.textContent = `〔${label}〕${text == null ? '（该侧无内容）' : ''}`;
+          h.textContent = `〔${label}〕${text == null ? ' 该侧无内容' : ''}`;
           block.appendChild(h);
           if (text != null) {
             const pre = document.createElement('div');
@@ -3240,24 +3260,24 @@ async function renderGitOps(force = false) {
             block.appendChild(pre);
           }
         };
-        mkPart('base 共同祖先', tri.base);
-        mkPart('ours 本方', tri.ours);
-        mkPart('theirs 对方', tri.theirs);
+        mkPart('共同祖先', tri.base);
+        mkPart('本方', tri.ours);
+        mkPart('对方', tri.theirs);
         const area = document.createElement('textarea');
         area.className = 'git-input';
         area.id = `conflict-resolve-${path}`;
         area.style.width = '100%';
         area.rows = 4;
-        area.placeholder = '在此填写解决后的完整文件内容（手动合并；不提供整文件一键用某边覆盖）';
+        area.placeholder = '在此填写解决后的完整文件内容，手动合并；不提供整文件一键用某一方覆盖';
         const submit = document.createElement('button');
         submit.className = 'chip';
         submit.textContent = `提交解决 ${wrapPath(path)}`;
         submit.onclick = () => void (async () => {
           const content = area.value;
-          if (content === '') { say('解决内容为空——如需删除该文件请用你自己的 git 客户端处理。'); return; }
+          if (content === '') { say('解决内容为空——如需删除该文件请用你自己的 Git 客户端处理。'); return; }
           await command('git.conflict.resolve', { projectId: state.projectId, path, content });
           await refreshGitViews();
-          say(`已解决冲突：${path}（写入内容并暂存）`);
+          say(`已解决冲突：${path}，已写入内容并暂存`);
         })().catch((error) => { say(`解决失败：${error.message}`); });
         block.append(area, submit);
         box.appendChild(block);
@@ -3266,7 +3286,7 @@ async function renderGitOps(force = false) {
   }
 
   // 历史：按钮 + 列表（任务关联来自本产品操作日志——外部提交不虚构归属）。
-  mkBtn('查看提交历史', '最近提交与任务/改动集关联（只展示关联，不表示整提交已人工审阅）', async () => {
+  mkBtn('查看提交历史', '最近提交与任务、改动集的关联；只展示关联，不表示整提交已人工审阅', async () => {
     const existing = document.getElementById('git-history-block');
     if (existing != null) { existing.remove(); return; }
     const h = await command('git.history', { projectId: state.projectId, limit: 20 });
@@ -3274,7 +3294,7 @@ async function renderGitOps(force = false) {
     block.id = 'git-history-block';
     block.className = 'git-result';
     if (h.items.length === 0) {
-      block.textContent = '（无提交历史）';
+      block.textContent = '暂无提交历史';
     } else {
       block.innerHTML = '';
       for (const item of h.items) {
@@ -3305,7 +3325,7 @@ async function renderGitOps(force = false) {
             for (const patch of data.patches) {
               const ph = document.createElement('div');
               ph.className = 'meta';
-              ph.textContent = `${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+              ph.textContent = `${CHANGE[patch.change] ?? '变更'} ${patch.path}${patch.oldPath != null ? ` · 原路径 ${patch.oldPath}` : ''}${patch.binary ? ' · 二进制' : ''}${patch.truncated ? ' · 超限截断' : ''}`;
               sub.appendChild(ph);
               if (!patch.binary && patch.text.length > 0) {
                 const pre = document.createElement('div');
@@ -3317,7 +3337,7 @@ async function renderGitOps(force = false) {
             if (data.patches.length === 0) {
               const empty = document.createElement('div');
               empty.className = 'meta';
-              empty.textContent = '（相对该父无差异）';
+              empty.textContent = '相对该父提交无差异';
               sub.appendChild(empty);
             }
           };
@@ -3341,7 +3361,7 @@ async function renderGitOps(force = false) {
                 b.className = 'chip';
                 b.textContent = `${pm.short} ${pm.subject.slice(0, 24)}`;
                 if (pm.oid === activeOid) { b.disabled = true; b.title = '当前比较父'; }
-                else { b.title = '以该父为基准查看差异（差异=本提交相对该父的实际变更）'; }
+                else { b.title = '以该父为基准查看差异，差异即本提交相对该父的实际变更'; }
                 b.onclick = () => void (async () => {
                   const d2 = await command('git.commitDiff', { projectId: state.projectId, oid: item.oid, parentOid: pm.oid });
                   body.textContent = '';
@@ -3359,7 +3379,7 @@ async function renderGitOps(force = false) {
               for (const patch of data.patches) {
                 const ph = document.createElement('div');
                 ph.className = 'meta';
-                ph.textContent = `${changeMap[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+                ph.textContent = `${changeMap[patch.change] ?? '变更'} ${patch.path}${patch.oldPath != null ? ` · 原路径 ${patch.oldPath}` : ''}${patch.binary ? ' · 二进制' : ''}${patch.truncated ? ' · 超限截断' : ''}`;
                 target.appendChild(ph);
                 if (!patch.binary && patch.text.length > 0) {
                   const pre = document.createElement('div');
@@ -3371,7 +3391,7 @@ async function renderGitOps(force = false) {
               if (data.patches.length === 0) {
                 const empty = document.createElement('div');
                 empty.className = 'meta';
-                empty.textContent = '（相对该父无差异）';
+                empty.textContent = '相对该父提交无差异';
                 target.appendChild(empty);
               }
             };
@@ -3388,17 +3408,17 @@ async function renderGitOps(force = false) {
             renderPatches(d);
           }
           box.appendChild(sub);
-        })().catch((error) => { say(`diff 查看失败：${error.message}`); });
+        })().catch((error) => { say(`差异查看失败：${error.message}`); });
         line.appendChild(diffBtn);
         if (item.oid === h.head) {
           const undoBtn = document.createElement('button');
           undoBtn.className = 'chip';
-          undoBtn.textContent = '撤销此提交（软回退）';
+          undoBtn.textContent = '撤销此提交，软回退';
           undoBtn.title = '仅撤销最新提交，保留文件内容并取消暂存';
           undoBtn.onclick = () => void (async () => {
             const r = await command('git.commit.undo', { projectId: state.projectId, commitOid: item.oid, expectedHead: item.oid });
             await refreshGitViews();
-            say(`已软回退到上一提交（${r.movedToUnstaged} 项改动回到未暂存；文件未删除）`);
+            say(`已软回退到上一提交，${r.movedToUnstaged} 项改动回到未暂存；文件未删除`);
           })().catch((error) => { say(`撤销失败：${error.message}`); });
           line.appendChild(undoBtn);
         }
@@ -3439,8 +3459,8 @@ async function refreshGate() {
     return;
   }
   const lines = [];
-  if (data.pendingDispatchCount > 0) lines.push(`待派发 ${data.pendingDispatchCount} 项（重启遗留）`);
-  if (data.interruptedRuns.length > 0) lines.push(`中断运行 ${data.interruptedRuns.length} 个（不自动重跑）`);
+  if (data.pendingDispatchCount > 0) lines.push(`待派发 ${data.pendingDispatchCount} 项，重启遗留`);
+  if (data.interruptedRuns.length > 0) lines.push(`中断运行 ${data.interruptedRuns.length} 个，不自动重跑`);
   info.textContent = lines.length > 0 ? lines.join('\n') : '上次退出时有未完成工作';
   info.classList.remove('hidden');
   gate.classList.remove('hidden');
@@ -3474,7 +3494,7 @@ function renderRecoveryPanel(panel, data) {
   el('recovery-help').classList.remove('hidden'); // START-07 首版：恢复场景可读帮助随恢复面出现
   panel.innerHTML = '';
   const head = document.createElement('div');
-  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未完成撤销 ${undos.length} 项` : ''}${retainedOnly.length > 0 ? `；保留保护 ${retainedOnly.length} 项（无租约）` : ''}`;
+  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未完成撤销 ${undos.length} 项` : ''}${retainedOnly.length > 0 ? `；保留保护 ${retainedOnly.length} 项，无租约` : ''}`;
   panel.appendChild(head);
   // 未收口撤销行（第九轮）：in_progress/failed 可续跑（changeset.undo 逐步幂等重验，不覆盖
   // 用户改动；conflict 不可自动继续——展示冲突原因，人工处置后重新发起）。
@@ -3483,7 +3503,7 @@ function renderRecoveryPanel(panel, data) {
     row.className = 'recovery-row recovery-undo-row';
     row.dataset.changeSetId = u.changeSetId;
     const meta = document.createElement('span');
-    meta.textContent = `未完成撤销（${u.status === 'failed' ? '中断——待恢复续跑' : '进行中'}；遇到文件冲突会停止）`;
+    meta.textContent = `未完成撤销：${u.status === 'failed' ? '中断，待恢复续跑' : '进行中'}；遇到文件冲突会停止`;
     row.appendChild(meta);
     if (u.status !== 'conflict') {
       const b = document.createElement('button');
@@ -3505,9 +3525,9 @@ function renderRecoveryPanel(panel, data) {
       const facts = document.createElement('div');
       facts.className = 'recovery-facts';
       const conflictHint = mark?.budgetMark === 'refunded'
-        ? String.fromCharCode(10) + '（本次执行已按未启动退还额度；如有账单或迟到结果，需核对后更正）'
+        ? String.fromCharCode(10) + '本次执行已按未启动退还额度；如有账单或迟到结果，需核对后更正'
         : '';
-      facts.textContent = `遗留保护：${l.owner_turn_id} 的写入租约仍持有（预算处置=${mark?.budgetMark ?? '已完成'}·${mark?.turnStatus ?? '?'}）——写入保护保留，确认相关进程已结束后才能解除${conflictHint}`;
+      facts.textContent = `遗留保护：任务执行 ${l.owner_turn_id} 的写入租约仍持有，预算处置${budgetMarkText(mark?.budgetMark)}，状态${turnStatusText(mark?.turnStatus)}；写入保护保留，确认相关进程已结束后才能解除${conflictHint}`;
       row.appendChild(facts);
       const b = document.createElement('button');
       b.textContent = '检查并解除保护';
@@ -3522,7 +3542,7 @@ function renderRecoveryPanel(panel, data) {
     row.dataset.turnId = r.turnId;
     const facts = document.createElement('div');
     facts.className = 'recovery-facts';
-    facts.textContent = `保留保护：${r.turnId}（状态=${r.turnStatus ?? '?'}·预算处置=${r.budgetMark ?? '?'}·仍需确认执行已结束）；检查并解除保护后才能恢复执行`;
+    facts.textContent = `保留保护：${r.turnId}；状态${turnStatusText(r.turnStatus)}，预算处置${budgetMarkText(r.budgetMark)}；仍需确认执行已结束，检查并解除保护后才能恢复执行`;
     row.appendChild(facts);
     const b = document.createElement('button');
     b.textContent = '检查并解除保护';
@@ -3536,7 +3556,7 @@ function renderRecoveryPanel(panel, data) {
     row.dataset.turnId = t.id;
 
     const meta = document.createElement('span');
-    meta.textContent = `任务 ${t.taskId ?? '?'} · ${t.stageKey ?? '?'} · 状态未知（需对账）`;
+    meta.textContent = `任务 ${t.taskId ?? '未知'} · 阶段 ${STAGE_TEXT[t.stageKey] ?? '阶段未知'} · 状态未知，需对账`;
     row.appendChild(meta);
 
     // 程序观测事实（服务端登记与取证）与无法确认事项、保留保护——分行如实呈现。
@@ -3548,14 +3568,14 @@ function renderRecoveryPanel(panel, data) {
     if (reg == null) {
       factLines.push('无法检查执行进程，写入保护保留');
     } else {
-      factLines.push(`执行进程：${reg.processModel === 'per-turn' ? '本次执行进程' : reg.processModel === 'shared' ? '共享进程' : '无独立子进程'}${reg.pid != null ? ` PID ${reg.pid}` : ''}${reg.startedAtMs != null ? '（已记录启动时间）' : ''}`);
+      factLines.push(`执行进程：${reg.processModel === 'per-turn' ? '本次执行进程' : reg.processModel === 'shared' ? '共享进程' : '无独立子进程'}${reg.pid != null ? `，进程号 ${reg.pid}` : ''}${reg.startedAtMs != null ? '，已记录启动时间' : ''}`);
       if (reg.lastProbeResult != null) {
-        factLines.push(`最近检查：${reg.lastProbeResult}${reg.lastProbeDetail ? `——${reg.lastProbeDetail}` : ''}`);
+        factLines.push(`最近检查：${probeResultText(reg.lastProbeResult)}${reg.lastProbeDetail ? `——${reg.lastProbeDetail}` : ''}`);
       } else {
         factLines.push('尚未确认进程退出，请点击「检查执行进程」');
       }
     }
-    factLines.push(leases.length > 0 ? `保留保护：写入租约 ${leases.length} 条（确认进程退出后才能解除）` : '未持有写入锁，仍需核对执行结果');
+    factLines.push(leases.length > 0 ? `保留保护：写入租约 ${leases.length} 条，确认进程退出后才能解除` : '未持有写入锁，仍需核对执行结果');
     facts.textContent = factLines.join('\n');
     row.appendChild(facts);
 
@@ -3563,7 +3583,7 @@ function renderRecoveryPanel(panel, data) {
     const noteInput = document.createElement('input');
     noteInput.className = 'recovery-note';
     noteInput.dataset.turnId = t.id;
-    noteInput.placeholder = '人工依据说明（必填）：如渠道账单已扣费 / 任务管理器亲见进程';
+    noteInput.placeholder = '人工依据说明，必填：如渠道账单已扣费、任务管理器亲见进程';
     noteInput.value = state.recoveryNotes[t.id] ?? '';
     noteInput.oninput = () => { state.recoveryNotes[t.id] = noteInput.value; };
     row.appendChild(noteInput);
@@ -3580,8 +3600,8 @@ function renderRecoveryPanel(panel, data) {
       return b;
     };
     row.appendChild(mkBtn('检查执行进程', () => probeTurn(t.id)));
-    row.appendChild(mkBtn('确认已执行（需先检查进程）', () => reconcileTurn(t.id, { verdict: 'executed', note: noteOf() })));
-    row.appendChild(mkBtn('声明未启动（退还额度，保留保护）', () => {
+    row.appendChild(mkBtn('确认已执行，需先检查进程', () => reconcileTurn(t.id, { verdict: 'executed', note: noteOf() })));
+    row.appendChild(mkBtn('声明未启动，退还额度并保留保护', () => {
       const note = noteOf();
       if (!window.confirm('尚无法确认是否启动。声明未启动后将退还额度并记为失败，写入保护仍保留。继续？')) return;
       void reconcileTurn(t.id, { verdict: 'notStarted', manualRiskAck: true, note });
@@ -3608,7 +3628,7 @@ async function probeTurn(turnId) {
   if (row != null) {
     const el = document.createElement('div');
     el.className = 'recovery-probe-result';
-    el.textContent = `进程检查结果：${r.result}${r.detail ? `——${r.detail}` : ''}（检查时间 ${new Date(r.observedAt).toLocaleTimeString()}）`;
+    el.textContent = `进程检查结果：${probeResultText(r.result)}${r.detail ? `——${r.detail}` : ''}，检查时间 ${new Date(r.observedAt).toLocaleTimeString()}`;
     row.appendChild(el);
   }
 }
@@ -3617,9 +3637,9 @@ async function probeTurn(turnId) {
 async function releaseRetainedProtection(turnId) {
   let failure = null;
   try {
-    await command('recovery.releaseProtection', { turnId, note: '恢复面「继续核对并解除」（用户操作）' });
+    await command('recovery.releaseProtection', { turnId, note: '恢复面「继续核对并解除」，用户操作' });
   } catch (error) {
-    failure = `解除被拒（保护保留）：${error.message}`;
+    failure = `解除被拒，保护保留：${error.message}`;
   }
   await refreshGate();
   if (failure != null) showRecoveryError(failure);
@@ -3637,7 +3657,7 @@ async function resumeUndo(changeSetId) {
   await refreshGate();
   if (failure != null) { showRecoveryError(failure); return; }
   if (outcome != null && outcome.status === 'conflict') {
-    showRecoveryError(`撤销冲突（不覆盖用户改动）：${JSON.stringify(outcome.failure ?? {}).slice(0, 200)}`);
+    showRecoveryError(`撤销冲突，未覆盖用户改动${Array.isArray(outcome.manualPaths) && outcome.manualPaths.length > 0 ? `：${outcome.manualPaths.join('、')}` : ''}`);
   }
 }
 
@@ -3745,7 +3765,7 @@ el('dm-create').onclick = () => void (async () => {
   }
   const agents = state.members.filter((x) => x.principalType === 'agent' && x.enabled);
   box.replaceChildren();
-  if (agents.length === 0) { box.textContent = '（本项目没有启用的 AI 成员）'; box.classList.remove('hidden'); return; }
+  if (agents.length === 0) { box.textContent = '本项目没有启用的 AI 成员'; box.classList.remove('hidden'); return; }
   for (const a of agents) {
     const btn = document.createElement('button');
     btn.className = 'chip';
@@ -3783,7 +3803,7 @@ el('dm-remind-btn').onclick = () => void (async () => {
       ownerMemberId: state.dmActive.peerMemberId, title: `每日提醒：${state.dmActive.peerDisplayName ?? '会话'}`,
       schedule: { kind: 'daily', time },
     });
-    showError(`已设每日提醒（${time} 本地时刻）——下次 ${new Date(r.nextAt).toLocaleString()}；到点后在「待我处理」确认执行`);
+    showError(`已设每日提醒，${time} 本地时刻；下次 ${new Date(r.nextAt).toLocaleString()}；到点后在「待我处理」确认执行`);
   } catch (e) { showError(`设置提醒失败：${e.message}`); }
 })().catch(() => {});
 // ---------- DEV-18 第二包绑定（第二十五轮四）：搜索/收藏/关注·静音（纯读+偏好写） ----------
@@ -3848,7 +3868,7 @@ el('files-toggle').onclick = () => {
   if (toolActive === 'files') { closeToolReturn(); return; }
   showToolPanel('files');
   void renderFiles().catch(() => {});
-  el('thread-title').textContent = 'Files';
+  el('thread-title').textContent = '文件';
 };
 el('files-refresh').onclick = () => void renderFiles().catch(() => {});
 el('files-scope').addEventListener('change', () => void renderFiles().catch(() => {}));
@@ -3911,7 +3931,7 @@ el('dm-review-reject').onclick = () => {
   const input = document.createElement('input');
   input.id = 'dm-review-note-input';
   input.className = 'git-input';
-  input.placeholder = '修改意见（必填，成员将据此修改）';
+  input.placeholder = '修改意见，必填；成员将据此修改';
   input.maxLength = 500;
   const confirmBtn = document.createElement('button');
   confirmBtn.className = 'danger';
@@ -3923,14 +3943,14 @@ el('dm-review-reject').onclick = () => {
     // 会话已切换：明确拒绝并作废——不能把旧意见提交到另一会话的当前交付。
     if (state.openDmId !== conversationAtOpen) {
       closeNoteRow();
-      showError('返工意见已作废：会话已切换——请在目标会话重新发起（意见不自动套用到其它交付）');
+      showError('返工意见已作废：会话已切换，请在目标会话重新发起；意见不自动套用到其它交付');
       return;
     }
     // 同会话：只审打开时快照；期间版本更新由后端按 revision/hash 拒（STALE_REVISION）——不悄悄换稿。
     try {
       await command('task.review', { taskId: reviewAtOpen.taskId, deliveryId: reviewAtOpen.deliveryId, deliveryRevision: reviewAtOpen.revision, manifestHash: reviewAtOpen.manifestHash, decision: 'changes_requested', note });
       closeNoteRow();
-    } catch (e) { showError(`提交返工意见失败（第 ${reviewAtOpen.revision} 版）：${e.message}`); }
+    } catch (e) { showError(`提交返工意见失败，第 ${reviewAtOpen.revision} 版：${e.message}`); }
     await renderDm();
   })().catch(() => {});
   row.querySelector('.git-row').append(input, confirmBtn);
@@ -3941,7 +3961,7 @@ el('dm-stop-btn').onclick = () => void (async () => {
   if (active?.activeTaskId == null) return;
   try {
     await command('task.stop', { taskId: active.activeTaskId, targetRunId: active.activeRunId, expectedStopGeneration: active.activeStopGeneration ?? 0 });
-    el('dm-state').textContent = '停止请求已发（排队消息转暂停）';
+    el('dm-state').textContent = '停止请求已发出，排队消息转为暂停';
   } catch (e) { el('dm-state').textContent = `停止失败：${e.message}`; }
   await renderDm();
 })().catch(() => {});
@@ -3950,7 +3970,7 @@ el('dm-resume-btn').onclick = () => void (async () => {
   try {
     const r = await command('dm.resume', { conversationId: state.openDmId });
     const n = r?.enqueued ?? 0;
-    el('dm-state').textContent = n > 0 ? `已继续队列（${n} 条消息将依次执行）` : '已继续：当前无待处理的排队消息';
+    el('dm-state').textContent = n > 0 ? `已继续队列，${n} 条消息将依次执行` : '已继续：当前无待处理的排队消息';
   } catch (e) { el('dm-state').textContent = `继续失败：${e.message}`; }
   await renderDm();
   void renderDmSidebar().catch(() => {});
@@ -3964,7 +3984,7 @@ el('dm-recover-btn').onclick = () => void (async () => {
   try {
     // 恢复意图绑源执行（第三十九轮 §2.2：同源重试幂等/新中断=新源 run=新意图）。
     await command('task.redispatch', { taskId: target.taskId, reason: 'interrupted-recovery', ...(target.lastRunId != null ? { sourceRunId: target.lastRunId } : {}) });
-    el('dm-state').textContent = `恢复执行已入队（任务「${target.title}」——按原输入重新执行）`;
+    el('dm-state').textContent = `恢复执行已入队：任务「${target.title}」，按原输入重新执行`;
   } catch (e) { el('dm-state').textContent = `恢复失败：${e.message}`; }
   await renderDm();
   void renderDmSidebar().catch(() => {});
@@ -4052,10 +4072,10 @@ async function renderMemberRuntimeSettings() {
   const box = el('member-runtime-list');
   if (box == null) return;
   box.textContent = '';
-  if (state.projectId == null) { box.textContent = '（未打开项目）'; return; }
+  if (state.projectId == null) { box.textContent = '未打开项目'; return; }
   const members = state.members ?? [];
   const agents = members.filter((m) => m.principalType === 'agent');
-  if (agents.length === 0) { box.textContent = '（本项目暂无 AI 成员）'; return; }
+  if (agents.length === 0) { box.textContent = '本项目暂无 AI 成员'; return; }
   for (const m of agents) {
     const row = document.createElement('div');
     row.className = 'meta';
@@ -4066,15 +4086,15 @@ async function renderMemberRuntimeSettings() {
     if (binding?.environment != null) state.runtimeEnvironment = binding.environment; // 防护包模式标志（绑定对话框 fake 选项）
     const kind = binding?.binding?.kind ?? null;
     const model = binding?.binding?.model ?? null;
-    const current = kind == null ? '未设置（使用默认运行渠道）' : `${kind}${model != null ? ` · ${model}` : ''}`;
+    const current = kind == null ? '未设置，使用默认运行渠道' : `${runtimeKindText(kind)}${model != null ? ` · ${model}` : ''}`;
     const label = document.createElement('span');
-    label.textContent = `${m.displayName ?? m.id}：${current}${m.enabled === false ? ' ｜ 已停用（不参与之后派发）' : ''}`;
+    label.textContent = `${m.displayName ?? m.id}：${current}${m.enabled === false ? ' ｜ 已停用，不参与之后派发' : ''}`;
     row.appendChild(label);
     // 协作参与开关（第十六轮六）：停用=该成员不再参与之后派发（协调者不可停用——服务端校验）。
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'chip';
     toggleBtn.textContent = m.enabled === false ? '启用' : '停用';
-    toggleBtn.title = '停用后该成员不再参与之后的任务派发（在途任务不受影响）；协调者不可停用';
+    toggleBtn.title = '停用后该成员不再参与之后的任务派发，在途任务不受影响；协调者不可停用';
     toggleBtn.onclick = () => void (async () => {
       try {
         await command('member.setEnabled', { memberId: m.id, enabled: m.enabled === false });
@@ -4096,8 +4116,8 @@ async function renderMemberRuntimeSettings() {
       for (const old of box.querySelectorAll('.member-runtime-edit')) old.remove();
       const edit = document.createElement('div');
       edit.className = 'member-runtime-edit meta';
-      const kinds = [['claude', 'claude（CLI 渠道）'], ['codex', 'codex（App Server）']];
-      if (runtimeEnv.realDispatchGuard === true && runtimeEnv.allowFake === true) kinds.push(['fake', 'fake（模拟渠道）']);
+      const kinds = [['claude', 'Claude 渠道'], ['codex', 'Codex 渠道']];
+      if (runtimeEnv.realDispatchGuard === true && runtimeEnv.allowFake === true) kinds.push(['fake', '模拟渠道']);
       const sel = document.createElement('select');
       for (const [v, text] of kinds) {
         const o = document.createElement('option');
@@ -4106,7 +4126,7 @@ async function renderMemberRuntimeSettings() {
         sel.appendChild(o);
       }
       const modelInput = document.createElement('input');
-      modelInput.placeholder = '模型（如 deepseek-flash）';
+      modelInput.placeholder = '模型，如 deepseek-flash';
       modelInput.value = model ?? '';
       const save = document.createElement('button');
       save.className = 'chip';
@@ -4151,7 +4171,7 @@ async function renderCollabSettings() {
   const box = el('collab-settings');
   if (box == null) return;
   box.textContent = '';
-  if (state.project == null) { box.textContent = '（未打开项目）'; return; }
+  if (state.project == null) { box.textContent = '未打开项目'; return; }
   let data;
   try {
     data = await command('project.collab.get', { projectId: state.projectId });
@@ -4161,7 +4181,7 @@ async function renderCollabSettings() {
   }
   const revision = data.revision;
   const fields = [
-    { key: 'turnDeadlineMs', label: '单轮运行时限（秒，留空=继承；0=关闭；只对之后开始的执行生效）', value: data.turnDeadlineMs },
+    { key: 'turnDeadlineMs', label: '单轮运行时限，单位秒；留空继承，0 关闭；只对之后开始的执行生效', value: data.turnDeadlineMs },
   ];
   for (const f of fields) {
     const row = document.createElement('div');
@@ -4173,10 +4193,10 @@ async function renderCollabSettings() {
     input.max = deadlineField ? '86400' : '1440';
     input.step = deadlineField ? '0.001' : '1';
     input.placeholder = deadlineField
-      ? (data.effectiveTurnDeadlineMs == null ? '继承（不设上限）' : `继承（${data.effectiveTurnDeadlineMs / 1000} 秒）`)
+      ? (data.effectiveTurnDeadlineMs == null ? '继承，不设上限' : `继承，当前 ${data.effectiveTurnDeadlineMs / 1000} 秒`)
       : '默认';
     input.value = f.value != null ? (deadlineField ? String(f.value / 1000) : String(Math.round(f.value / 60000))) : '';
-    input.title = deadlineField ? '留空=继承；0=关闭；自定义至少 10 秒、最多 24 小时' : '范围 1–1440 分钟；清空使用默认等待时间';
+    input.title = deadlineField ? '留空继承；0 关闭；自定义至少 10 秒、最多 24 小时' : '范围 1–1440 分钟；清空使用默认等待时间';
     const err = document.createElement('span');
     err.className = 'meta';
     const submit = async () => {
@@ -4184,7 +4204,7 @@ async function renderCollabSettings() {
       const raw = input.value.trim();
       const ms = raw === '' ? null : Number(raw) * (deadlineField ? 1000 : 60000);
       if (ms != null && (!Number.isInteger(ms) || (deadlineField ? ms !== 0 && ms < 10_000 : ms < 10_000) || ms > 86_400_000)) {
-        err.textContent = deadlineField ? '留空=继承；0=关闭；自定义须为至少 10 秒、最多 24 小时' : '范围要求：1–1440 分钟（整数）；未保存';
+        err.textContent = deadlineField ? '留空继承；0 关闭；自定义须为至少 10 秒、最多 24 小时' : '范围要求：1–1440 分钟的整数；未保存';
         return;
       }
       try {
@@ -4192,7 +4212,7 @@ async function renderCollabSettings() {
         err.textContent = r.changed ? '已保存' : '无变更';
         await renderCollabSettings(); // 重读 revision（后续保存用新版本）
       } catch (e2) {
-        err.textContent = /版本冲突/.test(e2.message) ? `保存失败：${e2.message}（已刷新，请重试）` : `保存失败：${e2.message}`;
+        err.textContent = /版本冲突/.test(e2.message) ? `保存失败：${e2.message}；已刷新，请重试` : `保存失败：${e2.message}`;
         if (/版本冲突/.test(e2.message)) void renderCollabSettings();
       }
     };
@@ -4206,7 +4226,7 @@ function renderProjectSettings() {
   const btn = el('task-review-toggle');
   const note = el('task-review-note');
   if (state.project == null) {
-    btn.textContent = '任务验收：—（未打开项目）';
+    btn.textContent = '任务验收：— 未打开项目';
     btn.disabled = true;
     note.textContent = '';
     return;
@@ -4216,7 +4236,7 @@ function renderProjectSettings() {
   btn.textContent = `任务验收：${on ? '开' : '关'}`;
   note.textContent = on
     ? '当前开启：新任务交付进入待验收。已有任务保持创建时的策略。'
-    : '当前关闭：新任务满足交付要求即完成（无需验收）。关闭不授权自动提交或推送。';
+    : '当前关闭：新任务满足交付要求即完成，无需验收。关闭不授权自动提交或推送。';
 }
 
 el('task-review-toggle').onclick = () => void (async () => {
@@ -4304,7 +4324,7 @@ async function renderRemoteSettings() {
     // 已应用配置事实行（与上方编辑下拉分列——下拉是「待应用编辑」，本行是服务端已生效值）。
     const appliedNote = document.createElement('div');
     appliedNote.className = 'meta';
-    appliedNote.textContent = `已应用配置：监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}${cfg.running ? '（运行中；修改后点「启用」应用）' : '（当前停用）'}${remoteEditDirty ? '；检测到未应用的编辑' : ''}`;
+    appliedNote.textContent = `已应用配置：监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}${cfg.running ? '，运行中；修改后点「启用」应用' : '，当前停用'}${remoteEditDirty ? '；检测到未应用的编辑' : ''}`;
     row.replaceChildren(appliedNote);
     if (cfg.running) {
       const addr = document.createElement('button');
@@ -4314,20 +4334,20 @@ async function renderRemoteSettings() {
       addr.onclick = () => void navigator.clipboard.writeText(String(cfg.address)).then(() => showError(`已复制地址：${cfg.address}`), (e) => showError(`复制失败：${e.message}`));
       const fp = document.createElement('button');
       fp.className = 'chip';
-      fp.title = '点击复制完整证书 SHA-256 指纹（64 位十六进制——设备端逐位核对）';
+      fp.title = '点击复制完整证书指纹，64 位十六进制，设备端逐位核对';
       fp.textContent = `指纹 ${String(cfg.fingerprint ?? '')}`;
-      fp.onclick = () => void navigator.clipboard.writeText(String(cfg.fingerprint ?? '')).then(() => showError('已复制完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
+      fp.onclick = () => void navigator.clipboard.writeText(String(cfg.fingerprint ?? '')).then(() => showError('已复制完整指纹，共 64 位'), (e) => showError(`复制失败：${e.message}`));
       row.append(addr, fp);
       // 信任根（CA）指纹+服务证书签发者（第三十六轮一：两层证书——用户导入 ca.cer 时核对 CA 指纹）。
       const caFp = document.createElement('button');
       caFp.className = 'chip';
-      caFp.title = '点击复制信任根（CA）完整 SHA-256 指纹——客户端导入 ca.cer 时逐位核对';
+      caFp.title = '点击复制信任根完整指纹；客户端导入 ca.cer 时逐位核对';
       caFp.textContent = `信任根指纹 ${String(cfg.caFingerprint ?? '')}`;
-      caFp.onclick = () => void navigator.clipboard.writeText(String(cfg.caFingerprint ?? '')).then(() => showError('已复制 CA 完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
+      caFp.onclick = () => void navigator.clipboard.writeText(String(cfg.caFingerprint ?? '')).then(() => showError('已复制信任根完整指纹，共 64 位'), (e) => showError(`复制失败：${e.message}`));
       row.append(caFp);
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `证书有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}（监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}）`;
+      meta.textContent = `证书有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '未知'}；监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}`;
       row.append(meta);
       // LAN 地址明细（第三十八轮：多网卡逐地址可复制+虚拟网卡标注——UI 监听选项只有回环与
       // 0.0.0.0 两种，客户端实际访问哪个地址从这份列表选；虚拟段（198.18.x.x 等）明确标注
@@ -4337,7 +4357,7 @@ async function renderRemoteSettings() {
         for (const d of details) {
           const b = document.createElement('button');
           b.className = 'chip';
-          b.title = d.note != null ? d.note : '点击复制该地址（客户端浏览器访问）';
+          b.title = d.note != null ? d.note : '点击复制该地址，供客户端浏览器访问';
           b.textContent = d.url;
           b.onclick = () => void navigator.clipboard.writeText(d.url).then(() => showError(`已复制地址：${d.url}`), (e) => showError(`复制失败：${e.message}`));
           row.append(b);
@@ -4351,7 +4371,7 @@ async function renderRemoteSettings() {
       } else if ((cfg.lanAddresses ?? []).length > 0) {
         const n = document.createElement('div');
         n.className = 'meta';
-        n.textContent = `LAN 地址：${cfg.lanAddresses.join(' / ')}`;
+        n.textContent = `局域网地址：${cfg.lanAddresses.join(' / ')}`;
         row.append(n);
       }
       // 分层核验（第三十六轮二）：仅本机明确提示；LAN 模式呈现本机经实际 LAN IP 的 HTTPS 自检。
@@ -4359,15 +4379,15 @@ async function renderRemoteSettings() {
       lanNote.className = 'meta';
       if (cfg.allowLan) {
         const sc = cfg.lanSelfCheck;
-        lanNote.textContent = sc == null ? 'LAN 自检未取得（服务运行中稍候刷新）' : (sc.ok ? `LAN 自检通过（${sc.checkedUrl}——本机经局域网地址连接正常）` : `LAN 自检失败：${sc.error}（请检查监听地址、证书和防火墙）`);
+        lanNote.textContent = sc == null ? '局域网自检未取得，服务运行中稍候刷新' : (sc.ok ? `局域网自检通过：${sc.checkedUrl}，本机经局域网地址连接正常` : `局域网自检失败：${sc.error}；请检查监听地址、证书和防火墙`);
       } else {
-        lanNote.textContent = '仅本机模式：仅 127.0.0.1 可访问——其它设备无法连接；需要客户端访问请切换「局域网」并启用';
+        lanNote.textContent = '仅本机模式：只有本机可以访问，其它设备无法连接；需要客户端访问请切换「局域网」并启用';
       }
       row.append(lanNote);
     } else {
       const stopped = document.createElement('div');
       stopped.className = 'meta';
-      stopped.textContent = `已停用（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
+      stopped.textContent = `已停用，监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败，见后台服务日志' : ''}`;
       row.append(stopped);
     }
     if (deviceBox != null) {
@@ -4378,7 +4398,7 @@ async function renderRemoteSettings() {
         for (const d of r.devices) {
           const line = document.createElement('div');
           const name = document.createElement('span');
-          name.textContent = `${d.deviceName}（${d.deviceId.slice(0, 12)}… · ${d.revokedAt != null ? '已吊销' : `最近 ${d.lastSeenAt != null ? new Date(d.lastSeenAt).toLocaleString() : '未见'}`}）`;
+          name.textContent = `${d.deviceName}，设备编号 ${d.deviceId.slice(0, 12)}… · ${d.revokedAt != null ? '已吊销' : `最近 ${d.lastSeenAt != null ? new Date(d.lastSeenAt).toLocaleString() : '未见'}`}`;
           line.append(name);
           if (d.revokedAt == null) {
             const btn = document.createElement('button');
@@ -4403,7 +4423,7 @@ function wireRemoteSettings() {
       const port = Number(el('remote-port-input')?.value ?? '0') || 0;
       await command('remote.config.set', { enabled, listenHost: host, port, allowLan });
       remoteEditDirty = false; // 已应用：编辑值成为已应用配置——刷新可同步
-      showError(enabled ? `远程访问已启用（${host}:${port || '自动'}${allowLan ? ' · LAN' : ''}）` : '远程访问已停用');
+      showError(enabled ? `远程访问已启用：${host}:${port || '自动'}${allowLan ? ' · 局域网' : ''}` : '远程访问已停用');
       await renderRemoteSettings();
     } catch (e) { showError(`远程配置失败：${e.message}`); }
   })();
@@ -4417,7 +4437,7 @@ function wireRemoteSettings() {
         const r = await command('remote.pairing.selfcheck', {});
         out.textContent = '';
         const s = document.createElement('div');
-        s.textContent = `自检 ${r.pass}/${r.total}${r.ok ? '（全部通过）' : '（存在失败项——见明细）'}`;
+        s.textContent = `自检 ${r.pass}/${r.total}${r.ok ? '，全部通过' : '，存在失败项，见明细'}`;
         const d = document.createElement('div');
         d.className = 'meta';
         d.textContent = (r.items ?? []).map((i) => `${i.ok ? '✓' : '✗'} ${i.name}`).join('；');
@@ -4431,14 +4451,14 @@ function wireRemoteSettings() {
       const r = await command('remote.pairing.create', {});
       out.textContent = '';
       const line1 = document.createElement('div');
-      line1.textContent = `配对码：${r.pairingId} / ${r.code}（${new Date(r.expiresAt).toLocaleTimeString()} 前一次有效）${r.address != null ? ` · 地址 ${r.address}` : ' · 服务未启用'}`;
+      line1.textContent = `配对码：${r.pairingId} / ${r.code}，${new Date(r.expiresAt).toLocaleTimeString()} 前一次有效${r.address != null ? ` · 地址 ${r.address}` : ' · 服务未启用'}`;
       const fpLine = document.createElement('div');
       fpLine.className = 'meta';
-      fpLine.textContent = r.fingerprint != null ? `证书 SHA-256 指纹（完整逐位核对）：${r.fingerprint}` : '';
+      fpLine.textContent = r.fingerprint != null ? `证书指纹，完整逐位核对：${r.fingerprint}` : '';
       const copyBtn = document.createElement('button');
       copyBtn.className = 'chip';
       copyBtn.textContent = '复制指纹';
-      copyBtn.onclick = () => void navigator.clipboard.writeText(String(r.fingerprint ?? '')).then(() => showError('已复制完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
+      copyBtn.onclick = () => void navigator.clipboard.writeText(String(r.fingerprint ?? '')).then(() => showError('已复制完整指纹，共 64 位'), (e) => showError(`复制失败：${e.message}`));
       out.append(line1, fpLine);
       if (r.fingerprint != null) out.append(copyBtn);
     } catch (e) { out.textContent = `配对码创建失败：${e.message}`; }
@@ -4468,14 +4488,14 @@ if (lastProject != null && lastProject.length > 0) {
       } catch (e) {
         lastErr = e;
         if (i < delays.length) {
-          el('project-name').textContent = `恢复项目失败（第 ${i + 1} 次，${delays[i]}ms 后重试）：${e.message}`;
+          el('project-name').textContent = `恢复项目失败，第 ${i + 1} 次，${delays[i]} 毫秒后重试：${e.message}`;
           navAuditPush({ what: 'startup.retry', attempt: i + 1, error: String(e.message).slice(0, 160) });
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r) => setTimeout(r, delays[i]));
         }
       }
     }
-    el('project-name').textContent = `恢复项目失败（已重试 ${delays.length + 1} 次）：${lastErr?.message ?? '未知错误'}——服务重新就绪后会自动重试，或手动重开项目`;
+    el('project-name').textContent = `恢复项目失败，已重试 ${delays.length + 1} 次：${lastErr?.message ?? '未知错误'}——服务重新就绪后会自动重试，或手动重开项目`;
   })();
 } else {
   // 服务端记忆回退（第二十六轮二）：清缓存/换机后 localStorage 为空——读 daemon 持久设置

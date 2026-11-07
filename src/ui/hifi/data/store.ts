@@ -19,6 +19,7 @@ import type { TaskExecutionBlocker } from '../../../contracts/executionBlockers.
 import type {ThreadMembersSnapshot} from '../../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../../contracts/runtimeProgress';
 import { openTab } from '../lib/resource';
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { configureReadingPositions, readingPosition, saveReadingPosition } from './readingPositions';
 import type { MemberMentionBindings } from '../lib/mentionText';
 
@@ -236,7 +237,7 @@ export function addFileRefToDraft(
   opts?: { bodyInsertAt?: number; replaceRange?: { start: number; end: number } },
 ): { ok: boolean; existed?: boolean; error?: string } {
   if (draftKey.length === 0) return { ok: false, error: '目标草稿未知' };
-  if (ref.attachmentId == null || ref.attachmentId.length === 0) return { ok: false, error: '资源身份缺失（attachmentId）——不凭文件名猜身份' };
+  if (ref.attachmentId == null || ref.attachmentId.length === 0) return { ok: false, error: '资源身份缺失，不能凭文件名猜测身份' };
   const d = getDraftFull(draftKey);
   if (d.attachments.some((a) => a.attachmentId === ref.attachmentId && (a.revision ?? 0) === (ref.revision ?? 0))) {
     return { ok: true, existed: true };
@@ -741,7 +742,7 @@ export function settleUploadReady(draftKey: string, uploadId: string, conversati
   }
   if (cur.conversationId !== conversationId) {
     // 回执会话与发起会话不一致（跨会话串线）：按失败分列，不写草稿 ref。
-    setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).map((x) => (x.uploadId === uploadId ? { ...x, status: 'failed' as const, error: `回执会话不一致（${conversationId}）——已丢弃` } : x)) } }));
+    setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).map((x) => (x.uploadId === uploadId ? { ...x, status: 'failed' as const, error: '回执会话不一致，已丢弃本次上传' } : x)) } }));
     const d = getDraftFull(draftKey);
     setDraftFull(draftKey, {
       ...d,
@@ -1064,7 +1065,9 @@ function persistSnapshot(): void {
     localStorage.setItem(persistKey, payload);
     if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote, legacyImport: s.draftPersist.legacyImport } }));
   } catch (e) {
-    const msg = `草稿保存失败：${e instanceof Error ? e.message : String(e)}。请释放存储空间后重试；关闭前请复制尚未发送的内容。`;
+    const raw = e instanceof Error ? e.message : String(e);
+    const detail = /quota/i.test(raw) ? '存储空间不足' : userFacingSystemText(raw);
+    const msg = `草稿保存失败：${detail}。请释放存储空间后重试；关闭前请复制尚未发送的内容。`;
     setState((s) => (s.draftPersist.error === msg ? s : { ...s, draftPersist: { ...s.draftPersist, mode: 'on', error: msg } }));
   }
 }
@@ -1097,7 +1100,9 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
     hadKey = raw != null;
   } catch (e) {
     persistKey = null;
-    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿无法读取：${e instanceof Error ? e.message : String(e)}。本次编辑的内容尚未保存。`, recoveryNote: null, legacyImport: s.draftPersist.legacyImport } }));
+    const raw = e instanceof Error ? e.message : String(e);
+    const detail = /quota/i.test(raw) ? '存储空间不足' : userFacingSystemText(raw);
+    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿无法读取：${detail}。本次编辑的内容尚未保存。`, recoveryNote: null, legacyImport: s.draftPersist.legacyImport } }));
     return false;
   }
   let recoveryNote: string | null = null;
@@ -1159,14 +1164,14 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
         return hadKey; // 不 persistSnapshot——覆盖即销毁原件（review-r62 §3 反例）
       }
       if (wholeUnrecoverable) {
-        recoveryNote = `草稿无法恢复（${parseOk ? `版本 v${String((data as { v?: unknown })?.v ?? '?')} 不受本程序支持` : 'JSON 损坏'}）——原件已${quarantined ? `保存为恢复副本` : '无法另存副本，请释放存储空间后重试'}。`;
+        recoveryNote = `草稿无法恢复，${parseOk ? '旧版记录版本不受本程序支持' : 'JSON 损坏'}；原件已${quarantined ? `保存为恢复副本` : '无法另存副本，请释放存储空间后重试'}。`;
       } else {
         const parts: string[] = [];
         if (droppedDrafts > 0) parts.push(`损坏草稿 ${droppedDrafts} 条`);
         if (droppedSends > 0) parts.push(`无法读取的发送记录 ${droppedSends} 条`);
-        if (droppedUploads > 0) parts.push(`损坏/悬空上传项 ${droppedUploads} 项`);
+        if (droppedUploads > 0) parts.push(`损坏或悬空的上传项 ${droppedUploads} 项`);
         if (expiredDrafts > 0) parts.push(`已过期草稿 ${expiredDrafts} 条`);
-        recoveryNote = `部分草稿无法恢复：${parts.join('、')}——原件已${quarantined ? `保存为恢复副本` : '保留'}；有效部分（草稿 ${restoredDrafts} 条/发送记录 ${restoredSends} 条）已恢复`;
+        recoveryNote = `部分草稿无法恢复：${parts.join('、')}；原件已${quarantined ? `保存为恢复副本` : '保留'}；已恢复有效部分：草稿 ${restoredDrafts} 条、发送记录 ${restoredSends} 条`;
       }
     }
   }
@@ -1273,7 +1278,7 @@ export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir:
   }
   persistSnapshot();
   recoverLedgerToPending();
-  const refused = out.refusedVersions.length > 0 ? `、无法读取的旧版记录 ${out.refusedVersions.length} 个（${out.refusedVersions.map((r) => `${r.sourceDir} v${r.v} 不受本程序支持`).join('；')}）` : '';
+  const refused = out.refusedVersions.length > 0 ? `、无法读取的旧版记录 ${out.refusedVersions.length} 个：${out.refusedVersions.map((r) => `${r.sourceDir} 的记录版本不受本程序支持`).join('；')}` : '';
   const detail = `已恢复：草稿 ${out.mergedDrafts} 条、发送记录 ${out.mergedSends} 条、待确认操作 ${out.mergedLedger} 条${out.expired > 0 ? `、过期草稿 ${out.expired} 条` : ''}${out.dropped > 0 ? `、损坏条目 ${out.dropped} 条` : ''}${refused}。${note}`;
   setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, mode: 'on', recoveryNote: detail } }));
   return out;
@@ -1285,8 +1290,8 @@ export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir:
 export function importLegacySnapshot(key: string, dir: string): { ok: boolean; error?: string; outcome?: InheritOutcome } {
   let raw: string | null = null;
   try { raw = localStorage.getItem(key); } catch (e) { return { ok: false, error: `旧键读取失败：${e instanceof Error ? e.message : String(e)}` }; }
-  if (raw == null) return { ok: false, error: '旧键不存在（可能已被清除）' };
-  const outcome = mergeInheritedSnapshots([{ raw, sourceDir: dir }], `用户确认导入旧目录 ${dir} 的键 ${key}（原件保留）`);
+  if (raw == null) return { ok: false, error: '旧键不存在，可能已被清除' };
+  const outcome = mergeInheritedSnapshots([{ raw, sourceDir: dir }], `用户确认导入旧目录 ${dir} 的键 ${key}，原件保留`);
   const importedAt = Date.now();
   setState((s) => ({
     ...s,
@@ -1341,14 +1346,16 @@ export function retryDraftPersistence(): void {
  * 键与旧绝对路径键并存——必须清活动键（store 记录的 persistKey），不能按绝对路径拼键
  * （旧拼法清的是已不使用的 v1 键，活动键原样保留=清理无效）。同步清理内存；保全锁定与未确认发送拒绝清理。 */
 export function clearPersistedSnapshot(): { ok: boolean; hadKey: boolean; key: string | null; error?: string } {
-  if (persistKey == null) return { ok: false, hadKey: false, key: null, error: '草稿持久化未初始化（身份未就绪/浏览器宿主）——没有活动键可清理' };
+  if (persistKey == null) return { ok: false, hadKey: false, key: null, error: '草稿持久化未初始化：身份未就绪或当前为浏览器环境，没有活动键可清理' };
   if(state.draftPersist.mode==='locked'||Object.keys(state.outboundLedger).length>0||Object.keys(state.pendingSends).length>0) return {ok:false,hadKey:false,key:persistKey,error:'草稿含保全原件或发送结果待确认，请先导出保全并处理未确认发送后再清理'};
   let hadKey = false;
   try {
     hadKey = localStorage.getItem(persistKey) != null;
     if (hadKey) localStorage.removeItem(persistKey);
   } catch (e) {
-    return { ok: false, hadKey, key: persistKey, error: `快照键清除失败：${e instanceof Error ? e.message : String(e)}` };
+    const raw = e instanceof Error ? e.message : String(e);
+    const detail = /quota/i.test(raw) ? '存储空间不足' : userFacingSystemText(raw);
+    return { ok: false, hadKey, key: persistKey, error: `快照键清除失败：${detail}` };
   }
   drafts.clear(); draftRev += 1;
   setState(s=>({...s,drafts:{},draftRefs:{},uploadItems:{},pendingSends:{},lastSendReferences:{},outboundLedger:{}}));
@@ -1394,7 +1401,7 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
   if (err != null) {
     // 落盘失败=账本不可靠：回滚内存条目并取消发送（不冒充已保存原信封）。
     setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId) },lastSendReferences:Object.fromEntries(Object.entries({...s.lastSendReferences,[draftKey]:previousReference}).filter((entry):entry is [string,LastSendReference]=>entry[1]!=null)) }));
-    return { ok: false, error: `发送记录无法保存（${err}）。本次尚未发送，请释放存储空间后重试。` };
+    return { ok: false, error: `发送记录无法保存：${userFacingSystemText(err)}。本次尚未发送，请释放存储空间后重试。` };
   }
   return { ok: true };
 }

@@ -117,7 +117,7 @@ function togglePanel(toggleId: string, panelId?: string): string | null {
   if (panelId != null) {
     const panel = document.getElementById(panelId);
     const visible = panel != null && !panel.classList.contains('hidden') && getComputedStyle(panel).display !== 'none';
-    if (!visible) return '原界面正在打开，面板尚未显示（重试中）';
+    if (!visible) return '原界面正在打开，面板尚未显示，正在重试';
   }
   return null;
 }
@@ -488,7 +488,7 @@ export default function App() {
       sidebarDrag?.kind === 'room' && sidebarDrag.roomId === roomId ? 'is-dragging' : '',
       sidebarDrop?.kind === 'room' && sidebarDrop.roomId === roomId ? `drop-${sidebarDrop.place}` : '',
     ].filter(Boolean).join(' '),
-    title: '拖动可调整本项目房间的显示顺序（只改本机显示）',
+    title: '拖动可调整本项目房间的显示顺序，只改本机显示',
     onDragStart: (event) => {
       if (dragPressBlockedRef.current || isBlockingDragPress(event.target)) {
         event.preventDefault();
@@ -558,7 +558,7 @@ export default function App() {
                 </button>
                 <button
                   className="side-icon-btn"
-                  title="全局搜索（Ctrl+K）：跨项目搜消息、任务、成果"
+                  title="全局搜索：跨项目搜消息、任务、成果"
                   onClick={() => setPaletteOpen(true)}
                 >
                   <Icon name="search" size={14} />
@@ -636,7 +636,7 @@ export default function App() {
                       className={`side-row${isCurrent ? ' context-active' : ''}`}
                       data-zs-side-project={p.id}
                       draggable
-                      title="拖动可调整项目显示顺序（只改本机显示）"
+                      title="拖动可调整项目显示顺序，只改本机显示"
                       onDragStart={(event) => beginProjectDrag(p.id, event)}
                       onDragOver={(event) => hoverProjectRow(p.id, event)}
                       onDragLeave={leaveProjectRow}
@@ -653,7 +653,7 @@ export default function App() {
                         </button>
                         <button
                           className="side-item-label-btn"
-                          title={`${expanded ? '收起' : '展开'}「${p.displayName}」的房间列表 · ${p.rootPath}${p.archivedAt != null ? '（已归档·只读）' : ''}`}
+                          title={`${expanded ? '收起' : '展开'}「${p.displayName}」的房间列表 · ${p.rootPath}${p.archivedAt != null ? '，已归档，只读' : ''}`}
                           aria-expanded={expanded}
                           aria-current={isCurrent ? 'true' : undefined}
                           onClick={() => toggleProjectExpanded(p.id)}
@@ -735,7 +735,7 @@ export default function App() {
               </button> : null}
               <button
                 className={`side-item${navActive.settings ? ' active' : ''}`}
-                title="应用设置（含操作手册与项目链接）"
+                title="应用设置，含操作手册与项目链接"
                 onClick={() => navigate('/settings?section=general')}
               >
                 <Icon name="settings" size={14} />
@@ -760,8 +760,8 @@ export default function App() {
             <MenuItem icon="pin" hint={pinned ? '已置顶' : undefined} title={pinned ? '取消置顶：恢复按侧栏顺序排列' : '置顶：排到项目列表前部'} onClick={() => { toggleProjectPinned(p.id); close(); }}>
               {pinned ? '取消置顶' : '置顶项目'}
             </MenuItem>
-            <MenuItem icon="folder" title="打开项目主页（房间/成员/活跃任务概览）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}`); close(); }}>项目主页</MenuItem>
-            <MenuItem icon="settings" title="项目设置（信息/交付/协作限制/高级操作）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/settings`); close(); }}>项目设置</MenuItem>
+            <MenuItem icon="folder" title="打开项目主页，含房间、成员与活跃任务概览" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}`); close(); }}>项目主页</MenuItem>
+            <MenuItem icon="settings" title="项目设置，含信息、交付、协作限制与高级操作" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/settings`); close(); }}>项目设置</MenuItem>
           </Menu>
         );
       })() : null}
@@ -811,7 +811,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
     if(ent!=null&&opening!=null&&opening.projectId!==ent.projectId&&opening.urlSeqAtStart>=currentNavSeq())return <div className="main"><div className="page"><div className="panel info">正在打开项目…</div></div></div>;
     return (
       <div className="main"><div className="page">
-        <div className="panel info">正在定位线程（对齐所属项目后自动进入房间）…</div>
+        <div className="panel info">正在定位线程，对齐所属项目后自动进入房间…</div>
         <LocateThread threadId={tid} messageId={query.message} tab={query.tab} focusedTaskId={query.task} focusedDeliveryId={query.delivery}/>
       </div></div>
     );

@@ -101,7 +101,7 @@ export async function copyClosedDataRoot(input:{source:string;destinationParent:
   input.onProgress?.({phase:'checking',files:0,totalFiles:0,bytes:0,totalBytes:0});
   const initial=await inventory(source),{files}=initial,bytes=files.reduce((n,file)=>n+file.bytes,0);
   const disk=statfsSync(parent),free=disk.bavail*disk.bsize,needed=Math.ceil((bytes+files.filter(f=>/^state\.sqlite(?:-wal|-shm)?$/.test(f.path)).reduce((n,f)=>n+f.bytes,0))*1.05)+64*1024*1024;
-  if(free<needed)throw Error(`DATA_SPACE_INSUFFICIENT：需要约${Math.ceil(needed/1048576)}MB可用空间，当前约${Math.floor(free/1048576)}MB。原数据未改动。`);
+  if(free<needed)throw Error(`DATA_SPACE_INSUFFICIENT：需要约${Math.ceil(needed/1048576)}兆字节可用空间，当前约${Math.floor(free/1048576)}兆字节。原数据未改动。`);
   const label={backup:'众说备份',import:'众说数据',previous:'切换前备份'}[input.kind];
   const container=join(parent,`${label}-${new Date().toISOString().replace(/[:.]/g,'-')}-${randomUUID().slice(0,8)}`),dataRoot=join(container,'data');
   await mkdir(container,{recursive:false,mode:0o700});await mkdir(dataRoot,{mode:0o700});

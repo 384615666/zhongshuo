@@ -246,7 +246,7 @@ async function initDraftPersistenceFromIdentity(): Promise<void> {
       initDraftPersistence(ns);
       if (id.rootIdentityHealth === 'invalid-marker') {
         recordWrite('app.identity', `草稿保存标记无效（${id.rootIdentityProblem ?? '未知原因'}）——原文件未改动；本会话草稿仍可正常编辑，暂不继承旧草稿`);
-        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, recoveryNote: `草稿保存标记无效（${id.rootIdentityProblem ?? '未知原因'}）——原文件未改动，本会话仍可正常编辑草稿。可到设置页重新检查。` } }));
+        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, recoveryNote: `草稿保存标记无效：${id.rootIdentityProblem ?? '未知原因'}；原文件未改动，本会话仍可正常编辑草稿。可到设置页重新检查。` } }));
       }
       return;
     }
@@ -262,7 +262,7 @@ async function initDraftPersistenceFromIdentity(): Promise<void> {
     if (marker?.state === 'done') return;
     await attemptLegacyInheritance(ns, { localUserId: id.localUserId, appDataDir: id.appDataDir, dataRootId: id.dataRootId });
   } catch (e) {
-    markPersistenceDegraded(`持久化身份不可用（${e instanceof Error ? e.message : String(e)}）——草稿仅本次进程内有效`);
+    markPersistenceDegraded(`持久化身份不可用：${e instanceof Error ? e.message : String(e)}；草稿仅本次进程内有效`);
   }
 }
 let draftIdentityInitialization:Promise<void>|null=null;
@@ -288,7 +288,7 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
   // 生成过的标记）。R67 反例：此键曾被跳过，同目录升级丢失草稿/未知账本。
   for (const c of candidates.filter((c) => c.dir === id.appDataDir)) {
     const raw = localStorage.getItem(c.key) ?? '';
-    if (raw.length > 0) validated.push({ raw, sourceDir: `${c.dir}（同目录）` });
+    if (raw.length > 0) validated.push({ raw, sourceDir: `${c.dir} 同目录` });
   }
   // 通道②③：跨目录候选——内嵌 dataRootId 自证，或交 daemon 只读核对旧目录标记。
   const crossDir = candidates.filter((c) => c.dir !== id.appDataDir);
@@ -300,7 +300,7 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
       try { return (JSON.parse(raw) as { dataRootId?: unknown })?.dataRootId; } catch { return null; }
     })();
     if (typeof embedded === 'string' && embedded.length >= 8) {
-      if (embedded === id.dataRootId) validated.push({ raw, sourceDir: `${c.dir}（内嵌同根）` });
+      if (embedded === id.dataRootId) validated.push({ raw, sourceDir: `${c.dir} 内嵌同根` });
       // 内嵌异根：不合并、不导入（明确属于其它逻辑根）。
     } else {
       needDirCheck.push({ key: c.key, dir: c.dir, raw });
@@ -310,7 +310,7 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
     try {
       const r = await command<{ ids: Record<string, string | null>; hasStateDb: Record<string, boolean> }>('app.rootIdentityOf', { appDataDirs: needDirCheck.map((c) => c.dir) });
       for (const c of needDirCheck) {
-        if (r.ids[c.dir] === id.dataRootId) validated.push({ raw: c.raw, sourceDir: `${c.dir}（标记同根）` });
+        if (r.ids[c.dir] === id.dataRootId) validated.push({ raw: c.raw, sourceDir: `${c.dir} 标记同根` });
         else {
           // 旧目录无标记/异根：真实 v3/v4 旧根没有标记——登记为用户导入候选（hasStateDb 帮助
           // 核对，不构成信任证明；不自动合并无关根）。
@@ -319,11 +319,11 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
       }
     } catch (e) {
       // 目录校验不可用：仅已验证部分继承；未验证候选下次启动重试（标记不写 done）。
-      scanError = `旧草稿目录检查不可用（${e instanceof Error ? e.message : String(e)}）——候选保留，下次启动自动重试`;
+      scanError = `旧草稿目录检查不可用：${e instanceof Error ? e.message : String(e)}；候选保留，下次启动自动重试`;
     }
   }
   if (validated.length > 0) {
-    mergeInheritedSnapshots(validated, `已从旧版本自动恢复草稿（${validated.map((c) => c.sourceDir).join('、')}；原记录保留）`);
+    mergeInheritedSnapshots(validated, `已从旧版本自动恢复草稿：${validated.map((c) => c.sourceDir).join('、')}；原记录保留`);
   }
   setLegacyImportCandidates(importable, scanError);
   if (importable.length > 0) {
@@ -389,7 +389,7 @@ export async function bootRemembered(): Promise<void> {
         } catch (e) {
           // r57：记忆路径失效≠服务未就绪——如实报错并保持可操作（选择其它目录/重试），
           // 不再被外层 catch 归类成「连接中」空转 60 秒。
-          setState((st) => ({ ...st, boot: 'failed', bootError: `记忆的项目路径无法打开：${(e as Error).message}——可打开其它文件夹或修改「启动时打开的项目」` }));
+          setState((st) => ({ ...st, boot: 'failed', bootError: `记忆的项目路径无法打开：${(e as Error).message}；可打开其它文件夹或修改「启动时打开的项目」` }));
         }
         return;
       }
@@ -518,7 +518,7 @@ export async function stopAllProjectReal(projectId: string): Promise<{ stopped: 
     for (const c of stoppable) {
       try {
         const tg = await command<{ task: { id: string; stopGeneration: number }; activeRun: { id: string } | null }>('task.get', { taskId: c.taskId });
-        if (tg.activeRun == null) { failed.push(`#${c.title}：无活跃 run（可能已结束）`); continue; }
+        if (tg.activeRun == null) { failed.push(`#${c.title}：没有进行中的运行，可能已结束`); continue; }
         await command('task.stop', { taskId: tg.task.id, targetRunId: tg.activeRun.id, expectedStopGeneration: tg.task.stopGeneration });
         stopped += 1;
       } catch (e) {
@@ -1774,7 +1774,7 @@ export async function ensureProjectActive(projectId: string, intent?: NavIntent)
     if (!navIntentActive(intent)) return;
     proj = getState().projects.find((p) => p.id === projectId);
     if (proj == null || typeof proj.rootPath !== 'string' || proj.rootPath.length === 0) {
-      throw new Error(`项目不在注册表或路径缺失（可能已归档/移除/目录失效）：${projectId}`);
+      throw new Error(`项目不在注册表或路径缺失，可能已归档、移除或目录失效：${projectId}`);
     }
     if (getState().rooms.some((r) => r.projectId === projectId)) {
       const { focusProject } = await import('./data/actions-nav');
@@ -1791,7 +1791,7 @@ export async function ensureProjectActive(projectId: string, intent?: NavIntent)
     if (getState().activeProjectId === projectId) return;
     // 并发打开抢先（如启动恢复观察器晚到落位）：有界重试
   }
-  throw new Error('项目切换未落位（并发打开抢占）——请重试');
+  throw new Error('项目切换未落位，并发打开抢占；请重试');
 }
 
 /**
@@ -2085,9 +2085,9 @@ export function attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'r
   const s = getState();
   const items = (s.uploadItems[draftKey] ?? []).filter((x) => x.removed !== true);
   const uploading = items.filter((x) => x.status === 'uploading');
-  if (uploading.length > 0) return { blockError: `附件仍在上传（${uploading.map((x) => x.name).join('、')}）——完成后再发送` };
+  if (uploading.length > 0) return { blockError: `附件仍在上传：${uploading.map((x) => x.name).join('、')}；完成后再发送` };
   const failed = items.filter((x) => x.status === 'failed');
-  if (failed.length > 0) return { blockError: `有上传失败的附件（${failed.map((x) => x.name).join('、')}）——请移除或重选后再发送` };
+  if (failed.length > 0) return { blockError: `有上传失败的附件：${failed.map((x) => x.name).join('、')}；请移除或重选后再发送` };
   const d = getDraftFull(draftKey);
   const ready = d.attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
   if (ready.length === 0) return {};
@@ -2116,7 +2116,7 @@ export async function stopThreadTask(threadId: string): Promise<{ ok: boolean; e
   const s = getState();
   const detail = s.threadTasks[threadId];
   if (detail == null) return { ok: false, error: '任务详情未装载——先打开详情刷新' };
-  if (['DONE', 'CANCELLED'].includes(detail.status)) return { ok: false, error: `任务已终态（${detail.status}）——无可停止的执行` };
+  if (['DONE', 'CANCELLED'].includes(detail.status)) return { ok: false, error: '任务已结束，无可停止的执行' };
   try {
     const closure=detail.executionStatus?.actions.find(action=>action.kind==='close');
     if(closure?.kind==='close'){
@@ -2295,7 +2295,7 @@ export function classifyAttachmentFile(name: string, _size: number): AttachmentC
   if (/\.(pdf)$/.test(lower)) return { cls: 'pdf' };
   if (/\.(csv|tsv)$/.test(lower)) return { cls: 'csv' };
   if (OFFICE_EXTS.test(lower)) return { cls: 'office' };
-  return { cls: 'unsupported', reason: '未接入的附件类型（文本/图片/PDF/Office/CSV 之外）' };
+  return { cls: 'unsupported', reason: '未接入的附件类型，仅支持文本、图片、PDF、Office 与 CSV' };
 }
 
 /** File→base64（arrayBuffer+btoa——Electron renderer 与 Node 测试环境双兼容，不依赖 FileReader）。 */
@@ -2344,7 +2344,7 @@ export async function uploadAttachmentFile(conversationId: string, file: File): 
   // R69 P1-D：Office 软解析失败=上传成功（原件已保存、本地预览可开）+提取分列不可用——
   // 不再吞掉整次上传；失败原因随回执带出（芯片就地呈现，模型注入侧 fail-closed 拒绝）。
   const extractionFailed = r.extraction === 'failed'
-    ? `内容提取失败（${r.extractionCode ?? '未知'}：${r.extractionMessage ?? ''}）——文件已保存可预览；发给 AI 会因无提取文本被拒`
+    ? `内容提取失败：${r.extractionMessage ?? ''}；文件已保存可预览，发给 AI 会因无提取文本被拒`
     : undefined;
   let previewWarning: string | undefined;
   if (cls.cls === 'image' && typeof Image !== 'undefined') {
@@ -2386,7 +2386,7 @@ export async function openExternalDeepLink(hash: string, threadTab?:'task'|'repl
     if (!opened.isCurrent()) return;
   }
   const route = routeForResolved(res, getState(), threadTab);
-  if (route == null) throw new Error(`深链解析成功但无对应界面落点（kind=${res.kind}）`);
+  if (route == null) throw new Error('深链解析成功但无对应界面落点');
   if (currentNavSeq() !== urlSeq) return;
   navigate(route);
   recordWrite('deepLink.resolve', `深链 ${hash.slice(0, 40)} → ${route}`);

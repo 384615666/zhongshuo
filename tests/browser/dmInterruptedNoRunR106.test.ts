@@ -46,7 +46,9 @@ describe('R106 DM interrupted notice', () => {
     });
     expect(html).toContain('data-zs-dm-interrupted-kind="executed"');
     expect(html).toContain('继续这次请求');
-    expect(html).toContain('中断记录：provider exited after one turn');
+    expect(html).toContain('中断记录：');
+    expect(html).not.toContain('provider');
+    expect(html).not.toContain('turn');
     expect(html).not.toContain('按当前配置重新提交');
   });
 

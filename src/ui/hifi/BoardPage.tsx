@@ -26,6 +26,15 @@ const COLUMN_LABEL: Record<BoardCard['column'], string> = {
   running: '进行中', waiting: '等待', review: '待验收', blocked: '受阻', stopped: '已停止', done: '已完成',
 };
 const COLUMN_ORDER: BoardCard['column'][] = ['running', 'waiting', 'review', 'blocked', 'stopped', 'done'];
+/** 原始枚举只用于内部判断，卡片上显示中文状态（R191：提示不出现英文枚举）。 */
+const TASK_STATUS_COPY: Record<string, string> = {
+  OPEN: '待开始', ACTIVE: '进行中', WAITING_USER: '等你处理', BLOCKED: '受阻',
+  REVIEW: '待验收', DONE: '已完成', FAILED: '失败', CANCELLED: '已停止',
+};
+const RUN_STATUS_COPY: Record<string, string> = {
+  QUEUED: '运行已排队', RUNNING: '运行中', ACTIVE: '运行中', WAITING: '运行等待中', FAILED: '本轮运行失败',
+  SUCCEEDED: '本轮运行成功', STOPPING: '正在停止', INTERRUPTED: '运行中断', CANCELLED: '运行已停止',
+};
 
 export function BoardPage() {
   const projectId = useStore((s) => s.activeProjectId);
@@ -73,7 +82,7 @@ export function BoardPage() {
         <span className="faint small">点击任务卡片，查看回复、补充要求或验收成果</span>
         <button className="btn ghost sm" onClick={() => void reload()} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
       </div>
-      {err != null ? <div className="panel warning">看板加载失败：{userFacingSystemText(err ?? '')}（可刷新重试）</div> : null}
+      {err != null ? <div className="panel warning">看板加载失败：{userFacingSystemText(err ?? '')}；可刷新重试</div> : null}
       {group == null && err == null ? <div className="panel info">{loading ? '正在加载…' : '当前项目没有任务。'}</div> : null}
       {groups.map((group) => group.rooms.map((room) => {
         const byColumn = new Map<BoardCard['column'], BoardCard[]>(COLUMN_ORDER.map((c) => [c, []]));
@@ -84,7 +93,7 @@ export function BoardPage() {
             <div className="row tight" style={{ marginBottom: 6 }}>
               <Icon name="message-circle" size={12} />
               <span className="small" style={{ fontWeight: 600 }}>{room.name}</span>
-              <span className="faint small">（{room.cards.length} 张卡）</span>
+              <span className="faint small">{room.cards.length} 张卡</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))', gap: 8 }}>
               {COLUMN_ORDER.map((col) => {
@@ -108,11 +117,11 @@ export function BoardPage() {
                           <span className="small" style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.title}</span>
                         </div>
                         <div className="row tight" style={{ marginTop: 4 }}>
-                          <span className="faint small">{card.taskStatus}{card.runStatus != null ? ` · run ${card.runStatus}` : ''}</span>
+                          <span className="faint small">{TASK_STATUS_COPY[card.taskStatus] ?? '状态待确认'}{card.runStatus != null && card.runStatus !== card.taskStatus ? ` · ${RUN_STATUS_COPY[card.runStatus] ?? '运行状态待确认'}` : ''}</span>
                           {card.pendingDelivery != null ? <Tag tone="info" icon="package">交付 v{card.pendingDelivery.revision}</Tag> : null}
                           {card.exitUnconfirmed ? <Tag tone="warning" icon="alert-triangle">退出未确认</Tag> : null}
                         </div>
-                        {card.statusReason != null ? <div className="faint small" style={{ marginTop: 4 }}>{card.statusReason}</div> : null}
+                        {card.statusReason != null ? <div className="faint small" style={{ marginTop: 4 }}>{userFacingSystemText(card.statusReason)}</div> : null}
                       </button>
                     ))}
                   </div>

@@ -23,8 +23,8 @@ describe('R136 member channel UI', () => {
   });
 
   it.each([
-    {kind:'deepseek-harness',label:'DeepSeek Harness',executable:'dsh',model:'harness-model',help:['安装官方 DeepSeek Harness','随包连接组件','DSH 的 zhongshuo 配置中设置模型','dsh web 使用另一份配置','不会自动同步','密钥由 DSH 管理']},
-    {kind:'pi',label:'Pi',executable:'pi',model:'pi-model',help:['安装官方 Pi CLI','在 Pi 中配置 provider 和模型','众说沿用本机 Pi 配置','密钥由 Pi 管理']},
+    {kind:'deepseek-harness',label:'DeepSeek Harness',executable:'dsh',model:'harness-model',help:['安装官方 DeepSeek Harness','随包连接组件','DeepSeek Harness 的众说配置中设置模型','在浏览器中打开的版本使用另一份配置','不会自动同步','密钥由 DeepSeek Harness 管理']},
+    {kind:'pi',label:'Pi',executable:'pi',model:'pi-model',help:['安装官方 Pi 命令行工具','在 Pi 中配置服务商和模型','众说沿用本机 Pi 配置','密钥由 Pi 管理']},
   ])('creates, binds, reloads and templates $label through rendered forms without model calls', async channel => {
     const fixture = mkdtempSync(join(root, '.r136-member-channels-'));
     temporaryDirectories.push(fixture);
@@ -100,8 +100,8 @@ window.run=async()=>{
 
   await until(()=>document.querySelector('[data-zs-member-bind="m1"]'));
   document.querySelector('[data-zs-member-bind="m1"]').click();
-  await until(()=>document.querySelector('[aria-label="runtime 渠道"]'));
-  check('member list preserves Harness kind',combo('runtime 渠道').textContent.includes(channel.label));
+  await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  check('member list preserves Harness kind',combo('运行渠道').textContent.includes(channel.label));
   check('member list preserves custom executable',executionInput().value==='C:/test/'+channel.executable+'.exe');
   button('取消').click();await sleep(20);
   document.querySelector('[data-zs-members-add]').click();
@@ -110,10 +110,10 @@ window.run=async()=>{
   const addOptions=await options('运行渠道');
   check('new member uses shared real channel catalog',JSON.stringify(addOptions.map(o=>o.dataset.zsOption))===JSON.stringify(RUNTIME_CHANNELS.map(c=>c.value)));
   addOptions.find(el=>el.dataset.zsOption==='codex').click();await sleep(20);
-  input('input[aria-label="手动模型 ID"]','old-model');await sleep(550);await choose('思考等级','medium');
-  input('details input[placeholder="留空使用本机 CLI"]','old-custom.exe');await sleep(20);
+  input('input[aria-label="手动模型标识"]','old-model');await sleep(550);await choose('思考等级','medium');
+  input('details input[placeholder="留空则自动查找本机程序"]','old-custom.exe');await sleep(20);
   await choose('运行渠道',channel.kind);
-  check('new member clears old model',document.querySelector('[aria-label="手动模型 ID"]').value==='');
+  check('new member clears old model',document.querySelector('[aria-label="手动模型标识"]').value==='');
   check('new member clears old effort',combo('思考等级').textContent.includes('渠道默认'));
   check('new member resets executable to dsh',executionInput().value===channel.executable);
   check('selected channel provides connection instructions',channel.help.every(copy=>text().includes(copy)));
@@ -127,16 +127,16 @@ window.run=async()=>{
   const models=await options('模型');check('Harness model comes from catalog',models.some(el=>el.dataset.zsOption===channel.model));models.find(el=>el.dataset.zsOption===channel.model).click();
   await sleep(550);await choose('思考等级','high');
   check('Harness efforts queried for chosen model',last('member.runtimeOptions').model===channel.model&&last('member.runtimeOptions').kind===channel.kind);
-  input('details input[placeholder="留空使用本机 CLI"]','');await sleep(20);
+  input('details input[placeholder="留空则自动查找本机程序"]','');await sleep(20);
   document.querySelector('[data-zs-member-addsave]').click();await until(()=>last('member.create'));
   check('create persists Harness and default executable',last('member.create').runtime.kind===channel.kind&&last('member.create').runtime.executable===channel.executable);
   check('create persists catalog model and effort',last('member.create').runtime.model===channel.model&&last('member.create').runtime.effort==='high');
 
   await mount(BindRuntimeModal,{projectId:'p',member,initial:{kind:'claude',model:'old-model',effort:'medium',executable:'old-cli.exe',permissionMode:'plan'},guard:{fakeAllowed:false,realDispatchGuard:false},onClose:()=>{},onSaved:()=>{saved++;}});
-  await choose('runtime 渠道',channel.kind);
-  check('bind clears old model and effort',document.querySelector('[aria-label="手动模型 ID"]').value===''&&combo('思考等级').textContent.includes('渠道默认'));
+  await choose('运行渠道',channel.kind);
+  check('bind clears old model and effort',document.querySelector('[aria-label="手动模型标识"]').value===''&&combo('思考等级').textContent.includes('渠道默认'));
   check('bind defaults to dsh',executionInput().value===channel.executable);
-  check('bind preserves grant with unverified label',combo('权限模式').textContent.includes('plan')&&combo('权限模式').textContent.includes('尚未认证'));
+  check('bind preserves grant with unverified label',combo('权限模式').textContent.includes('只读分析')&&combo('权限模式').textContent.includes('尚未认证'));
   check('bind does not claim Claude read-only semantics',!text().includes('选择 plan 可保持只读'));
   await choose('权限模式','bypassPermissions');
   document.querySelector('[data-zs-member-bindsave]').click();await until(()=>saved===1);
@@ -150,7 +150,7 @@ window.run=async()=>{
   await until(()=>document.querySelector('[data-zs-member-name]'));
   const revisionBeforeTwoStep=memberRevision;
   input('[data-zs-member-name]','两步改名');
-  await choose('runtime 渠道','codex');await sleep(30);
+  await choose('运行渠道','codex');await sleep(30);
   document.querySelector('[data-zs-member-bindsave]').click();
   await until(()=>countOf('member.update')>updateCallsBefore&&countOf('member.setRuntime')>runtimeCallsBefore);
   const twoStepWrites=calls.filter(c=>c.method==='member.update'||c.method==='member.setRuntime').slice(-2);
@@ -160,11 +160,11 @@ window.run=async()=>{
 
   await mount(MemberDetailPage,{projectId:'p',memberId:'m1'});
   await until(()=>document.querySelector('[data-zs-member-detail-bind]'));
-  document.querySelector('[data-zs-member-detail-bind]').click();await until(()=>document.querySelector('[aria-label="runtime 渠道"]'));
-  check('detail reopens Harness without coercion to Claude',combo('runtime 渠道').textContent.includes(channel.label));
-  check('detail preserves model effort and program',document.querySelector('[aria-label="手动模型 ID"]').value===channel.model&&combo('思考等级').textContent.includes('high')&&executionInput().value==='C:/test/'+channel.executable+'.exe');
-  await choose('runtime 渠道','codex');
-  check('switch away restores codex executable and clears state',executionInput().value==='codex'&&document.querySelector('[aria-label="手动模型 ID"]').value===''&&combo('思考等级').textContent.includes('渠道默认'));
+  document.querySelector('[data-zs-member-detail-bind]').click();await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  check('detail reopens Harness without coercion to Claude',combo('运行渠道').textContent.includes(channel.label));
+  check('detail preserves model effort and program',document.querySelector('[aria-label="手动模型标识"]').value===channel.model&&combo('思考等级').textContent.includes('高')&&executionInput().value==='C:/test/'+channel.executable+'.exe');
+  await choose('运行渠道','codex');
+  check('switch away restores codex executable and clears state',executionInput().value==='codex'&&document.querySelector('[aria-label="手动模型标识"]').value===''&&combo('思考等级').textContent.includes('渠道默认'));
   check('Harness instructions disappear on another channel',!document.querySelector('[data-zs-runtime-channel-help]'));
 
   const template={id:'t1',name:'角色模板',description:'模板说明',enabled:true,revision:7,config:{kind:'claude',model:'old-model',effort:'medium',executable:'old-cli.exe',permissionMode:'plan'}};
@@ -172,7 +172,7 @@ window.run=async()=>{
   const templateOptions=await options('模板渠道');
   check('template uses shared real channel catalog',JSON.stringify(templateOptions.map(o=>o.dataset.zsOption))===JSON.stringify(RUNTIME_CHANNELS.map(c=>c.value)));
   templateOptions.find(el=>el.dataset.zsOption===channel.kind).click();await sleep(20);
-  check('template clears provider-specific fields',document.querySelector('[aria-label="手动模型 ID"]').value===''&&combo('思考等级').textContent.includes('渠道默认'));
+  check('template clears provider-specific fields',document.querySelector('[aria-label="手动模型标识"]').value===''&&combo('思考等级').textContent.includes('渠道默认'));
   check('template defaults dsh and retains grant',executionInput().value===channel.executable&&combo('模板权限').textContent.includes('尚未认证'));
   await choose('模板权限','bypassPermissions');
   input('label.field input[maxlength="1024"]','');await sleep(20);
@@ -199,7 +199,7 @@ window.run=async()=>{
   const descField=document.querySelector('input[placeholder="例如 实现与重构，偏好直接给结论"]');
   check('template create opens the shared add-AI dialog with a template note',text().includes('已按模板'));
   check('template prefill carries name and description',nameField.value==='角色模板'&&descField.value==='模板说明');
-  check('template prefill carries channel model and executable',combo('运行渠道').textContent.includes(channel.label)&&document.querySelector('[aria-label="手动模型 ID"]').value===channel.model&&executionInput().value===channel.executable);
+  check('template prefill carries channel model and executable',combo('运行渠道').textContent.includes(channel.label)&&document.querySelector('[aria-label="手动模型标识"]').value===channel.model&&executionInput().value===channel.executable);
   const createCallsBefore=countOf('member.create');
   document.querySelector('[data-zs-member-addsave]').click();
   await until(()=>countOf('member.create')>createCallsBefore);

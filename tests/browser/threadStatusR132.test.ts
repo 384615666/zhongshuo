@@ -54,7 +54,7 @@ describe('R132 thread status latency',()=>{
     expect(getState().tasks.find(t=>t.id==='task')?.status).toBe('WAITING_USER');
     history.release(null);await loading;
     expect(getState().threadTasks.t?.status).toBe('WAITING_USER');
-    if(mode==='failed')expect(getState().readErrors['thread:t']).toBe('history unavailable');
+    if(mode==='failed')expect(getState().readErrors['thread:t']).toBe('历史不可用');
   });
   it('history is still readable when the independent task query fails',async()=>{
     host(async method=>{if(method==='thread.get')return{thread,anchor:null,lastReadSeq:0};if(method==='task.get')throw Error('task unavailable');
@@ -62,7 +62,7 @@ describe('R132 thread status latency',()=>{
     await loadThread('t');
     expect(getState().threadMessages.t?.[0]?.body).toBe('现有答复');
     expect(threadExecutionStatusOf(getState(),'t')?.phase).toBe('WAITING_FOR_USER');
-    expect(getState().readErrors['thread:t']).toBe('task unavailable');
+    expect(getState().readErrors['thread:t']).toBe('任务不可用');
   });
   it('rejects a task response from a thread load superseded by a newer load',async()=>{
     const old=gate();let reads=0;

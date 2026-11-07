@@ -245,7 +245,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                     className={`project-card${current ? ' is-current' : ''}`}
                     data-zs-files-project={p.id}
                     aria-current={current ? 'page' : undefined}
-                    title={current ? `${p.displayName}（本页当前项目）` : `切到 ${p.displayName} 的文件与 Git（同时切换当前项目）`}
+                    title={current ? `${p.displayName}，本页当前项目` : `切到 ${p.displayName} 的文件与 Git，同时切换当前项目`}
                     onClick={() => openProject(p.id)}
                   >
                     <span className="project-card-name" title={p.displayName}>{p.displayName}</span>
@@ -294,9 +294,9 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
               <div className="toolbar-tail">
               {(() => {
                 const upstream = curBranch?.upstream == null
-                  ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置）' : '没有上游分支'
+                  ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支，远端已配置' : '没有上游分支'
                   : curBranch.ahead == null || curBranch.behind == null
-                    ? `${curBranch.upstream}（领先/落后未知）`
+                    ? `${curBranch.upstream}，领先或落后未知`
                     : (() => {
                       // 领先与落后**同时存在时必须都写出来**，不能互相吃掉。
                       const parts: string[] = [];
@@ -307,7 +307,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                 const detail = [
                   upstream,
                   ...(lock != null ? [`${lock.ownerTaskLabel} 正在写入此项目`] : []),
-                  ...(git?.lastOp?.ok ? [`最近一次 Git 操作：${git.lastOp.detail}（${relTime(git.lastOp.at)}）`] : []),
+                  ...(git?.lastOp?.ok ? [`最近一次 Git 操作：${userFacingSystemText(git.lastOp.detail)}，${relTime(git.lastOp.at)}`] : []),
                 ].join('\n');
                 return (
                   /* R189：工具栏只有 48px 高，状态条必须是**单行**——原来这里用多个 flex 子项
@@ -327,7 +327,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                 <div className="fg-topbar-actions">
                   <button
                     className="btn ghost sm"
-                    title={`从远端拉取（origin/${git?.currentBranch ?? ''}）`}
+                    title="从远端拉取当前分支"
                     onClick={() => void pull(projectId)}
                     disabled={!curBranch}
                   >
@@ -339,7 +339,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                     onClick={() => void push(projectId)}
                     disabled={!curBranch}
                   >
-                    <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` (${curBranch.ahead})` : ''}
+                    <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` · 领先 ${curBranch.ahead}` : ''}
                   </button>
                   {/* 「分支」→「新建分支」：这个按钮是**创建**动作，左栏的「分支」是**查看**视图。 */}
                   <button className="btn ghost sm" onClick={() => setBranchModal(true)} title="基于当前提交创建分支；不会自动切换分支">
@@ -353,10 +353,10 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
             {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
               <div className="panel warning" style={{ marginBottom: 10 }} data-zs-git-read-errors="1">
                 <div className="panel-title"><Icon name="alert-triangle" size={13} /> Git 部分信息读取失败</div>
-                {git.readErrors.status != null ? <div>仓库状态：{git.readErrors.status}（显示上次读取的结果）</div> : null}
-                {git.readErrors.branches != null ? <div>分支：{git.readErrors.branches}（显示上次读取的列表）</div> : null}
-                {git.readErrors.history != null ? <div>历史：{git.readErrors.history}（显示上次读取的列表）</div> : null}
-                {git.readErrors.remotes != null ? <div>远端：{git.readErrors.remotes}（显示上次读取的列表）</div> : null}
+                {git.readErrors.status != null ? <div>仓库状态：{userFacingSystemText(git.readErrors.status)}；显示上次读取的结果</div> : null}
+                {git.readErrors.branches != null ? <div>分支：{userFacingSystemText(git.readErrors.branches)}；显示上次读取的列表</div> : null}
+                {git.readErrors.history != null ? <div>历史：{userFacingSystemText(git.readErrors.history)}；显示上次读取的列表</div> : null}
+                {git.readErrors.remotes != null ? <div>远端：{userFacingSystemText(git.readErrors.remotes)}；显示上次读取的列表</div> : null}
               </div>
             ) : null}
 
@@ -367,7 +367,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
             {git?.lastOp && !git.lastOp.ok ? (
               <div className="panel danger" style={{ marginBottom: 14 }}>
                 <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
-                {git.lastOp.detail}
+                {userFacingSystemText(git.lastOp.detail)}
                 <span className="small faint"> · {relTime(git.lastOp.at)}</span>
                 <button className="btn ghost sm" onClick={() => void refreshGitState(projectId)}>刷新仓库状态</button>
               </div>
@@ -426,7 +426,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                       />
                     ) : tree.error != null ? (
                       <div className="panel warning" style={{ margin: 8 }}>
-                        目录读取失败：{userFacingSystemText(tree.error ?? '')}（点击刷新可重新读取）
+                        目录读取失败：{userFacingSystemText(tree.error ?? '')}；点击刷新可重新读取
                         <div className="panel-actions">
                           <button className="btn sm" onClick={() => tree.reload()}>重试</button>
                         </div>
@@ -534,7 +534,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
       {branchModal && isGit ? (
         <NewBranchModal
           projectId={projectId}
-          base={git?.commits[0]?.shortHash ?? '(空仓库)'}
+          base={git?.commits[0]?.shortHash ?? '空仓库'}
           onClose={() => setBranchModal(false)}
         />
       ) : null}
@@ -624,7 +624,7 @@ export function ChangeSetDetail({ projectId, setId }: { projectId: string; setId
   if (!active) {
     return (
       <div className="card">
-        <EmptyState icon="diff" title="还没有改动" detail="任务修改项目文件后，这里会显示改动内容与 diff。" />
+        <EmptyState icon="diff" title="还没有改动" detail="任务修改项目文件后，这里会显示改动内容与差异。" />
       </div>
     );
   }
@@ -767,7 +767,7 @@ export function ChangeSetDetail({ projectId, setId }: { projectId: string; setId
                 <div className="spacer" />
                 <button className="btn ghost sm" onClick={() => toggleDiff(f.path)}>
                   <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-                  {open ? '收起 diff' : '展开 diff'}
+                  {open ? '收起差异' : '展开差异'}
                 </button>
               </div>
 
@@ -801,7 +801,7 @@ export function ChangeSetDetail({ projectId, setId }: { projectId: string; setId
                     </div>
                   ) : !f.cannotRevert ? (
                     <div className="small faint" style={{ padding: '8px 12px' }}>
-                      该文件没有可展示的文本 diff（二进制或大文件）。
+                      该文件没有可展示的文本差异，可能是二进制或大文件。
                     </div>
                   ) : null}
                 </>
@@ -833,7 +833,7 @@ export function ChangeSetDetail({ projectId, setId }: { projectId: string; setId
                   disabled
                   title="本页暂不支持撤销文件改动。已提交的改动可到 Git 页撤销提交。"
                 >
-                  <Icon name="corner-up-left" size={12} /> 确认撤销（暂不可用）
+                  <Icon name="corner-up-left" size={12} /> 确认撤销，暂不可用
                 </button>
               </>
             }

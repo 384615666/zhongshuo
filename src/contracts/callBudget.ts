@@ -85,7 +85,7 @@ export function isSupportedCallBudgetLimit(value: unknown): value is number {
 
 function assertMode(mode: unknown): asserts mode is CallBudgetMode {
   if (!CALL_BUDGET_MODES.includes(mode as CallBudgetMode)) {
-    throw new TypeError(`不支持的调用预算模式：${String(mode)}`);
+    throw new TypeError('不支持的调用预算模式，请重新选择');
   }
 }
 
@@ -144,7 +144,7 @@ export function parseCallBudgetEnabledSetting(value: string | null | undefined):
   if (value == null || value === '') return false;
   if (value === 'true') return true;
   if (value === 'false') return false;
-  throw new TypeError(`调用次数预算开关只接受 true/false，读到：${value}`);
+  throw new TypeError('调用次数预算开关的值无效，请重新设置');
 }
 
 export function serializeCallBudgetEnabledSetting(enabled: boolean): CallBudgetEnabledSettingValue {
@@ -171,10 +171,10 @@ export function createCallBudgetState(initial?: Partial<CallBudgetState>): CallB
 
 function assertCallBudgetState(state: CallBudgetState): void {
   if (!Number.isSafeInteger(state.usedCalls) || state.usedCalls < 0) {
-    throw new RangeError('usedCalls 必须是非负安全整数');
+    throw new RangeError('已用调用数必须是非负整数');
   }
   if (!Number.isSafeInteger(state.inFlightCalls) || state.inFlightCalls < 0) {
-    throw new RangeError('inFlightCalls 必须是非负安全整数');
+    throw new RangeError('在途调用数必须是非负整数');
   }
 }
 

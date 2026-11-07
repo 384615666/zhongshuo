@@ -267,7 +267,7 @@ export function NumberField({
     }
     // 整数校验不可省：1.5 个并发、-2 次预算这类值能被 9 接受，但业务上不成立（评审复现）
     if (integer && !Number.isInteger(n)) {
-      setError(`只能是 ${范围}（不接受小数）`);
+      setError(`只能是 ${范围}，不接受小数`);
       return;
     }
     setError(null);

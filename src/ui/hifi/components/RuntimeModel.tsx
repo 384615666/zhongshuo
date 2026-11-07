@@ -20,7 +20,7 @@ export function RuntimeModel({projectId,kind,executable,value,onChange,disabled}
   const options=runtimeModelPickerOptions(models,{currentValue:value,channelFallback:kind});
   const savedOutsideCatalog=catalog!=null&&value!==''&&!models.some(model=>model.id===value);
   return <div className="field"><span className="field-label">模型</span>
-    <Select ariaLabel="模型" searchable disabled={disabled} value={value} onChange={onChange} title={value!==''?`完整模型 ID：${value}`:'选择模型'} options={[
+    <Select ariaLabel="模型" searchable disabled={disabled} value={value} onChange={onChange} title={value!==''?`完整模型标识：${value}`:'选择模型'} options={[
       {value:'',label:catalog?'选择模型':error?'暂无法读取模型清单':'正在读取模型清单…'},
       ...options,
     ]}/>
@@ -28,6 +28,6 @@ export function RuntimeModel({projectId,kind,executable,value,onChange,disabled}
       <button className="btn ghost sm" disabled={disabled} onClick={()=>setRefresh(n=>n+1)}>重新读取</button>
     </div>
     {catalog?.program.status==='missing'?<div className="panel warning">当前未找到执行程序，可在高级设置选择程序后再使用。</div>:null}
-    <details><summary className="small faint">高级：查看或手动指定完整模型 ID</summary><input className="input" aria-label="手动模型 ID" disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} placeholder="使用当前渠道实际支持的模型 ID"/><div className="small faint">填写渠道支持的完整模型 ID。</div></details>
+    <details><summary className="small faint">高级：查看或手动指定完整模型标识</summary><input className="input" aria-label="手动模型标识" disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} placeholder="使用当前渠道实际支持的模型标识"/><div className="small faint">填写渠道支持的完整模型标识。</div></details>
   </div>;
 }
