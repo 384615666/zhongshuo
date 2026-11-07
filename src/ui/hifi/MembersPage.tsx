@@ -38,7 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import {RuntimeModel} from './components/RuntimeModel';
 import {RuntimeEffort} from './components/RuntimeEffort';
-import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
+import { Avatar, Modal, SearchField, Select, Tag, memberColor, memberShortId } from './components/ui';
 import { useStore, toast } from './shell';
 import { refreshMembers,refreshRooms } from './loader';
 import { navigate } from './lib/router';
@@ -468,7 +468,17 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           <section className="project-content members-content">
             {/* R183 第 3、5 项：右栏不再有「项目名 + N 名成员」标题块；筛选与两个动作同一行。 */}
             <div className="page-filters">
-              <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:260}}/>
+              {/* R189（用户 2026-11-07）：四页顶部栏统一为同一条灰底圆角工具栏，搜索框统一用共享
+                  <SearchField>（放大镜+外框、30px 高）——原来这里是裸 input，与搜索页的搜索框外观不一致。
+                  data-zs-member-search 仍在内部 input 上（截图/测试按它定位），实时过滤行为不变。 */}
+              <SearchField
+                ariaLabel="查找成员"
+                value={query}
+                onChange={setQuery}
+                placeholder="名称 / 说明"
+                maxWidth={260}
+                inputProps={{ 'data-zs-member-search': '' }}
+              />
               <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
               <button
                 className="btn ghost sm" data-zs-members-refresh onClick={() => { workload.refresh(); void reload(); }} title="刷新成员、工作量与房间名单">刷新</button>

@@ -8,7 +8,7 @@
  */
 
 import { userFacingSystemText } from '../../../contracts/userFacingText';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import {createPortal} from 'react-dom';
 import { Icon, type IconName } from './Icon';
 import {
@@ -700,5 +700,50 @@ export function Meter({
         </div>
       ) : null}
     </>
+  );
+}
+/* ---------------- R189：统一搜索框（四页顶部工具栏共用） ---------------- */
+
+/**
+ * 统一的搜索框：外框 + 放大镜 + 输入（与工具栏 30px 控件同高）。
+ *
+ * 为什么抽成组件：R189 用户反馈四页的「顶部栏 / 搜索栏」风格不一致——成员管理是裸
+ * input，搜索与收藏是带外框和放大镜的自制行。搜索框是同一个交互，外观也不该各写一套；
+ * 之后所有页面要加搜索都用这一个，避免再次分叉。
+ */
+export function SearchField({
+  value, onChange, placeholder, ariaLabel, onEnter, disabled, maxWidth, inputProps,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  ariaLabel: string;
+  /** 按 Enter 触发（输入法组合期间不触发）——实时过滤的页面可以不传。 */
+  onEnter?: () => void;
+  disabled?: boolean;
+  maxWidth?: number;
+  /** 透传给内部 input 的额外属性（如既有 data-zs-* 标记），不改外观。
+   *  data-* 在 JSX 里合法、但对象字面量按 InputHTMLAttributes 校验会报错，所以显式放行 data-*。 */
+  inputProps?: InputHTMLAttributes<HTMLInputElement> & Record<string, unknown>;
+}) {
+  return (
+    <div className="search-field" style={maxWidth != null ? { maxWidth } : undefined}>
+      <Icon name="search" size={13} className="faint" />
+      <input
+        {...inputProps}
+        className="search-field-input"
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (onEnter != null && event.key === 'Enter' && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            onEnter();
+          }
+        }}
+      />
+    </div>
   );
 }

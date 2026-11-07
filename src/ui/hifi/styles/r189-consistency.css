@@ -1,0 +1,211 @@
+/* R189 四页统一：项目卡列的「标题 / 卡片小字行」+ 顶部工具栏 / 搜索栏。
+ *
+ * 用户 2026-11-07 反馈：成员管理、任务看板、文件与 Git、搜索与收藏四页的
+ * ①项目卡片和标题样式不一致；②顶部栏和搜索栏风格不一致，割裂感强。
+ *
+ * 统一口径（选项已与用户确认）：
+ * - 左栏标题「项目」：四页共用 .project-rail-title（在 r183-project-rail.css），这里不再重复；
+ * - 项目卡：四页都是「项目名 + 固定一行小字」（.project-card-name + .project-card-meta），
+ *   小字内容按页面语义（房间/成员数、任务数、Git 类型），但字体、行高、颜色、间距必须一致；
+ *   「全部项目」卡在看板/搜索页同样两行；
+ * - 顶部栏：四页都用一条 .page-filters（灰底、1px 边框、圆角、8px/10px 内边距、30px 控件）；
+ *   文件页与搜索页的页签也收进这条栏里，不再单独一行；
+ * - 搜索框：四页共用一个 <SearchField>（放大镜 + 输入，30px 高），见 components/ui.tsx。
+ *
+ * 本文件只放跨页共用的补充规则；页面自己的结构差异仍由各页样式文件负责。
+ */
+
+/* ============================================================
+   1) 顶部工具栏里的页签（文件页 文件/Git、搜索页 搜索/收藏）
+   ============================================================ */
+
+/* R189 实测修正：四页工具栏必须同一高度，否则一排左栏卡片旁边会出现 48/49/62/90 四种栏高。
+   统一做法：控件 30px + 上下内边距 8px + 1px 边框 = 48px；min-height 兜底，
+   filter-note 也按 30px 行高排（它是文字，不设行高时会被 11px 字体撑出 1px 差异）。 */
+.project-content > .page-filters {
+  min-height: 48px;
+  align-items: center;
+}
+
+.page-filters .filter-note {
+  line-height: 30px;
+}
+
+/* 页签不再是独立一行：作为工具栏的第一个控件，与 30px 控件同高、垂直居中。 */
+.page-filters > .thread-tabs {
+  flex: none;
+  height: 30px;
+  margin: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.page-filters > .thread-tabs .thread-tab {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-12);
+}
+
+/* 工具栏右侧的动作组：用自动外边距推到行尾（.page-filters 的 .spacer 会被基样式隐藏）。 */
+.page-filters .toolbar-tail {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+  min-width: 0;
+}
+
+/* 「更多筛选」展开后的第二排：与工具栏同一个盒子（背景/边框不变），
+   只在需要时占一行，收起时工具栏高度与其它三页一致。 */
+.page-filters .toolbar-more {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/* ============================================================
+   2) 统一搜索框（<SearchField>，与 30px 工具栏控件同高）
+   ============================================================ */
+
+.search-field {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+  max-width: 320px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+}
+
+.search-field:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: var(--ring);
+}
+
+.search-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-12);
+  outline: none;
+  box-shadow: none;
+}
+
+.search-field-input::placeholder {
+  color: var(--text-3);
+}
+
+/* 工具栏里的搜索框不再被基样式的高度/内边距改写。 */
+.page-filters .search-field,
+.page-filters .search-field-input {
+  height: 30px;
+  min-height: 30px;
+}
+
+.page-filters .search-field-input {
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+/* ============================================================
+   3) 项目卡小字行：四页共用同一套字色/行高（结构由各页 JSX 决定）
+   ============================================================ */
+
+/* 没有可显示的数字时也保留 16px 行高，卡片高度不因「读取中 / 未知」跳动。 */
+.project-card-meta {
+  min-height: 16px;
+  font-size: var(--fs-11);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.project-card-flag {
+  color: var(--warning);
+}
+
+.project-card-flag.muted {
+  color: var(--text-3);
+}
+
+/* ≤980px：工具栏在窄屏保持同一套外观，允许换行（不横向溢出）。 */
+@media (max-width: 980px) {
+  .page-filters {
+    flex-wrap: wrap;
+  }
+
+  .search-field {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}
+
+/* 文件页：工具栏吸附在右列顶部（本页整页不滚动，row 自身不吸顶）。 */
+.fg-rail-content > .page-filters.fg-toolbar {
+  flex: none;
+  margin-bottom: 0;
+  position: static;
+  box-shadow: none;
+  /* R189：文件页工具栏内容最多（页签+路径+状态+Git 操作），必须单行不换行——
+     否则它比其它三页高出 16~40px，视觉上又是"四个页面不一样"。路径负责让位。 */
+  flex-wrap: nowrap;
+}
+
+/* 文件页工具栏里的路径：可伸缩、过长省略，不再独占白底一整行。 */
+.fg-rail-content > .page-filters .fg-topbar-path {
+  flex: 1 1 80px;
+  min-width: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+/* 文件页工具栏里的仓库状态同理：不换行、可截断（空间不足时优先牺牲这段说明文字）。
+   R189 实测：这组声明原来挂在 `.fg-topbar .fg-statusbar--inline` 上，改成 `.page-filters`
+   工具栏后不再命中，于是吃到了基础 `.fg-statusbar` 的 6px 内边距 + 边框 + 12px 下外边距
+   （44px 高），把文件页工具栏撑到 62px。这里按原意重新限定在工具栏内。 */
+.fg-rail-content > .page-filters .fg-statusbar--inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.fg-rail-content > .page-filters .fg-statusbar--inline > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

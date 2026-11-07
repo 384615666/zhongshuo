@@ -20,7 +20,7 @@ import { userFacingSystemText } from '../../contracts/userFacingText';
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
-import { EmptyState, Select, Tag } from './components/ui';
+import { EmptyState, SearchField, Select, Tag } from './components/ui';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
 import { openExternalDeepLink, refreshSavedMessageRefs } from './loader';
@@ -74,6 +74,11 @@ export function LibraryPage() {
   const [scope, setScope] = useState<'project' | 'visible'>('project');
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'message' | 'thread' | 'task'>('all');
+  /** R189（用户 2026-11-07 第 2 项）：作者/日期/会话收进「更多筛选」，默认收起。
+   *  为什么：本页控件最多，全部平铺会让工具栏换成两行、比另外三页高出一大截，
+   *  正是用户说的「四个页面顶部栏风格不一致」。收起后工具栏与其它页同高同宽，
+   *  展开时是同一个工具栏盒子里的第二排（背景/边框不变），功能一个不少。 */
+  const [moreFilters, setMoreFilters] = useState(false);
   /** 既有筛选（r56 H4 §5）：作者显示名/日期窗（本机时区）/会话（当前项目房间）——与
    * search.query 正式参数一一对应；服务端对全部类型统一生效（线程=锚消息、任务=根消息）。 */
   const [author, setAuthor] = useState('');
@@ -111,6 +116,14 @@ export function LibraryPage() {
   /** 还没打开任何项目：scope='project' 不可用（和服务端「scope=project 需要 projectId」一致），
    *  界面明确引导去点「全部项目」，而不是静默搜出空结果。 */
   const noActiveProject = projectId == null || projectId === '';
+  /**
+   * R189：没有「当前项目」时不要停在 scope='project' 显示「尚未打开项目」——
+   * 左栏明明列着项目卡，却要用户先点一次「全部项目」才能用，像是页面坏了。
+   * 这里自动落到「全部项目」（侧栏可见项目），用户点任意项目卡会再切回 project 范围。
+   */
+  useEffect(() => {
+    if (noActiveProject) setScope('visible');
+  }, [noActiveProject]);
   /**
    * 侧栏「可见项目」集合 = 可见 ∪ 置顶（与看板左栏、侧栏房间列表同口径），去掉已移除项目。
    * 「全部项目」卡的搜索与收藏过滤都用它；searchKey 也带上它，侧栏可见集变化时旧响应作废。
@@ -248,9 +261,9 @@ export function LibraryPage() {
   const scopeNote = scope === 'project'
     ? `范围：${currentProjectName !== '' ? `「${currentProjectName}」` : '当前项目'}`
     : '范围：全部项目（侧栏可见）';
-  const searchPlaceholder = scope === 'project'
-    ? `在${currentProjectName !== '' ? `「${currentProjectName}」` : '当前项目'}搜消息/线程/任务标题…（Enter 检索）`
-    : '在全部项目搜消息/线程/任务标题…（Enter 检索）';
+  /** R189：搜索框与成员页共用同一个 <SearchField>（宽度有限），占位符只写「搜什么」；
+   *  当前范围由工具栏下方那行说明（scopeNote）负责，避免占位符被截断成「（Enter 检」。 */
+  const searchPlaceholder = '搜消息 / 线程 / 任务标题…';
 
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-library="hifi">
@@ -292,7 +305,11 @@ export function LibraryPage() {
                     onClick={() => selectProject(p.id)}
                   >
                     <span className="project-card-name" title={p.displayName}>{p.displayName}</span>
+                    {/* R189（用户 2026-11-07 第 1 项）：四页项目卡统一「名称 + 一行小字」。
+                        本页小字说明项目的 Git 类型（与文件与 Git 页一致），不再留空行；
+                        目录失效/已归档仍以 flag 追加在后面，如实提示但不改变字体与间距。 */}
                     <span className="project-card-meta">
+                      <span>{p.isGit ? 'Git 仓库' : '非 Git 目录'}</span>
                       {p.status === 'missing' ? (
                         <span className="project-card-flag"><Icon name="alert-triangle" size={11} />目录失效</span>
                       ) : null}
@@ -308,57 +325,70 @@ export function LibraryPage() {
           </aside>
 
           <section className="project-content">
-            {/* 页签在上、一个筛选行在下（原型 §17.7：范围对两个标签都生效；关键词/类型/作者/
-                日期/会话只对搜索生效——同一行里各自可辨，控件样式与看板/成员/归档同套）。 */}
-            <div className="thread-tabs">
-              <button role="tab" aria-selected={tab === 'search'} className={`thread-tab${tab === 'search' ? ' on' : ''}`} onClick={() => setTab('search')}>
-                <Icon name="search" size={13} /> 搜索
-              </button>
-              <button role="tab" aria-selected={tab === 'saved'} className={`thread-tab${tab === 'saved' ? ' on' : ''}`} onClick={() => setTab('saved')}>
-                <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
-              </button>
-            </div>
-
+            {/* R189（用户 2026-11-07 第 2 项）：四页顶部栏统一为同一条灰底圆角工具栏。
+                本页原来「页签一行 + 筛选行一行」，现在把 搜索/收藏 页签并进工具栏（共享规则
+                r189-consistency.css 的 `.page-filters > .thread-tabs` 负责高度对齐），
+                搜索框换成共享 <SearchField>（放大镜+外框，与成员管理页同一个组件）。 */}
             <div className="page-filters">
+              <div className="thread-tabs">
+                <button role="tab" aria-selected={tab === 'search'} className={`thread-tab${tab === 'search' ? ' on' : ''}`} onClick={() => setTab('search')}>
+                  <Icon name="search" size={13} /> 搜索
+                </button>
+                <button role="tab" aria-selected={tab === 'saved'} className={`thread-tab${tab === 'saved' ? ' on' : ''}`} onClick={() => setTab('saved')}>
+                  <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
+                </button>
+              </div>
               {tab === 'search' ? (
                 <>
                   <label className="field inline">
                     <span className="field-label">类型</span>
                     <Select value={kind} ariaLabel="类型" onChange={(v) => setKind(v as typeof kind)} options={KIND_FILTERS.map((f) => ({ value: f.value, label: f.label }))} />
                   </label>
-                  <div className="row tight" style={{ flex: '1 1 220px', minWidth: 180, border: '1px solid var(--border)', borderRadius: 7, padding: '0 8px', background: 'var(--bg-surface)' }}>
-                    <Icon name="search" size={13} className="faint" style={{ flex: 'none' }} />
-                    <input
-                      className="input"
-                      style={{ border: 'none', boxShadow: 'none', flex: 1, minWidth: 0, background: 'transparent' }}
-                      placeholder={searchPlaceholder}
-                      value={q}
-                      onChange={(e) => setQ(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); searchNow(1); } }}
-                    />
-                  </div>
-                  <label className="field inline" title="按作者名称筛选">
-                    <span className="field-label">作者</span>
-                    <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
-                  </label>
-                  <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
-                    <span className="field-label">日期</span>
-                    <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
-                    <span className="faint small">至</span>
-                    <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
-                  </label>
-                  {scope === 'project' && rooms.length > 0 ? (
-                    <label className="field inline" title="限定会话（当前项目的房间）">
-                      <span className="field-label">会话</span>
-                      <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
-                    </label>
-                  ) : null}
+                  <SearchField
+                    ariaLabel="搜索关键词"
+                    value={q}
+                    onChange={setQ}
+                    placeholder={searchPlaceholder}
+                    onEnter={() => searchNow(1)}
+                  />
                   <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => searchNow(1)}>{searching ? '检索中…' : '检索'}</button>
+                  {/* R189：作者/日期/会话默认收起，保证工具栏与另外三页同高；展开后是同一盒子的第二排。 */}
+                  <button
+                    className="btn ghost sm"
+                    data-zs-library-more={moreFilters ? 'open' : 'closed'}
+                    aria-expanded={moreFilters}
+                    title="作者 / 日期 / 会话筛选"
+                    onClick={() => setMoreFilters((v) => !v)}
+                  >
+                    <Icon name="filter" size={12} /> {moreFilters ? '收起筛选' : '更多筛选'}
+                  </button>
+                  {moreFilters ? (
+                    <div className="toolbar-more">
+                      <label className="field inline" title="按作者名称筛选">
+                        <span className="field-label">作者</span>
+                        <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
+                      </label>
+                      <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
+                        <span className="field-label">日期</span>
+                        <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
+                        <span className="faint small">至</span>
+                        <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
+                      </label>
+                      {scope === 'project' && rooms.length > 0 ? (
+                        <label className="field inline" title="限定会话（当前项目的房间）">
+                          <span className="field-label">会话</span>
+                          <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
+                        </label>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </>
               ) : null}
-              <span className="filter-note">
-                {tab === 'search' ? `${scopeNote} · 搜索范围为消息、线程和任务标题，不含文件正文` : `${scopeNote} · 收藏总计 ${saved?.length ?? 0} 条`}
-              </span>
+            </div>
+            {/* 范围说明放在工具栏下方一行：它是说明文字而不是控件，放进工具栏会把栏撑成两行
+                （正是「四页顶部栏不一致」的根因之一）；这里与成员页的只读提示同样式。 */}
+            <div className="faint small" data-zs-library-scope-note="1">
+              {tab === 'search' ? `${scopeNote} · 搜索范围为消息、线程和任务标题，不含文件正文` : `${scopeNote} · 收藏总计 ${saved?.length ?? 0} 条`}
             </div>
 
             {tab === 'search' ? (

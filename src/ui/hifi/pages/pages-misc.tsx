@@ -267,16 +267,16 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
           {/* 右列：原来的 topbar + 状态/错误面板 + 文件树或 Git 面板全部收进来 */}
           <section className="project-content fg-rail-content">
             {/**
-             * R170 第 9 项：文件页顶部与房间页一致——**一条 42px 的合并行**
+             * R170 第 9 项：文件页顶部与房间页一致——**一条合并行**
              * （本机路径 + 文件/Git 页签 + 仓库状态 + Git 操作）。
-             * 原来这里是「页头 / 页签 / 状态条」三条横带叠在一起，比对话页顶部高出一大截。
              * 完整状态（上游领先/落后、写入锁、最近一次 Git 操作）收进这一行的 title，
              * 界面上只留一句最重要的信息。
              * R188：顶栏的项目下拉已删除（它会让界面横向位移），项目改由左栏卡片切换。
+             * R189（用户 2026-11-07 第 2 项）：四页顶部栏统一成同一条灰底圆角工具栏
+             * （`.page-filters`），所以这里不再用白底 42px 的 `.fg-topbar`：页签、路径、
+             * 仓库状态与 Git 操作都收进同一条栏，与成员管理/看板/搜索页外观一致。
              */}
-            <div className="fg-topbar" data-zs-files-topbar="1">
-              <Icon name="folder" size={13} className="faint" />
-              <span className="fg-topbar-path mono" title={project.canonicalPath} data-zs-files-path={project.canonicalPath}>{project.canonicalPath}</span>
+            <div className="page-filters fg-toolbar" data-zs-files-topbar="1">
               <div className="thread-tabs fg-topbar-tabs">
                 <button className={`thread-tab${tab === 'files' ? ' on' : ''}`} onClick={() => setTab('files')}>
                   <Icon name="file-text" size={13} /> 文件
@@ -290,7 +290,8 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   {!isGit ? <span className="faint">未初始化</span> : null}
                 </button>
               </div>
-              <span className="spacer" />
+              <span className="fg-topbar-path mono" title={project.canonicalPath} data-zs-files-path={project.canonicalPath}><Icon name="folder" size={12} /> {project.canonicalPath}</span>
+              <div className="toolbar-tail">
               {(() => {
                 const upstream = curBranch?.upstream == null
                   ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置）' : '没有上游分支'
@@ -309,17 +310,16 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   ...(git?.lastOp?.ok ? [`最近一次 Git 操作：${git.lastOp.detail}（${relTime(git.lastOp.at)}）`] : []),
                 ].join('\n');
                 return (
-                  <span className="fg-statusbar fg-statusbar--inline" title={detail}>
-                    <span>{project.isGit ? 'Git 仓库' : '非 Git 目录 · 改动仍会记录'}</span>
-                    {isGit && git ? (
-                      <>
-                        <span className="fg-sep" />
-                        <span className="mono-sm">{git.currentBranch}</span>
-                        <span className="fg-sep" />
-                        <span title="工作区改动文件数">{changedFileCount} 个未提交改动</span>
-                        {lock != null ? <><span className="fg-sep" /><Icon name="lock" size={11} /></> : null}
-                      </>
-                    ) : null}
+                  /* R189：工具栏只有 48px 高，状态条必须是**单行**——原来这里用多个 flex 子项
+                     （仓库类型 / 分隔符 / 分支 / 改动数）会折成两行把工具栏撑到 62px，
+                     与其它三页不一致。完整状态仍在 title 里，界面只留一句紧凑说明。 */
+                  <span className="fg-statusbar fg-statusbar--inline" title={detail} data-zs-files-status="1">
+                    <span>
+                      {isGit && git
+                        ? `${git.currentBranch} · ${changedFileCount} 个未提交改动`
+                        : '非 Git 目录'}
+                    </span>
+                    {lock != null ? <Icon name="lock" size={11} /> : null}
                   </span>
                 );
               })()}
@@ -347,6 +347,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   </button>
                 </div>
               ) : null}
+              </div>
             </div>
 
             {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (

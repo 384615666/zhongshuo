@@ -1,25 +1,14 @@
 /* R188 搜索与收藏页：左侧项目卡列（与成员管理/看板/文件页同一套 .project-split /
    .project-rail / .project-card，见 r183-project-rail.css），用项目卡替代原来的「范围」
-   下拉（用户 2026-11-07 第 7 项）。 */
+   下拉（用户 2026-11-07 第 7 项）。
+
+   R189（用户 2026-11-07 第 2 项）：四页顶部栏统一为同一条灰底圆角工具栏。本页原来
+   「页签一行 + 筛选行一行」，现在页签并进工具栏（见 LibraryPage 的 JSX）；工具栏的
+   外观、sticky 与内部控件高度全部由共享 `.page-filters` / r189-consistency.css 负责，
+   本文件不再覆盖 position / box-shadow，避免与成员管理、看板、文件页表现不一致。 */
 
 /* 本页是普通滚动 .page：左栏沿用共享的 sticky（top: var(--page-top-gap)）即可。
    两栏内容从同一条顶部基线开始（与看板 .tasks-board-page 的写法一致）。 */
 .library-page > .project-split {
   margin-top: var(--page-top-gap);
-}
-
-/* 页签/筛选行留在右列顶部，但**不吸顶**：本页主体是搜索结果 / 收藏卡这类纵向列表，
-   共享 CSS 里 .project-content > .page-filters 默认 sticky，滚动时会在右列顶部压出一条
-   常驻行、盖住滚上来的页签与结果；这里按本页版式改回普通流（左栏自己仍然吸顶）。
-   注意只覆盖粘附相关声明，不改 --project-rail-gap / --project-rail-inner / 页面左内边距。 */
-.library-page .project-content > .page-filters {
-  position: static;
-  z-index: auto;
-  box-shadow: none;
-}
-
-/* 页签行是右列第一行：不再额外留上边距，和左栏「项目」标题同高（.project-content 的
-   `> * + *` 只影响后续兄弟，这里显式写 0 防止以后再加通用边距时把页签推低）。 */
-.library-page .project-content > .thread-tabs {
-  margin-top: 0;
 }

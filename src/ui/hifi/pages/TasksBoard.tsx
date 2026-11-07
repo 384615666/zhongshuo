@@ -285,9 +285,17 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                   <Icon name="grid" size={12} />
                   <span className="project-card-name-text">全部项目</span>
                 </span>
-                {/* meta 行常驻（CSS min-height）：数字就绪前不显示，但卡片高度不跳。 */}
+                {/* R189（用户 2026-11-07 第 1 项）：四页项目卡统一「名称 + 一行小字」。
+                    「全部项目」卡的小字与其它页同一套写法：说明范围 + 已知数量；
+                    未知总数时只写范围，不写 0（数字未就绪不等于没有任务）。 */}
                 <span className="project-card-meta">
-                  {allScopeCount != null ? <span className="project-card-count">共 {allScopeCount} 项</span> : null}
+                  <span>侧栏可见项目</span>
+                  {allScopeCount != null ? (
+                    <>
+                      <span aria-hidden="true">{' · '}</span>
+                      <span className="project-card-count">共 {allScopeCount} 项</span>
+                    </>
+                  ) : null}
                 </span>
               </button>
               {railProjects.map((p) => {
@@ -336,7 +344,8 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                   撤销
                 </button>
               ) : null}
-              <button className="btn ghost" disabled={reading} onClick={() => setGen((v) => v + 1)}>{reading ? '读取中…' : '刷新'}</button>
+              {/* R189：工具栏内所有控件统一 30px（.btn.sm 的高度），否则这一页的栏比其它页高 1px。 */}
+              <button className="btn ghost sm" disabled={reading} onClick={() => setGen((v) => v + 1)}>{reading ? '读取中…' : '刷新'}</button>
               <button
                 type="button"
                 className={`btn sm board-archive-all${confirmKey === 'all' ? ' danger' : ' ghost'}`}

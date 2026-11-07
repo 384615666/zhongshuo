@@ -635,7 +635,7 @@ const scenesSource = String.raw`(() => {
           scrollWidth: document.documentElement.scrollWidth,
           innerWidth: window.innerWidth,
           rail: rectOfLocal(q('.fg-page .project-rail')),
-          topbar: rectOfLocal(q('.fg-topbar')),
+          topbar: rectOfLocal(q('[data-zs-files-topbar]')),
           content: rectOfLocal(q('.fg-rail-content')),
           body: rectOfLocal(q('.fg-rail-content .fg-body') || q('.fg-rail-content .git-layout')),
           path: rectOfLocal(q('[data-zs-files-path]')),
@@ -763,7 +763,7 @@ const scenesSource = String.raw`(() => {
       await wait(900);
       const search = lastCommand('search.query');
       extra.searchParams = search && search.params;
-      extra.scopeNote = textOf(q('.library-page .filter-note'));
+      extra.scopeNote = textOf(q('.library-page [data-zs-library-scope-note]'));
       extra.allCardCurrent = q('[data-zs-library-scope-all]') != null && q('[data-zs-library-scope-all]').classList.contains('is-current');
       extra.sidebarBefore = sidebarBefore;
       extra.sidebarAfter = sidebarActiveText();
@@ -776,7 +776,9 @@ const scenesSource = String.raw`(() => {
       check('范围说明写明「全部项目（侧栏可见）」', /全部项目（侧栏可见）/.test(extra.scopeNote));
       check('点「全部项目」不切换当前项目（侧栏高亮不变）', extra.sidebarAfter === extra.sidebarBefore);
       check('点「全部项目」不切换当前项目（标题栏项目名不变）', extra.titlebarAfter === extra.titlebarBefore);
-      check('搜索占位符改为「全部项目」口径', (extra.placeholder || '').indexOf('全部项目') >= 0);
+      // R189：占位符改为统一的「搜消息 / 线程 / 任务标题…」（与成员页搜索框同一组件），
+      // 当前范围改由工具栏下方的范围说明承担——所以这里断言占位符是统一文案、范围在说明里。
+      check('搜索占位符是统一文案', (extra.placeholder || '').indexOf('搜消息') >= 0);
       window.r188Extra = extra;
     } },
     { name: 'library-project', run: async () => {
@@ -797,7 +799,7 @@ const scenesSource = String.raw`(() => {
       extra.currentCardText = textOf(q('[data-zs-library-project].is-current'));
       extra.sidebarActive = sidebarActiveText();
       extra.titlebarProject = textOf(q('.zs-tb-project-name'));
-      extra.scopeNote = textOf(q('.library-page .filter-note'));
+      extra.scopeNote = textOf(q('.library-page [data-zs-library-scope-note]'));
       extra.placeholder = (qa('.library-page .page-filters input').find((el) => (el.getAttribute('placeholder') || '').indexOf('搜') >= 0) || {}).placeholder || '';
       extra.errorPanel = textOf(q('.library-page .panel.warning'));
       check('点项目卡同时切换当前项目（侧栏高亮=社区运营）', extra.sidebarActive.indexOf(targetName) >= 0);
@@ -805,7 +807,8 @@ const scenesSource = String.raw`(() => {
       check('目标项目卡显示选中态', extra.currentCardId === targetId);
       check('切项目后 search.query scope=project 且带目标项目 ID', extra.searchParams != null && extra.searchParams.scope === 'project' && extra.searchParams.projectId === targetId);
       check('范围说明切到该项目', /社区运营/.test(extra.scopeNote));
-      check('搜索占位符切到该项目', /社区运营/.test(extra.placeholder));
+      // R189：范围改由范围说明表达（占位符统一），断言说明里出现目标项目名。
+      check('范围说明切到该项目（占位符统一）', /社区运营/.test(extra.scopeNote) && (extra.placeholder || '').indexOf('搜消息') >= 0);
       check('切项目没有检索错误', extra.errorPanel === '');
       window.r188Extra = extra;
     } },
