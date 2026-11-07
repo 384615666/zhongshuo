@@ -125,9 +125,11 @@ async function processFixture(mode:'success'|'wrong-key'|'hang'|'no-result',kind
 describe.each(['deepseek-harness','pi'] as const)('R136 daemon %s: formal commands and isolated fake dispatch, zero provider calls',kind=>{
   it('persists Harness and independent template snapshots without creating a new default member or implying certification',async()=>{
     const f=await fixture(kind);await f.bind();
-    const info=await f.cmd<{binding:{kind:string;permissionMode:string;executable:string};permissionExecution:{effective:string};installation:{capabilities_json:string};imageInput:{status:string}}>('member.runtime',{memberId:f.memberId});
+    const info=await f.cmd<{binding:{kind:string;permissionMode:string;executable:string};permissionExecution:{effective:string};installation:{capabilities_json:string};imageInput:{status:string;protocol:string;reason:string}}>('member.runtime',{memberId:f.memberId});
     expect(info.binding).toMatchObject({kind:kind,permissionMode:'bypassPermissions',executable:f.executable});
-    expect(info.permissionExecution.effective).toBe('CLI 完整权限');expect(info.imageInput.status).not.toBe('supported');
+    expect(info.permissionExecution.effective).toBe('CLI 完整权限');
+    // R194：所有运行时都随消息直接接收图片字节——不再有人为的「未认证」图片状态。
+    expect(info.imageInput.status).toBe('supported');expect(info.imageInput.protocol).toContain('图片字节');expect(info.imageInput.reason).toContain('图片随消息直接发送');
     const capabilities=JSON.parse(info.installation.capabilities_json) as {permissionAuth:string;toolCapabilities:{restrictWrites:string}};
     expect(capabilities.permissionAuth).toBe('unverified');expect(capabilities.toolCapabilities.restrictWrites).not.toBe('supported');
     const saved=await f.cmd<{id:string;config:unknown}>('memberTemplate.saveFromMember',{projectId:f.projectId,memberId:f.memberId,expectedRevision:f.revision(),name:'Harness template',description:''});

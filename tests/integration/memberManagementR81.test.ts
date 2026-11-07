@@ -221,7 +221,8 @@ describe('R81 formal member and independent configuration template contracts', (
             const made = await f.cmd('memberTemplate.createMember', { projectId: f.q, templateId: saved.id, expectedRevision: 0, displayName: '不可用但已保存', description: '' });
             const runtime = await f.cmd('member.runtime', { memberId: made.memberId });
             expect(runtime.executableStatus.status).toBe('missing');
-            expect(runtime.imageInput.status).toBe('unverified');
+            // R194：图片输入不再按运行时/执行程序认证——不可用程序仍如实报告 missing，但图片恒 supported。
+            expect(runtime.imageInput.status).toBe('supported');
             expect(runtime.binding.permissionMode).toBe('plan');
             expect((await f.raw('memberTemplate.update', { templateId: saved.id, expectedRevision: 0, name: '秘密', description: '', enabled: true, config: { ...saved.config, apiKey: 'DO_NOT_COPY' } })).error?.code).toBe('VALIDATION_INVALID');
             const remote = await dispatchDaemonCommand({ ...f.deps, remoteAudit: { deviceId: 'test', authEpoch: 1 } }, { protocolVersion: 1, commandId: 'r81-remote-config', method: 'memberTemplate.list', params: {} }) as Reply;

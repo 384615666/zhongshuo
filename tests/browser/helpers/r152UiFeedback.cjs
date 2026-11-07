@@ -15,7 +15,6 @@ import { Composer } from '../../../src/ui/hifi/components/Composer.tsx';
 import * as store from '../../../src/ui/hifi/data/store.ts';
 import { navigate, useHashRoute, parseQuery } from '../../../src/ui/hifi/lib/router.ts';
 const calls = [], sends = [], controls = [];
-let capability = 'supported', readCount = 0;
 window.zsWindow = {
   minimize: async () => { controls.push('minimize'); return {ok:true}; },
   toggleMaximize: async () => { controls.push('maximize'); return {ok:true}; },
@@ -25,11 +24,6 @@ window.zsWindow = {
 };
 window.zs = { command: async env => {
   calls.push(env.method);
-  if (env.method === 'message.imageCapability') {
-    readCount++;
-    if (capability === 'error') return {ok:false,error:{code:'READ_FAILED',message:'图片能力暂时不可用'}};
-    return {ok:true,data:{supported:capability==='supported',willDispatch:capability!=='record',members:[{kind:'codex',model:'fixture',channel:'fixture',configuration:'fixture',protocol:'fixture',status:capability,reason:'合成图片能力'}]}};
-  }
   if (env.method === 'app.settings.get') return {ok:true,data:{values:{'callBudget.enabled':'false'}}};
   if (env.method === 'app.appearance.get') return {ok:true,data:{showAvatars:true,avatars:{}}};
   if (env.method === 'app.identity') return {ok:true,data:{localUserId:'synthetic',appDataDir:'合成测试目录'}};
@@ -88,14 +82,14 @@ window.r152 = {
     window:getComputedStyle(document.getElementById('hifi-root')).backgroundColor,
     controls:[...document.querySelectorAll('.zs-winbtn')].map(el=>({color:getComputedStyle(el).color,rect:rect(el),drag:getComputedStyle(el).webkitAppRegion})),controlsCalled:controls.slice(),
     drag:getComputedStyle(document.querySelector('[data-zs-titlebar-rendered] .zs-tb-drag')).webkitAppRegion}),
-  composer:async mode=>{
-    capability=mode;
-    const route='/composer-'+mode, key=route.slice(1);
-    store.setDraftFull(key,{body:'请看这张图片',mentions:['m'],attachments:[{name:'示例.png',size:128,attachmentId:'image-'+mode,kind:'image_file',revision:1}],access:'plan',sendAs:'ai'});
+  composer:async ()=>{
+    const route='/composer-image', key=route.slice(1);
+    store.setDraftFull(key,{body:'请看这张图片',mentions:['m'],attachments:[{name:'示例.png',size:128,attachmentId:'image-synthetic',kind:'image_file',revision:1}],access:'plan',sendAs:'ai'});
     navigate(route);
   },
-  composerState:()=>({readCount,sends:sends.length,text:document.body.innerText,status:document.querySelector('[data-zs-image-status]')?.textContent,
+  composerState:()=>({sends:sends.length,text:document.body.innerText,
     editor:!!document.querySelector('.composer-editor'),draft:store.getDraftFull(location.hash.slice(2)),
+    statusElement:!!document.querySelector('[data-zs-image-status]'),
     gate:!!document.querySelector('.composer-info-chip button[title*="文字"]')}),
   calls:()=>calls,
 };
@@ -180,21 +174,20 @@ app.whenReady().then(async()=>{
    check('manual-opens-via-main-bridge',opened.join(',')==='manual',opened);
    await capture('settings-help-1280');
    win.setContentSize(1100,760);await pause(50);
-   for(const mode of ['supported','record','unsupported','error']) {
-    const before=await js('r152.composerState().readCount');
-    await js('r152.composer('+JSON.stringify(mode)+')');await until('r152.composerState().editor&&r152.composerState().readCount>'+before,'image capability '+mode);await pause(70);
-    const state=await js('r152.composerState()');samples.push({mode,composer:state});
-    check('composer/'+mode+'/ordinary-status-absent',!state.text.includes('图片会随消息发送')&&!state.text.includes('图片会保存到本机'),state);
-    check('composer/'+mode+'/draft-and-image-preserved',state.draft.body.includes('请看这张图片')&&state.draft.attachments.length===1&&state.draft.attachments[0].attachmentId==='image-'+mode,state.draft);
-    check('composer/'+mode+'/actionable-status',mode==='unsupported'?state.status?.includes('换成员或移除图片'):mode==='error'?state.status?.includes('读取失败'):state.status==null,state.status);
-    if(mode==='supported'||mode==='record')await capture('composer-'+mode);
-    if(mode==='supported'||mode==='unsupported'||mode==='error') {
-     const sent=state.sends;await js("document.querySelector('.composer-send').click()");await pause(180);
-     const after=await js('r152.composerState()');
-     check('composer/'+mode+'/dispatch-gate',mode==='supported'?after.sends===sent+1:after.sends===sent&&((mode==='unsupported'&&after.text.includes('仅发送文字'))||(mode==='error'&&after.text.includes('图片发送能力读取失败'))),after);
-    }
-    if(mode==='unsupported'||mode==='error')await capture('composer-'+mode);
+   // R194：图片随消息直接发送——输入条不再显示图片能力提示条/二选一弹层，也不再预检 message.imageCapability。
+   await js('r152.composer()');
+   await until('r152.composerState().editor','composer editor');await pause(200);
+   const state=await js('r152.composerState()');samples.push({composer:state});
+   check('composer/image/no-image-status-prompt',state.statusElement===false&&!state.text.includes('图片会随消息发送')&&!state.text.includes('图片会保存到本机'),state);
+   check('composer/image/draft-and-image-preserved',state.draft.body.includes('请看这张图片')&&state.draft.attachments.length===1&&state.draft.attachments[0].attachmentId==='image-synthetic',state.draft);
+   check('composer/image/no-two-way-gate',state.gate===false,state.gate);
+   {
+    const sent=state.sends;await js("document.querySelector('.composer-send').click()");await pause(180);
+    const after=await js('r152.composerState()');
+    check('composer/image/sends-without-extra-confirmation',after.sends===sent+1,after);
    }
+   check('composer/image/no-image-capability-precheck',!(await js('r152.calls()')).includes('message.imageCapability'),await js('r152.calls()'));
+   await capture('composer-image');
    check('no-business-command-issued',!(await js('r152.calls()')).includes('message.submit'));
    win.destroy();
   }

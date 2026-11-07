@@ -1,14 +1,15 @@
 /**
- * DEV-24 图片附件首包（第二十八轮四）：四能力如实分列——
- * ①保存原件（magic bytes 内容类型校验——扩展名不作依据；尺寸/面积按格式头限幅；损坏/截断/
- * 超限明确拒绝；内容寻址 {appData}/blobstore/{hash}.bin）②预览（audience+实根+sha256 原件
- * 核对；mime/尺寸/dataUrl——渲染由 <img>）③OCR=未实现（明确 unsupported）④模型图片输入=
- * 未认证（注入链路只注文本——startTurn 输入不含图片数据，不发路径冒充已读）。
+ * DEV-24 图片附件首包（第二十八轮四；R76 冻结信封 + R194 取消图片输入能力门）：
+ * ①保存原件（magic bytes 内容类型校验；尺寸/面积按格式头限幅；损坏/截断/超限明确拒绝；
+ * 内容寻址 {appData}/blobstore/{hash}.bin）②预览（audience+实根+sha256 原件核对；渲染由 <img>）
+ * ③OCR=未实现（明确 unsupported）④模型图片输入=随消息直接发送（所有 AI 都能看图）：
+ * 默认意图引用图片直接发送、图片-only（空正文）允许发送、旧 imageAck 字段被忽略、
+ * record_only 记 'local-only' 只保存原件不发送字节。
  * 消息可带图引用（四通道沿用）；图片评论随分批归属（comment.add 对 image 明确拒绝）。
  */
 import type { TurnRequest } from '../../src/contracts/runtime.ts';
 import {validatedImages} from '../../src/adapter/imageInput.ts';
-import { describe, expect, it, afterAll, vi } from 'vitest';
+import { describe, expect, it, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,11 +81,7 @@ function makeEnv() {
 }
 
 
-// A protocol-only supported fixture enables the full daemon → worker path without a model call.
-const status=vi.hoisted(()=>({supported:true,identityKey:'original'}));
-vi.mock('../../src/daemon/imageCapability.ts',()=>({memberImageCapability:()=>({status:status.supported?'supported':'unverified',identityKey:status.identityKey})}));
-
-describe('R76 image sends and frozen omission',()=>{
+describe('R76/R194 image sends: images go with the message, no capability gate',()=>{
  it.each([10,50])('R184 %i MiB images finish the full fake worker path without UNKNOWN or retained protection',async mb=>{
   const env=makeEnv();const {worker,adapter}=env.makeWorker();
   try{
@@ -99,7 +96,7 @@ describe('R76 image sends and frozen omission',()=>{
    expect(env.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
   }finally{await adapter.closeAllSessions();env.close();}
  });
- it('image-only positive, original envelope replay once, worker passes actual bytes; omission persists',async()=>{
+ it('image-only positive, envelope replay once, worker passes actual bytes; legacy imageAck ignored; record_only local-only',async()=>{
   const env=makeEnv();try{
    const png=makePng();const up=await env.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:'conv_room',filename:'中文.png',contentBase64:png.toString('base64')});
    const params={target:{kind:'room_root',projectId:'p1',conversationId:'conv_room',roomId:'r0'},body:'',intent:'default',mentions:[{kind:'member',memberId:'mA'}],attachmentRefs:[up.attachmentId]};
@@ -111,26 +108,17 @@ describe('R76 image sends and frozen omission',()=>{
    const original=adapter.startTurn.bind(adapter);adapter.startTurn=async(s,i)=>{input=i;await original(s,i);};
    await worker.runOnce();expect(input?.images).toHaveLength(1);expect(Buffer.from(input!.images![0]!.dataBase64,'base64')).toEqual(png);
    expect(input?.text).not.toContain('图片附件未发送');await adapter.closeAllSessions();
-   const omitted=await env.cmdRaw('message.submit',{...params,body:'只发文字',imageAck:'omit-images'});expect(omitted.ok).toBe(true);
-   const row=env.db.prepare("SELECT body_json FROM messages WHERE body_json LIKE '%只发文字%'").get() as {body_json:string};expect(JSON.parse(row.body_json).imageInput).toBe('omit');
-   const run2=env.makeWorker();let second:TurnRequest|undefined;const orig=run2.adapter.startTurn.bind(run2.adapter);run2.adapter.startTurn=async(s,i)=>{second=i;await orig(s,i);};await run2.worker.runOnce();expect(second?.images).toEqual([]);expect(second?.text).toContain('图片附件未发送');await run2.adapter.closeAllSessions();
-   const empty=await env.cmdRaw('message.submit',{...params,imageAck:'omit-images'});expect(empty.ok).toBe(false);
-   status.supported=false;const no=await env.cmdRaw('message.submit',params);expect(no.ok).toBe(false);
-   const local=await env.cmdRaw('message.submit',{...params,intent:'record_only'});expect(local.ok).toBe(true);
+   // R194：旧持久化信封里的 imageAck:'omit-images' 仍被 schema 接受但完全忽略——图片照常发送。
+   const legacyAck=await env.cmdRaw('message.submit',{...params,body:'旧确认字段已忽略',imageAck:'omit-images'});expect(legacyAck.ok).toBe(true);
+   const ackRow=env.db.prepare("SELECT body_json FROM messages WHERE body_json LIKE '%旧确认字段已忽略%'").get() as {body_json:string};expect(JSON.parse(ackRow.body_json).imageInput).toBe('include');
+   const run2=env.makeWorker();let second:TurnRequest|undefined;const orig=run2.adapter.startTurn.bind(run2.adapter);run2.adapter.startTurn=async(s,i)=>{second=i;await orig(s,i);};await run2.worker.runOnce();expect(second?.images).toHaveLength(1);expect(second?.text).not.toContain('图片附件未发送');await run2.adapter.closeAllSessions();
+   // 图片-only（空正文+仅图片附件）带旧确认字段同样允许发送。
+   const empty=await env.cmdRaw('message.submit',{...params,imageAck:'omit-images'});expect(empty.ok).toBe(true);
+   // record_only：只保存原件（local-only），不发送图片字节。
+   const local=await env.cmdRaw('message.submit',{...params,intent:'record_only'}) as {ok:boolean;data?:{messageId?:string}};expect(local.ok).toBe(true);
+   const localRow=env.db.prepare('SELECT body_json FROM messages WHERE id=?').get(local.data!.messageId!) as {body_json:string};expect(JSON.parse(localRow.body_json).imageInput).toBe('local-only');
    expect((env.db.prepare('SELECT count(*) c FROM real_calls').get() as {c:number}).c).toBe(0);
-  }finally{status.supported=true;env.close();}
- });
- it('runtime certification changing while opening a session blocks before startTurn and keeps originals',async()=>{
-  const env=makeEnv();try{
-   const up=await env.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:'conv_room',filename:'变更.png',contentBase64:makePng().toString('base64')});
-   await env.cmd('message.submit',{target:{kind:'room_root',projectId:'p1',conversationId:'conv_room',roomId:'r0'},body:'',intent:'default',mentions:[{kind:'member',memberId:'mA'}],attachmentRefs:[up.attachmentId]});
-   const {worker,adapter}=env.makeWorker();const open=adapter.openSession.bind(adapter);
-   adapter.openSession=async input=>{const session=await open(input);status.supported=false;return session;};
-   await expect(worker.runOnce()).rejects.toThrow('图片输入认证');expect(adapter.startTurnLog).toHaveLength(0);
-   expect((env.db.prepare("SELECT count(*) c FROM agent_turns WHERE status='UNKNOWN'").get() as {c:number}).c).toBe(0);
-   expect((env.db.prepare('SELECT count(*) c FROM message_attachments').get() as {c:number}).c).toBe(1);
-   await adapter.closeAllSessions();
-  }finally{status.supported=true;env.close();}
+  }finally{env.close();}
  });
  it('declared worktree SVG reads original bytes and hash, while raster upload still rejects SVG',async()=>{
   const env=makeEnv();try{const svg=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><rect width="96" height="64" fill="green"/></svg>');
@@ -140,18 +128,6 @@ describe('R76 image sends and frozen omission',()=>{
    const hash=(await import('node:crypto')).createHash('sha256').update(svg).digest('hex');expect(r.sha256).toBe(hash);
    const up=await env.cmdRaw('attachment.uploadImage',{conversationId:'conv_room',filename:'中文.svg',contentBase64:svg.toString('base64')});expect(up.ok).toBe(false);
   }finally{env.close();}
- });
- it('R77 same certified channel but configuration snapshot changes during openSession: no startTurn, no UNKNOWN',async()=>{
-  const env=makeEnv();try{
-   const up=await env.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:'conv_room',filename:'配置.png',contentBase64:makePng().toString('base64')});
-   await env.cmd('message.submit',{target:{kind:'room_root',projectId:'p1',conversationId:'conv_room',roomId:'r0'},body:'',intent:'default',mentions:[{kind:'member',memberId:'mA'}],attachmentRefs:[up.attachmentId]});
-   const {worker,adapter}=env.makeWorker();const open=adapter.openSession.bind(adapter);
-   adapter.openSession=async input=>{const session=await open(input);status.identityKey='changed-configuration';return session;};
-   await expect(worker.runOnce()).rejects.toThrow('图片输入认证');expect(status.supported).toBe(true);expect(adapter.startTurnLog).toHaveLength(0);
-   expect((env.db.prepare("SELECT count(*) c FROM agent_turns WHERE status='UNKNOWN'").get() as {c:number}).c).toBe(0);
-   expect((env.db.prepare('SELECT count(*) c FROM message_attachments').get() as {c:number}).c).toBe(1);
-   await adapter.closeAllSessions();
-  }finally{status.identityKey='original';env.close();}
  });
  it('WebP truncated lossless header rejects without a range exception',async()=>{
   const env=makeEnv();try{const raw=Buffer.alloc(21);raw.write('RIFF');raw.write('WEBP',8);raw.write('VP8L',12);raw[20]=0x2f;

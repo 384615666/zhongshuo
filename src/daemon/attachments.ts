@@ -52,7 +52,7 @@ export function truncateUtf8Bytes(text: string, maxBytes: number): { text: strin
 // 服务端零像素解码依赖：内容类型按 **magic bytes**（不只扩展名）；尺寸/完整性按格式头
 // 解析（PNG IHDR/JPEG SOF/GIF 头/WebP VP8X）——超尺寸/截断/头部损坏明确拒绝；像素级
 // 解码与缩略图在 renderer <img>（浏览器沙箱）；OCR=未实现（明确不可用）；模型图片输入=
-// 未认证（注入链路只注入文本——runtime 图片输入能力认证属后续批次，不发文件路径冒充已读）。
+// 随消息直接发送图片字节（所有 AI 均可看图，无需额外认证）。
 
 export interface ImageMeta { mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; width: number; height: number }
 

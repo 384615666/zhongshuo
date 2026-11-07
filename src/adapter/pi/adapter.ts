@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { OpenSessionInput, ProbeResult, RuntimeCapabilities, SessionRef, TurnRequest } from '../../contracts/runtime.ts';
+import { validatedImages } from '../imageInput.ts';
 import { externalRuntimeLaunchIdentity } from '../cli/configuration.ts';
 import { resolveAgentExecutable } from '../cli/executable.ts';
 import { CliTurnAdapter, isRecord, type CliAdapterOptions, type CliSession, type CliTurn } from '../cli/turnAdapter.ts';
@@ -93,7 +94,6 @@ export class PiAdapter extends CliTurnAdapter {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED','Pi 当前支持原生完整权限；只读分析和项目受限编辑尚未认证',true);
     if(restrictedTurn(input)&&(!isRecord(input.outputSchema)||session.requestedSessionId||session.ref.providerSessionId))
       throw new AdapterCallError('VALIDATION_INVALID','Pi 格式补交需要结果结构和独立的新会话，不能续接原执行',true);
-    if(input.images?.length)throw new AdapterCallError('CAPABILITY_UNSUPPORTED','Pi 图片输入尚未认证，请换用已支持图片的成员',true);
     if(this.options.model&&!/^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,199}$/.test(this.options.model))throw new AdapterCallError('VALIDATION_INVALID','Pi 模型编号无效',true);
     if(this.options.effort&&!['off','none','minimal','low','medium','high','xhigh'].includes(this.options.effort))throw new AdapterCallError('VALIDATION_INVALID','Pi 思考等级无效',true);
     const expected=session.input.writeAccess?.launchConfigurationKey;
@@ -143,7 +143,9 @@ export class PiAdapter extends CliTurnAdapter {
         if(restrictedTurn(turn.input)&&(data.messageCount!==0||data.isCompacting===true))throw Error('Pi 格式补交会话中已有待处理内容');
         meta.file=data.sessionFile;this.sessionReady(session,turn,data.sessionId);turn.ready=true;
         if(turn.stopRequested){this.fail(session,turn,'INTERRUPTED','Pi 在启动阶段收到停止请求');return;}
-        this.send(turn,{id:`${turn.requestId}:prompt`,type:'prompt',message:turn.input.text});return;
+        // Pi 1.4.0 rpc prompt 帧直接携带图片（hash/mime 已由 imageInput.ts 校验）；所有模型都随消息看图。
+        const images=turn.input.images?.length?validatedImages(turn.input):[];
+        this.send(turn,{id:`${turn.requestId}:prompt`,type:'prompt',message:turn.input.text,...(images.length?{images:images.map(image=>({type:'image' as const,data:image.dataBase64,mimeType:image.mime}))}:{})});return;
       }
       if(suffix==='prompt'){
         if(isRecord(frame.data)&&frame.data.disposition==='handled')this.fail(session,turn,'CAPABILITY_UNSUPPORTED','Pi 扩展处理了输入，没有启动可跟踪的任务',true);

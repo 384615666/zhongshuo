@@ -17,7 +17,6 @@
  *   或 unsupported——协议字段存在、方法实现、真实行为通过是三个不同状态。
  */
 import { codexInput } from '../imageInput.ts';
-import {codexConfigurationIdentity} from './configuration.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -952,8 +951,6 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   private async startPreparedTurn(state: SessionState, session: SessionRef, input: TurnRequest): Promise<void> {
-    if(input.images?.length&&input.imageConfigurationKey&&input.imageConfigurationKey!==codexConfigurationIdentity(session.cwd))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','图片执行配置已变化；未发送，原件保留',true);
-    if(input.images?.length){let models:Awaited<ReturnType<CodexAppServerAdapter['listModels']>>;try{models=await this.listModels();}catch(e){throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`图片模型信息读取失败；没有发送模型输入：${e instanceof Error?e.message:'元数据不可读'}`,true);}const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(model?.inputModalities&&!model.inputModalities.includes('image'))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前模型明确不支持图片；原件保留，可仅记录或换成员',true);}
     const providerInput = codexInput(input);
     if (state.startingTurns.has(input.turnId) || [...state.providerTurnToInternal.values()].includes(input.turnId)) {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '本轮执行身份已经使用；本次未重复发送', true);

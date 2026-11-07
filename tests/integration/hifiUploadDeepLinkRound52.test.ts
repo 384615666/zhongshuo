@@ -2,8 +2,8 @@ import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
 /**
  * 第五十二轮 H2 真实链测试（review-r51 §2/§3/§5/§6.3）：**打包 hifi 前端数据层 × 正式
  * daemon × fake 库**——附件归属（uploadId 收敛/移除即弃/refs 清算）、fatal UTF-8 字节合同、
- * 深链归属分列（delivery 带 threadId；未知归属不默认 DM）、信封冻结（refs/imageAck/
- * attachmentRanges 逐字重发）、图片能力门端到端合同。
+ * 深链归属分列（delivery 带 threadId；未知归属不默认 DM）、信封冻结（refs/
+ * attachmentRanges 逐字重发）、图片随消息直接发送（无图片能力门）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,10 +43,10 @@ interface LoaderApi {
   refreshDms(): Promise<void>;
   loadThread(threadId: string, opts?: { markRead?: boolean }): Promise<void>;
   uploadAttachmentFile(conversationId: string, file: File): Promise<{ attachmentId: string; hash: string; revision: number; kind: string }>;
-  attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string };
+  attachmentRefsFromDraft(draftKey: string): { refs?: string[]; blockError?: string };
   attachmentRangesFromDraft(draftKey: string): Record<string, string> | undefined;
   setDraftAttachmentRange(draftKey: string, attachmentId: string, range: string): void;
-  buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): { commandId: string; method: 'message.submit'; params: Record<string, unknown> };
+  buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { attachmentRanges?: Record<string, string> }): { commandId: string; method: 'message.submit'; params: Record<string, unknown> };
   sendEnvelope(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; code?: string; error?: string }>;
   stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }>;
 }
@@ -99,7 +99,7 @@ async function makeHarness(): Promise<Harness> {
 const MINI_PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
 
 describe('第五十二轮 H2：附件归属/字节合同/深链分列/信封冻结（真实链）', () => {
-  it('uploadId 收敛+移除即弃+refs 清算；fatal UTF-8；delivery 深链带 threadId；imageAck/ranges 冻结', async () => {
+  it('uploadId 收敛+移除即弃+refs 清算；fatal UTF-8；delivery 深链带 threadId；refs/ranges 冻结', async () => {
     await buildHifiBundle();
     const h = await makeHarness();
     try {
@@ -172,18 +172,18 @@ describe('第五十二轮 H2：附件归属/字节合同/深链分列/信封冻�
       await h.bundle.loader.refreshDms(); // DM 归属按已装载会话分列（真实流程在 openProject 后已载）
       expect(h.bundle.deepLink.routeForResolved({ kind: 'task', projectId: projId, conversationId: 'convDm1', threadId: null, taskId: 't_dm' }, h.bundle.store.getState())).toBe('/dm/convDm1');
 
-      // ── ④ imageAck 端到端：图片+派发无确认=服务端拒；omit-images=接受且消息挂图片 ──
+      // ── ④ 图片随消息直接发送：房间根派发无需确认；旧 imageAck 字段被服务端忽略 ──
       const img = new File([MINI_PNG], 'mini.png', { type: 'image/png' });
       const upImg = await h.bundle.loader.uploadAttachmentFile('convA', img);
       expect(upImg.kind).toBe('image_file');
-      // 图片门作用于**派发路由**（房间根消息 @成员）——记录串零派发不设门（合同口径）。
-      const noAck = await h.bundle.loader.sendEnvelope({ commandId: `cmd_${randomUUID().slice(0, 8)}`, method: 'message.submit', params: { target: { kind: 'room_root', projectId: projId, conversationId: 'convA', roomId: 'roomA' }, body: '带图片的派发（无确认）', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [upImg.attachmentId] } });
-      expect(noAck.status).toBe('failed');
-      expect(noAck.error).toContain('模型图片输入能力未认证');
-      expect(noAck.error).not.toContain('IMAGE_INPUT_UNVERIFIED');
-      const withAckRaw = await h.bundle.loader.sendEnvelope({ commandId: `cmd_${randomUUID().slice(0, 8)}`, method: 'message.submit', params: { target: { kind: 'room_root', projectId: projId, conversationId: 'convA', roomId: 'roomA' }, body: '带图片的派发（仅发送文字确认）', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [upImg.attachmentId], imageAck: 'omit-images' } });
-      if (withAckRaw.status !== 'ok') console.log('WITHACK_ERR=', JSON.stringify(withAckRaw));
-      expect(withAckRaw.status).toBe('ok');
+      const imgSend = await h.bundle.loader.sendEnvelope({ commandId: `cmd_${randomUUID().slice(0, 8)}`, method: 'message.submit', params: { target: { kind: 'room_root', projectId: projId, conversationId: 'convA', roomId: 'roomA' }, body: '带图片的派发（无需确认）', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [upImg.attachmentId] } });
+      expect(imgSend.status).toBe('ok');
+      const imgMsg = h.db.prepare("SELECT id, body_json FROM messages WHERE body_json LIKE '%带图片的派发（无需确认）%'").get() as { id: string; body_json: string };
+      expect((JSON.parse(imgMsg.body_json) as { imageInput?: string }).imageInput).toBe('include');
+      expect((h.db.prepare('SELECT count(*) c FROM message_attachments WHERE message_id = ?').get(imgMsg.id) as { c: number }).c).toBe(1);
+      // 旧持久化信封若仍带 imageAck:'omit-images'：schema 接受但完全忽略，图片照常发送。
+      const legacyAck = await h.bundle.loader.sendEnvelope({ commandId: `cmd_${randomUUID().slice(0, 8)}`, method: 'message.submit', params: { target: { kind: 'room_root', projectId: projId, conversationId: 'convA', roomId: 'roomA' }, body: '带图片的派发（旧确认字段）', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [upImg.attachmentId], imageAck: 'omit-images' } });
+      expect(legacyAck.status).toBe('ok');
 
       // ── ⑤ attachmentRanges 冻结：CSV 上传→真实表名范围→信封携带→服务端接受 ──
       const csv = new File(['h1,h2\n1,2\n'], '表.csv', { type: 'text/csv' });
@@ -206,7 +206,7 @@ describe('第五十二轮 H2：附件归属/字节合同/深链分列/信封冻�
       h.bundle.loader.setDraftAttachmentRange('thread:TR', upCsv.attachmentId, '');
       expect(h.bundle.loader.attachmentRangesFromDraft('thread:TR')).toBeUndefined(); // 清除=默认窗口
 
-      // ── ⑥ 未知信封重试：同号同参（含 refs/imageAck/ranges）逐字一致+业务恰一次 ──
+      // ── ⑥ 未知信封重试：同号同参（含 refs/ranges）逐字一致+业务恰一次 ──
       const cmdR = `cmd_${randomUUID().slice(0, 8)}`;
       const envR = h.bundle.loader.buildThreadEnvelope(cmdR, th.id, 'r52 未知重试样本', 'record_only', [up.attachmentId]);
       const r6 = await h.bundle.loader.sendEnvelope(envR);

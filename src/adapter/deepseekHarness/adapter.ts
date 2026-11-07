@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { ProbeResult, RuntimeCapabilities, TurnRequest } from '../../contracts/runtime.ts';
+import { validatedImages } from '../imageInput.ts';
 import { externalRuntimeLaunchIdentity } from '../cli/configuration.ts';
 import { resolveAgentExecutable } from '../cli/executable.ts';
 import { CliTurnAdapter, isRecord, type CliAdapterOptions, type CliSession, type CliTurn } from '../cli/turnAdapter.ts';
@@ -34,7 +35,6 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
   }
   protected validate(session: CliSession, input: TurnRequest): void {
     const planning = input.stage === 'coordination.planning';
-    if (input.images?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 图片输入尚未认证，请换用已支持图片的成员', true);
     if (!input.repairOnly && !planning && (!session.input.writeAccess?.fullAccess || session.input.writeAccess.analysisOnly ||
       ![undefined, 'bypassPermissions'].includes(this.options.permissionMode)))
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'DeepSeek Harness 当前支持原生完整权限；只读分析和项目受限编辑尚未认证', true);
@@ -73,8 +73,12 @@ export class DeepSeekHarnessAdapter extends CliTurnAdapter {
         this.fail(session, turn, 'CAPABILITY_UNSUPPORTED', 'Harness 连接组件需要升级；请运行当前安装目录 runtime-tools/deepseek-harness/setup.cmd 后再继续任务', true);
         return;
       }
+      const mode = turn.input.stage === 'coordination.planning' ? 'planning' : turn.input.repairOnly ? 'format-repair' : 'full';
+      // 图片随消息直接发送给模型：full 模式 execute 帧携带图片字节；
+      // planning/format-repair 协议只接受文字，按原样不带 images。
+      const images = mode === 'full' && turn.input.images?.length ? validatedImages(turn.input) : [];
       this.send(turn, { v: 1, type: 'execute', requestId: turn.requestId, cwd: session.ref.cwd, prompt: turn.input.text,
-        mode: turn.input.stage === 'coordination.planning' ? 'planning' : turn.input.repairOnly ? 'format-repair' : 'full', ...(session.requestedSessionId ? { sessionId: session.requestedSessionId } : {}),
+        mode, ...(images.length ? { images: images.map(image => ({ data: image.dataBase64, mediaType: image.mime })) } : {}), ...(session.requestedSessionId ? { sessionId: session.requestedSessionId } : {}),
         ...(this.options.model ? { model: this.options.model } : {}), ...(this.options.effort ? { effort: this.options.effort } : {}),
         ...(session.input.developerInstructions ? { developerInstructions: session.input.developerInstructions } : {}),
         ...(turn.input.outputSchema ? { outputSchema: turn.input.outputSchema } : {}) });

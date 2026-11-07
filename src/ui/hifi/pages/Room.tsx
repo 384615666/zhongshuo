@@ -788,12 +788,11 @@ function RoomPool({
               return { status: 'failed', error: '当前房间没有可用 AI——请先添加或启用 AI' };
             }
             const draftKey = `room:${roomId}`;
-            const refs = attachmentRefsFromDraft(draftKey, intent);
+            const refs = attachmentRefsFromDraft(draftKey);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
             const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, {
               collaboration: p.collaboration, analysisOnly:p.analysisOnly,
               ...(p.collaboration != null && p.budgetMaxTurns != null ? { deliberationBudget: { maxTurns: p.budgetMaxTurns } } : {}),
-              imageAck: p.imageAck,
               attachmentRanges: attachmentRangesFromDraft(draftKey),
             });
             env.revAtSend = p.draftRev;
@@ -2143,10 +2142,10 @@ function ThreadPanel({
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
             const intent = 'default' as const;
             const draftKey = `thread:${threadId}`;
-            const refs = attachmentRefsFromDraft(draftKey, intent);
+            const refs = attachmentRefsFromDraft(draftKey);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
             if (entityConversationId === '') return { status: 'failed', error: '线程信息尚未装载——稍后重试' };
-            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             env.quoteIds = p.quoteIds;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账

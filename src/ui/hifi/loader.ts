@@ -1999,7 +1999,7 @@ export function defaultDeliberationMaxTurns(rosterSize: number): number {
  * 重造）+body+intent+mentions）。等待/回执/重试/冻结都用这一份。
  * 附件 refs（第五十一轮 H2）：只在 upload 回执明确成功后进入信封——信封不可变原则不变。
  */
-export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { analysisOnly?:boolean; collaboration?:'deliberate'; deliberationBudget?: { maxTurns: number }; imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): PendingSendEnvelope {
+export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { analysisOnly?:boolean; collaboration?:'deliberate'; deliberationBudget?: { maxTurns: number }; attachmentRanges?: Record<string, string> }): PendingSendEnvelope {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   return {
@@ -2014,7 +2014,6 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
         ? { deliberationBudget: { maxTurns: opts.deliberationBudget.maxTurns } }
         : {}),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
-      ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
     },
     targetLabel: `room:${roomId}`,
@@ -2022,7 +2021,7 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
   };
 }
 
-export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): PendingSendEnvelope {
+export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { attachmentRanges?: Record<string, string> }): PendingSendEnvelope {
   const s = getState();
   return {
     commandId,
@@ -2030,7 +2029,6 @@ export function buildDmEnvelope(commandId: string, conversationId: string, body:
     params: {
       target: { kind: 'dm', projectId: s.activeProjectId, conversationId }, body, intent, mentions: [],
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
-      ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
     },
     targetLabel: `dm:${conversationId}`,
@@ -2050,7 +2048,6 @@ export function buildThreadEnvelope(
     mentionIds?:string[];
     collaboration?:'deliberate';
     deliberationBudget?:{maxTurns:number};
-    imageAck?: 'omit-images';
     attachmentRanges?: Record<string, string>;
   },
 ): PendingSendEnvelope {
@@ -2068,7 +2065,6 @@ export function buildThreadEnvelope(
         ?{deliberationBudget:{maxTurns:opts.deliberationBudget.maxTurns}}
         :{}),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
-      ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
     },
     targetLabel: `thread:${threadId}`,
@@ -2078,10 +2074,10 @@ export function buildThreadEnvelope(
 
 /**
  * 草稿附件 → 正式 refs（第五十二轮修订，review-r51 §2）：上传中/失败项拦截（store.uploadItems
- * 为真源）；refs 取**草稿里已就绪的 attachmentId 引用**（上传回执写入）。图片+派发意图不再硬拦
- * ——由 Composer 显式二选一（imageAck='omit-images' 一次性冻结进信封，或改仅记录）。
+ * 为真源）；refs 取**草稿里已就绪的 attachmentId 引用**（上传回执写入）。图片与其它附件同一
+ * 路径直接随消息发送，不再需要额外确认。
  */
-export function attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string } {
+export function attachmentRefsFromDraft(draftKey: string): { refs?: string[]; blockError?: string } {
   const s = getState();
   const items = (s.uploadItems[draftKey] ?? []).filter((x) => x.removed !== true);
   const uploading = items.filter((x) => x.status === 'uploading');
@@ -2091,7 +2087,7 @@ export function attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'r
   const d = getDraftFull(draftKey);
   const ready = d.attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
   if (ready.length === 0) return {};
-  return { refs: ready.map((a) => a.attachmentId), hasImages: intent === 'default' && ready.some((a) => a.kind === 'image_file') };
+  return { refs: ready.map((a) => a.attachmentId) };
 }
 
 /** 表格注入范围（第五十二轮 §6.3）：草稿内已选范围 → attachmentRanges；缺省=服务端有界默认窗。 */

@@ -580,7 +580,7 @@ function renderChips() {
 
 // ---------- 发送（按实际提交信封清算；失败语义分明确拒绝/未知） ----------
 /** r63（review-r62 §5）：发送失败就地显示在发送区（绑定发起目标——切走即清）；事件流保留诊断行。
- * 实际失败原因人话化：空正文（有附件时正文仍必填——附件不是正文替代）、图片能力未认证、
+ * 实际失败原因人话化：空正文（有附件时正文仍必填——附件不是正文替代）、
  * 服务端明确拒绝；草稿与附件一律保留。 */
 function showSendError(message) {
   const el = document.getElementById('send-error');
@@ -593,7 +593,6 @@ function clearSendError() {
   if (el != null) { el.textContent = ''; el.classList.add('hidden'); }
 }
 function humanizeSendError(e) {
-  if (e && e.code === 'IMAGE_INPUT_UNVERIFIED') return '图片输入能力未认证：图片不会作为模型输入发送。请去掉图片附件、改为「仅记录」，或继续发送文字部分（草稿与附件已保留）';
   const msg = String((e && e.message) || e || '未知错误');
   if (/expected string to have >=1 characters/i.test(msg)) return '发送失败：正文不能为空——有附件时也需填写至少一个字符的正文（附件单独发送暂不支持）；草稿与附件已保留';
   return '发送失败：' + msg + '（草稿与附件已保留，可修正后重试）';

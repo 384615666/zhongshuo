@@ -21,11 +21,11 @@ export async function runtimeOptions(kind:string,executable:string|undefined,mod
   if(isExternalRuntimeKind(kind)){
     const adapter=externalRuntimeAdapter(kind,{executable,cwd,model});
     const models=await adapter.listModels();const selected=models.find(m=>m.id===model);
-    return{efforts:selected?.efforts??[],models:models.map(m=>({id:m.id,model:m.id,displayName:m.label})),source:`本机 ${externalRuntimeMetadata(kind).label} 模型清单（无推理调用）`,reason:selected?'按当前模型声明提供等级':'未在当前清单找到模型 ID；可保留手动配置',imageInput:'unsupported'};
+    return{efforts:selected?.efforts??[],models:models.map(m=>({id:m.id,model:m.id,displayName:m.label})),source:`本机 ${externalRuntimeMetadata(kind).label} 模型清单（无推理调用）`,reason:selected?'按当前模型声明提供等级':'未在当前清单找到模型 ID；可保留手动配置',imageInput:'automatic'};
   }
   if(kind==='codex') {
     const adapter=new CodexAppServerAdapter({executable,cwd,requestTimeoutMs:10000});
-    try{const models=await adapter.listModels();const selected=models.find(m=>m.model===model||m.id===model);return {efforts:selected?.supportedReasoningEfforts?.map(e=>e.reasoningEffort)??[],defaultEffort:selected?.defaultReasoningEffort,models,source:'正式 app-server model/list（无模型调用）',reason:selected?'按当前模型声明提供等级':'未在当前 model/list 找到模型 ID',imageInput:selected?.inputModalities?selected.inputModalities.includes('image')?'supported':'unsupported':'automatic'};}finally{await adapter.dispose();}
+    try{const models=await adapter.listModels();const selected=models.find(m=>m.model===model||m.id===model);return {efforts:selected?.supportedReasoningEfforts?.map(e=>e.reasoningEffort)??[],defaultEffort:selected?.defaultReasoningEffort,models,source:'正式 app-server model/list（无模型调用）',reason:selected?'按当前模型声明提供等级':'未在当前 model/list 找到模型 ID',imageInput:'automatic'};}finally{await adapter.dispose();}
   }
-  return {efforts:[],source:'无真实 CLI',reason:'工程运行时没有真实思考等级',imageInput:'unsupported'};
+  return {efforts:[],source:'无真实 CLI',reason:'工程运行时没有真实思考等级',imageInput:'automatic'};
 }

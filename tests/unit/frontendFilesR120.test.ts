@@ -73,7 +73,7 @@ describe('R120 frontend file limits', () => {
     });
       settleUploadReady('draft_r120', `up_r120_${i}`, 'conv_r120', { name: `${i}.txt`, size: 1, attachmentId: `a_r120_${i}`, kind: 'text_file' });
     }
-    expect(attachmentRefsFromDraft('draft_r120', 'record_only').refs).toHaveLength(120);
+    expect(attachmentRefsFromDraft('draft_r120').refs).toHaveLength(120);
   });
 
   it('loads full attachment preview through the full-read command', async () => {

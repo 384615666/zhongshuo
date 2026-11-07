@@ -4,9 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveClaudeConfiguration } from '../../src/adapter/claude/configuration.ts';
-import { CLAUDE_ADAPTER_VERSION, ClaudeCliAdapter, claudeLaunchIdentity } from '../../src/adapter/claude/cliAdapter.ts';
-import { claudeCertificationMismatches } from '../../src/daemon/imageCapability.ts';
-import certification from '../../src/adapter/image-certification-r76.json' with {type:'json'};
+import { ClaudeCliAdapter } from '../../src/adapter/claude/cliAdapter.ts';
+import type { TurnRequest } from '../../src/contracts/runtime.ts';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, {recursive:true,force:true}); });
@@ -152,7 +151,6 @@ describe('R77 configuration identity: no model calls, immutable certificate', ()
     const f=fixture(); const a=resolveClaudeConfiguration(f.cwd,[],f.env);
     writeFileSync(join(f.cwd,'.claude',filename),JSON.stringify({env:{ANTHROPIC_BASE_URL:'https://project.example.test'}}));
     const b=resolveClaudeConfiguration(f.cwd,[],f.env);expect(b.reason).toContain('渠道覆盖');expect(b.reason).toContain(filename);expect(b.configurationKey).not.toBe(a.configurationKey);
-    expect(claudeCertificationMismatches({...certification,reason:b.reason},certification.model,'plan')).not.toEqual([]);
     expect(resolveClaudeConfiguration(f.root,[],f.env).reason).toBeNull(); // exact project cwd isolation
   });
   it('bad or unreadable JSON cannot become the official endpoint or successful identity', () => {
@@ -168,18 +166,7 @@ describe('R77 configuration identity: no model calls, immutable certificate', ()
     writeFileSync(f.settings,JSON.stringify({env:{CLAUDE_CONFIG_DIR:join(f.root,'redirected')}}));expect(resolveClaudeConfiguration(f.cwd,[],f.env).reason).toContain('重定向');f.save();
     writeFileSync(join(f.user,'managed-settings.json'),JSON.stringify({permissions:{defaultMode:'auto'}}));expect(resolveClaudeConfiguration(f.cwd,[],f.env).reason).toContain('托管');
   });
-  it('the frozen R76 certificate stays invalid after the native standing adapter version changed; config restoration does not forge recertification',()=>{
-    const identity={executableHash:certification.executableHash,endpointHash:certification.endpointHash,reason:null};
-    expect(CLAUDE_ADAPTER_VERSION).not.toBe(certification.adapterVersion);
-    const versionMismatch='适配器版本与认证不匹配';
-    expect(claudeCertificationMismatches(identity,certification.model,'plan')).toEqual([versionMismatch]);
-    expect(claudeCertificationMismatches({...identity,executableHash:'different'},certification.model,'plan')).toEqual(['CLI 字节版本与认证不匹配',versionMismatch]);
-    expect(claudeCertificationMismatches({...identity,endpointHash:'different'},certification.model,'plan')).toEqual(['有效渠道与认证不匹配',versionMismatch]);
-    expect(claudeCertificationMismatches(identity,'different','plan')[0]).toContain('模型ID');
-    expect(claudeCertificationMismatches(identity,certification.model,'auto')[0]).toContain('权限');
-    expect(claudeCertificationMismatches(identity,certification.model,'plan')).toEqual([versionMismatch]);
-  });
-  it('formal adapter checks captured identity before spawn; file/env/CLI changes rejected, restore reaches spawn', async () => {
+  it('images no longer carry a launch-identity gate: a changed configuration still reaches spawn without an image rejection', async () => {
     const f=fixture();vi.stubEnv('CLAUDE_CONFIG_DIR',f.user);
     const executable=join(f.root,'fixture.cjs');writeFileSync(executable,'// zero-call fixture');
     let spawns=0;const options={executable,model:'deepseek-flash',permissionMode:'plan' as const};
@@ -187,11 +174,10 @@ describe('R77 configuration identity: no model calls, immutable certificate', ()
     const session=await adapter.openSession({cwd:f.cwd,projectId:'p',memberId:'m',threadId:'th',taskId:'t',policyId:'policy-analyze',sessionGeneration:0});
     const raw=Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010800000000','hex');
     const image={artifactId:'own',mime:'image/png' as const,hash:createHash('sha256').update(raw).digest('hex'),dataBase64:raw.toString('base64')};
-    const key=claudeLaunchIdentity(options,f.cwd).identityKey;
-    const input={turnId:'t',dispatchKey:'d',inputBundleId:'b',text:'',images:[image],imageConfigurationKey:key,policyId:'policy-analyze',taskRevision:0};
-    f.save('https://changed.example.test');await expect(adapter.startTurn(session,input)).rejects.toThrow('图片启动配置');expect(spawns).toBe(0);
-    f.save();writeFileSync(executable,'// replacement executable');await expect(adapter.startTurn(session,input)).rejects.toThrow('配置');expect(spawns).toBe(0);
-    writeFileSync(executable,'// zero-call fixture');await expect(adapter.startTurn(session,input)).rejects.toThrow('fixture spawn reached');expect(spawns).toBe(1);
+    const input:TurnRequest={turnId:'t',dispatchKey:'d',inputBundleId:'b',text:'看图',images:[image],policyId:'policy-analyze',taskRevision:0};
+    f.save('https://changed.example.test');
+    // R194：图片启动配置不再参与准入——配置变化也直接到达 spawn（图片随消息字节发送）。
+    await expect(adapter.startTurn(session,input)).rejects.toThrow('fixture spawn reached');expect(spawns).toBe(1);
     await adapter.close(session);
   });
 });

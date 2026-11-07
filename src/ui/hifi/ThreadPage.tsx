@@ -478,14 +478,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             onSend={(p): Promise<FormalSendOutcome> => (async () => {
               const intent = 'default' as const;
               const draftKey = `thread:${threadId}`;
-              const refs = attachmentRefsFromDraft(draftKey, intent);
+              const refs = attachmentRefsFromDraft(draftKey);
               if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
               if (conversationId === '') return { status: 'failed', error: '线程归属未装载，缺少会话编号；稍后重试' };
               const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, {
                 mentionIds:p.mentionIds,
                 ...(p.collaboration?{collaboration:p.collaboration}:{}),
                 ...(p.collaboration&&p.budgetMaxTurns!=null?{deliberationBudget:{maxTurns:p.budgetMaxTurns}}:{}),
-                imageAck:p.imageAck,
                 attachmentRanges:attachmentRangesFromDraft(draftKey),
               });
               env.revAtSend = p.draftRev;

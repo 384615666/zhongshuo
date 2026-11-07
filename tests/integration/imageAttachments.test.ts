@@ -1,9 +1,9 @@
 /**
- * DEV-24 图片附件首包（第二十八轮四）：四能力如实分列——
+ * DEV-24 图片附件首包（第二十八轮四；R194 起图片不再有输入能力门）：
  * ①保存原件（magic bytes 内容类型校验——扩展名不作依据；尺寸/面积按格式头限幅；损坏/截断/
  * 超限明确拒绝；内容寻址 {appData}/blobstore/{hash}.bin）②预览（audience+实根+sha256 原件
  * 核对；mime/尺寸/dataUrl——渲染由 <img>）③OCR=未实现（明确 unsupported）④模型图片输入=
- * 未认证（注入链路只注文本——startTurn 输入不含图片数据，不发路径冒充已读）。
+ * 随消息直接发送（默认意图引用图片即发送，图片字节进入 TurnRequest.images；所有 AI 都能看图）。
  * 消息可带图引用（四通道沿用）；图片评论随分批归属（comment.add 对 image 明确拒绝）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
@@ -17,6 +17,7 @@ import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
+import type { TurnRequest } from '../../src/contracts/runtime.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
@@ -111,7 +112,7 @@ describe('DEV-24 图片首包：保存原件（magic 校验+限幅+内容寻址�
 });
 
 describe('DEV-24 图片首包：预览/OCR/模型输入如实分列', () => {
-  it('预览返回 mime/尺寸/dataUrl+原件 hash 核对；OCR=unsupported；模型输入=unverified；跨会话拒绝', async () => {
+  it('预览返回 mime/尺寸/dataUrl+原件 hash 核对；OCR=unsupported；跨会话拒绝', async () => {
     const env = makeEnv();
     const png = makePng(32, 32);
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadImage', { conversationId: 'dm_a', filename: '预览用.png', contentBase64: png.toString('base64') });
@@ -120,7 +121,7 @@ describe('DEV-24 图片首包：预览/OCR/模型输入如实分列', () => {
     expect(pv.width).toBe(32);
     expect(pv.dataUrl.startsWith('data:image/png;base64,')).toBe(true);
     expect(pv.ocr).toBe('unsupported'); // OCR 如实未实现
-    expect(pv.modelInput).toBe('depends-on-target-member'); // 模型图片输入未认证
+    expect(pv.modelInput).toBe('sent-with-message'); // R194：图片字节随消息直接发送给模型
     expect(pv.revision).toBe(1);
     // 原件被改写 → 完整性拒绝。
     const blobPath = (env.db.prepare('SELECT blob_path FROM artifacts WHERE id = ?').get(up.attachmentId) as { blob_path: string }).blob_path;
@@ -137,32 +138,28 @@ describe('DEV-24 图片首包：预览/OCR/模型输入如实分列', () => {
     expect(String(cross.error?.message)).toContain('audience');
     env.close();
   });
-  it('消息可带图引用（四通道沿用）+ 能力门：无确认拒发；确认后注入「图片未发送」说明；图片评论随分批归属拒绝', async () => {
+  it('消息可带图引用（四通道沿用）：默认意图直接发送，图片字节进入 TurnRequest；图片评论随分批归属拒绝', async () => {
     const env = makeEnv();
-    const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadImage', { conversationId: 'dm_a', filename: '带图执行.png', contentBase64: makePng(8, 8).toString('base64') });
-    // 能力门（第二十九轮三）：未确认 → 拒发（不悄悄省略图片冒充成功）。
-    const blocked = await env.cmdRaw('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
-    expect(blocked.ok).toBe(false);
-    expect(String(blocked.error?.message)).toContain('IMAGE_INPUT_UNVERIFIED');
-    // 确认仅发送文字 → 落库+派发；注入明示图片未发送（不含图片数据/hash）。
-    const send = await env.cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId], imageAck: 'omit-images' });
+    const png = makePng(8, 8);
+    const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadImage', { conversationId: 'dm_a', filename: '带图执行.png', contentBase64: png.toString('base64') });
+    // R194：引用图片的默认意图发送不再需要额外确认（图片输入能力门已取消）。
+    const send = await env.cmd<{ messageId: string; taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
     expect(send.taskId).toBeTruthy();
     const att = (env.db.prepare('SELECT count(*) c FROM message_attachments WHERE artifact_id = ?').get(up.attachmentId) as { c: number }).c;
     expect(att).toBe(1); // 消息-图片关联落库（四通道沿用）
+    const bodyRow = env.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(send.messageId) as { body_json: string };
+    expect((JSON.parse(bodyRow.body_json) as { imageInput?: string }).imageInput).toBe('include'); // 图片随消息发送
+    // 装配层：图片字节进入 TurnRequest.images，注入文本不再声称「未发送」。
     const { worker, adapter } = env.makeWorker();
+    let input: TurnRequest | undefined;
+    const original = adapter.startTurn.bind(adapter);
+    adapter.startTurn = async (session, request) => { input = request; await original(session, request); };
     await worker.runOnce();
-    expect(adapter.startTurnLog.length).toBe(1);
-    expect(adapter.startTurnLog[0]!.text).toContain('【图片附件未发送】'); // 明示未发送+用户确认
-    expect(adapter.startTurnLog[0]!.text).not.toContain('data:image'); // 注入不含图片数据
-    // hash 只随「未发送」附件条目出现一次（资源身份可追溯），不作为已读材料重复注入。
-    {
-      const t = adapter.startTurnLog[0]!.text;
-      const marker = up.hash.slice(0, 16);
-      const count = t.split(marker).length - 1;
-      expect(count).toBe(1);
-    }
-    const fs = await import('node:fs');
-    void fs;
+    expect(input?.images).toHaveLength(1);
+    expect(Buffer.from(input!.images![0]!.dataBase64, 'base64')).toEqual(png); // 实际图片字节，而非文件名冒充
+    expect(input!.images![0]!.hash).toBe(up.hash);
+    expect(input?.text).toContain('【图片输入附件】');
+    expect(input?.text).not.toContain('图片附件未发送');
     // 图片评论随分批归属——本批明确拒绝（文本/代码/Markdown 首批）。
     const cmt = await env.cmdRaw('attachment.comment.add', { attachmentId: up.attachmentId, body: '图片评论', expectedHash: up.hash, expectedRevision: 1 });
     expect(cmt.ok).toBe(false);

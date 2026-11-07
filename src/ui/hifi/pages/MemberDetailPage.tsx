@@ -131,7 +131,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>保存的权限模式</dt><dd>{runtimePermissionLabel(runtime?.binding?.permissionMode,effective?.kind)}</dd>
                 <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}</dd>
                 <dt>文件访问权限</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{userFacingSystemText(runtime.permissionExecution.reason ?? '')}</div>:null}</dd>
-                <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}</dd>
+                <dt>图片输入</dt><dd>自动传递图片</dd>
               </dl>
               {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} disabled={project.archivedAt!=null||project.removedAt!=null} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>AI 设置…</button> : null}
             </div>

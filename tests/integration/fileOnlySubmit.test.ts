@@ -4,8 +4,8 @@
  *  ① room_root / dm 文件-only 发送：空正文+就绪附件 → 消息落库（body 空）、任务标题=📎 文件名
  *     （不合成假正文）；AI 意图建任务/仅记录零任务零派发键。
  *  ② 真正空白（无正文且无附件）→ VALIDATION_INVALID（不静默、不占位正文）。
- *  ③ 图片门空正文：仅图片附件+「仅发送文字」+空正文 → EMPTY_MODEL_INPUT（不得形成空模型输入）；
- *     加一段正文后同参数通过（有可用文字）。
+ *  ③ 图片-only：空正文+仅图片附件+默认意图直接发送（R194 取消图片能力门与空模型输入限制）；
+ *     record_only 记 'local-only' 只保存原件；旧 imageAck 字段被忽略。
  *  ④ attachment.readFull：全文无截断（>64KB 文本尾部可读——与提取窗分列）；originalFile：
  *     原件字节 sha256==记录 hash（文本类 .txt）。
  *  ⑤ member.runtime effective：未绑定成员 source='global-default'（ZS_RUNTIME 语义）；
@@ -83,17 +83,27 @@ describe('R66 P3：只有文件也能发送（用户已批准语义）', () => {
     expect(e2.ok).toBe(false);
   });
 
-  it('③ 图片门空正文：仅图片+仅发送文字 → EMPTY_MODEL_INPUT；有文字则通过', async () => {
+  it('③ 图片-only 直接发送；旧 imageAck 被忽略；record_only 只保存原件', async () => {
     // 1×1 PNG（magic/尺寸合法）。
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
     const dm = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
     const img = await cmd<{ attachmentId: string }>('attachment.uploadImage', { conversationId: dm.conversationId, filename: '图.png', contentBase64: png.toString('base64') });
-    const blocked = await raw('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: dm.conversationId }, body: '', intent: 'default', mentions: [], attachmentRefs: [img.attachmentId], imageAck: 'omit-images' });
-    expect(blocked.ok).toBe(false);
-    expect(blocked.error?.message).toMatch(/EMPTY_MODEL_INPUT/);
-    // 加一段正文后同参数通过（有可用文字）。
+    // R194：图片-only（空正文+仅图片附件）允许发送；默认意图下图片字节随消息发送。
+    const imageOnly = await cmd<{ messageId: string; taskId: string | null }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: dm.conversationId }, body: '', intent: 'default', mentions: [], attachmentRefs: [img.attachmentId] });
+    expect(imageOnly.messageId).toBeTruthy();
+    expect(imageOnly.taskId).toBeTruthy();
+    const imageOnlyRow = db.prepare('SELECT body_json FROM messages WHERE id = ?').get(imageOnly.messageId) as { body_json: string };
+    expect((JSON.parse(imageOnlyRow.body_json) as { imageInput?: string }).imageInput).toBe('include');
+    // 带正文 + 旧 imageAck=omit-images：字段仍被 schema 接受但完全忽略，图片照常发送。
     const ok = await cmd<{ messageId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: dm.conversationId }, body: '看这张图说明什么', intent: 'default', mentions: [], attachmentRefs: [img.attachmentId], imageAck: 'omit-images' });
     expect(ok.messageId).toBeTruthy();
+    const okRow = db.prepare('SELECT body_json FROM messages WHERE id = ?').get(ok.messageId) as { body_json: string };
+    expect((JSON.parse(okRow.body_json) as { imageInput?: string }).imageInput).toBe('include');
+    // record_only：只保存原件（local-only），零任务。
+    const rec = await cmd<{ messageId: string; taskId: string | null }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: dm.conversationId }, body: '', intent: 'record_only', mentions: [], attachmentRefs: [img.attachmentId] });
+    expect(rec.taskId).toBeNull();
+    const recRow = db.prepare('SELECT body_json FROM messages WHERE id = ?').get(rec.messageId) as { body_json: string };
+    expect((JSON.parse(recRow.body_json) as { imageInput?: string }).imageInput).toBe('local-only');
     // dm 文件-only（非图片）：空正文+就绪文本附件 → 建任务+标题推导。
     const txt = await cmd<{ attachmentId: string }>('attachment.uploadText', { conversationId: dm.conversationId, filename: 'r66.md', content: 'x'.repeat(10) });
     const fo = await cmd<{ messageId: string; taskId: string | null }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: dm.conversationId }, body: '', intent: 'record_only', mentions: [], attachmentRefs: [txt.attachmentId] });

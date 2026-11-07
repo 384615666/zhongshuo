@@ -129,9 +129,9 @@ export function RoomPage({ roomId }: { roomId: string }) {
             return { status: 'failed', error: '该房间没有启用成员，无法发送；可先用「仅记录」保存' };
           }
           const draftKey = `room:${roomId}`;
-          const refs = attachmentRefsFromDraft(draftKey, intent);
+          const refs = attachmentRefsFromDraft(draftKey);
           if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { attachmentRanges: attachmentRangesFromDraft(draftKey) });
           env.revAtSend = p.draftRev;
           env.quoteIds = p.quoteIds;
           const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）

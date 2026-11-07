@@ -102,12 +102,27 @@ describe('DeepSeek Harness structured profile and actual child lifecycle',()=>{
     expect(events.some(e=>e.kind==='turn.started'||e.kind==='session.ready'||e.kind==='turn.completed')).toBe(false);
     expect(await a.waitForTurnExit(s,'turn',3000)).toMatchObject({exitConfirmed:true});
   });
-  it('rejects unsupported scopes, images and malformed repair requests before starting any child',async()=>{
+  it('rejects unsupported scopes and malformed repair requests before starting any child; images reach the model only in full mode',async()=>{
     let calls=0;const a=adapter('success',()=>{calls++;});const readOnly=await a.openSession({...input(),writeAccess:undefined});
     await expect(a.startTurn(readOnly,request())).rejects.toMatchObject({code:'CAPABILITY_UNSUPPORTED',notStarted:true});
     const full=await a.openSession(input());await expect(a.startTurn(full,{...request(),repairOnly:true})).rejects.toMatchObject({notStarted:true});
-    await expect(a.startTurn(full,{...request(),images:[{artifactId:'a',hash:'h',mime:'image/png',dataBase64:'AA=='}]})).rejects.toMatchObject({notStarted:true});
     expect(calls).toBe(0);
+    // R194：图片随消息直接发送——full 模式 execute 帧携带图片字节；planning/format-repair 只接受文字。
+    const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1kAAAAASUVORK5CYII=','base64');
+    const {createHash}=await import('node:crypto');
+    const image={artifactId:'a',hash:createHash('sha256').update(png).digest('hex'),mime:'image/png' as const,dataBase64:png.toString('base64')};
+    const imageSession=await a.openSession(input());await a.startTurn(imageSession,{...request('看图'),images:[image]});
+    const events=await terminal(a,imageSession);const done=events.find(e=>e.kind==='turn.completed');
+    expect(done?.kind).toBe('turn.completed');
+    if(done?.kind==='turn.completed'){const echoed=JSON.parse(done.finalText!) as {mode:string;images:Array<{data:string;mediaType:string}>|null};
+      expect(echoed.mode).toBe('full');expect(echoed.images).toHaveLength(1);expect(echoed.images![0]!.mediaType).toBe('image/png');
+      expect(Buffer.from(echoed.images![0]!.data,'base64')).toEqual(png);}
+    const planning=await a.openSession({...input(),writeAccess:undefined});
+    await a.startTurn(planning,{...request('计划'),stage:'coordination.planning',outputSchema:{type:'object'},images:[image]});
+    const planEvents=await terminal(a,planning);const planDone=planEvents.find(e=>e.kind==='turn.completed');
+    if(planDone?.kind==='turn.completed'){const echoed=JSON.parse(planDone.finalText!) as {mode:string;images:unknown};
+      expect(echoed.mode).toBe('planning');expect(echoed.images).toBeNull();}
+    expect(calls).toBe(2);
   });
   it('carries the result schema and confines repair to the separate tool-free mode',async()=>{
     const a=adapter(),s=await a.openSession({...input(),writeAccess:undefined});

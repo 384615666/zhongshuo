@@ -36,7 +36,6 @@ import { comparisonKey } from './directoryIdentity.ts';
  * - 验收策略收尾：user_review → REVIEW + pending 交付；auto_deliver → DONE + not_required（§10.5）。
  * - 迟到完成不复活停止：turn 已 STOPPING 时完成事件走取消收尾并留 lateCompletion 审计（RT-06 形态）。
  */
-import { memberImageCapability } from './imageCapability.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { realpathSync } from 'node:fs';
@@ -969,13 +968,10 @@ export class DispatchWorker {
       }
       const baselineContentNote = baselineContentUnavailable.length === 0 ? null
         : `项目内有 ${baselineContentUnavailable.length} 个文件超过内容级前像上限，无法内容级撤销；这不降低用户明确选择的执行权限，只有在用户目标或协作角色明确只读时才按只读执行。`;
-      const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
-      const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
       const executionBasis=generalRequest||coordination?.request?this.db.prepare(`SELECT t.current_delivery_id deliveryId,d.revision,d.manifest_hash manifestHash FROM tasks t LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?`).get(task.id) as {deliveryId:string|null;revision:number|null;manifestHash:string|null}:null;
       const preparation = assembleDirectTurnWithAttachmentCache({
         db: this.db,
         writeAccess,
-        allowImages: imageCapabilityAtAssembly.status === 'supported',
         coordinationNote:[coordination?.note,baselineContentNote,executionBasis?`本条为用户新发的消息，按当前问题回应；只有明确要求修改时才修改文件。执行时读取的当前成果：${JSON.stringify(executionBasis)}。历史返工意见是上下文，不是本条的自动执行授权。`:null].filter(Boolean).join('\n')||undefined,
         coordination:coordination?{phase:coordination.kind,runId:coordination.run?.run_id??null,role:coordination.kind==='child'?coordination.run.role:'coordinator'}:undefined,
         communicationContract:communicationForTurn(this.db,task.id,member.id,coordination?.kind,automatic?.phase==='planning'?runId:coordination?.run?.run_id,executionDispatchKey),
@@ -1204,13 +1200,6 @@ export class DispatchWorker {
       }
       if(this.roomIsArchived(task))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','房间已归档；本次尚未开始，恢复房间后再继续',true);
 
-      const imageCapabilityAtLaunch = memberImageCapability(this.db, member.id);
-      if ((assembled.value.images?.length ?? 0) > 0 && (imageCapabilityAtLaunch.status !== 'supported'
-        || imageCapabilityAtLaunch.identityKey !== imageCapabilityAtAssembly.identityKey
-        || JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf())) !== imageBindingAtAssembly)) {
-        startupPhase = 'session-record'; // No turn request has been made; close the opened session normally.
-        throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '图片输入认证或成员运行时在派发前已变化；原消息与原件保留，未发送图片');
-      }
       if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(dispatchWriteScope??coordination?.request?.writeScopeJson)).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
       assertCoordinationDispatch(this.db,task.id,executionDispatchKey,turnId);
       if(partialClarificationRefs.length)verifyHandoffFiles({files:changeSetFilesForDelivery(this.db,task.id,partialClarificationRefs)},project.canonical_path);
@@ -1232,7 +1221,6 @@ export class DispatchWorker {
         stage: coordination==null?`direct.work`:`coordination.${coordination.kind}`,
         repairOnly: isRepairDispatch,
         images: assembled.value.images,
-        imageConfigurationKey: imageCapabilityAtLaunch.identityKey ?? undefined,
         policyId: writeAccess.policyId,
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
@@ -1746,12 +1734,10 @@ export class DispatchWorker {
     const memberScope=frozen.find(m=>m.memberId===step.memberId);
     let writeAccess:ReturnType<typeof effectiveTaskWriteAccess>;
     let materials:Awaited<ReturnType<typeof assembleDirectTurnWithAttachmentCache>>;
-    const imageBinding=JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()));
-    const imageCapability=memberImageCapability(this.db,step.memberId);
     try{
       if(frozen.length && !memberScope?.writeScope)throw Error(memberScope?.unavailableReason??'成员未包含在发送时的配置快照内');
       writeAccess=effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined);
-      const preparation=assembleDirectTurnWithAttachmentCache({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess,skipFileDiscovery:true,
+      const preparation=assembleDirectTurnWithAttachmentCache({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),writeAccess,skipFileDiscovery:true,
         task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq},
         identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
         budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns,...(budget.callBudget?{callBudget:budget.callBudget}:{})}});
@@ -1915,9 +1901,7 @@ export class DispatchWorker {
       };
       if(!this.deliberationMayLaunch(task.id,run.id)){await cancelUnavailablePeer();return;}
 
-      if(effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined).identityKey!==writeAccess.identityKey
-        ||JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()))!==imageBinding
-        ||(materials.value.images?.length&&memberImageCapability(this.db,step.memberId).identityKey!==imageCapability.identityKey))throw Error('研讨成员实际配置在启动前变化；未发送');
+      if(effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined).identityKey!==writeAccess.identityKey)throw Error('研讨成员实际配置在启动前变化；未发送');
       if(!this.deliberationMayLaunch(task.id,run.id)){await cancelUnavailablePeer();return;}
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
       this.preRegisterTurnProcess(turnId, run.id, step.memberId);
@@ -1930,7 +1914,6 @@ export class DispatchWorker {
         stage: assembly.value.stageKey,
         repairOnly: isRepair,
         images:materials.value.images,
-        imageConfigurationKey:imageCapability.identityKey??undefined,
         outputSchema:deliberationOutputSchema(step.stage),
         policyId: writeAccess.policyId,
         taskRevision: 0,

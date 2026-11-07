@@ -422,12 +422,6 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       args.push('--resume', resumeId);
     }
     args.push(...(this.options.extraArgs ?? []));
-    if (input.imageConfigurationKey != null && input.images?.length) {
-      const identity = claudeLaunchIdentity(this.options, session.cwd);
-      if (identity.reason != null || identity.identityKey !== input.imageConfigurationKey) {
-        throw new AdapterCallError('CAPABILITY_UNSUPPORTED', `图片启动配置已变化或无法核实：${identity.reason ?? 'CLI、模型、权限或配置快照不匹配'}；原件保留`);
-      }
-    }
     // A native system channel, separate from user text/image stdin. Apply after
     // every permission branch rebuilds args, including resumed CLI processes.
     // File transport avoids Windows command-line limits and exposing the prompt

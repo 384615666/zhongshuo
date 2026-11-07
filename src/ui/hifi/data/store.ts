@@ -225,7 +225,7 @@ export function useStore<T>(selector: (s: HifiState) => T): T {
 /**
  * 文件引用直写草稿（r61 G7 重做）：预览「引用文件」把**资源引用卡**写进目标草稿的
  * attachments（同上传附件同一正式链路——发送时进 attachmentRefs，服务端按 ID 做
- * audience/完整性/范围/图片门；正文保持用户文字，全文不自动粘贴）。
+ * audience/完整性/范围；正文保持用户文字，全文不自动粘贴）。
  * - 原子：ready 芯片（uploadItems）与草稿 ref 在同一次调用内写入（JS 单线程无中间窗口）；
  * - 去重：同 attachmentId+revision 已在草稿→existed（同文件同版本不积压；新版本=新行）；
  * - 失败零写入：目标缺失/参数非法返回错误，不产生幽灵芯片或幽灵 ref。

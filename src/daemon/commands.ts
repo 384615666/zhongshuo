@@ -69,7 +69,7 @@ import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate,isDispatchGateHeld } from '../persistence/daemonState.ts';
-import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
+import { memberImageCapability } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
 import {runtimeOptions} from './runtimeOptions.ts';
 import { archiveListParams, readArchiveIndex, ArchiveCursorError } from './archiveIndex.ts';
@@ -180,7 +180,7 @@ export interface DaemonCommandDeps {
 }
 
 
-function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?: ImageCapabilityReadContext) {
+function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string) {
   const binding = readMemberRuntimeBinding(db, memberId);
   if (binding == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${memberId}`);
   const installation = binding.installationId == null ? null
@@ -198,7 +198,7 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const permissionExecution=isRealRuntimeKind(effective.kind)?full?{effective:'CLI 完整权限',reason:'新任务使用原生完整权限，可读写电脑并执行命令；原有只读任务不自动升级。'}:isExternalRuntimeKind(effective.kind)?{effective:'未支持',reason:'当前渠道仅支持 CLI 原生完整权限；只读及项目范围模式尚未认证，派发会明确拒绝。'}:{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':explicitReadonly?'成员保存的是只读档；项目范围授权不会改变该档，已有任务保留原权限快照。':!access.authorized?'项目范围编辑档尚未获得本项目授权；这不代表完整权限成员受限。':!scopeUsable?'授权目录身份已变化或不可用；未开放写入。':writeCapability.reason}:null;
   return { binding, installation, permissionExecution, writeCapability, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
-    imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
+    imageInput: memberImageCapability(db, memberId), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
 }
 
 function taskModeFromRoute(route: unknown): 'DIRECT' | 'AUTO' | 'DELIBERATE' | null {
@@ -361,7 +361,7 @@ const messageSubmitParams = z.strictObject({
     z.strictObject({ kind: z.literal('all') }),
   ])),
   attachmentRefs: z.array(z.string().min(1)).optional(),
-  // 图片能力门（第二十九轮三）：omit-images=用户明确选择仅发送文字（注入如实注明图片未发送）。
+  // 兼容旧持久化信封字段：图片能力门已取消（所有 AI 都可看图），收到也完全忽略。
   imageAck: z.literal('omit-images').optional(),
   collaboration:z.literal('deliberate').optional(),
   analysisOnly:z.boolean().optional(),
@@ -483,7 +483,7 @@ function reviewPolicyOf(db: ZhongshuoDatabase, projectId: string): 'auto_deliver
  * ref=artifacts.id；上传侧（attachment.upload*）已校验 audience/归档/大小——此处对每个
  * 引用再核：存在、kind 支持、**归属会话与提交目标一致**（跨会话引用=audience 拒绝）。
  * 不存在/不支持/跨会话都明确拒绝——绝不静默丢附件。第二十九轮三/四：图片与 Office 类
- * 进引用面（图片走能力门 imageGate；Office 类注入走提取缓存+可选范围）。
+ * 进引用面（图片随消息直接发送给模型，无能力门；Office 类注入走提取缓存+可选范围）。
  */
 const ATTACHABLE_KINDS = [...(ATT_TEXT_KINDS as readonly string[]), 'image_file', 'pdf_file', 'docx_file', 'sheet_file', 'slides_file'] as const;
 function resolveAttachmentRefs(
@@ -503,36 +503,6 @@ function resolveAttachmentRefs(
     out.push({ artifactId: attId, displayName: att.source_name ?? attId, hash: att.hash, kind: att.kind });
   }
   return out;
-}
-
-/**
- * 图片能力门（R76）：按实测 CLI/适配器/渠道/模型组合判断，未认证组合不能宣称模型已读图
- * ——引用图片附件且本次会派发时，不允许悄悄省略图片后以任务成功冒充处理完成。用户须明确
- * 选择：仅发送文字（imageAck:"omit-images"——组装注入明示「图片未发送+用户已确认」）或
- * 仅记录（record_only，零派发）。保存/预览不受此门影响。
- */
-function assertImageGate(
-  resolved: Array<{ artifactId: string; displayName: string; kind: string }>,
-  willDispatch: boolean,
-  imageAck: string | undefined,
-  /** R66 P3：正文（文件-only 语义下可为空）——仅图片+「继续文字」+空正文会形成**空模型输入**。 */
-  bodyForModel?: string,
-  imagesSupported = false,
-): void {
-  if (!willDispatch) return; // record_only/记录串/无派发路由：不进模型，无门禁
-  const images = resolved.filter((a) => a.kind === 'image_file');
-  if (images.length === 0) return;
-  if (imageAck === 'omit-images') {
-    // 「仅发送文字」但没有任何可用文字（正文空且其余附件也全是图片——其余 kind 均有文本
-    // 提取注入，不在此列）：不得形成空模型输入，给出可行选择（加文字或改仅记录）。
-    const nonImages = resolved.filter((a) => a.kind !== 'image_file');
-    if ((bodyForModel ?? '').trim().length === 0 && nonImages.length === 0) {
-      throw new DaemonCommandError('VALIDATION_INVALID', 'EMPTY_MODEL_INPUT：已选择「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）。请先添加文字，或改为「仅记录」（intent:"record_only"——只保存消息与文件，不派发不扣预算），或选择其他附件。');
-    }
-    return; // 用户明确选择仅发送文字（组装侧如实注入说明）
-  }
-  if (imagesSupported) return;
-  throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `IMAGE_INPUT_UNVERIFIED：目标成员的模型图片输入能力未认证，不能发送图片后宣称模型已读。请明确选择其一：仅发送文字（imageAck:"omit-images"——消息与注入文本将注明图片未发送及用户确认）或仅记录（intent:"record_only"，不派发）。${images.map((i) => i.displayName).join('、')}`);
 }
 
 /** 注入范围校验（第二十九轮四）：仅表格类；格式与窗口边界在提交时早失败（不静默截别人选的范围）。 */
@@ -734,7 +704,8 @@ async function ensureDocumentCache(
 }
 
 /** 消息-附件关联（与消息插入同一事务调用——消息落库与关联原子）。range_spec=表格类注入
- * 范围（第二十九轮四，迁移 036；已在提交时校验合法）。 */
+ * 范围（第二十九轮四，迁移 036；已在提交时校验合法）。imageMode：record_only 记为
+ * 'local-only'（只保存原件不派发），其余一律 'include'（图片随消息直接发送给模型）。 */
 function attachMessageRefs(
   db: ZhongshuoDatabase,
   messageId: string,
@@ -1626,9 +1597,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const inProject = new Set(rows.map(r => r.id));
         const ids = selected ?? rows.map(r => r.id);
         if (ids.some(id => !inProject.has(id))) throw new DaemonCommandError('VALIDATION_INVALID', '批量读取中的成员不属于目标项目');
-        const readContext: ImageCapabilityReadContext = new Map(); // Bounded to this one read command, not a cache across polls or sends.
         const items = ids.map(memberId => {
-          try { return { memberId, info: memberRuntimeInfo(deps.db, memberId, readContext) }; }
+          try { return { memberId, info: memberRuntimeInfo(deps.db, memberId) }; }
           catch (error) { return { memberId, error: { code: error instanceof DaemonCommandError ? error.code : 'STORAGE_UNAVAILABLE', message: (error as Error).message } }; }
         });
         return withCommandId({ ok: true, data: { projectId: params.projectId, items, snapshot: 'one-read-request', dispatchRecheck: 'independent-before-send-and-spawn' } });
@@ -1785,7 +1755,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             assertThreadTaskReady(deps.db,target.threadId);
             const selected=selectThreadRecipients(deps.db,target.threadId,params.mentions as MentionNode[],undefined,params.collaboration,target);
             willDispatch=true;members=selected.candidateIds;routedMode=selected.route.kind==='dispatch'?selected.route.mode:null;
-          }catch(error){return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:(error as Error).message,supported:false,members:[]}});}
+          }catch(error){return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:(error as Error).message,supported:true,members:[]}});}
         }
         if (target.kind === 'dm') {
           const peer = dmPeerOf(deps.db, target.conversationId); if (peer != null) members = [peer.principal_id];
@@ -1807,7 +1777,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return withCommandId({ok:true,data:{willDispatch,modificationAuthorized:reason==null,reason:reason??'项目内文件编辑；Shell、网络工具与委派未开放，派发前再次核对授权与配置'}});
         }
         const capabilities = members.map((id) => memberImageCapability(deps.db, id));
-        return withCommandId({ ok: true, data: { willDispatch, supported: !willDispatch || capabilities.length > 0 && capabilities.every((c) => c.status === 'supported'), members: capabilities } });
+        // 图片能力门已取消：所有 AI 都能看图，恒 supported（members 保留供界面展示当前执行配置）。
+        return withCommandId({ ok: true, data: { willDispatch, supported: true, members: capabilities } });
       }
       case 'taskNotification.poll': return withCommandId({ok:true,data:pollTaskNotifications(deps.db,deps.localUserId,env.params)});
       case 'taskNotification.claim': return withCommandId({ok:true,data:claimTaskNotification(deps.db,deps.localUserId,env.params)});
@@ -1969,7 +1940,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 }
               }
               if (thread.root_task_id == null && params.intent==='record_only') {
-                // 记录串（E1）：讨论线程永不唤醒 agent——默认仍是保存记录（图片门不适用：零派发）。
+                // 记录串（E1）：讨论线程永不唤醒 agent——默认仍是保存记录（零派发，只保存原件）。
                 const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
                 assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
                 const saved = insertThreadMessage(deps.db, {
@@ -1984,7 +1955,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                   taskId: null,
                   replyToMessageId: target.replyToMessageId,
                 });
-                attachMessageRefs(deps.db, saved.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
+                attachMessageRefs(deps.db, saved.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : 'include');
                 return saved;
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
@@ -2002,7 +1973,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 if(thread.root_task_id)continueStoppedTask(deps.db,thread.root_task_id);
               }
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
-              assertImageGate(resolvedAtts,params.intent==='default',params.imageAck,params.body,(selection?.recipientIds??[]).every(id=>memberImageCapability(deps.db,id).status==='supported'));
               assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
               let threadCallBudget:{maxTurns:number;callBudget:FrozenCallBudgetPolicy}|undefined;
               if(selection?.route.kind==='dispatch'){
@@ -2030,7 +2000,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 taskId: thread.root_task_id,
                 replyToMessageId: target.replyToMessageId,
               });
-              attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
+              attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : 'include');
               deps.db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.conversationIntent',?) WHERE id=?").run(params.intent,message.messageId);
               if(selection){
                 if(!thread.root_task_id)thread.root_task_id=createTaskForRecordThread(deps.db,thread.id,message.messageId,taskTitleOf(params.body,resolvedAtts.map(a=>a.displayName)),selection,reviewPolicyOf(deps.db,target.projectId));
@@ -2050,8 +2020,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               throw new DaemonCommandError('VALIDATION_INVALID', '私信不接受独立研讨预算或协作模式；本次草稿保留');
             }
             const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
-            const imagePeer = dmPeerOf(deps.db, target.conversationId);
-            assertImageGate(resolvedAtts, params.intent === 'default', params.imageAck, params.body, imagePeer != null && memberImageCapability(deps.db, imagePeer.principal_id).status === 'supported'); // 默认意图=派发（能力门先于落库；空正文+仅图片+仅文字=空模型输入拒）
             assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
             const conv = dmConversationOf(deps.db, target.conversationId);
             if (conv == null || conv.kind !== 'dm' || conv.project_id !== target.projectId) {
@@ -2080,7 +2048,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 if (r.taskId == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', '私信执行任务未建立；本次未提交，草稿保留');
                 freezeTaskCallBudget(deps.db, r.taskId, dmCallBudget.callBudget);
               }
-              attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
+              attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : 'include');
               try{snapshotTaskWriteAccess(deps.db,r.taskId);freezeCoordinationScope(deps.db,r.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
@@ -2119,7 +2087,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           } else if (route.value.kind === 'dispatch') {
             frozenCallBudget = callBudgetSnapshotObject(resolveRequestCallBudget(route.value.mode));
           }
-          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.initialWakeMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
           assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
           return deps.db.transaction(() => {
             const ids = {
@@ -2156,7 +2123,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               }
             }
             try{snapshotTaskWriteAccess(deps.db,ids.taskId,{analysisOnly:params.analysisOnly});freezeCoordinationScope(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
-            attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
+            attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : 'include');
             return frozenCallBudget == null
               ? created.value
               : { ...created.value, callBudget: frozenCallBudget, ...(params.collaboration === 'deliberate' ? { deliberationBudget: { maxTurns: frozenCallBudget.maxTurns } } : {}) };
@@ -3872,7 +3839,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
         const meta = validateImageBuffer(verified.raw);
         if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'depends-on-target-member' } });
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'sent-with-message' } });
       }
       case 'attachment.uploadPdf': {
         // PDF 附件（第二十八轮五→第二十九轮二重构）：能力①保存原件+隔离解析验证（子进程
@@ -4956,8 +4923,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const {isDispatchGateHeld}=await import('../persistence/daemonState.ts');
         if(p.projectId&&!deps.db.prepare('SELECT 1 FROM projects WHERE id=?').get(p.projectId))throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
         const rows=p.projectId?deps.db.prepare('SELECT id FROM project_members WHERE project_id=? ORDER BY rowid LIMIT 21').all(p.projectId) as Array<{id:string}>:[];
-        const context:ImageCapabilityReadContext=new Map();
-        const runtime=rows.slice(0,20).map(row=>{const c=memberImageCapability(deps.db,row.id,context);let channel:string|null=null;try{channel=new URL(c.channel).host;}catch{/* uncertain channel */}return{memberId:createHash('sha256').update(row.id).digest('hex').slice(0,16),channel,kind:c.kind,model:c.model&&/^[a-zA-Z0-9._/-]{1,80}$/.test(c.model)&&!c.model.startsWith('sk-')?c.model:null,status:c.status,configuration:c.configuration,source:c.endpointSource?.includes('环境')?'进程环境':c.endpointSource?.includes('项目')?'项目配置':c.endpointSource?.includes('用户')?'用户配置':c.endpointSource?.includes('托管')?'托管配置':c.endpointSource==='官方默认'?'官方默认':'未提供',protocol:c.protocol,certification:c.evidence?'historical-match':'unverified',reason:c.evidence?'历史工程识图证据与当前组合匹配':c.status==='supported'?'自动图片输入；当前组合未提供匹配的历史识图证据，实际结果由本次请求判定':c.reason.includes('不匹配')?'有效配置与认证不匹配':c.reason.includes('超时')?'此前真实认证等待上游超时':c.reason.includes('不可读')||c.reason.includes('无法')?'有效配置不可确定':'此组合未认证',identityKey:c.identityKey};});
+        const runtime=rows.slice(0,20).map(row=>{const c=memberImageCapability(deps.db,row.id);return{memberId:createHash('sha256').update(row.id).digest('hex').slice(0,16),channel:null,kind:c.kind,model:c.model&&/^[a-zA-Z0-9._/-]{1,80}$/.test(c.model)&&!c.model.startsWith('sk-')?c.model:null,status:c.status,configuration:c.configuration,source:'随消息直接发送',protocol:c.protocol,certification:'not-required',reason:c.reason,identityKey:null};});
         const count=(sql:string)=>(deps.db.prepare(sql).get() as {n:number}).n;
         return withCommandId({ok:true,data:{at:Date.now(),service:'ready',runtime,truncated:rows.length>20,protection:{dispatchGateHeld:isDispatchGateHeld(deps.db),unknownTurns:count("SELECT count(*) n FROM agent_turns WHERE status='UNKNOWN'"),pendingDispatches:count("SELECT count(*) n FROM outbox WHERE status='pending'")}}});
       }

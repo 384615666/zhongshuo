@@ -1,13 +1,12 @@
 /**
- * Office 三类 + CSV + 图片能力门 + WebP 头（第二十九轮三/四）：
+ * Office 三类 + CSV + 图片随消息发送 + WebP 头（第二十九轮三/四；R194 取消图片能力门）：
  * - DOCX：段落/表格有序提取+安全排版 HTML（白名单）；宏文档拒绝；
  * - XLSX：中文/空格/数字/日期/公式（不执行——无缓存值占位、有缓存值直读）/合并单元格/
  *   多 sheet；CSV：编码规则（UTF-8 BOM/UTF-16/不支持编码明确拒）；
  * - PPTX：按页文字+备注保序；
  * - 注入：表格**范围选择**（attachmentRanges→message_attachments.range_spec→组装按窗口），
  *   默认=有界默认窗口；越界/超窗口/坏格式在提交时明确拒绝；
- * - 图片能力门：IMAGE_INPUT_UNVERIFIED（无确认不发）；确认后注入「图片未发送+用户确认」
- *   说明；record_only 不设门；
+ * - 图片：所有 AI 都能看图——默认意图引用图片直接发送并注入图片字节；record_only 只保存原件；
  * - WebP VP8/VP8L/JPEG/GIF 头部样本：宽高可解析（头部≠像素解码——解码验证在渲染器）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
@@ -20,6 +19,7 @@ import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
+import type { TurnRequest } from '../../src/contracts/runtime.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 import { getParsePool, disposeParsePool } from '../../src/daemon/parsePool.ts';
 import {
@@ -264,27 +264,30 @@ describe('PPTX', () => {
   }, 90_000);
 });
 
-describe('图片能力门（IMAGE_INPUT_UNVERIFIED）', () => {
-  it('无确认→拒发且零派发；确认→注入「图片未发送+用户确认」；record_only 不设门', async () => {
+describe('图片随消息直接发送（不再有图片能力门）', () => {
+  it('无 imageAck 也直接发送：消息落库+派发，图片字节进入 TurnRequest；record_only 只保存原件', async () => {
     const env = makeEnv();
-    const up = await env.cmd<{ attachmentId: string }>('attachment.uploadImage', { conversationId: 'dm_a', filename: '门禁图.png', contentBase64: makePng(8, 8).toString('base64') });
-    // 无确认：拒绝（不悄悄省略图片冒充成功）。
-    const blocked = await env.cmdRaw('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
-    expect(blocked.ok).toBe(false);
-    expect(String(blocked.error?.message)).toContain('IMAGE_INPUT_UNVERIFIED');
-    expect((env.db.prepare("SELECT count(*) c FROM messages WHERE body_json LIKE '%看这张图执行%'").get() as { c: number }).c).toBe(0);
-    // 确认（imageAck=omit-images）：消息落库+派发；注入明示图片未发送。
-    await env.cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId], imageAck: 'omit-images' });
+    const png = makePng(8, 8);
+    const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadImage', { conversationId: 'dm_a', filename: '门禁图.png', contentBase64: png.toString('base64') });
+    // R194：默认意图引用图片直接发送，不再要求任何图片确认。
+    const sent = await env.cmd<{ messageId: string; taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
+    expect(sent.taskId).toBeTruthy();
+    const row = env.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(sent.messageId) as { body_json: string };
+    expect((JSON.parse(row.body_json) as { imageInput?: string }).imageInput).toBe('include'); // 图片随消息发送
     const { worker, adapter } = env.makeWorker();
+    let input: TurnRequest | undefined;
+    const original = adapter.startTurn.bind(adapter);
+    adapter.startTurn = async (session, request) => { input = request; await original(session, request); };
     await worker.runOnce();
-    expect(adapter.startTurnLog.length).toBe(1);
-    const text = adapter.startTurnLog[0]!.text;
-    expect(text).toContain('【图片附件未发送】');
-    expect(text).toContain('仅发送文字');
-    expect(text).not.toMatch(/data:image|像素内容/); // 不混入像素/伪内容
-    // record_only：不派发→无门；保存成功。
-    const saved = await env.cmdRaw('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '仅记录这张图', intent: 'record_only', mentions: [], attachmentRefs: [up.attachmentId] });
-    expect(saved.ok).toBe(true);
+    expect(input?.images).toHaveLength(1);
+    expect(Buffer.from(input!.images![0]!.dataBase64, 'base64')).toEqual(png);
+    expect(input?.text).toContain('【图片输入附件】');
+    expect(input?.text).not.toContain('图片附件未发送');
+    expect(input?.text).toContain(up.hash.slice(0, 16));
+    // record_only：只保存原件（local-only），零派发。
+    const saved = await env.cmd<{ messageId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '仅记录这张图', intent: 'record_only', mentions: [], attachmentRefs: [up.attachmentId] });
+    const savedRow = env.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(saved.messageId) as { body_json: string };
+    expect((JSON.parse(savedRow.body_json) as { imageInput?: string }).imageInput).toBe('local-only');
     const { worker: w2, adapter: a2 } = env.makeWorker();
     await w2.runOnce();
     expect(a2.startTurnLog.length).toBe(0); // record_only 零派发

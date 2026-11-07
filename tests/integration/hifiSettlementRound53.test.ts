@@ -42,7 +42,7 @@ interface LoaderApi {
   refreshRooms(): Promise<void>;
   loadThread(threadId: string, opts?: { markRead?: boolean }): Promise<void>;
   uploadAttachmentFile(conversationId: string, file: File): Promise<{ attachmentId: string; hash: string; revision: number; kind: string }>;
-  attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string };
+  attachmentRefsFromDraft(draftKey: string): { refs?: string[]; blockError?: string };
   buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[]): { commandId: string; method: 'message.submit'; params: Record<string, unknown>; revAtSend?: number };
   sendEnvelope(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; code?: string; error?: string }>;
 }
@@ -129,7 +129,7 @@ describe('第五十三轮 H2：上传回执原子结算+发送/重试 refs 清�
       store.hydrateUploadRefs(DK, 'convA', store.getDraftFull(DK).attachments.map((a) => ({ name: a.name, size: 6, attachmentId: a.attachmentId })));
       expect((store.getState().uploadItems[DK] ?? []).some((x) => x.attachmentId === 'art_rm')).toBe(false);
       // refs 提取（真实信封的上游）：不含已移除资源。
-      expect(loader.attachmentRefsFromDraft(DK, 'record_only').refs).toEqual([rOk.attachmentId]);
+      expect(loader.attachmentRefsFromDraft(DK).refs).toEqual([rOk.attachmentId]);
 
       // ── ③ 会话不一致回执（跨会话串线防御）：按失败分列、零草稿 ref ──
       store.addUploadItem({ uploadId: 'up_x', draftKey: DK, conversationId: 'convA', name: 'cross.md', size: 4, status: 'uploading' });
@@ -155,7 +155,7 @@ describe('第五十三轮 H2：上传回执原子结算+发送/重试 refs 清�
       store.clearSettledUploads(DK, [real.attachmentId]);
       const d5 = store.getDraftFull(DK);
       store.setDraftFull(DK, { ...d5, attachments: d5.attachments.filter((a) => a.attachmentId !== real.attachmentId) });
-      const refsAfterRemove = loader.attachmentRefsFromDraft(DK, 'record_only');
+      const refsAfterRemove = loader.attachmentRefsFromDraft(DK);
       expect(refsAfterRemove.refs).not.toContain(real.attachmentId);
       const env1 = loader.buildThreadEnvelope(`cmd_${randomUUID().slice(0, 8)}`, th.id, 'r53 移除后发送', 'record_only', refsAfterRemove.refs);
       expect((env1.params as { attachmentRefs?: string[] }).attachmentRefs).not.toContain(real.attachmentId);
@@ -167,7 +167,7 @@ describe('第五十三轮 H2：上传回执原子结算+发送/重试 refs 清�
       expect(artCount).toBe(1); // 上传确实发生（不伪造「零上传」）——但绝不随消息落库
 
       // ── ⑥ 发送成功后的 refs 清算模型（等待期无编辑/有编辑 × 新增附件） ──
-      const sentNow = loader.attachmentRefsFromDraft(DK, 'record_only').refs ?? [];
+      const sentNow = loader.attachmentRefsFromDraft(DK).refs ?? [];
       expect(sentNow).toEqual([rOk.attachmentId]);
       const env2 = loader.buildThreadEnvelope(`cmd_${randomUUID().slice(0, 8)}`, th.id, 'r53 已发资源一次', 'record_only', sentNow);
       env2.revAtSend = store.getDraftFull(DK).rev;
@@ -180,7 +180,7 @@ describe('第五十三轮 H2：上传回执原子结算+发送/重试 refs 清�
       const rNew = await loader.uploadAttachmentFile('convA', new File(['R53-NEW'], 'new.md', { type: 'text/markdown' }));
       store.addUploadItem({ uploadId: 'up_new', draftKey: DK, conversationId: 'convA', name: 'new.md', size: 7, status: 'uploading' });
       expect(store.settleUploadReady(DK, 'up_new', 'convA', { name: 'new.md', size: 7, attachmentId: rNew.attachmentId, hash: rNew.hash, revision: rNew.revision, kind: rNew.kind })).toBe(true);
-      const refsNext = loader.attachmentRefsFromDraft(DK, 'record_only');
+      const refsNext = loader.attachmentRefsFromDraft(DK);
       expect(refsNext.refs).toEqual([rNew.attachmentId]); // 旧资源已剥、新资源在册
       const env3 = loader.buildThreadEnvelope(`cmd_${randomUUID().slice(0, 8)}`, th.id, 'r53 下一条只带新资源', 'record_only', refsNext.refs);
       expect(await loader.sendEnvelope(env3)).toHaveProperty('status', 'ok');

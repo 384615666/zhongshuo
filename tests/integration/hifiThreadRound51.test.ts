@@ -13,7 +13,7 @@ import {initializeHifiSendPersistence} from '../helpers/hifiSendPersistence.ts';
  *  - task.get DTO：pendingDelivery 只有 id/revision/manifest_hash 三重身份。
  *  - task.review 三重绑定：错 manifestHash → STALE_REVISION；对快照 accept → 任务 DONE。
  *  - 附件骨架：attachment.uploadText 真实回执 → attachmentRefs 进信封 → 消息挂附件；
- *    跨会话引用被 audience 拒绝；attachmentRefsFromDraft 图片+派发拦截（能力门同判）。
+ *    跨会话引用被 audience 拒绝；attachmentRefsFromDraft 图片与其它附件同一路径直接随消息发送。
  *  - 深链映射（routeForResolved）：#task/#delivery → /thread/:id?tab=task；#msg 带线程 →
  *    /thread/:id?message=…。
  */
@@ -72,7 +72,7 @@ interface LoaderApi {
   stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }>;
   submitTaskReview(snapshot: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string }, decision: 'accept' | 'changes_requested', note?: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }>;
   uploadAttachmentFile(conversationId: string, file: File): Promise<{ attachmentId: string; hash: string; revision: number; kind: string }>;
-  attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string };
+  attachmentRefsFromDraft(draftKey: string): { refs?: string[]; blockError?: string };
 }
 interface StoreApi {
   initDraftPersistence(namespace:string,rootId?:string):boolean;
@@ -260,7 +260,7 @@ describe('第五十一轮 H2：回复串/任务详情/附件/深链（真实链�
       expect(up.kind).toBe('text_file');
       // 第五十二轮起 refs 从**草稿**取（store 真源）——先写草稿再读（同真实 Composer 流程）。
       h.bundle.store.setDraftFull(`thread:${th.id}`, { body: '', mentions: [], attachments: [{ name: '样本.md', size: 100, attachmentId: up.attachmentId, kind: 'text_file' }], access: 'default', sendAs: 'ai' });
-      const refs = h.bundle.loader.attachmentRefsFromDraft(`thread:${th.id}`, 'default');
+      const refs = h.bundle.loader.attachmentRefsFromDraft(`thread:${th.id}`);
       expect(refs.refs).toEqual([up.attachmentId]);
       const cmd3 = `cmd_${randomUUID().slice(0, 8)}`;
       const env3 = h.bundle.loader.buildThreadEnvelope(cmd3, th.id, '带附件的跟进', 'default', refs.refs);
@@ -270,12 +270,11 @@ describe('第五十一轮 H2：回复串/任务详情/附件/深链（真实链�
       const attMsg = h.db.prepare("SELECT id FROM messages WHERE thread_id = ? AND body_json LIKE '%带附件的跟进%'").get(th.id) as { id: string };
       const linkRow = h.db.prepare('SELECT count(*) c FROM message_attachments WHERE message_id = ?').get(attMsg.id) as { c: number };
       expect(linkRow.c).toBe(1);
-      // 图片+派发 → hasImages 标记（第五十二轮：显式二选一由 Composer 呈现——数据层只给事实）。
+      // 图片与其它附件同一路径：草稿 refs 直接给出，不再返回 hasImages 标记（图片能力门已取消）。
       h.bundle.store.setDraftFull('t-img', { body: '', mentions: [], attachments: [{ name: 'x.png', size: 100, attachmentId: 'art_img', kind: 'image_file' }], access: 'default', sendAs: 'ai' });
-      const imgGate = h.bundle.loader.attachmentRefsFromDraft('t-img', 'default');
-      expect(imgGate.hasImages).toBe(true);
-      const recImg = h.bundle.loader.attachmentRefsFromDraft('t-img', 'record_only');
-      expect(recImg.hasImages !== true).toBe(true); // 仅记录=零派发，不设门
+      const imgRefs = h.bundle.loader.attachmentRefsFromDraft('t-img');
+      expect(imgRefs.refs).toEqual(['art_img']);
+      expect(Object.hasOwn(imgRefs, 'hasImages')).toBe(false); // 数据层不再给旧二选一事实
       // 跨会话引用（另一会话上传的 ref 提交到本会话）→ audience 拒绝。
       const conv2 = `conv_other_${randomUUID().slice(0, 6)}`;
       h.db.prepare("INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('room_other_1', ?, '另一房间', 'mA')").run(projIdRow.id);

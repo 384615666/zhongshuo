@@ -319,7 +319,7 @@ body.embedded .footer{display:none}
 <a href="#optional"><span>12</span>备份与恢复</a>
 <a href="#send"><span>13</span>发送后看哪里</a>
 <a href="#help"><span>14</span>常见问题</a></aside><main><h1>众说操作手册</h1>
-<p><strong>Windows 桌面版 · 图文入门 · 更新于 2026-11-06</strong></p>
+<p><strong>Windows 桌面版 · 图文入门 · 更新于 2026-11-08</strong></p>
 <p>第一次用众说，可以跟着本手册做一次：打开项目 → 添加 AI → 发消息 → 看回复。本手册用“读书会筹备”举例，你可以换成自己的工作、资料或代码项目。</p>
 <p><strong>怎么看图：</strong> 截图中的蓝色 <strong>①②③</strong> 标出了点击位置，下面的步骤与编号对应。打开 <strong>设置 → 帮助与关于 → 操作手册</strong>，随时可以回来查。</p>
 <p><a id="start"></a></p>
@@ -484,7 +484,7 @@ body.embedded .footer{display:none}
 <p><strong>Pi：</strong> 安装官方 Pi CLI，在 Pi 内完成供应商和模型配置，再回众说选择 <strong>Pi</strong>。Pi 无需安装众说连接插件。众说为不同任务建立独立会话，续接时核对原会话编号与目录；原会话缺失会明确失败，不会自动创建替代会话。</p>
 <p>这两种渠道均不要求安装 Magpie。官方直连、其他网关或本地服务按对应 CLI 的供应商配置方式接入，众说不预置个人网关地址、模型或密钥。MCP 和 Skill 也沿用对应 CLI 的配置。Pi 的 MCP 可以通过默认 codemode 调用，或按原生配置选择 direct 展示；不要仅因界面里没有同名独立工具就判断 MCP 不可用。修改 Pi 的用户级或项目级 MCP 配置后，已排队的旧执行会要求重新确认当前配置，避免默默采用不同工具设置。</p>
 <p>Windows 上，Harness 官方桌面版安装后提供的 <code>dsh</code> 入口可直接使用，也可以在高级设置选择 <code>DeepSeek Harness.exe</code>。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 <code>pi</code>。已安装好时无需重复安装 CLI，众说安装器会自动配置 Harness 连接组件。</p>
-<p>密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑和图片暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版安装目录中的 <code>runtime-tools/deepseek-harness/setup.cmd</code> 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 <strong>继续任务</strong>。</p>
+<p>密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版安装目录中的 <code>runtime-tools/deepseek-harness/setup.cmd</code> 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 <strong>继续任务</strong>。</p>
 <h3>修改已有AI</h3>
 <p>进入 <strong>成员管理</strong>，在对应成员卡片上点 <strong>AI设置…</strong>。修改渠道或模型后，点 <strong>保存 AI 设置</strong>。</p>
 <p>Claude、Codex 只需要阅读和解释资料时，可以展开 <strong>高级：执行程序与权限</strong>，选择只读模式；需要修改文件时，选择对应的编辑权限。Harness、Pi 当前选择原生完整权限，旧的受限配置保留原值，不能通过切换渠道自动升级授权。</p>
@@ -669,6 +669,7 @@ body.embedded .footer{display:none}
 <li>在 <strong>② 输入框</strong> 写要求，例如：<strong>“请根据附件整理活动安排。”</strong></li>
 <li>点 <strong>发送</strong>。</li>
 </ol>
+<p>图片也按同样方式直接附带发送：所有 AI 成员都能收到图片，图片内容随消息一起交给 AI，不需要在发送前更换成员或另行选择接收方式。</p>
 <p>AI 生成的 Word、Excel、PPT 和 PDF 交给其他成员时，程序会自动读取保存的原件并准备提取内容，无需先手动打开预览。原件损坏或无法解析时，会保留文件并说明原因。</p>
 <h3>看文件，保存或引用其中一段</h3>
 <p><img src="images/10-file-preview.png" alt="文件预览：①下载原文件，②更多文件操作"></p>

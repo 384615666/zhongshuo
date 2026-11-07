@@ -30,18 +30,19 @@ function fixture(){
 
 describe.each(['deepseek-harness','pi'] as const)('R136 daemon %s metadata, no provider calls',kind=>{
   const Adapter=kind==='pi'?PiAdapter:DeepSeekHarnessAdapter;
-  it('uses reported model efforts through both formal metadata commands, preserving unsupported image status',async()=>{
+  it('uses reported model efforts through both formal metadata commands, keeping image input automatic',async()=>{
     const f=fixture();const listed=vi.spyOn(Adapter.prototype,'listModels').mockResolvedValue([{id:'fixture-model',label:'Fixture',efforts:['low','high']}]);
     const starts=vi.spyOn(Adapter.prototype,'startTurn').mockRejectedValue(Error('inference must never start'));
     expect(runtimeChannelPatch(kind)).toEqual({kind:kind,executable:runtimeExecutable(kind),model:null,effort:null});
-    expect(await runtimeOptions(kind,f.executable,'fixture-model',f.root)).toMatchObject({efforts:['low','high'],imageInput:'unsupported'});
+    // R194：所有 AI 都能看图——元数据里图片输入恒 automatic，不再按模型/渠道声明 unsupported。
+    expect(await runtimeOptions(kind,f.executable,'fixture-model',f.root)).toMatchObject({efforts:['low','high'],imageInput:'automatic'});
     vi.stubEnv(kind==='pi'?'ZS_PI_MODEL':'ZS_DSH_MODEL','fixture-model');
     expect(await runtimeCatalog(kind,f.executable,f.root)).toMatchObject({kind:kind,defaultModel:'fixture-model',models:[{id:'fixture-model',label:'Fixture',source:'reported'}]});
     const db=openDatabase(':memory:');
     try{
       const cmd=async(method:string,params:unknown)=>dispatchDaemonCommand({db,localUserId:'r136',appDataDir:f.root,interruptTurn:async()=>{}},{protocolVersion:1,commandId:randomUUID(),method,params});
       const opened=await cmd('project.open',{path:f.root}) as {data:{project:{id:string}}};const projectId=opened.data.project.id;
-      expect(await cmd('member.runtimeOptions',{projectId,kind:kind,executable:f.executable,model:'fixture-model'})).toMatchObject({ok:true,data:{efforts:['low','high'],imageInput:'unsupported'}});
+      expect(await cmd('member.runtimeOptions',{projectId,kind:kind,executable:f.executable,model:'fixture-model'})).toMatchObject({ok:true,data:{efforts:['low','high'],imageInput:'automatic'}});
       expect(await cmd('member.runtimeCatalog',{projectId,kind:kind,executable:f.executable})).toMatchObject({ok:true,data:{kind:kind,models:[{id:'fixture-model',label:'Fixture',source:'reported'}]}});
       expect(db.prepare('SELECT 1 FROM real_calls').get()).toBeUndefined();
     }finally{db.close();}

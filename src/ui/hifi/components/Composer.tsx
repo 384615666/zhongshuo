@@ -194,7 +194,6 @@ export interface ComposerTarget {
 
 /** 每键发送锁（review-r48 §4）：多目标在途互不解除——A 回执的 finally 只清 A 的键。 */
 const sendingKeys = new Set<string>();
-const imageCheckingKeys = new Set<string>();
 /** 附件上传项的稳定空集（selector 引用稳定——useSyncExternalStore 契约）。 */
 const EMPTY_UPLOADS: UploadItem[] = [];
 const DELIBERATION_BUDGET_MAX = 500;
@@ -1048,8 +1047,6 @@ export function Composer({
     attachments: HifiDraftAttachment[];
     /** 本次随 body 一起发给模型的对话引用卡身份（仅本地草稿清算用）。 */
     quoteIds: string[];
-    /** 图片能力门显式选择（一次性）：'omit-images'=仅发送文字（图片不送模型并如实注明）。 */
-    imageAck?: 'omit-images';
     collaboration?:'deliberate';
     /** 独立研讨本次调用预算；页面必须冻结进 message.submit，而不是只留在 UI。 */
     budgetMaxTurns?: number;
@@ -1273,8 +1270,6 @@ export function Composer({
   const readyAttachmentCount = useMemo(() => attachments.filter((x) => x.status === 'ready').length, [attachments]);
   const pendingAttachmentCount = useMemo(() => attachments.filter((x) => x.status === 'preparing' || x.status === 'uploading').length, [attachments]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  /** 图片能力门待选（第五十二轮：显式二选一，不再硬拦——发送暂停在选择上）。 */
-  const [imageGate, setImageGate] = useState<{ names: string[]; reason?: string } | null>(null);
 
   /**
    * 附件按类型上传，内容校验由服务端裁决。成功回执经
@@ -1430,20 +1425,16 @@ export function Composer({
   /** 当前挂载目标键（结算时核对——迟到回执只在同键在挂时同步当前输入）。 */
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
-  const imageProjectId = useStore((s) => s.activeProjectId);
-  const [imageStatus, setImageStatus] = useState<{ key: string; text: string } | null>(null);
-  const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
-    mentions: effectiveMentionIds, collaboration, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
   const threadFactRevision=useStore(s=>target.kind==='thread'&&target.threadId?s.threadTasks[target.threadId]?.revision:null);
   const writeConversationId=attachmentUpload?.conversationId??target.dmId;
   const writeTarget=target.kind==='room_root'
-    ?{kind:target.kind,projectId:imageProjectId,conversationId:writeConversationId,roomId:target.roomId}
+    ?{kind:target.kind,projectId:activeProjectId,conversationId:writeConversationId,roomId:target.roomId}
     :target.kind==='thread'
-      ?{kind:target.kind,projectId:imageProjectId,conversationId:writeConversationId,threadId:target.threadId}
-      :{kind:target.kind,projectId:imageProjectId,conversationId:writeConversationId};
+      ?{kind:target.kind,projectId:activeProjectId,conversationId:writeConversationId,threadId:target.threadId}
+      :{kind:target.kind,projectId:activeProjectId,conversationId:writeConversationId};
   // Only command identity belongs in the key: subtask labels and task revisions
   // must not cancel a pending read. Incomplete loading state is not a query.
-  const writeContext=imageProjectId&&writeConversationId&&(target.kind!=='thread'||target.threadId)
+  const writeContext=activeProjectId&&writeConversationId&&(target.kind!=='thread'||target.threadId)
     ?JSON.stringify({target:writeTarget,...(collaboration?{collaboration}:{}),mentions:effectiveMentionIds.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})})
     :null;
   const [writeHint,setWriteHint]=useState<{key:string;reason:string;error?:string}|null>(null);
@@ -1469,28 +1460,6 @@ export function Composer({
   useEffect(()=>{
     refreshWriteHint.current?.();
   },[writeContext,draftKey,sendAs,formalLimits?.access,sendDisabledReason,inputDisabledReason,threadFactRevision]);
-  useEffect(() => {
-    if (!attachments.some(a => a.status === 'ready' && a.kind === 'image_file')) return;
-    let cancelled = false; let reading = false;
-    const read = async () => {
-      if (reading) return; reading = true;
-      const conversationId = attachmentUpload?.conversationId ?? target.dmId ?? '';
-      const formalTarget = target.kind === 'room_root' ? { kind: target.kind, projectId: imageProjectId, conversationId, roomId: target.roomId }
-        : target.kind === 'thread' ? { kind: target.kind, projectId: imageProjectId, conversationId, threadId: target.threadId }
-        : { kind: target.kind, projectId: imageProjectId, conversationId };
-      try {
-        const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: effectiveMentionIds.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
-        if (!cancelled && draftKeyRef.current === draftKey) {
-          const needsAttention = c.willDispatch && (!c.members.length || c.members.some(m => m.status !== 'supported'));
-          setImageStatus(needsAttention ? {key:imageContext,text:'部分 AI 暂不能接收图片，可换成员或移除图片。'} : null);
-        }
-      } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${userFacingSystemText((e as Error).message ?? '')}；仍可本地预览，发送前可重试`}); }
-      finally { reading = false; }
-    };
-    void read(); const timer = setInterval(() => void read(), 5000);
-    return () => { cancelled = true; clearInterval(timer); };
-    // imageContext includes the complete read scope; avoid unstable parent target objects.
-  }, [imageContext, draftKey]);
   /** 本目标的结果未知信封（store 持有——切走/卸载不丢）。 */
   const pendingEnv = useStore((st) => st.pendingSends[draftKey]);
   const [sending, setSending] = useState(false);
@@ -1848,7 +1817,7 @@ export function Composer({
     window.addEventListener('zs:drafts-cleared',clear);return()=>window.removeEventListener('zs:drafts-cleared',clear);
   },[]);
 
-  async function submit(imageAck?: 'omit-images') {
+  async function submit() {
     const text = stripInlineAttachmentTokens(body).trim();
     const sentQuotes = getDraftFull(draftKey).conversationQuotes ?? [];
     const outboundText = composeDraftOutboundBody(text, sentQuotes);
@@ -1891,38 +1860,12 @@ export function Composer({
     }
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
     // 独立可发；A 的回执 finally 只删 A 的键（不清 B 的锁）。
-    if (sendingKeys.has(draftKey) || imageCheckingKeys.has(draftKey)) return;
-    // 图片能力未确认时先给出一次明确选择；普通聊天不存在“改为仅记录”。
+    if (sendingKeys.has(draftKey)) return;
+    // 附件按普通附件直接随消息发送（图片不再有额外确认/门禁）。
     const draftRefs = getDraftFull(draftKey).attachments;
-    const imageNames = draftRefs.filter((a) => a.kind === 'image_file').map((a) => a.name);
-    if (imageNames.length > 0 && sendAs === 'ai' && imageAck !== 'omit-images') {
-      const revisionAtCheck = getDraftFull(draftKey).rev;
-      imageCheckingKeys.add(draftKey);
-      try {
-        const projectId = getState().activeProjectId;
-        const conversationId = attachmentUpload?.conversationId ?? target.dmId ?? '';
-        const formalTarget = target.kind === 'room_root' ? { kind: target.kind, projectId, conversationId, roomId: target.roomId }
-          : target.kind === 'thread' ? { kind: target.kind, projectId, conversationId, threadId: target.threadId }
-          : { kind: target.kind, projectId, conversationId };
-        const capability = await command<{ supported: boolean; willDispatch: boolean; members: Array<{ kind: string; model: string; status: string; channel: string; reason: string; configuration: string; protocol: string }> }>('message.imageCapability', {
-          target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: effectiveMentionIds.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
-        });
-        if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
-        if (!capability.supported) { setImageGate({ names: imageNames, reason: '当前所选 AI 尚不能确认接收图片' }); return; }
-      } catch (error) {
-        setSendErrorFor(draftKey, `图片发送能力读取失败：${userFacingSystemText((error as Error).message ?? '')}。草稿与原件保留，可重试、换成员或移除图片。`);
-        return;
-      } finally { imageCheckingKeys.delete(draftKey); }
-
-    }
-    if (imageAck === 'omit-images' && outboundText.length === 0 && draftRefs.every((a) => a.kind === 'image_file')) {
-      setSendErrorFor(draftKey, '已选「仅发送文字」，但没有可用文字：正文为空且附件只有图片，请先添加文字或换非图片附件');
-      return;
-    }
     sendingKeys.add(draftKey);
     setSending(true);
     setSendErrorState(null);
-    setImageGate(null);
     const keyAtSend = draftKey;
     const commandIdAtSend = commandIdRef.current;
     const sentMentions = effectiveMentionIds;
@@ -1947,7 +1890,6 @@ export function Composer({
       commandId: commandIdAtSend,
       target,
       draftRev: getDraftFull(draftKey).rev,
-      ...(imageAck === 'omit-images' ? { imageAck: 'omit-images' as const } : {}),
     });
 
     /** 按**发起目标键**结算 STORED 草稿（review-r47 §3：迟到回执只清发起目标的已发内容，
@@ -2491,23 +2433,6 @@ export function Composer({
             <button title="移除所有空文件后继续输入" onClick={() => {
               for (const item of attachments.filter((x) => x.status === 'ready' && x.size === 0 && (x.kind === 'text_file' || x.kind === 'code_file'))) removeAttachment(item.uploadId);
             }}>移除空文件</button>
-          </span>
-        </div>
-      ) : null}
-
-      {/* 图片能力门（第五十二轮 §6.3）：显式二选一——选择前不发送；结果一次性冻结进信封。 */}
-      {imageStatus?.key === imageContext && attachments.some(a => a.status === 'ready' && a.kind === 'image_file') ? <div className="composer-mentions" data-zs-image-status="1">
-        <span className="chip composer-info-chip" style={{ whiteSpace: 'normal' }}>{imageStatus.text}</span>
-      </div> : null}
-      {imageGate != null ? (
-        <div className="composer-mentions">
-          <span className="chip composer-info-chip" title="未能确认图片能否发送；图片默认不发送给 AI">
-            <Icon name="image" size={11} />
-            {userFacingSystemText(imageGate.reason ?? '当前目标暂不能接收图片')}：{imageGate.names.join('、')}
-            <button disabled={!hasVisibleText(stripInlineAttachmentTokens(body)) && conversationQuotes.length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片保留在聊天中，本次只把文字发送给 AI" onClick={() => submit('omit-images')}>仅发送文字，图片不送模型</button>
-            <button title="移除本草稿图片引用；已保存原件保留，其余内容可继续发送" onClick={() => { for (const a of attachments) if (a.kind === 'image_file') removeAttachment(a.uploadId); setImageGate(null); }}>移除图片继续</button>
-            {showMentions ? <button title="重新选择能接收图片的成员后发送" onClick={() => { setImageGate(null); setMentionTrigger(null); setMentionOpen(true); }}>换可用成员</button> : <button onClick={navigateToMembers}>成员配置</button>}
-            <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
           </span>
         </div>
       ) : null}

@@ -12,7 +12,7 @@
  *  - task.get DTO：pendingDelivery 只有 id/revision/manifest_hash 三重身份。
  *  - task.review 三重绑定：错 manifestHash → STALE_REVISION；对快照 accept → 任务 DONE。
  *  - 附件骨架：attachment.uploadText 真实回执 → attachmentRefs 进信封 → 消息挂附件；
- *    跨会话引用被 audience 拒绝；attachmentRefsFromDraft 图片+派发拦截（能力门同判）。
+ *    跨会话引用被 audience 拒绝；attachmentRefsFromDraft 图片与其它附件同一路径直接随消息发送。
  *  - 深链映射（routeForResolved）：#task/#delivery → /thread/:id?tab=task；#msg 带线程 →
  *    /thread/:id?message=…。
  */
@@ -73,7 +73,7 @@ interface LoaderApi {
   stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }>;
   submitTaskReview(snapshot: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string }, decision: 'accept' | 'changes_requested', note?: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }>;
   uploadAttachmentFile(conversationId: string, file: File): Promise<{ attachmentId: string; hash: string; revision: number; kind: string }>;
-  attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string };
+  attachmentRefsFromDraft(draftKey: string): { refs?: string[]; blockError?: string };
 }
 interface StoreApi {
   setState(fn: (s: ReturnType<StoreApi['getState']>) => ReturnType<StoreApi['getState']>): void;

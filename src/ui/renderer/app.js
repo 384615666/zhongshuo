@@ -61,8 +61,6 @@ const TASK_TERMINAL = ['DONE', 'BLOCKED', 'FAILED', 'CANCELLED'];
 
 const state = {
   projectId: null,
-  /** 图片能力门一次性确认（第二十九轮三）：确认后随下一条消息消费（imageAck=omit-images）。 */
-  imageAckPending: false,
   /** 首启服务端记忆轮询取消位（第四十三轮 P0）：用户手动打开项目后停轮询。 */
   startupMemoryPollCancelled: false,
   /** 导航代次（第二十三轮一）：每次切换视图/会话/项目 +1——异步响应凭 (目标三元组+代次)
@@ -1022,7 +1020,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   if (kindHint === 'image_file') {
     // 图片预览（第二十八轮四→第二十九轮三）：previewImage（audience+实根+原件核对）→ <img>
     // 渲染（浏览器沙箱解码）。**格式头通过≠像素解码成功**——解码结果如实记录（data-decode
-    // ok/failed + naturalWidth 与服务端头部宽高对账）；OCR=未实现、模型图片输入=未认证。
+    // ok/failed + naturalWidth 与服务端头部宽高对账）；OCR=未实现、图片随消息直接发送给模型。
     const img = await command('attachment.previewImage', { attachmentId });
     if (!alive()) return;
     const ibox = el('attach-preview');
@@ -1053,14 +1051,14 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         iel2.dataset.decodeError = String(e?.message ?? e).slice(0, 120);
         const failNote = document.createElement('div');
         failNote.className = 'meta img-decode-failed';
-        failNote.textContent = `图片无法显示，可能已损坏。原文件已保存，无法提取文字或发送图片给 AI`;
+        failNote.textContent = `图片无法本地显示，可能已损坏。原文件已保存，仍会随消息发送给 AI`;
         iel2.replaceWith(failNote);
       },
     );
     iel2.onerror = () => { iel2.dataset.decode = 'failed'; };
     const inote = document.createElement('div');
     inote.className = 'meta';
-    inote.textContent = '图片文字识别与评论暂不可用；发送时需选择仅发送文字，图片不会发送给 AI';
+    inote.textContent = '图片会随消息直接发送给 AI；本地预览始终可用';
     const iwrap = document.createElement('div');
     iwrap.append(ihead, iclose, iel2, inote);
     ibox.replaceChildren(iwrap);
@@ -2211,17 +2209,10 @@ async function sendDm() {
   const input = el('dm-input');
   const text = input.value.trim();
   if (text.length === 0) return;
-  // 图片能力门（第二十九轮三）：默认意图（会派发）+草稿含图片 → 用户明确选择，不悄悄省略。
-  if (draftHasImage('dm') && !state.dmRecordOnly && !state.imageAckPending) {
-    showImageGate('dm', () => { state.imageAckPending = true; void sendDm(); });
-    return;
-  }
   // 发起时快照：目标键与要发送的附件 refs（响应前切会话不动另一键——失败保留正文与附件）。
   const dmKey = attachDraftKey('dm');
   const dmAtts = attachDraft('dm');
   const sentRefs = dmAtts.map((a) => a.attachmentId);
-  const ack = state.imageAckPending === true;
-  state.imageAckPending = false; // 一次性消费（失败重发会再过门）
   const dmRanges = {};
   for (const a of dmAtts) if (a.range != null && String(a.range).trim().length > 0) dmRanges[a.attachmentId] = String(a.range).trim();
   input.value = '';
@@ -2230,7 +2221,6 @@ async function sendDm() {
       target: { kind: 'dm', projectId: state.projectId, conversationId: state.openDmId },
       body: text, intent: state.dmRecordOnly ? 'record_only' : 'default', mentions: [],
       ...(sentRefs.length > 0 ? { attachmentRefs: sentRefs } : {}),
-      ...(ack ? { imageAck: 'omit-images' } : {}),
       ...(Object.keys(dmRanges).length > 0 ? { attachmentRanges: dmRanges } : {}),
     });
     // 成功只清**本次发送的 refs**（失败后新加的附件保留在草稿）。
@@ -2626,32 +2616,6 @@ function clearSendError() {
   el('send-error').classList.add('hidden');
 }
 
-// ---------- 图片能力门（第二十九轮三）----------
-// 草稿含图片且本次会派发（DM 默认意图/主池派发路由）时，程序不悄悄省略图片后以任务成功
-// 冒充处理完成：用户明确二选一——仅发送文字（imageAck:"omit-images"——注入文本如实注明
-// 图片未发送及用户确认）或取消。record_only/线程跟进不派发=无门（保存/预览不受影响）。
-function draftHasImage(kind) {
-  return attachDraft(kind).some((a) => a.kind === 'image_file');
-}
-/** 图片能力门确认条（kind 决定容器：DM 区就地呈现——send-error 在主池 footer，DM 视图不可见）。 */
-function showImageGate(kind, onConfirm) {
-  const box = el(kind === 'dm' ? 'dm-gate' : 'send-error');
-  if (box == null) { onConfirm(); return; } // 容器缺失不阻断（服务端门仍在——这里只是无 UI）
-  box.classList.remove('hidden');
-  box.innerHTML = '';
-  const text = document.createElement('span');
-  text.textContent = '当前无法向 AI 发送图片，请选择：';
-  const okBtn = document.createElement('button');
-  okBtn.id = 'image-gate-confirm';
-  okBtn.textContent = '仅发送文字，不发送图片';
-  okBtn.onclick = () => { box.classList.add('hidden'); box.innerHTML = ''; onConfirm(); };
-  const cancel = document.createElement('button');
-  cancel.id = 'image-gate-cancel';
-  cancel.textContent = '取消发送';
-  cancel.onclick = () => { box.classList.add('hidden'); box.innerHTML = ''; };
-  box.append(text, okBtn, cancel);
-}
-
 async function retrySend() {
   const envelope = state.pendingRetry;
   if (envelope == null) return;
@@ -2697,7 +2661,6 @@ function buildEnvelope() {
     params: {
       target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions,
       ...(atts.length > 0 ? { attachmentRefs: atts.map((a) => a.attachmentId) } : {}),
-      ...(state.imageAckPending === true ? { imageAck: 'omit-images' } : {}),
       ...(Object.keys(ranges).length > 0 ? { attachmentRanges: ranges } : {}),
     },
   };
@@ -2733,18 +2696,11 @@ async function send() {
   if (state.inflightSend != null) return; // 双击/重复 Enter：在途即忽略（同 commandId 语义）
   const text = el('composer-input').value.trim();
   if (!text || state.conversationId == null) return;
-  // 图片能力门（第二十九轮三）：主池默认意图（派发路由）+草稿含图片 → 明确选择；线程跟进
-  // 与仅记录不派发=无门。
-  if (state.openThreadId == null && !state.recordOnly && draftHasImage('composer') && state.imageAckPending !== true) {
-    showImageGate('composer', () => { state.imageAckPending = true; void send(); });
-    return;
-  }
   // 发起时固定视图与「仅记录」意图（响应到达前用户可能切换视图）。
   const view = currentView();
   const recordIntent = state.recordOnly;
   const keyAtSend = draftKey(); // 发起时目标键快照（第二十八轮三：完整键——响应前切换线程不清错键）
   const envelope = buildEnvelope();
-  state.imageAckPending = false; // 一次性消费（随信封固化；失败重发会再过门）
   clearSendError();
   state.inflightSend = envelope.commandId;
   el('send').disabled = true;

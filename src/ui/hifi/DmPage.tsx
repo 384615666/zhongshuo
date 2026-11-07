@@ -717,9 +717,9 @@ export function DmPage() {
                       // roomId/dmId 私有字段，review-r48 §3）；unknown 冻结原信封。
                       const intent = 'default' as const;
                       const draftKey = `dm:${active.id}`;
-                      const refs = attachmentRefsFromDraft(draftKey, intent);
+                      const refs = attachmentRefsFromDraft(draftKey);
                       if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-                      const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+                      const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs, { attachmentRanges: attachmentRangesFromDraft(draftKey) });
                       env.revAtSend = p.draftRev;
                       env.quoteIds = p.quoteIds;
                       const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）

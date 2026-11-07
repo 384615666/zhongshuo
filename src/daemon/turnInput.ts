@@ -12,8 +12,8 @@ import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8By
 import { validateExtractCacheForInput, extractCacheIsTruncated, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
 import { regenerateDocumentCache } from './documentCache.ts';
 
-/** 组装行 → 信封附件条目（第二十九轮二/三/四）。图片=持久发送选择：include 经成员认证与原件核验后提供字节输入；
- * omit/local-only/旧记录注入**未发送说明**，不宣称已读；文档类=原件实根+实身份+sha256 核对 +
+/** 组装行 → 信封附件条目（第二十九轮二/三/四）。图片=图片字节随消息直接发送给模型（所有 AI 均可看图；
+ * local-only 记录注入**未发送说明**，不宣称已读）；文档类=原件实根+实身份+sha256 核对 +
  * 提取缓存严格校验（schema v2——结构/版本/hash 校验，兼容已知历史摘录）后按类渲染：
  * PDF 页标注 / DOCX 有序文本 / 幻灯片按页+备注 / 表格按范围窗口（有界默认）。返回
  * string=组装失败原因（fail-closed）。 */
@@ -21,14 +21,14 @@ type DocAttachmentRow = { id: string; source_name: string | null; hash: string; 
 function documentAttachmentForInput(
   row: DocAttachmentRow,
   blobRoot: string | undefined,
-  allowImages = false,
   missingCaches?: DocAttachmentRow[],
 ): { entry: { ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }; image?: NonNullable<TurnRequest['images']>[number] } | { error: string } {
   const label = row.source_name ?? row.id;
   const NL = String.fromCharCode(10);
   if (row.kind === 'image_file') {
-    if (row.image_mode === 'include') {
-      if (!allowImages) return { error: 'IMAGE_INPUT_UNVERIFIED：当前实际派发成员不在图片认证组合内；原消息与原件保留' };
+    // 图片能力门已取消：include 与旧 legacy 'omit' 一律提供图片字节（旧「仅发送文字」选择已失效）；
+    // 只有 record_only 的 'local-only' 仍只保存原件。历史无 imageInput 标记的图片同样发送。
+    if (row.image_mode !== 'local-only') {
       const verified = readVerifiedBlob(row.blob_path, row.hash, blobRoot);
       if (!verified.ok) return { error: verified.error.message };
       const meta = validateImageBuffer(verified.raw);
@@ -37,7 +37,7 @@ function documentAttachmentForInput(
         text: `【图片输入附件】「${label}」（sha256 ${row.hash} v${row.revision}）；内容通过本轮独立图片输入块提供。` },
         image: { artifactId: row.id, hash: row.hash, mime: meta.meta.mime, dataBase64: verified.raw.toString('base64') } };
     }
-    return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes: 0, truncated: false, text: `【图片附件未发送】「${label}」（sha256 ${row.hash.slice(0, 12)}… v${row.revision}）：${row.image_mode === 'omit' ? '用户已明确选择仅发送文字' : row.image_mode === 'local-only' ? '该消息选择仅记录，只保存原件' : '历史版本没有图片输入授权'}；图片内容未发送，模型未读图。` } };
+    return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes: 0, truncated: false, text: `【图片附件未发送】「${label}」（sha256 ${row.hash.slice(0, 12)}… v${row.revision}）：该消息选择仅记录，只保存原件；图片内容未发送，模型未读图。` } };
   }
   const mapping = ARTIFACT_PARSE_KINDS[row.kind];
   if (mapping == null) return { error: `附件类型（${row.kind}）不在注入范围——拒绝组装` };
@@ -189,7 +189,6 @@ export interface AssembledTurnInput {
   db: ZhongshuoDatabase;
   /** 本次 appData 的托管存储根（{appData}/blobstore——第二十八轮三：附件读取按实际根校验路径越界）。 */
   blobRoot?: string;
-  allowImages?: boolean;
   coordinationNote?: string;
   coordination?:{phase:'planning'|'child'|'integration';runId:string|null;role:string};
   communicationContract?:TurnBundleEnvelope['communicationContract'];
@@ -330,8 +329,8 @@ function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRo
       rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text, ...(detail?{detail:true}:{}), ...(detail&&verified.copy.truncated?{fullTextPath:row.blob_path}:{}) });
       continue;
     }
-    // 文档类（PDF/DOCX/表格/幻灯片=严格缓存+原件核对；图片=未发送说明）——第二十九轮二/三/四。
-    const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages, missingCaches);
+    // 文档类（PDF/DOCX/表格/幻灯片=严格缓存+原件核对；图片=字节随消息发送/仅记录时未发送说明）——第二十九轮二/三/四。
+    const doc = documentAttachmentForInput(row, input.blobRoot, missingCaches);
     if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
     rootAttachments.push(doc.entry);
     if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);
@@ -548,8 +547,8 @@ function assembleDmTurn(input: AssembledTurnInput, missingCaches?: DocAttachment
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
   // R67（用户已批准：只有文件也沿用当前模式发送）：正文可空——前提是根消息**带附件引用**
-  //（模型输入=附件注入文本；上方 hasImages/omit-images 门已在提交侧挡掉「仅图片+仅文字」
-  // 的空输入组合）。无正文且无附件仍按空根消息拒绝（不构造空输入）。
+  //（模型输入=附件注入文本；图片附件直接以图片输入块提供，服务端不再有图片能力门）。
+  // 无正文且无附件仍按空根消息拒绝（不构造空输入）。
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
     const rootAttCount = (db.prepare('SELECT count(*) c FROM message_attachments WHERE message_id = ?').get(root.id) as { c: number }).c;
     if (rootAttCount === 0) {
@@ -607,8 +606,8 @@ function assembleDmTurn(input: AssembledTurnInput, missingCaches?: DocAttachment
         rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text, ...(detail?{detail:true}:{}), ...(detail&&verified.copy.truncated?{fullTextPath:row.blob_path}:{}) });
         continue;
       }
-      // 文档类（同房间装配——严格缓存+原件核对；图片=未发送说明）。
-      const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages, missingCaches);
+      // 文档类（同房间装配——严格缓存+原件核对；图片直接发送/仅记录时未发送说明）。
+      const doc = documentAttachmentForInput(row, input.blobRoot, missingCaches);
       if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
       rootAttachments.push(doc.entry);
     if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);

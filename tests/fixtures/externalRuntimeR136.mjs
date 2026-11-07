@@ -30,7 +30,7 @@ if (process.argv.includes('--zs-probe')) {
     }
     event({kind:'usage',inputTokens:12,cachedTokens:5,outputTokens:3,model:'fixture-model'});
     if (scenario === 'failure') send({v:1,type:'result',requestId,sessionId,status:'failed',error:{code:'AUTH_REQUIRED',message:'Fixture auth error'}});
-    else send({v:1,type:'result',requestId,sessionId:scenario==='conflicting-session'?'second-session':sessionId,status:'completed',stopReason:scenario === 'truncated' ? 'max-tokens' : 'completed',text:scenario === 'empty' ? '' : JSON.stringify({prompt:command.prompt,developer:command.developerInstructions??null,schemaVersion:'fixture',sessionId,mode:command.mode,outputSchema:command.outputSchema})});
+    else send({v:1,type:'result',requestId,sessionId:scenario==='conflicting-session'?'second-session':sessionId,status:'completed',stopReason:scenario === 'truncated' ? 'max-tokens' : 'completed',text:scenario === 'empty' ? '' : JSON.stringify({prompt:command.prompt,developer:command.developerInstructions??null,schemaVersion:'fixture',sessionId,mode:command.mode,images:command.images??null,outputSchema:command.outputSchema})});
   });
   const handshake = () => send({v:1,type:'ready',runtime:'zhongshuo-dsh',protocol:1,pluginVersion:'test',capabilities:{structuredEvents:true,sessionResume:true,sessionCancel:true,...(scenario==='old-plugin'?{}:{outputSchema:true,formatRepair:true,...(scenario==='shared-history-plugin'?{}:{privateSessions:true})})}});
   if (scenario === 'slow-ready') setTimeout(handshake,150);
