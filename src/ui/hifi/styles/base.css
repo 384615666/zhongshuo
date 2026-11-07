@@ -172,6 +172,16 @@ code, pre, .mono {
   background: var(--bg-app);
   border-right: 1px solid var(--border-subtle);
   overflow: hidden;
+  /* 阻断老界面同名类泄漏：同一份 index.html 还会加载 renderer/style.css（legacy 界面），
+     其中也有一条 `.sidebar`（240px / padding:12px / gap:10px）。本规则没有声明
+     padding/gap，旧规则里多出来的这两项会继续生效，把 hifi 侧栏整条内缩 12px：
+       · `.side-item.active::before` 的 left:-8px 落在 12px 内边距里，蓝色选中竖条
+         离开窗口左缘、浮在侧栏中间，与圆角选中底脱开；
+       · 每行名称可用宽度少 24px，长项目名/房间名比设计更早出现省略号；
+       · flex column 多出 10px 间距，顶部导航、项目区、底部设置三段被拉开。
+     显式归零后，下方「8(容器) + 24(条目) = 32」的图标基线与 8px 行内边距才成立。 */
+  padding: 0;
+  gap: 0;
 }
 .sidebar.collapsed {
   width: 0;
@@ -290,14 +300,17 @@ code, pre, .mono {
   padding: 8px 8px 4px;
 }
 
-/* 项目行：展开箭头与"切换项目"是两个动作，用 flex 分成两个点击区 */
+/* 项目行：展开箭头与"切换项目"是两个动作，用 flex 分成两个点击区。
+   gap 归零：箭头 24 + 行 gap 2 + 名称按钮左内边距 2 会让项目图标落在 36，
+   而一级导航图标在 32（8 容器 + 24）。去掉这两段 2px 后，树图标=32、
+   项目名=53，与导航图标 32 / 名称 54 落在同一条竖线上。 */
 .side-project {
   margin-bottom: 2px;
 }
 .side-row {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   border-radius: var(--r-sm);
 }
 .side-row.context-active {
@@ -337,7 +350,7 @@ code, pre, .mono {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 8px 3px 2px;
+  padding: 3px 8px 3px 0;
   border: none;
   background: transparent;
   color: var(--text-2);
@@ -649,6 +662,14 @@ code, pre, .mono {
   background: var(--bg-app);
 }
 
+/* 底部入口（恢复任务 / 设置）和顶部五个入口是同一层级，图标必须落在同一条基线上。
+   顶部条目有 .sidebar-top > .side-item 的 24px 左内边距（8 容器 + 24 = 32），
+   底部缺这条规则时只剩 .side-item 自身的 8px（8 + 8 = 16）——截图里「设置」
+   会比上方导航整体左突 16px，看起来像另一层。 */
+.sidebar-foot > .side-item {
+  padding-left: 24px;
+}
+
 .side-section {
   margin-bottom: 14px;
 }
@@ -796,13 +817,15 @@ code, pre, .mono {
 /* 房间：缩进挂在所属项目下，并用左侧竖线明确"这是它的子项"，
    而不是和项目同级平铺（用户反馈"看不出房间属于当前项目"） */
 .side-item.sub {
-  /* 左内边距 13px（2026-09-25 第三轮末）：**子项名称与项目名同列**
+  /* 子项名称与项目名同列、子项状态位与项目图标同列
      （用户原话"子项名称和项目名是同一层缩进的"）。
-     算法：子项行 [margin-left 12 + padding-left 13 + 13px 状态位 + 8px 间距] = 项目名 x（54），
-     顺带把状态位落在项目图标那一列 —— 正好是用户给的参考图里的排布：
-     父行图标 / 子行图标共用一列，两行文字对齐，层级由箭头与行内文字大小表达。
-     项目区不画竖线（导轨与选中竖条都已删除），这里再用 padding 凑对齐。 */
-  padding-left: 13px;
+     现行父行算法：sidebar-scroll 8 + 展开箭头 24 + 项目图标 13 = 项目图标 x(32)、
+     加 8px 图标/文字 gap = 项目名 x(53)。
+     子项行算法：margin-left 12 + padding-left 12 + 13px 状态位 + 8px 间距
+     = 状态位 x(32)、名称 x(53)。
+     注：`--control-icon-compact` 是 24px；行 gap 与名称按钮左内边距已归零，
+     树图标和一级导航图标（32）才落在同一列。项目区不画竖线，这里用 padding 凑对齐。 */
+  padding-left: 12px;
   /* 右侧不再为"项目行的操作区"预留槽位（2026-09-25 用户复核 §1）：
      未读小点要**固定在最右侧**、与一级入口（私信等）的点同一条竖线 ——
      统一取「行右缘 − 8px 内边距 − 22px 提示区」这唯一一套规则。
