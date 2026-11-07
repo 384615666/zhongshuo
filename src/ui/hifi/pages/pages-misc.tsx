@@ -13,7 +13,7 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
 
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { EmptyState, ErrorState, Segmented, Select, Tag } from '../components/ui';
+import { EmptyState, ErrorState, Segmented, Tag } from '../components/ui';
 import { useStore, toast, recordWrite } from '../data/store';
 import { Modal } from '../components/ui';
 import { byId, lockOfProject } from '../data/selectors';
@@ -21,6 +21,7 @@ import { consensusLabel, formatBytes, formatDuration, fullTime, relTime } from '
 import { pull, push, refreshGitState, stageByOwner, gitOperationLabel } from '../data/actions-git';
 import { PendingGitOperations } from '../components/PendingGitOperations';
 import { focusProject, rememberFileGitTab, resolveFileGitTab } from '../data/actions-nav';
+import { orderProjectIds, useListOrderVersion } from '../data/listOrder';
 import { useLazyTree, fileSizeLabel, type TreeNode } from '../data/project-files';
 import { navigate } from '../lib/router';
 import { GitPage, useNarrowPane } from './GitPage';
@@ -182,6 +183,29 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
   const curBranch = git?.branches.find((b) => b.isCurrent);
   const lock = lockOfProject(s, projectId);
 
+  /**
+   * 左栏项目卡（R188 第 6 项）：与成员管理 / 任务看板同一套共享样式与顺序来源。
+   * 顺序跟随侧栏「项目/房间」拖动偏好（R183 第 1 项）：只排未移除项目，已移除项目
+   * 不在这里出现；useListOrderVersion 订阅拖动事件后列表立即重排。
+   */
+  const listOrderVersion = useListOrderVersion();
+  const railProjects = useMemo(() => {
+    const list = s.projects.filter((p) => p.removedAt == null);
+    const rank = new Map(orderProjectIds(list.map((p) => p.id)).map((id, index) => [id, index]));
+    return [...list].sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+  }, [s.projects, listOrderVersion]);
+
+  /**
+   * 点项目卡 = 与原来的顶栏项目下拉**完全同一语义**（用户确认过）：切当前项目（焦点）
+   * + 跳到该项目的文件与 Git 页并保留当前页签。改成卡片而不是下拉，是因为下拉会让
+   * 整个界面横向位移；焦点切换本身的行为不变（侧栏高亮、标题栏一并同步）。
+   */
+  const openProject = (next: string) => {
+    if (next === projectId) return;
+    focusProject(next, { announce: false });
+    navigate(`/project/${next}/files?tab=${tab}`);
+  };
+
   if (!project) {
     return (
       <div className="main">
@@ -199,285 +223,309 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
         页头 / 顶层标签 / 状态条各占 flex:none 的位置，剩下的高度全部给
         .fg-body，左右两栏在里面各自滚动 —— 这就是"左右阅读与选择互不干扰"。
         其它页面（房间 / 线程 / 私信 / 看板）用的还是普通 .page，不受影响。
+
+        R188（用户 2026-11-07 第 6 项）：原来切项目靠顶栏的共享 Select，点它换项目会让
+        整个界面横向位移。现在改成与成员管理 / 任务看板一致的左侧项目卡列：
+        .page 下只有 .project-split（左 280px 项目卡列 + 右内容列），切项目只换右列内容，
+        两栏宽度都由 CSS 固定，几何不随项目变化。右列里仍是原来的 topbar + 提示面板 +
+        fg-body，结构只多包一层，内部两栏各自滚动的契约没变。
       */}
       <div className="page fg-page">
-        {/**
-         * R170 第 9 项：文件页顶部与房间页一致——**一条 42px 的合并行**
-         * （本机路径 + 文件/Git 页签 + 仓库状态 + 项目选择 + Git 操作）。
-         * 原来这里是「页头 / 页签 / 状态条」三条横带叠在一起，比对话页顶部高出一大截。
-         * 完整状态（上游领先/落后、写入锁、最近一次 Git 操作）收进这一行的 title，
-         * 界面上只留一句最重要的信息。
-         */}
-        <div className="fg-topbar" data-zs-files-topbar="1">
-          <Icon name="folder" size={13} className="faint" />
-          <span className="fg-topbar-path mono" title={project.canonicalPath} data-zs-files-path={project.canonicalPath}>{project.canonicalPath}</span>
-          <div className="thread-tabs fg-topbar-tabs">
-            <button className={`thread-tab${tab === 'files' ? ' on' : ''}`} onClick={() => setTab('files')}>
-              <Icon name="file-text" size={13} /> 文件
-            </button>
-            <button className={`thread-tab${tab === 'git' ? ' on' : ''}`} onClick={() => setTab('git')}>
-              <Icon name="git-branch" size={13} /> Git
-              {/* 这个数字是**工作区改动文件数**，不是提交数、也不是审批数 */}
-              {git && git.status.length > 0 ? (
-                <span className="faint" title="工作区改动文件数">{changedFileCount}</span>
-              ) : null}
-              {!isGit ? <span className="faint">未初始化</span> : null}
-            </button>
-          </div>
-          <span className="spacer" />
-          {(() => {
-            const upstream = curBranch?.upstream == null
-              ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置）' : '没有上游分支'
-              : curBranch.ahead == null || curBranch.behind == null
-                ? `${curBranch.upstream}（领先/落后未知）`
-                : (() => {
-                  // 领先与落后**同时存在时必须都写出来**，不能互相吃掉。
-                  const parts: string[] = [];
-                  if (curBranch.ahead > 0) parts.push(`领先 ${curBranch.ahead}`);
-                  if (curBranch.behind > 0) parts.push(`落后 ${curBranch.behind}`);
-                  return parts.length > 0 ? parts.join(' · ') : '与远端一致';
-                })();
-            const detail = [
-              upstream,
-              ...(lock != null ? [`${lock.ownerTaskLabel} 正在写入此项目`] : []),
-              ...(git?.lastOp?.ok ? [`最近一次 Git 操作：${git.lastOp.detail}（${relTime(git.lastOp.at)}）`] : []),
-            ].join('\n');
-            return (
-              <span className="fg-statusbar fg-statusbar--inline" title={detail}>
-                <span>{project.isGit ? 'Git 仓库' : '非 Git 目录 · 改动仍会记录'}</span>
-                {isGit && git ? (
-                  <>
-                    <span className="fg-sep" />
-                    <span className="mono-sm">{git.currentBranch}</span>
-                    <span className="fg-sep" />
-                    <span title="工作区改动文件数">{changedFileCount} 个未提交改动</span>
-                    {lock != null ? <><span className="fg-sep" /><Icon name="lock" size={11} /></> : null}
-                  </>
-                ) : null}
-              </span>
-            );
-          })()}
-          {/* R172 第 1 项：项目下拉与全站一致（共享 Select），不再用原生 select 的浏览器外观。 */}
-          <div className="field inline fg-topbar-project">
-            <Select
-              value={projectId}
-              size="sm"
-              ariaLabel="切换项目"
-              title="切换文件页所属项目"
-              onChange={(next) => {
-                focusProject(next, { announce: false });
-                navigate(`/project/${next}/files?tab=${tab}`);
-              }}
-              options={s.projects.map((p) => ({ value: p.id, label: p.displayName }))}
-            />
-          </div>
-          {tab === 'git' && isGit ? (
-            <div className="fg-topbar-actions">
-              <button
-                className="btn ghost sm"
-                title={`从远端拉取（origin/${git?.currentBranch ?? ''}）`}
-                onClick={() => void pull(projectId)}
-                disabled={!curBranch}
-              >
-                <Icon name="download" size={12} /> 拉取
-              </button>
-              <button
-                className="btn ghost sm"
-                title={`推送到所选远端；不会覆盖远端已有提交${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
-                onClick={() => void push(projectId)}
-                disabled={!curBranch}
-              >
-                <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` (${curBranch.ahead})` : ''}
-              </button>
-              {/* 「分支」→「新建分支」：这个按钮是**创建**动作，左栏的「分支」是**查看**视图。 */}
-              <button className="btn ghost sm" onClick={() => setBranchModal(true)} title="基于当前提交创建分支；不会自动切换分支">
-                <Icon name="git-branch" size={12} /> 新建分支
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
-          <div className="panel warning" style={{ marginBottom: 10 }} data-zs-git-read-errors="1">
-            <div className="panel-title"><Icon name="alert-triangle" size={13} /> Git 部分信息读取失败</div>
-            {git.readErrors.status != null ? <div>仓库状态：{git.readErrors.status}（显示上次读取的结果）</div> : null}
-            {git.readErrors.branches != null ? <div>分支：{git.readErrors.branches}（显示上次读取的列表）</div> : null}
-            {git.readErrors.history != null ? <div>历史：{git.readErrors.history}（显示上次读取的列表）</div> : null}
-            {git.readErrors.remotes != null ? <div>远端：{git.readErrors.remotes}（显示上次读取的列表）</div> : null}
-          </div>
-        ) : null}
-
-        {/* R71：普通非 Git 目录=中性形态（不是失败）——一行说明即可；文件阅读照常。 */}
-        {git?.notARepo ? (
-          <div className="panel info" style={{ marginBottom: 14 }} data-zs-git-neutral="1">
-            <div className="panel-title"><Icon name="info" size={13} /> 此文件夹未初始化 Git</div>
-            <span className="small faint">普通目录同样支持文件树与预览；Git 页的历史、差异与提交操作需要 Git 仓库。</span>
-          </div>
-        ) : null}
-
-        {/* 失败不静默（§16.5）：成功态已收进状态条一行，失败才占一块说清-
-            楚。真实 Git 执行错误/权限/目录失效仍在此（NOT_A_GIT_REPO 已分流为上方中性态）。 */}
-        {git?.lastOp && !git.lastOp.ok ? (
-          <div className="panel danger" style={{ marginBottom: 14 }}>
-            <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
-            {git.lastOp.detail}
-            <span className="small faint"> · {relTime(git.lastOp.at)}</span>
-            <button className="btn ghost sm" onClick={() => void refreshGitState(projectId)}>刷新仓库状态</button>
-          </div>
-        ) : null}
-
-        {tab === 'git' ? <PendingGitOperations projectId={projectId}/> : null}
-        {project.status === 'missing' ? (
-          <div className="panel warning" style={{ marginBottom: 14 }}>
-            <div className="panel-title"><Icon name="alert-triangle" size={13} /> 项目目录失效</div>
-            路径 {project.rootPath} 当前不可访问。历史记录仍可查看，但读取文件与 Git 操作会失败；
-            请在顶栏项目菜单里重新定位目录。
-          </div>
-        ) : null}
-
-        {tab === 'files' ? (
-          /**
-           * 文件工作区（L5，§17.9 第 2 条）：左侧目录树 + **右侧共享预览**。
-           *
-           * 这里原来有一套自己的预览壳（卡头 + `<pre>`），与房间/线程那套
-           * 并行存在 —— 于是版本徽标、来源行、引用入口只长在其中一套上。
-           * 现在选中节点即调用 `openWorktreeNode` 把内容交给**同一个** PreviewPane。
-           */
-          <div className={`fg-body${narrow ? ' narrow' : ''}`} data-pane={pane}>
-            {/* 左：目录树 / 改动集 二选一。
-                头部（标题 + 视图切换）常驻在 pane 里，不会被内容滚走。 */}
-            <div className="fg-pane fg-pane-list">
-              <div className="fg-pane-head">
-                <div className="card-title row tight">
-                  <Icon name="folder" size={13} /> 项目文件
-                  <span className="count">{fileCount}</span>
-                  <div className="spacer" />
-                  {/* 真实目录标注：来自用户项目磁盘（project.files.list 安全根内只读列举）。 */}
-                  <span className="small faint" title="项目目录，点击文件可预览">
-                    <Icon name="info" size={11} /> 真实目录
-                  </span>
-                </div>
-                <Segmented<'tree' | 'changes'>
-                  value={leftTab}
-                  onChange={(v) => { setLeftTab(v); backToList(); }}
-                  options={[
-                    { value: 'tree', label: '目录树' },
-                    /* 「改动 N」→「改动集 N」：这里是**改动集的数量**，
-                       不是改动文件数，也不是待提交数。 */
-                    { value: 'changes', label: formalChanges.items===null?'任务改动 · 未读取':`任务改动 · 最近 ${formalChanges.items.length} 项` },
-                  ]}
-                />
-              </div>
-
-              {/* 左栏唯一滚动容器：目录树很长时在这里滚，不影响右栏 */}
-              <div className="fg-pane-scroll files-tree" ref={listRef}>
-                {leftTab === 'changes' ? (
-                  <FormalChangeList
-                    facts={formalChanges}
-                    selected={activeCs}
-                    onSelect={(id) => { setCsId(id); openDetail(); }}
-                  />
-                ) : tree.error != null ? (
-                  <div className="panel warning" style={{ margin: 8 }}>
-                    目录读取失败：{userFacingSystemText(tree.error ?? '')}（点击刷新可重新读取）
-                    <div className="panel-actions">
-                      <button className="btn sm" onClick={() => tree.reload()}>重试</button>
-                    </div>
-                  </div>
-                ) : tree.loading && tree.roots.length === 0 ? (
-                  <div className="small faint" style={{ padding: 8 }}>正在读取项目目录…</div>
-                ) : tree.roots.length === 0 ? (
-                  <div className="small faint" style={{ padding: 8 }}>
-                    {project.status === 'missing'
-                      ? '目录失效，无法读取文件列表。'
-                      : '这个项目目录为空。'}
-                  </div>
-                ) : (
-                  <div className="file-tree">
-                    {tree.roots.map((n) => (
-                      <TreeNodeRow
-                        key={n.path}
-                        node={n}
-                        expanded={expanded}
-                        onToggle={toggleDir}
-                        selectedPath={selected?.path}
-                        onSelect={(node) => {
-                          setSelected(node);
-                          /**
-                           * 选中即打开共享预览（§17.9）。真实链：登记工作区资源（真实路径/大小）
-                           * → 预览面板经 project.file.read 实际读取内容（安全根内只读快照）。
-                           * 只有**文件**节点才打开；目录节点不产生预览。
-                           */
-                          if (node.kind === 'file') {
-                            openWorktreePreview(projectId,node.path,node.sizeBytes??0, {
-                              target: { kind: 'files', projectId, view: 'files', selection: node.path },
-                            });
-                            openDetail();
-                          }
-                        }}
-                        changedPaths={changedPaths}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* 右：目录树 → 共享预览；改动集 → 该改动集的详情（一次只做一件事） */}
-            <div className="fg-pane fg-pane-detail">
-              {/* 窄窗口：一次只显示一栏，给一条明确的回退路径 */}
-              {narrow ? (
-                <div className="fg-pane-head row">
-                  <button className="btn ghost sm" onClick={backToList}>
-                    <Icon name="arrow-left" size={12} /> 返回列表
+        <div className="project-split fg-split">
+          {/* 左栏：未移除项目按侧栏拖动顺序排列；当前项目用共享选中态 .is-current 标记。 */}
+          <aside className="project-rail" aria-label="项目" data-zs-files-projects="1">
+            <div className="project-rail-title">项目</div>
+            <div className="project-rail-list">
+              {railProjects.map((p) => {
+                const current = p.id === projectId;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`project-card${current ? ' is-current' : ''}`}
+                    data-zs-files-project={p.id}
+                    aria-current={current ? 'page' : undefined}
+                    title={current ? `${p.displayName}（本页当前项目）` : `切到 ${p.displayName} 的文件与 Git（同时切换当前项目）`}
+                    onClick={() => openProject(p.id)}
+                  >
+                    <span className="project-card-name" title={p.displayName}>{p.displayName}</span>
+                    {/* meta 行常驻（共享 CSS 带 min-height）：卡片高度不随内容跳。
+                        R188 第 8 项去掉「此文件夹未初始化 Git」面板后，这里用一行小字
+                        说明目录有没有 Git，用户不用切页签就能分辨。 */}
+                    <span className="project-card-meta">
+                      <span className="project-card-count">{p.isGit ? 'Git 仓库' : '非 Git 目录'}</span>
+                      {p.status === 'missing' ? <span className="project-card-flag"><Icon name="alert-triangle" size={11} /> 目录失效</span> : null}
+                      {p.archivedAt != null ? <span className="project-card-flag muted"><Icon name="archive" size={11} /> 已归档</span> : null}
+                    </span>
                   </button>
-                  <span className="small faint">
-                    {leftTab === 'changes' ? '任务改动详情' : selected?.path ?? '文件预览'}
+                );
+              })}
+              {railProjects.length === 0 ? <div className="project-rail-empty faint small">还没有项目。先从侧栏「打开/切换项目」添加。</div> : null}
+            </div>
+          </aside>
+
+          {/* 右列：原来的 topbar + 状态/错误面板 + 文件树或 Git 面板全部收进来 */}
+          <section className="project-content fg-rail-content">
+            {/**
+             * R170 第 9 项：文件页顶部与房间页一致——**一条 42px 的合并行**
+             * （本机路径 + 文件/Git 页签 + 仓库状态 + Git 操作）。
+             * 原来这里是「页头 / 页签 / 状态条」三条横带叠在一起，比对话页顶部高出一大截。
+             * 完整状态（上游领先/落后、写入锁、最近一次 Git 操作）收进这一行的 title，
+             * 界面上只留一句最重要的信息。
+             * R188：顶栏的项目下拉已删除（它会让界面横向位移），项目改由左栏卡片切换。
+             */}
+            <div className="fg-topbar" data-zs-files-topbar="1">
+              <Icon name="folder" size={13} className="faint" />
+              <span className="fg-topbar-path mono" title={project.canonicalPath} data-zs-files-path={project.canonicalPath}>{project.canonicalPath}</span>
+              <div className="thread-tabs fg-topbar-tabs">
+                <button className={`thread-tab${tab === 'files' ? ' on' : ''}`} onClick={() => setTab('files')}>
+                  <Icon name="file-text" size={13} /> 文件
+                </button>
+                <button className={`thread-tab${tab === 'git' ? ' on' : ''}`} onClick={() => setTab('git')}>
+                  <Icon name="git-branch" size={13} /> Git
+                  {/* 这个数字是**工作区改动文件数**，不是提交数、也不是审批数 */}
+                  {git && git.status.length > 0 ? (
+                    <span className="faint" title="工作区改动文件数">{changedFileCount}</span>
+                  ) : null}
+                  {!isGit ? <span className="faint">未初始化</span> : null}
+                </button>
+              </div>
+              <span className="spacer" />
+              {(() => {
+                const upstream = curBranch?.upstream == null
+                  ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置）' : '没有上游分支'
+                  : curBranch.ahead == null || curBranch.behind == null
+                    ? `${curBranch.upstream}（领先/落后未知）`
+                    : (() => {
+                      // 领先与落后**同时存在时必须都写出来**，不能互相吃掉。
+                      const parts: string[] = [];
+                      if (curBranch.ahead > 0) parts.push(`领先 ${curBranch.ahead}`);
+                      if (curBranch.behind > 0) parts.push(`落后 ${curBranch.behind}`);
+                      return parts.length > 0 ? parts.join(' · ') : '与远端一致';
+                    })();
+                const detail = [
+                  upstream,
+                  ...(lock != null ? [`${lock.ownerTaskLabel} 正在写入此项目`] : []),
+                  ...(git?.lastOp?.ok ? [`最近一次 Git 操作：${git.lastOp.detail}（${relTime(git.lastOp.at)}）`] : []),
+                ].join('\n');
+                return (
+                  <span className="fg-statusbar fg-statusbar--inline" title={detail}>
+                    <span>{project.isGit ? 'Git 仓库' : '非 Git 目录 · 改动仍会记录'}</span>
+                    {isGit && git ? (
+                      <>
+                        <span className="fg-sep" />
+                        <span className="mono-sm">{git.currentBranch}</span>
+                        <span className="fg-sep" />
+                        <span title="工作区改动文件数">{changedFileCount} 个未提交改动</span>
+                        {lock != null ? <><span className="fg-sep" /><Icon name="lock" size={11} /></> : null}
+                      </>
+                    ) : null}
                   </span>
+                );
+              })()}
+              {tab === 'git' && isGit ? (
+                <div className="fg-topbar-actions">
+                  <button
+                    className="btn ghost sm"
+                    title={`从远端拉取（origin/${git?.currentBranch ?? ''}）`}
+                    onClick={() => void pull(projectId)}
+                    disabled={!curBranch}
+                  >
+                    <Icon name="download" size={12} /> 拉取
+                  </button>
+                  <button
+                    className="btn ghost sm"
+                    title={`推送到所选远端；不会覆盖远端已有提交${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
+                    onClick={() => void push(projectId)}
+                    disabled={!curBranch}
+                  >
+                    <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` (${curBranch.ahead})` : ''}
+                  </button>
+                  {/* 「分支」→「新建分支」：这个按钮是**创建**动作，左栏的「分支」是**查看**视图。 */}
+                  <button className="btn ghost sm" onClick={() => setBranchModal(true)} title="基于当前提交创建分支；不会自动切换分支">
+                    <Icon name="git-branch" size={12} /> 新建分支
+                  </button>
                 </div>
               ) : null}
+            </div>
 
-              {leftTab === 'changes' ? (
-                <div className="fg-pane-scroll" ref={detailRef}>
-                  <FormalChangeDetail key={`${projectId}:${activeCs}`} projectId={projectId} entry={formalChanges.items?.find(c=>c.changeSetId===activeCs)} />
-                </div>
-              ) : selected ? (
-                /*
-                 * 共享预览直接当右栏的滚动宿主：它内部的 .preview-body 就是那
-                 * 一条滚动条，外面**不再套一层** —— 右栏只有一个主要纵向
-                 * 滚动容器，长行由 .preview-diff-body 横向滚。
-                 */
-                <div className="fg-pane-body">
-                  <PreviewPane
-                    context={{ kind: 'files', projectId, view: 'files', selection: selected.path }}
-                    quoteTarget={{ draftKey: `files:${projectId}`, label: '选择讨论位置' }}
-                    className="files-preview-pane"
-                    /*
-                     * 必须给 showEmpty：共享预览在"没有标签"时会 return null，
-                     * 而那个 return 在它自己的 hooks 之前 —— 文件页关掉最后一个
-                     * 标签就会触发 React #300（Rendered fewer hooks than expected）
-                     * 把整页打崩。给 showEmpty 后它渲染空态，右栏结构也保持稳定。
-                     */
-                    showEmpty
-                  />
-                </div>
-              ) : (
-                <div className="fg-pane-scroll">
-                  <div className="small faint">
-                    从左侧选择一个文件查看内容。目录可以展开；带标记的文件是本任务改动过的。
+            {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
+              <div className="panel warning" style={{ marginBottom: 10 }} data-zs-git-read-errors="1">
+                <div className="panel-title"><Icon name="alert-triangle" size={13} /> Git 部分信息读取失败</div>
+                {git.readErrors.status != null ? <div>仓库状态：{git.readErrors.status}（显示上次读取的结果）</div> : null}
+                {git.readErrors.branches != null ? <div>分支：{git.readErrors.branches}（显示上次读取的列表）</div> : null}
+                {git.readErrors.history != null ? <div>历史：{git.readErrors.history}（显示上次读取的列表）</div> : null}
+                {git.readErrors.remotes != null ? <div>远端：{git.readErrors.remotes}（显示上次读取的列表）</div> : null}
+              </div>
+            ) : null}
+
+            {/* 失败不静默（§16.5）：成功态已收进状态条一行，失败才占一块说清楚。
+                真实 Git 执行错误/权限/目录失效仍在此。R188 第 8 项删掉了「此文件夹未初始化
+                Git」的中性提示面板（用户嫌它是废话）：非 Git 目录不再单独占一块，顶栏 Git
+                页签上仍有「未初始化」小字，Git 页本身也会说明。 */}
+            {git?.lastOp && !git.lastOp.ok ? (
+              <div className="panel danger" style={{ marginBottom: 14 }}>
+                <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
+                {git.lastOp.detail}
+                <span className="small faint"> · {relTime(git.lastOp.at)}</span>
+                <button className="btn ghost sm" onClick={() => void refreshGitState(projectId)}>刷新仓库状态</button>
+              </div>
+            ) : null}
+
+            {tab === 'git' ? <PendingGitOperations projectId={projectId}/> : null}
+            {project.status === 'missing' ? (
+              <div className="panel warning" style={{ marginBottom: 14 }}>
+                <div className="panel-title"><Icon name="alert-triangle" size={13} /> 项目目录失效</div>
+                路径 {project.rootPath} 当前不可访问。历史记录仍可查看，但读取文件与 Git 操作会失败；
+                请在顶栏项目菜单里重新定位目录。
+              </div>
+            ) : null}
+
+            {tab === 'files' ? (
+              /**
+               * 文件工作区（L5，§17.9 第 2 条）：左侧目录树 + **右侧共享预览**。
+               *
+               * 这里原来有一套自己的预览壳（卡头 + `<pre>`），与房间/线程那套
+               * 并行存在 —— 于是版本徽标、来源行、引用入口只长在其中一套上。
+               * 现在选中节点即调用 `openWorktreeNode` 把内容交给**同一个** PreviewPane。
+               */
+              <div className={`fg-body${narrow ? ' narrow' : ''}`} data-pane={pane}>
+                {/* 左：目录树 / 改动集 二选一。
+                    头部（标题 + 视图切换）常驻在 pane 里，不会被内容滚走。 */}
+                <div className="fg-pane fg-pane-list">
+                  <div className="fg-pane-head">
+                    <div className="card-title row tight">
+                      <Icon name="folder" size={13} /> 项目文件
+                      <span className="count">{fileCount}</span>
+                      <div className="spacer" />
+                      {/* 真实目录标注：来自用户项目磁盘（project.files.list 安全根内只读列举）。 */}
+                      <span className="small faint" title="项目目录，点击文件可预览">
+                        <Icon name="info" size={11} /> 真实目录
+                      </span>
+                    </div>
+                    <Segmented<'tree' | 'changes'>
+                      value={leftTab}
+                      onChange={(v) => { setLeftTab(v); backToList(); }}
+                      options={[
+                        { value: 'tree', label: '目录树' },
+                        /* 「改动 N」→「改动集 N」：这里是**改动集的数量**，
+                           不是改动文件数，也不是待提交数。 */
+                        { value: 'changes', label: formalChanges.items===null?'任务改动 · 未读取':`任务改动 · 最近 ${formalChanges.items.length} 项` },
+                      ]}
+                    />
+                  </div>
+
+                  {/* 左栏唯一滚动容器：目录树很长时在这里滚，不影响右栏 */}
+                  <div className="fg-pane-scroll files-tree" ref={listRef}>
+                    {leftTab === 'changes' ? (
+                      <FormalChangeList
+                        facts={formalChanges}
+                        selected={activeCs}
+                        onSelect={(id) => { setCsId(id); openDetail(); }}
+                      />
+                    ) : tree.error != null ? (
+                      <div className="panel warning" style={{ margin: 8 }}>
+                        目录读取失败：{userFacingSystemText(tree.error ?? '')}（点击刷新可重新读取）
+                        <div className="panel-actions">
+                          <button className="btn sm" onClick={() => tree.reload()}>重试</button>
+                        </div>
+                      </div>
+                    ) : tree.loading && tree.roots.length === 0 ? (
+                      <div className="small faint" style={{ padding: 8 }}>正在读取项目目录…</div>
+                    ) : tree.roots.length === 0 ? (
+                      <div className="small faint" style={{ padding: 8 }}>
+                        {project.status === 'missing'
+                          ? '目录失效，无法读取文件列表。'
+                          : '这个项目目录为空。'}
+                      </div>
+                    ) : (
+                      <div className="file-tree">
+                        {tree.roots.map((n) => (
+                          <TreeNodeRow
+                            key={n.path}
+                            node={n}
+                            expanded={expanded}
+                            onToggle={toggleDir}
+                            selectedPath={selected?.path}
+                            onSelect={(node) => {
+                              setSelected(node);
+                              /**
+                               * 选中即打开共享预览（§17.9）。真实链：登记工作区资源（真实路径/大小）
+                               * → 预览面板经 project.file.read 实际读取内容（安全根内只读快照）。
+                               * 只有**文件**节点才打开；目录节点不产生预览。
+                               */
+                              if (node.kind === 'file') {
+                                openWorktreePreview(projectId,node.path,node.sizeBytes??0, {
+                                  target: { kind: 'files', projectId, view: 'files', selection: node.path },
+                                });
+                                openDetail();
+                              }
+                            }}
+                            changedPaths={changedPaths}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <GitPage
-            projectId={projectId}
-            embedded
-            narrow={narrow}
-            onRequestBranch={() => setBranchModal(true)}
-          />
-        )}
+
+                {/* 右：目录树 → 共享预览；改动集 → 该改动集的详情（一次只做一件事） */}
+                <div className="fg-pane fg-pane-detail">
+                  {/* 窄窗口：一次只显示一栏，给一条明确的回退路径 */}
+                  {narrow ? (
+                    <div className="fg-pane-head row">
+                      <button className="btn ghost sm" onClick={backToList}>
+                        <Icon name="arrow-left" size={12} /> 返回列表
+                      </button>
+                      <span className="small faint">
+                        {leftTab === 'changes' ? '任务改动详情' : selected?.path ?? '文件预览'}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {leftTab === 'changes' ? (
+                    <div className="fg-pane-scroll" ref={detailRef}>
+                      <FormalChangeDetail key={`${projectId}:${activeCs}`} projectId={projectId} entry={formalChanges.items?.find(c=>c.changeSetId===activeCs)} />
+                    </div>
+                  ) : selected ? (
+                    /*
+                     * 共享预览直接当右栏的滚动宿主：它内部的 .preview-body 就是那
+                     * 一条滚动条，外面**不再套一层** —— 右栏只有一个主要纵向
+                     * 滚动容器，长行由 .preview-diff-body 横向滚。
+                     */
+                    <div className="fg-pane-body">
+                      <PreviewPane
+                        context={{ kind: 'files', projectId, view: 'files', selection: selected.path }}
+                        quoteTarget={{ draftKey: `files:${projectId}`, label: '选择讨论位置' }}
+                        className="files-preview-pane"
+                        /*
+                         * 必须给 showEmpty：共享预览在"没有标签"时会 return null，
+                         * 而那个 return 在它自己的 hooks 之前 —— 文件页关掉最后一个
+                         * 标签就会触发 React #300（Rendered fewer hooks than expected）
+                         * 把整页打崩。给 showEmpty 后它渲染空态，右栏结构也保持稳定。
+                         */
+                        showEmpty
+                      />
+                    </div>
+                  ) : (
+                    <div className="fg-pane-scroll">
+                      <div className="small faint">
+                        从左侧选择一个文件查看内容。目录可以展开；带标记的文件是本任务改动过的。
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <GitPage
+                projectId={projectId}
+                embedded
+                narrow={narrow}
+                onRequestBranch={() => setBranchModal(true)}
+              />
+            )}
+          </section>
+        </div>
       </div>
 
       {/* 「新建分支」只有一份：页头「分支」按钮与 Git 页分支区的按钮都打开它 */}

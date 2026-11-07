@@ -1,6 +1,6 @@
 /* R183 任务看板：左栏项目卡 + 右栏看板（用户 2026-11-04 第 9 项）。
    项目卡列与成员管理共用 styles/r183-project-rail.css；这里只放看板自己的版式：
-   筛选行（房间/计数/撤销/刷新/归档全部）与项目分组。 */
+   筛选行（计数/撤销/刷新/归档全部）与项目分组。 */
 
 /* 看板右栏与成员管理右栏一致：页头是筛选行，项目分区块紧随其后。 */
 .tasks-board-page .project-split {
@@ -26,4 +26,27 @@
    r170-board.css 的 22px 底边距。两处若都生效会叠成 34px，比原来的分区节奏更松。 */
 .tasks-board-page .project-content > .board-project + .board-project {
   margin-top: 0;
+}
+
+/* R188（用户 2026-11-07 第 5 项）：删掉「房间」下拉后，筛选行只剩计数 + 撤销/刷新/归档全部，
+   都是窄控件、数量固定。这里明确不换行——否则窄窗口下最后一个按钮会掉到第二行，看起来像
+   布局错位；计数是唯一可伸缩项，空间不够时用省略号收尾，保证四个控件始终同一行且不撑破行。 */
+.tasks-board-page .project-content > .page-filters {
+  flex-wrap: nowrap;
+}
+
+.tasks-board-page .project-content > .page-filters .filter-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* R188（用户第 3 项）：单卡归档图标从 ×（关闭语义）改成 √（完成/收起）。共享样式里
+   hover 的危险红是「关闭/删除」的语言，会让 √ 看起来像删除，所以在看板范围内（含卡片内
+   的按钮）改成成功色；r170-board.css 是共享文件，不改，避免影响其它页面。 */
+.tasks-board-page .board-card-remove:hover {
+  color: var(--success);
+  background: var(--success-soft);
 }

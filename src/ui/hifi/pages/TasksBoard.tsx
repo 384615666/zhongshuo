@@ -1,9 +1,9 @@
 /**
- * 任务看板（R65 原型还原·TasksBoardPage 同源）：范围（全部项目/单项目）+房间筛选+
- * 项目分组×状态分组卡片。数据=board.view 权威只读聚合（业务状态 taskStatus 与执行状态
- * runStatus 分列；exitUnconfirmed/停止未确认/待验收版本如实标注）。卡片点击定位所属线程
- * （用任务自己的 projectId/roomId/threadId——不拿全局焦点拼链接）；操作（停止/验收/返工）
- * 在线程内按三重身份执行——看板不拖卡改状态（原型语义）。
+ * 任务看板（R65 原型还原·TasksBoardPage 同源）：范围（全部项目/单项目）+ 项目分组×状态分组
+ * 卡片。数据=board.view 权威只读聚合（业务状态 taskStatus 与执行状态 runStatus 分列；
+ * exitUnconfirmed/停止未确认/待验收版本如实标注）。卡片点击定位所属线程（用任务自己的
+ * projectId/roomId/threadId——不拿全局焦点拼链接）；操作（停止/验收/返工）在线程内按
+ * 三重身份执行——看板不拖卡改状态（原型语义）。
  *
  * R170（用户反馈第 3、4 项）：卡片改为「#编号 + 状态标签 / 标题两行 / 房间·项目·原因小字」。
  * R172（用户第 2 项）：单卡 ×、项目「归档本项目」、筛选栏「归档全部」统一叫**归档**——
@@ -15,13 +15,17 @@
  * R183（用户 2026-11-04 第 9 项）：左侧改成和成员管理一样的项目卡列——第一张固定
  * 「全部项目」（即原来的范围「侧栏可见项目」），下面每个未移除项目一张卡。点卡只换**本页**
  * 数据范围（scope/projectId 仍同步进 URL，深链照旧可分享），**不** switchFocusProject、
- * 不改侧栏 active 项目——与成员管理页同一语义。原来的「范围」「项目」两个下拉随之删除，
- * 房间筛选仍留在右栏筛选行；切换范围/项目时房间筛选重置为全部（沿用 roomStillValid 逻辑）。
+ * 不改侧栏 active 项目——与成员管理页同一语义。原来的「范围」「项目」两个下拉随之删除。
+ *
+ * R188（用户 2026-11-07 第 3、4、5 项）：①单卡归档图标由 ×（关闭语义）改成 √，长提示缩短
+ * 为「归档」——这个动作本来就是「从看板收起、任务保留」而不是删除；②删掉筛选行的「房间」
+ * 下拉，列表与计数固定为**当前范围全部房间**（卡片 meta 仍显示房间名），旧链接里的 roomId
+ * 在进入时用 replace 清掉、不再按房间过滤，也不再弹「筛选范围已变化」。
  */
 import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { Select, EmptyState, Tag, TaskStatusTag } from '../components/ui';
+import { EmptyState, Tag, TaskStatusTag } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { openExternalDeepLink } from '../loader';
@@ -63,7 +67,6 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   /** 本页数据范围来自 URL（scope/projectId）——由左侧项目卡写入，不回写全局焦点项目。 */
   const scope: BoardScope = q.scope === 'project' ? 'project' : 'all';
   const scopeProjectId = q.projectId ?? s.activeProjectId;
-  const roomFilter = q.roomId || 'all';
   const scopeKey = scope === 'project' ? `project:${scopeProjectId}` : `visible:${s.visibleProjectIds.slice().sort().join(',')}`;
   const [snapshot, setSnapshot] = useState<{ key: string; groups: BoardGroup[] } | null>(null);
   const data = snapshot?.key === scopeKey ? snapshot : null;
@@ -79,7 +82,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
 
   /**
    * 最近一次归档操作（仅内存，刷新/重开页面后没有撤销入口）：
-   * 单卡 ×、归档本项目、归档全部各算一次操作；撤销只恢复这一批 taskIds。
+   * 单卡 √、归档本项目、归档全部各算一次操作；撤销只恢复这一批 taskIds。
    */
   const [lastArchive, setLastArchive] = useState<{ taskIds: string[] } | null>(null);
 
@@ -107,9 +110,20 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   }, []);
 
   const setParam = (patch: Record<string, string>,replace=false) => {
-    const qs = new URLSearchParams({ scope, projectId: scopeProjectId, roomId: roomFilter, ...patch });
+    const qs = new URLSearchParams({ scope, projectId: scopeProjectId, ...patch });
     navigate(`/board?${qs.toString()}`,{replace});
   };
+
+  /**
+   * R188（用户第 5 项）：看板不再提供房间筛选，口径恒为「当前范围全部房间」。
+   * 但旧收藏/浏览器历史里的 /board?...&roomId=xxx 仍会进来：进入时用 replace 归一清掉一次，
+   * 不新增历史、不弹提示（房间筛选项已经不存在，提示只会让人困惑）。
+   */
+  useEffect(() => {
+    if (q.roomId == null) return;
+    setParam({}, true);
+  // 只在进入页面时处理一次；此后本页自己的导航（scope/projectId）不再写 roomId。
+  }, []);
 
   /** board.view 权威装载（scope=project 显式项目；visible/all 走服务端可见集——与导航偏好一致）。 */
   useEffect(() => {
@@ -142,14 +156,11 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     return () => { disposed = true; ++readGeneration.current; window.clearInterval(timer); };
   }, [scope, scopeProjectId, scopeKey, gen]);
 
-  /** 范围内的房间（来自聚合自带 groups.rooms——同名房间带项目名区分）。 */
-  const scopeRooms = useMemo(() => (data?.groups ?? []).flatMap((g) => (g.rooms ?? []).map((r) => ({ ...r, projectId: g.projectId, projectName: g.displayName }))), [data]);
-  const roomStillValid = roomFilter === 'all' || scopeRooms.some((r) => r.roomId === roomFilter);
-  useEffect(() => {
-    if (data != null && !roomStillValid) { setParam({roomId:'all'},true); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
-  }, [roomStillValid, data]);
+  /** 当前范围内的房间清单（取自聚合自带的 groups.rooms）——R188 起只用于卡片 meta 显示房间名。 */
+  const scopeRooms = useMemo(() => (data?.groups ?? []).flatMap((g) => g.rooms ?? []), [data]);
 
-  const cardsOf = (g: BoardGroup) => g.rooms.flatMap((r) => r.cards).filter((c) => roomFilter === 'all' || c.roomId === roomFilter);
+  /** 当前范围的卡片：R188 起不再按房间过滤（看板口径=当前范围全部房间）。 */
+  const cardsOf = (g: BoardGroup) => g.rooms.flatMap((r) => r.cards);
   const visibleCardsOf = (g: BoardGroup) => cardsOf(g).filter((c) => !hiddenIds.has(c.taskId));
   const totalCount = (data?.groups ?? []).reduce((n, g) => n + visibleCardsOf(g).length, 0);
   const visibleTaskIds = (data?.groups ?? []).flatMap((g) => visibleCardsOf(g).map((c) => c.taskId));
@@ -159,14 +170,14 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
      本来就没任务的项目仍按原逻辑显示占位说明。 */
   const sections = (data?.groups ?? [])
     .map((g) => ({ g, list: visibleCardsOf(g), all: cardsOf(g) }))
-    .filter(({ list, all }) => list.length > 0 || (all.length === 0 && roomFilter === 'all'));
+    .filter(({ list, all }) => list.length > 0 || all.length === 0);
 
   /**
    * R183 项目卡上的任务数：按 projectId 缓存，避免切换项目的空窗期把数字闪成 0。
    *  - 未知（还没装载过这个项目）→ null，卡片不显示数字，**不显示 0**；
    *  - scope=all 一次能拿到每个项目的可见卡片数，顺手写进缓存；
    *  - scope=project 只用当次数据更新当前项目，其它项目保留上次真值（不因不在当次数据里清零）。
-   * 口径与筛选行「共 N 项」一致：已从看板归档的不计，房间筛选生效时按筛选后口径。
+   * 口径与筛选行「共 N 项」一致：已从看板归档的不计。
    * 缓存在 effect 里写（不在 render 里写 ref），写完 bump 一次让卡片读到新值。
    */
   const projectCountCache = useRef<Map<string, number>>(new Map());
@@ -188,7 +199,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
       changed = true;
     }
     if (changed) bumpCounts((v) => v + 1);
-  }, [scope, data, hiddenIds, roomFilter]);
+  }, [scope, data, hiddenIds]);
 
   /** 「全部项目」卡显示的数字：scope=all 用当次真值（同「共 N 项」），其它范围用上次已知总数。 */
   const allScopeCount = scope === 'all' && data != null ? totalCount : allScopeCountCache.current;
@@ -204,16 +215,16 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     return [...list].sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
   }, [s.projects, listOrderVersion]);
 
-  /** 点「全部项目」卡=原「范围=侧栏可见项目」；切范围时房间筛选回到全部（新范围房间集不同）。
+  /** 点「全部项目」卡=原「范围=侧栏可见项目」。
    *  URL 用 replace 同步（同成员管理页切项目）：不把每次切范围都堆进浏览器历史。 */
   const selectAllScope = () => {
     if (scope === 'all') return;
-    setParam({ scope: 'all', roomId: 'all' }, true);
+    setParam({ scope: 'all' }, true);
   };
   /** 点项目卡=只看该项目（scope=project）；只换本页数据范围，不切侧栏 active 项目。 */
   const selectProjectScope = (projectId: string) => {
     if (scope === 'project' && scopeProjectId === projectId) return;
-    setParam({ scope: 'project', projectId, roomId: 'all' }, true);
+    setParam({ scope: 'project', projectId }, true);
   };
 
   const openCard = (c: BoardCard) => {
@@ -310,17 +321,9 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
           </aside>
 
           <section className="project-content">
-            {/* 筛选行：范围/项目已由左栏卡片承担，这里只留房间、计数、撤销、刷新、归档全部。 */}
+            {/* 筛选行：范围/项目已由左栏卡片承担；房间筛选已在 R188 删除，
+                这里只留计数、撤销（有归档时）、刷新、归档全部。 */}
             <div className="page-filters">
-              <label className="field inline">
-                <span className="field-label">房间</span>
-                <Select
-                  value={roomFilter}
-                  ariaLabel="房间筛选"
-                  onChange={v=>setParam({roomId:v})}
-                  options={[{ value: 'all', label: '当前范围全部房间' }, ...scopeRooms.map((r) => ({ value: r.roomId, label: `${r.projectName} · ${r.name}` }))]}
-                />
-              </label>
               <span className="filter-note">{data == null ? '正在读取任务' : `共 ${totalCount} 项`}</span>
               {lastArchive != null ? (
                 <button
@@ -339,7 +342,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                 className={`btn sm board-archive-all${confirmKey === 'all' ? ' danger' : ' ghost'}`}
                 data-zs-board-archive-all="1"
                 disabled={data == null || totalCount === 0}
-                title="只从看板归档这些卡片，不删除任务（任务本身保留，仍可在原对话串打开）"
+                title="归档全部"
                 onClick={archiveAllCards}
               >
                 {confirmKey === 'all' ? '确认归档全部？' : '归档全部'}
@@ -381,7 +384,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                           type="button"
                           className={`btn sm board-archive-btn ${armed ? 'danger' : 'ghost'}`}
                           data-zs-board-archive-project={g.projectId}
-                          title="只从看板归档这些卡片，不删除任务（任务本身保留，仍可在原对话串打开）"
+                          title="归档本项目"
                           onClick={() => archiveProject(g.projectId, list.map((c) => c.taskId))}
                         >
                           {armed ? '确认归档本项目？' : '归档本项目'}
@@ -421,15 +424,17 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                                       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(c); }
                                     }}
                                   >
+                                    {/* R188（用户第 3、4 项）：归档=把卡片从看板收起（任务保留），
+                                        图标用 √ 而不是 ×，提示只说「归档」，不再用长句解释。 */}
                                     <button
                                       type="button"
                                       className="icon-btn sm board-card-remove"
                                       data-zs-board-remove={c.taskId}
-                                      aria-label={c.roomTaskNumber != null ? `归档看板卡片 #${c.roomTaskNumber}` : '归档看板卡片'}
-                                      title="归档（只从看板归档，任务本身保留，仍可在原对话串打开）"
+                                      aria-label={c.roomTaskNumber != null ? `归档 #${c.roomTaskNumber}` : '归档'}
+                                      title="归档"
                                       onClick={(e) => { e.stopPropagation(); archiveCard(c); }}
                                     >
-                                      <Icon name="x" size={13} />
+                                      <Icon name="check" size={13} />
                                     </button>
                                     <div className="board-card-top">
                                       {c.roomTaskNumber != null ? <span className="root-task-no">#{c.roomTaskNumber}</span> : null}

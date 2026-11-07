@@ -1,12 +1,13 @@
-/* R183 侧栏项目 / 房间拖动调换顺序（用户 2026-11-04 第 1 项）。
-   只负责拖动时的视觉反馈；顺序本身由 data/listOrder.ts 管（localStorage，不改 daemon 数据）。 */
+/* R188 侧栏项目 / 房间拖动调换顺序（用户 2026-11-07 第 1 项修正 + 沿用 R183 第 1 项）。
+   只负责拖动时的视觉反馈；顺序本身由 data/listOrder.ts 管（localStorage，不改 daemon 数据）。
 
-/* 可拖动的行：整行可抓；行内只负责点击的操作按钮（⋯/+/图钉/展开箭头）由各自样式保持 pointer，
-   且 App 的 pointerdown 记录会阻止从这些按钮起拖（见 SIDEBAR_DRAG_BLOCKING）。
-   user-select: none —— 防止从名字文字上按下时浏览器改成"拖选文字"而不是拖动整行。 */
+   R188：用户反馈「鼠标放到项目和房间后就变成抓取的鼠标样式，应该用正常的鼠标样式，
+   长按拖动时才变成抓取」。旧版给可拖动行与行主体加了常驻 cursor: grab —— 这里改成：
+   · 平时保持该行原本的样式（按钮仍是可点击指针、行本身按默认箭头），不做"可抓"暗示；
+   · 只有真正进入拖动（App 加 .is-dragging）时才显示抓取光标。
+   user-select: none 保留——防止从名字文字上按下时浏览器改成"拖选文字"而不是拖动整行。 */
 .side-project > .side-row[draggable='true'],
 .conversation-nav-row[draggable='true'] {
-  cursor: grab;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -17,6 +18,11 @@
   opacity: 0.45;
   cursor: grabbing;
   transition: opacity 0.12s ease;
+}
+
+/* 拖动进行时，整条侧栏都用抓取光标：拖动指针会经过其它行，不能让光标在行间来回变。 */
+.sidebar:has(.is-dragging) {
+  cursor: grabbing;
 }
 
 /* 落点指示：在目标行的上/下缘画一条 2px 强调色横线 = 「插到这里」。
@@ -52,12 +58,6 @@
 
 .conversation-nav-row {
   position: relative;
-}
-
-/* 拖动提示：鼠标悬停行主体时给一点「可抓」的可发现性（拖动本身仍从行上开始）。 */
-.sidebar .side-project > .side-row:hover .side-item-label-btn,
-.sidebar .conversation-nav-row:hover .side-item {
-  cursor: grab;
 }
 
 @media (prefers-reduced-motion: reduce) {

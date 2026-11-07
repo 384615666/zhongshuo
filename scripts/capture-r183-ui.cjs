@@ -24,8 +24,8 @@
  *    改配置先 member.update 再 member.setRuntime，且 setRuntime 用 update 返回的新 revision）
  *  - template-add / template-add-submit：第 8 项（模板卡打开同一个添加 AI 弹窗并预填；提交走 member.create）
  *  - board-rail / board-archive / board-undo：第 9 项（左栏「全部项目」卡 + 项目卡；删除范围/项目下拉）
- *  - layout-symmetry-1360 / layout-symmetry-1873：第 2、9 项几何（卡片左缘到页面内容左缘 =
- *    卡片右缘到右栏内容左缘，±2px；1360 宽按 24px、1873 宽按 40px 页边距）
+ *  - layout-symmetry-1360 / layout-symmetry-1873：第 2、9 项几何（R188 第 2 项后已改为
+ *    卡片左缘到页面左缘 = 卡片右缘到分隔线 = 16px，±2px；1360 与 1873 两档相同）
  *  - sidebar-drag / sidebar-drag-reload：第 1 项（合成 DragEvent 拖动项目/房间；localStorage 落盘；
  *    重载后顺序保持；置顶项目排最前）
  *
@@ -585,7 +585,9 @@ const scenesSource = String.raw`(() => {
       check('左栏有项目卡 ≥4', projectCards.length >= 4);
       check('「范围」下拉已删除', extra.scopeSelectGone);
       check('「项目」下拉已删除', extra.projectSelectGone);
-      check('房间筛选仍在筛选行', extra.roomFilterPresent);
+      // R188 第 5 项：房间筛选下拉已删除，口径固定为当前范围全部房间。
+      check('看板不再有「房间筛选」下拉（R188 第 5 项）', !extra.roomFilterPresent);
+      check('筛选行文字不含「房间筛选」', extra.filtersText.indexOf('房间筛选') < 0);
       const community = projectCards.find((el) => textOf(el).indexOf('社区运营') >= 0);
       if (community == null) throw Error('看板左栏没有「社区运营」项目卡');
       clearCommands();
@@ -594,14 +596,14 @@ const scenesSource = String.raw`(() => {
       await wait(900);
       extra.viewAfterProject = lastCommand('board.view') && lastCommand('board.view').params;
       extra.currentProjectCard = textOf(q('.project-card.is-current'));
-      extra.roomFilterText = comboText('房间筛选');
       extra.cardsAfterProject = qa('[data-zs-task-id]').length;
       extra.hashAfterProject = window.location.hash;
       extra.projectSectionsAfterProject = qa('.board-project').length;
+      extra.roomFilterAfterProject = q('[aria-label="房间筛选"]') != null;
       check('点项目卡后看板 scope=project 且带该项目 ID', extra.viewAfterProject != null && extra.viewAfterProject.scope === 'project' && extra.viewAfterProject.projectId === community.dataset.zsBoardProject);
-      check('点项目卡后 URL 带 scope=project 与 roomId=all', /scope=project/.test(extra.hashAfterProject) && /roomId=all/.test(extra.hashAfterProject) && extra.hashAfterProject.indexOf(encodeURIComponent(community.dataset.zsBoardProject)) >= 0);
+      check('点项目卡后 URL 带 scope=project 与 projectId，且不再写 roomId', /scope=project/.test(extra.hashAfterProject) && extra.hashAfterProject.indexOf(encodeURIComponent(community.dataset.zsBoardProject)) >= 0 && !/[?&]roomId=/.test(extra.hashAfterProject));
       check('点项目卡后只显示该项目的看板分组', extra.projectSectionsAfterProject <= 1);
-      check('点项目卡后房间筛选清空为全部', /全部/.test(extra.roomFilterText));
+      check('点项目卡后仍没有房间筛选下拉', !extra.roomFilterAfterProject);
       clearCommands();
       allCard.click();
       await until(() => commands().some((row) => row.method === 'board.view' && row.params != null && row.params.scope === 'all'), '点全部项目回到 scope=all', 25000);
@@ -610,7 +612,7 @@ const scenesSource = String.raw`(() => {
       extra.hashAfterAll = window.location.hash;
       extra.allCardCurrent = q('[data-zs-board-scope-all]') != null && q('[data-zs-board-scope-all]').classList.contains('is-current');
       check('点「全部项目」回到 scope=all', extra.viewAfterAll != null && extra.viewAfterAll.scope === 'all');
-      check('点「全部项目」URL 回到 scope=all', /scope=all/.test(extra.hashAfterAll));
+      check('点「全部项目」URL 回到 scope=all 且无 roomId', /scope=all/.test(extra.hashAfterAll) && !/[?&]roomId=/.test(extra.hashAfterAll));
       check('「全部项目」卡显示选中态', extra.allCardCurrent);
       window.r183Extra = extra;
     } },
@@ -754,14 +756,18 @@ const scenesSource = String.raw`(() => {
   ];
 
   /** 成员页 + 看板页各量一次左栏几何。
-   *  左留白 = 项目卡左缘 - .page 盒子左缘（.page 的水平内边距就是页面边缘到内容区的留白，
-   *  共享 CSS 的几何目标正是让它等于 24px / 40px）；右留白 = 右栏内容左缘 - 项目卡右缘。
+   *  R188 第 2 项起几何目标改为 16px/16px：
+   *  左留白 = 项目卡左缘 - .page 盒子左缘（页面 padding-left 收到 16px）；
+   *  右留白 = 卡片右缘到**分隔线**（.project-split::before 的定位线，贴 280px 左栏右缘；
+   *  --project-rail-inner=16px）。右栏内容与分隔线之间还有 --project-rail-gap（16/32），
+   *  不属于卡片自身留白，只作为 contentGap 记录。
    *  另记「卡片左缘 - 页面内容区左缘」（contentLeftGap，正常应为 0）便于核对。 */
   const measureSplit = (label) => {
     const page = q('.page');
     const card = q('.project-card') || q('[data-zs-members-project]') || q('[data-zs-board-project]');
     const content = q('.project-content') || q('.members-content') || q('.tasks-board-page > .board-project');
     const rail = q('.project-rail') || q('.members-projects');
+    const split = q('.project-split');
     if (page == null || card == null || content == null) {
       return { label, ok: false, missing: { page: page == null, card: card == null, content: content == null, rail: rail == null } };
     }
@@ -770,9 +776,20 @@ const scenesSource = String.raw`(() => {
     const paddingLeft = parseFloat(style.paddingLeft) || 0;
     const cardRect = card.getBoundingClientRect();
     const contentRect = content.getBoundingClientRect();
+    let dividerX = rail == null ? null : Math.round(rail.getBoundingClientRect().right * 10) / 10;
+    let dividerPseudo = null;
+    if (split != null) {
+      try {
+        const pseudo = getComputedStyle(split, '::before');
+        const pseudoLeft = parseFloat(pseudo.left);
+        dividerPseudo = { content: String(pseudo.content), left: Number.isFinite(pseudoLeft) ? pseudoLeft : null, width: parseFloat(pseudo.width) };
+        if (Number.isFinite(pseudoLeft)) dividerX = Math.round((split.getBoundingClientRect().left + pseudoLeft) * 10) / 10;
+      } catch { /* 伪元素读不到时退回左栏右缘 */ }
+    }
     const leftGap = Math.round((cardRect.left - pageRect.left) * 10) / 10;
     const contentLeftGap = Math.round((cardRect.left - (pageRect.left + paddingLeft)) * 10) / 10;
-    const rightGap = Math.round((contentRect.left - cardRect.right) * 10) / 10;
+    const dividerGap = dividerX == null ? null : Math.round((dividerX - cardRect.right) * 10) / 10;
+    const contentGap = Math.round((contentRect.left - cardRect.right) * 10) / 10;
     return {
       label,
       ok: true,
@@ -784,8 +801,12 @@ const scenesSource = String.raw`(() => {
       contentLeft: Math.round(contentRect.left * 10) / 10,
       leftGap,
       contentLeftGap,
-      rightGap,
-      diff: Math.round(Math.abs(leftGap - rightGap) * 10) / 10,
+      dividerX,
+      dividerPseudo,
+      dividerGap,
+      contentGap,
+      rightGap: dividerGap,
+      diff: dividerGap == null ? null : Math.round(Math.abs(leftGap - dividerGap) * 10) / 10,
       railWidth: rail == null ? null : Math.round(rail.getBoundingClientRect().width * 10) / 10,
     };
   };
@@ -798,16 +819,17 @@ const scenesSource = String.raw`(() => {
     await until(() => q('[data-zs-task-id]') != null, '看板卡片', 30000);
     await wait(1000);
     extra.board = measureSplit('board');
-    extra.membersPage = { leftGap: extra.members.leftGap, rightGap: extra.members.rightGap, diff: extra.members.diff };
-    extra.boardPage = { leftGap: extra.board.leftGap, rightGap: extra.board.rightGap, diff: extra.board.diff };
+    extra.membersPage = { leftGap: extra.members.leftGap, rightGap: extra.members.rightGap, dividerGap: extra.members.dividerGap, diff: extra.members.diff };
+    extra.boardPage = { leftGap: extra.board.leftGap, rightGap: extra.board.rightGap, dividerGap: extra.board.dividerGap, diff: extra.board.diff };
     window.r183Extra = extra;
-    const expectedGap = window.innerWidth >= 1700 ? 40 : 24;
+    // R188 第 2 项：卡片两侧留白都收到 16px（1360 与 1873 两档相同；不再有 24/40px 页边距）。
+    const expectedGap = 16;
     check('成员页左栏几何可测量（.project-rail/.project-content 存在）', extra.members.ok === true);
-    check('成员页左留白=右留白（±2px）', extra.members.ok === true && extra.members.diff <= 2);
-    check('成员页左右留白等于页边距 ' + expectedGap + 'px（±2px）', extra.members.ok === true && Math.abs(extra.members.leftGap - expectedGap) <= 2 && Math.abs(extra.members.rightGap - expectedGap) <= 2);
+    check('成员页左留白=卡片右缘到分隔线（±2px）', extra.members.ok === true && extra.members.diff != null && extra.members.diff <= 2);
+    check('成员页两侧留白都=' + expectedGap + 'px（±2px）', extra.members.ok === true && Math.abs(extra.members.leftGap - expectedGap) <= 2 && extra.members.dividerGap != null && Math.abs(extra.members.dividerGap - expectedGap) <= 2);
     check('看板左栏几何可测量（.project-rail/.project-content 存在）', extra.board.ok === true);
-    check('看板左留白=右留白（±2px）', extra.board.ok === true && extra.board.diff <= 2);
-    check('看板左右留白等于页边距 ' + expectedGap + 'px（±2px）', extra.board.ok === true && Math.abs(extra.board.leftGap - expectedGap) <= 2 && Math.abs(extra.board.rightGap - expectedGap) <= 2);
+    check('看板左留白=卡片右缘到分隔线（±2px）', extra.board.ok === true && extra.board.diff != null && extra.board.diff <= 2);
+    check('看板两侧留白都=' + expectedGap + 'px（±2px）', extra.board.ok === true && Math.abs(extra.board.leftGap - expectedGap) <= 2 && extra.board.dividerGap != null && Math.abs(extra.board.dividerGap - expectedGap) <= 2);
   };
 
   window.r183Scenes = scenes;

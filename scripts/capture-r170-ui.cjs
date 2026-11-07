@@ -164,13 +164,15 @@ const scenesSource = String.raw`(() => {
       await until(() => qa('[data-zs-task-id]').length > 0, '看板卡片');
       await wait(900);
       // R183 第 9 项：左栏项目卡列 + 「全部项目」卡；「范围/项目」下拉已删除。
+      // R188 第 5 项：看板不再有「房间筛选」下拉——这里如实记录它已不存在（不是新增断言）。
       window.r170Extra = {
         cards: qa('[data-zs-task-id]').length,
         allCard: textOf(q('[data-zs-board-scope-all]')),
         projectCards: qa('[data-zs-board-project]').map(textOf),
         scopeSelectGone: q('[aria-label="看板范围"]') == null,
         projectSelectGone: q('[aria-label="看板项目"]') == null,
-        roomFilter: q('[aria-label="房间筛选"]') != null,
+        roomFilterGone: q('[aria-label="房间筛选"]') == null,
+        filterText: textOf(q('.tasks-board-page .page-filters') || q('.page-filters')),
       };
     } },
     { name: 'board-archive', run: async () => {

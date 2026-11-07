@@ -1,0 +1,99 @@
+/* R188 文件与 Git 页：左侧项目卡列（与成员管理/看板同一套 .project-split / .project-rail /
+   .project-card，见 r183-project-rail.css），用项目卡替代原来的顶栏项目下拉（用户 2026-11-07
+   第 6 项：点下拉切项目会导致整个界面左移）。
+
+   本文件只处理"文件页自身不滚动、左右两栏各自滚动"的骨架与共享项目卡列的适配。 */
+
+/* .fg-page 原来是 flex 列（页头/页签/状态条 + fg-body）。R188 起它只有一个子元素
+   .project-split：左项目卡列 + 右内容列（右列内部再是原来的 topbar/fg-body 结构）。
+   .fg-page > * { flex:none } 的既有规则会把 .project-split 压扁，这里恢复它占满高度。 */
+.fg-page > .project-split.fg-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 两栏拉满同一高度：左栏是固定宽度的项目卡列（280px，共享 CSS），右栏是 flex 列。
+     两栏宽度都不随项目内容/装载状态变化，所以切项目不会横向位移。 */
+  align-items: stretch;
+}
+
+/* 文件页整页不滚动：左栏不用 sticky（sticky 需要滚动容器），直接铺满高度、自身可滚动。 */
+.fg-page .project-rail {
+  position: static;
+  top: auto;
+  max-height: none;
+  align-self: stretch;
+  overflow: hidden;
+}
+
+/* 右列：保持原来的 flex 列（topbar 常驻 + fg-body 吃掉剩余高度）。 */
+.fg-rail-content {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 右列里的固定块（topbar / 提示面板 / 空态）不参与压缩，剩余高度全部留给 fg-body。
+   这是原 `.fg-page > * { flex:none }` 的语义，只是现在多包了 .project-content 一层。 */
+.fg-rail-content > * {
+  flex: none;
+}
+
+/* 文件树 / Git 两栏骨架吃掉右列剩余高度（与原 `.fg-page > .fg-body` 一致）。
+   原来的左/右 18px、上 12px 外边距写在 r170-preview.css 的
+   `.fg-page > .fg-body`（直接子选择器）上；多包一层后不再命中，这里按原值补回，
+   使顶栏内容、提示面板、两栏工作区仍然左右对齐、上缘留 12px。 */
+.fg-rail-content > .fg-body,
+.fg-rail-content > .git-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 12px 18px 0;
+}
+
+/* 状态/错误面板：同上，按原 `.fg-page > .panel { margin-left/right: 18px }` 补回。 */
+.fg-rail-content > .panel {
+  margin-left: 18px;
+  margin-right: 18px;
+}
+
+/* 顶栏（42px 合并行）：原样式挂在 r170-preview.css 的 `.page.fg-page > .fg-topbar` 上，
+   R188 结构多了一层后不再命中。这里逐项照抄原值（只换选择器、不动观感）：
+   路径 + 文件/Git 页签 + 仓库状态 + Git 操作仍是一条不换行的合并行。 */
+.fg-page .fg-rail-content > .fg-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-width: 0;
+}
+
+/* 左栏的项目卡列表在固定高度里自己滚动（项目多时不被截断）。
+   共享 CSS 已给 .project-rail-list overflow-y:auto，这里只需保证它能在
+   "整页不滚动"的容器里拿到高度：父级 .project-rail 是 flex 列，list 是 flex:1。 */
+.fg-page .project-rail-list {
+  min-height: 0;
+}
+
+/* ≤1100px：与原 r170-preview.css 一致，收窄 topbar / 工作区的水平内边距。 */
+@media (max-width: 1100px) {
+  .fg-page .fg-rail-content > .fg-topbar {
+    padding: 0 14px;
+    gap: 8px;
+  }
+
+  .fg-rail-content > .fg-body,
+  .fg-rail-content > .git-layout {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .fg-rail-content > .panel {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+}
+
+/* ≤980px：共享 CSS 已把 .project-split 改成上下排列（项目卡变成顶部横排一条）。
+   横排时左栏不再固定宽度、右列自己占满一行，超出部分由共享 CSS 处理，
+   本文件不需要额外覆盖，避免和 Lead 统一调的间距参数打架。 */

@@ -2,13 +2,21 @@ import { userFacingSystemText } from '../../contracts/userFacingText';
 /**
  * 搜索与收藏（r55 H3 真实接线——沿批准原型 /library 的「搜索/收藏」合页与筛选行布局）：
  *  - 搜索：search.query 正式命令（消息/线程锚文本/任务标题——附件只随所在消息检索；范围
- *    project=当前项目 / all=全部可访问项目；kind/页码分页）。结果带正式 locate 深链
+ *    project=当前项目 / visible=侧栏可见项目；kind/页码分页）。结果带正式 locate 深链
  *    （#msg=/#task=）——点击经 deepLink.resolve 服务端定位，跨项目自动打开；不猜归属。
  *  - 收藏：saved.list（逐条 ok/missing/forbidden 如实——目标被删/越权不伪装可点）；
  *    取消收藏=saved.remove（只删收藏行，原内容不动）。收藏入口在线程回复消息的书签按钮
  *    （saved.add 幂等）。
  * 失败反馈真实：装载失败保留旧结果并上屏；空态与失败分开。请求代次收口：切标签/范围/
  * 项目的迟到响应不污染当前页。
+ *
+ * R188（用户 2026-11-07 第 7 项）：本页改成和任务看板一样的左侧项目卡列，替换原来的
+ * 「范围」三选一下拉（当前项目 / 侧栏可见项目 / 全部可访问项目）。用户确认两条语义：
+ *  ① 点项目卡**同时切换当前项目**（`focusProject`——侧栏高亮与标题栏同步），不做成看板那种
+ *     「只换本页范围」；
+ *  ② 第一张固定卡「全部项目」= 原来的 `scope='visible'`（侧栏当前可见的项目），不是全部可访问项目。
+ * 于是范围只剩「某个项目 / 全部项目（侧栏可见）」两档；页签行、筛选行与结果区都留在右列，
+ * 左栏项目卡承担范围选择，页面本身仍正常滚动（不是文件页那种整页不滚动的 fg-page）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
@@ -17,6 +25,8 @@ import { useStore, toast } from './shell';
 import { command } from './bridge';
 import { openExternalDeepLink, refreshSavedMessageRefs } from './loader';
 import { recordWrite } from './data/store';
+import { focusProject } from './data/actions-nav';
+import { orderProjectIds, useListOrderVersion } from './data/listOrder';
 
 interface SearchRow {
   kind: string; snippet?: string; title?: string; status?: string;
@@ -25,7 +35,7 @@ interface SearchRow {
   locate: string;
 }
 interface SearchData {
-  page: number; pageSize: number; scope: 'project' | 'all';
+  page: number; pageSize: number; scope: 'project' | 'visible';
   messages: Array<SearchRow & { kind: 'message'; snippet: string; createdAt: number }>;
   threads: Array<SearchRow & { kind: 'thread'; snippet: string; createdAt: number; taskId: string | null }>;
   tasks: Array<SearchRow & { kind: 'task'; title: string; status: string; createdAt: number | null }>;
@@ -53,12 +63,15 @@ function taskStatusZh(status: string): string {
 
 export function LibraryPage() {
   const projectId = useStore((s) => s.activeProjectId);
+  const projects = useStore((s) => s.projects);
   const visibleProjectIds = useStore((s) => s.visibleProjectIds);
   const pinnedProjectIds = useStore((s) => s.pinnedProjectIds);
   const allRooms = useStore((s) => s.rooms);
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
   const [tab, setTab] = useState<'search' | 'saved'>('search');
-  const [scope, setScope] = useState<'project' | 'visible' | 'all'>('project');
+  /** R188 第 7 项：范围只剩两档——'project'（左栏某张项目卡）与 'visible'（「全部项目」卡，
+   *  =原来的侧栏可见集）。默认沿用原来的「当前项目」（=activeProjectId），由页内项目卡表达。 */
+  const [scope, setScope] = useState<'project' | 'visible'>('project');
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'message' | 'thread' | 'task'>('all');
   /** 既有筛选（r56 H4 §5）：作者显示名/日期窗（本机时区）/会话（当前项目房间）——与
@@ -79,8 +92,36 @@ export function LibraryPage() {
   const savedGenRef = useRef(0);
   const mountedRef = useRef(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * 左栏项目卡（R188 第 7 项）：与成员管理/看板/文件页共用共享类，顺序跟随侧栏拖动偏好
+   * （R183 第 1 项的本机显示顺序，`orderProjectIds` + 事件订阅）。已移除项目不出卡——
+   * 它们也不在任何项目范围里；新项目按原顺序追加在末尾。
+   */
+  const listOrderVersion = useListOrderVersion();
+  const railProjects = useMemo(() => {
+    const list = projects.filter((p) => p.removedAt == null);
+    const byId = new Map(list.map((p) => [p.id, p] as const));
+    return orderProjectIds(list.map((p) => p.id)).flatMap((id) => {
+      const p = byId.get(id);
+      return p == null ? [] : [p];
+    });
+  }, [projects, listOrderVersion]);
+  const currentProjectName = projects.find((p) => p.id === projectId)?.displayName ?? '';
+  /** 还没打开任何项目：scope='project' 不可用（和服务端「scope=project 需要 projectId」一致），
+   *  界面明确引导去点「全部项目」，而不是静默搜出空结果。 */
+  const noActiveProject = projectId == null || projectId === '';
+  /**
+   * 侧栏「可见项目」集合 = 可见 ∪ 置顶（与看板左栏、侧栏房间列表同口径），去掉已移除项目。
+   * 「全部项目」卡的搜索与收藏过滤都用它；searchKey 也带上它，侧栏可见集变化时旧响应作废。
+   */
+  const visibleProjectSet = useMemo(() => {
+    const removed = new Set(projects.filter((p) => p.removedAt != null).map((p) => p.id));
+    return new Set([...visibleProjectIds, ...pinnedProjectIds].filter((id) => !removed.has(id)));
+  }, [projects, visibleProjectIds, pinnedProjectIds]);
+
   const searchKey = JSON.stringify([q.trim(), scope,
-    scope === 'project' ? projectId : scope === 'visible' ? [...new Set([...visibleProjectIds, ...pinnedProjectIds])].sort() : '',
+    scope === 'project' ? projectId : [...visibleProjectSet].sort(),
     kind, author.trim(), fromDay, toDay, scope === 'project' ? convId : '']);
   const visibleResult = resultKey === searchKey ? result : null;
   const visibleSearchErr = searchErrKey === searchKey ? searchErr : null;
@@ -88,6 +129,31 @@ export function LibraryPage() {
     mountedRef.current = true;
     return () => { mountedRef.current = false; searchGenRef.current += 1; savedGenRef.current += 1; };
   }, []);
+
+  /**
+   * 点「全部项目」卡 = 原来的范围「侧栏可见项目」（scope='visible'）。
+   * 只换本页范围，不切当前项目——用户确认的第 7 项语义②。
+   */
+  const selectAllProjects = () => {
+    if (scope !== 'visible') setScope('visible');
+  };
+  /**
+   * 点项目卡 = 本页只看该项目 + **同时切换当前项目**（用户 2026-11-07 确认的第 7 项语义①）：
+   * 走唯一入口 focusProject，侧栏高亮与标题栏同步；announce:false 是因为这是明确的用户点击
+   * （不是深链补选），不必每次弹「已在侧栏显示」。
+   * 会话筛选用的是「当前项目的房间」，切项目后旧会话属于旧项目，必须清空（否则会拿旧项目
+   * 的 conversationId 去搜新项目，结果只会是空）。
+   */
+  const selectProject = (pid: string) => {
+    if (pid === projectId && scope === 'project') return;
+    if (pid !== projectId) {
+      setConvId('');
+      focusProject(pid, { announce: false });
+    }
+    setScope('project');
+  };
+  /** 本页点卡之外切项目（侧栏/标题栏/深链）时同样清掉旧会话筛选——理由同上。 */
+  useEffect(() => { setConvId(''); }, [projectId]);
 
   const runSearch = useCallback(async (nextPage: number) => {
     if (!mountedRef.current) return;
@@ -105,7 +171,7 @@ export function LibraryPage() {
     if (scope === 'project' && (projectId == null || projectId === '')) {
       searchGenRef.current += 1; // 同判：切换到无效范围也作废在途（迟到结果不归属新上下文）
       setSearching(false);
-      setSearchErr('尚未打开项目——先在侧栏打开项目，或把范围切到「全部可访问项目」');
+      setSearchErr('尚未打开项目——左栏点「全部项目」查看侧栏可见项目，或先在侧栏打开一个项目');
       setSearchErrKey(searchKey);
       return;
     }
@@ -177,168 +243,225 @@ export function LibraryPage() {
   const rows: Array<SearchRow> = visibleResult == null ? [] : [...visibleResult.messages, ...visibleResult.threads, ...visibleResult.tasks]
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   const total = rows.length;
+  /** 范围说明放在筛选行末尾（原来的「范围」下拉已由左栏项目卡承担）：让用户随时看清
+   *  当前结果属于哪个项目——文案与卡片标题一致，不另造术语。 */
+  const scopeNote = scope === 'project'
+    ? `范围：${currentProjectName !== '' ? `「${currentProjectName}」` : '当前项目'}`
+    : '范围：全部项目（侧栏可见）';
+  const searchPlaceholder = scope === 'project'
+    ? `在${currentProjectName !== '' ? `「${currentProjectName}」` : '当前项目'}搜消息/线程/任务标题…（Enter 检索）`
+    : '在全部项目搜消息/线程/任务标题…（Enter 检索）';
 
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-library="hifi">
-      <div className="page">
-        {/* 标签在上、一个筛选行在下（原型 §17.7：范围对两个标签都生效；关键词/类型/作者/
-            日期/会话只对搜索生效——同一行里各自可辨，控件样式与看板/成员/归档同套）。 */}
-        <div className="thread-tabs" style={{ marginBottom: 12 }}>
-          <button role="tab" aria-selected={tab === 'search'} className={`thread-tab${tab === 'search' ? ' on' : ''}`} onClick={() => setTab('search')}>
-            <Icon name="search" size={13} /> 搜索
-          </button>
-          <button role="tab" aria-selected={tab === 'saved'} className={`thread-tab${tab === 'saved' ? ' on' : ''}`} onClick={() => setTab('saved')}>
-            <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
-          </button>
-        </div>
-
-        <div className="page-filters">
-          <label className="field inline" title="范围：当前项目、侧栏可见项目或全部可访问项目">
-            <span className="field-label">范围</span>
-            <Select
-              value={scope}
-              ariaLabel="搜索范围"
-              onChange={(v) => setScope(v as 'project' | 'visible' | 'all')}
-              options={[
-                { value: 'project', label: '当前项目' },
-                { value: 'visible', label: '侧栏可见项目' },
-                { value: 'all', label: '全部可访问项目' },
-              ]}
-            />
-          </label>
-          {tab === 'search' ? (
-            <>
-              <label className="field inline">
-                <span className="field-label">类型</span>
-                <Select value={kind} ariaLabel="类型" onChange={(v) => setKind(v as typeof kind)} options={KIND_FILTERS.map((f) => ({ value: f.value, label: f.label }))} />
-              </label>
-              <div className="row tight" style={{ flex: '1 1 220px', minWidth: 180, border: '1px solid var(--border)', borderRadius: 7, padding: '0 8px', background: 'var(--bg-surface)' }}>
-                <Icon name="search" size={13} className="faint" style={{ flex: 'none' }} />
-                <input
-                  className="input"
-                  style={{ border: 'none', boxShadow: 'none', flex: 1, minWidth: 0, background: 'transparent' }}
-                  placeholder={scope === 'project' ? '在当前项目搜消息/线程/任务标题…（Enter 检索）' : '在全部可访问项目搜消息/线程/任务标题…（Enter 检索）'}
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); searchNow(1); } }}
-                />
-              </div>
-              <label className="field inline" title="按作者名称筛选">
-                <span className="field-label">作者</span>
-                <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
-              </label>
-              <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
-                <span className="field-label">日期</span>
-                <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
-                <span className="faint small">至</span>
-                <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
-              </label>
-              {scope === 'project' && rooms.length > 0 ? (
-                <label className="field inline" title="限定会话（当前项目的房间）">
-                  <span className="field-label">会话</span>
-                  <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
-                </label>
-              ) : null}
-              <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => searchNow(1)}>{searching ? '检索中…' : '检索'}</button>
-            </>
-          ) : null}
-          <span className="filter-note">
-            {tab === 'search' ? '搜索范围为消息、线程和任务标题，不含文件正文' : `收藏总计 ${saved?.length ?? 0} 条`}
-          </span>
-        </div>
-
-      {tab === 'search' ? (
-        <>
-          {visibleSearchErr != null ? <div className="panel warning">搜索失败：{userFacingSystemText(visibleSearchErr ?? '')}。可重试</div> : null}
-          {visibleResult == null && visibleSearchErr == null && q.trim().length === 0 && !searching ? (
-            <EmptyState icon="search" title="输入关键词开始搜索" detail="按 Enter 检索，点击结果可回到原处。" />
-          ) : null}
-          {visibleResult == null && visibleSearchErr == null && (q.trim().length > 0 || searching) ? (
-            <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
-          ) : null}
-          {visibleResult != null ? (
-            <>
-              {total === 0 ? (
-                <EmptyState icon="search" title="本页没有命中" detail={`第 ${visibleResult.page} 页没有匹配结果，换关键词或范围再试。`} />
-              ) : null}
-              <div className="col" style={{ gap: 8 }}>
-                {rows.map((r) => (
-                  <button key={`${r.kind}-${r.messageId ?? r.threadId ?? r.taskId}`} className="card tight" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => locate(r.locate)} title="点击回到原处">
-                    <div className="row tight wrap">
-                      <Tag tone="accent" icon="folder">{r.projectName}</Tag>
-                      <Tag tone={r.kind === 'task' ? 'info' : 'neutral'} icon={r.kind === 'task' ? 'list' : r.kind === 'thread' ? 'message-circle' : 'message-square'}>
-                        {r.kind === 'message' ? '消息' : r.kind === 'thread' ? '线程' : '任务'}
-                      </Tag>
-                      {r.kind === 'task' && r.status != null ? <span className="faint small">{taskStatusZh(r.status)}</span> : null}
-                      <div className="spacer" />
-                      <span className="faint small">{r.createdAt != null ? new Date(r.createdAt).toLocaleString() : ''}</span>
-                      <span className="faint small" style={{ color: 'var(--accent,#2563eb)' }}>回原处 ↗</span>
-                    </div>
-                    <div className="small" style={{ marginTop: 4, lineHeight: 1.65 }}>{r.kind === 'task' ? r.title : r.snippet}</div>
+      <div className="page library-page">
+        {/* R188 第 7 项：左栏项目卡列（与成员管理/看板/文件页同一套 .project-split /
+            .project-rail / .project-card，见 styles/r183-project-rail.css），替代原来的「范围」
+            下拉——范围不再是抽象三选一，而是「看哪个项目」，与看板同一种操作。 */}
+        <div className="project-split">
+          <aside className="project-rail" aria-label="项目">
+            <div className="project-rail-title">项目</div>
+            <div className="project-rail-list">
+              {/* 第一张固定卡「全部项目」=侧栏当前可见的项目（原 scope='visible'）。
+                  点它只换本页范围，不切当前项目（与看板「全部项目」一致）。 */}
+              <button
+                type="button"
+                className={`project-card is-all-scope${scope === 'visible' ? ' is-current' : ''}`}
+                data-zs-library-scope-all="1"
+                aria-current={scope === 'visible' ? 'page' : undefined}
+                title="在全部项目里搜索/查看收藏（只含侧栏当前可见的项目；不切换当前项目）"
+                onClick={selectAllProjects}
+              >
+                <span className="project-card-name">
+                  <Icon name="grid" size={12} />
+                  <span className="project-card-name-text">全部项目</span>
+                </span>
+                {/* meta 行常驻（共享 CSS min-height）：卡片高度不因有无说明而跳。 */}
+                <span className="project-card-meta">侧栏可见项目</span>
+              </button>
+              {railProjects.map((p) => {
+                const current = scope === 'project' && p.id === projectId;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`project-card${current ? ' is-current' : ''}`}
+                    data-zs-library-project={p.id}
+                    aria-current={current ? 'page' : undefined}
+                    title={current ? `${p.displayName}（搜索与收藏页当前项目）` : `只看「${p.displayName}」，并把当前项目切到它`}
+                    onClick={() => selectProject(p.id)}
+                  >
+                    <span className="project-card-name" title={p.displayName}>{p.displayName}</span>
+                    <span className="project-card-meta">
+                      {p.status === 'missing' ? (
+                        <span className="project-card-flag"><Icon name="alert-triangle" size={11} />目录失效</span>
+                      ) : null}
+                      {p.archivedAt != null ? (
+                        <span className="project-card-flag muted"><Icon name="archive" size={11} />已归档</span>
+                      ) : null}
+                    </span>
                   </button>
-                ))}
-              </div>
-              <div className="row tight" style={{ marginTop: 10 }}>
-                <button className="btn ghost sm" disabled={visibleResult.page <= 1 || searching} onClick={() => searchNow(visibleResult.page - 1)}>上一页</button>
-                <span className="faint small">第 {visibleResult.page} 页 · 本页 {total} 条</span>
-                <button className="btn ghost sm" disabled={total < visibleResult.pageSize || searching} onClick={() => searchNow(visibleResult.page + 1)}>下一页</button>
-              </div>
-            </>
-          ) : null}
-        </>
-      ) : (
-        (() => {
-          // r56（review-r55 §2）：收藏「当前项目」范围此前不生效（saved.list 后不按 projectId
-          // 过滤——别的项目的收藏仍显示）。按收藏行的 projectId 过滤；无项目关联的链接不属
-          // 任何项目，收窄范围时明确计数说明（不静默消失），并给「复制链接」可用动作（定位
-          // 按钮对链接本来就无落点——不再无声）。
-          const visibleSet = new Set([...visibleProjectIds, ...pinnedProjectIds]);
-          const inScope = scope === 'project'
-            ? (saved ?? []).filter((it) => projectId !== '' && it.projectId === projectId)
-            : scope === 'visible' ? (saved ?? []).filter((it) => it.projectId != null && visibleSet.has(it.projectId)) : saved ?? [];
-          const linksHidden = scope !== 'all' ? (saved ?? []).filter((it) => it.projectId == null).length : 0;
-          const otherHidden = scope === 'project'
-            ? (saved ?? []).filter((it) => it.projectId != null && it.projectId !== projectId).length
-            : scope === 'visible' ? (saved ?? []).filter((it) => it.projectId != null && !visibleSet.has(it.projectId)).length : 0;
-          return (
-            <>
-              {scope === 'project' && projectId === '' ? <div className="panel info">尚未打开项目；请选择项目或切到其它范围。收藏不会丢失。</div> : null}
-              {savedErr != null ? <div className="panel warning">收藏读取失败：{userFacingSystemText(savedErr ?? '')}。可刷新重试</div> : null}
-              {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
-              {saved != null && saved.length === 0 ? (
-                <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮即可收藏；收藏不会改动原内容，也不会共享给其他成员。" />
-              ) : null}
-              {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && projectId === '') ? (
-                <div className="panel info">当前范围没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}{linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联` : ''}——切「全部可访问项目」可见。</div>
-              ) : null}
-              <div className="col" style={{ gap: 8 }}>
-                {inScope.map((it) => (
-                  <div key={`${it.kind}:${it.ref}`} className="card tight">
-                    <div className="row tight wrap">
-                      <Icon name="bookmark" size={13} />
-                      <Tag tone="neutral">{SAVED_KIND_LABEL[it.kind] ?? it.kind}</Tag>
-                      <span className="small strong" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title ?? it.ref}>{it.title ?? it.ref}</span>
-                      <div className="spacer" />
-                      <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
-                      {it.kind === 'link' ? (
-                        <button className="btn ghost sm" title="复制链接（应用内不自动打开外部网址）" onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}>复制链接</button>
-                      ) : it.status === 'ok' ? (
-                        <button className="btn ghost sm" title="回到原处" onClick={() => locate(it.locate)}>回原处</button>
-                      ) : it.status === 'missing' ? (
-                        <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
-                      ) : (
-                        <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
-                      )}
-                      <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（不会删除原内容）">取消收藏</button>
-                    </div>
+                );
+              })}
+              {railProjects.length === 0 ? <div className="project-rail-empty faint small">还没有项目。先从侧栏「打开/切换项目」添加。</div> : null}
+            </div>
+          </aside>
+
+          <section className="project-content">
+            {/* 页签在上、一个筛选行在下（原型 §17.7：范围对两个标签都生效；关键词/类型/作者/
+                日期/会话只对搜索生效——同一行里各自可辨，控件样式与看板/成员/归档同套）。 */}
+            <div className="thread-tabs">
+              <button role="tab" aria-selected={tab === 'search'} className={`thread-tab${tab === 'search' ? ' on' : ''}`} onClick={() => setTab('search')}>
+                <Icon name="search" size={13} /> 搜索
+              </button>
+              <button role="tab" aria-selected={tab === 'saved'} className={`thread-tab${tab === 'saved' ? ' on' : ''}`} onClick={() => setTab('saved')}>
+                <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
+              </button>
+            </div>
+
+            <div className="page-filters">
+              {tab === 'search' ? (
+                <>
+                  <label className="field inline">
+                    <span className="field-label">类型</span>
+                    <Select value={kind} ariaLabel="类型" onChange={(v) => setKind(v as typeof kind)} options={KIND_FILTERS.map((f) => ({ value: f.value, label: f.label }))} />
+                  </label>
+                  <div className="row tight" style={{ flex: '1 1 220px', minWidth: 180, border: '1px solid var(--border)', borderRadius: 7, padding: '0 8px', background: 'var(--bg-surface)' }}>
+                    <Icon name="search" size={13} className="faint" style={{ flex: 'none' }} />
+                    <input
+                      className="input"
+                      style={{ border: 'none', boxShadow: 'none', flex: 1, minWidth: 0, background: 'transparent' }}
+                      placeholder={searchPlaceholder}
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); searchNow(1); } }}
+                    />
                   </div>
-                ))}
-              </div>
-              {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>部分收藏内容已删除或无法访问。</div> : null}
-            </>
-          );
-        })()
-      )}
+                  <label className="field inline" title="按作者名称筛选">
+                    <span className="field-label">作者</span>
+                    <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
+                  </label>
+                  <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
+                    <span className="field-label">日期</span>
+                    <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
+                    <span className="faint small">至</span>
+                    <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
+                  </label>
+                  {scope === 'project' && rooms.length > 0 ? (
+                    <label className="field inline" title="限定会话（当前项目的房间）">
+                      <span className="field-label">会话</span>
+                      <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
+                    </label>
+                  ) : null}
+                  <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => searchNow(1)}>{searching ? '检索中…' : '检索'}</button>
+                </>
+              ) : null}
+              <span className="filter-note">
+                {tab === 'search' ? `${scopeNote} · 搜索范围为消息、线程和任务标题，不含文件正文` : `${scopeNote} · 收藏总计 ${saved?.length ?? 0} 条`}
+              </span>
+            </div>
+
+            {tab === 'search' ? (
+              <>
+                {visibleSearchErr != null ? <div className="panel warning">搜索失败：{userFacingSystemText(visibleSearchErr ?? '')}。可重试</div> : null}
+                {visibleResult == null && visibleSearchErr == null && q.trim().length === 0 && !searching ? (
+                  scope === 'project' && noActiveProject
+                    ? <div className="panel info">尚未打开项目——点左栏「全部项目」查看侧栏可见项目，或先在侧栏打开一个项目。</div>
+                    : <EmptyState icon="search" title="输入关键词开始搜索" detail="按 Enter 检索，点击结果可回到原处。" />
+                ) : null}
+                {visibleResult == null && visibleSearchErr == null && (q.trim().length > 0 || searching) ? (
+                  <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
+                ) : null}
+                {visibleResult != null ? (
+                  <>
+                    {total === 0 ? (
+                      <EmptyState icon="search" title="本页没有命中" detail={`第 ${visibleResult.page} 页没有匹配结果，换关键词或范围再试。`} />
+                    ) : null}
+                    <div className="col" style={{ gap: 8 }}>
+                      {rows.map((r) => (
+                        <button key={`${r.kind}-${r.messageId ?? r.threadId ?? r.taskId}`} className="card tight" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => locate(r.locate)} title="点击回到原处">
+                          <div className="row tight wrap">
+                            <Tag tone="accent" icon="folder">{r.projectName}</Tag>
+                            <Tag tone={r.kind === 'task' ? 'info' : 'neutral'} icon={r.kind === 'task' ? 'list' : r.kind === 'thread' ? 'message-circle' : 'message-square'}>
+                              {r.kind === 'message' ? '消息' : r.kind === 'thread' ? '线程' : '任务'}
+                            </Tag>
+                            {r.kind === 'task' && r.status != null ? <span className="faint small">{taskStatusZh(r.status)}</span> : null}
+                            <div className="spacer" />
+                            <span className="faint small">{r.createdAt != null ? new Date(r.createdAt).toLocaleString() : ''}</span>
+                            <span className="faint small" style={{ color: 'var(--accent,#2563eb)' }}>回原处 ↗</span>
+                          </div>
+                          <div className="small" style={{ marginTop: 4, lineHeight: 1.65 }}>{r.kind === 'task' ? r.title : r.snippet}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="row tight" style={{ marginTop: 10 }}>
+                      <button className="btn ghost sm" disabled={visibleResult.page <= 1 || searching} onClick={() => searchNow(visibleResult.page - 1)}>上一页</button>
+                      <span className="faint small">第 {visibleResult.page} 页 · 本页 {total} 条</span>
+                      <button className="btn ghost sm" disabled={total < visibleResult.pageSize || searching} onClick={() => searchNow(visibleResult.page + 1)}>下一页</button>
+                    </div>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              (() => {
+                // r56（review-r55 §2）：收藏「当前项目」范围此前不生效（saved.list 后不按 projectId
+                // 过滤——别的项目的收藏仍显示）。按收藏行的 projectId 过滤；无项目关联的链接不属
+                // 任何项目，收窄范围时明确计数说明（不静默消失），并给「复制链接」可用动作（定位
+                // 按钮对链接本来就无落点——不再无声）。
+                // R188 第 7 项：范围只剩「某个项目 / 全部项目（侧栏可见）」两档，过滤口径不变；
+                // 链接收藏（无项目关联）在两档里都不可见，只如实计数说明（收藏本身不删）。
+                const inScope = scope === 'project'
+                  ? (saved ?? []).filter((it) => !noActiveProject && it.projectId === projectId)
+                  : (saved ?? []).filter((it) => it.projectId != null && visibleProjectSet.has(it.projectId));
+                const linksHidden = (saved ?? []).filter((it) => it.projectId == null).length;
+                const otherHidden = scope === 'project'
+                  ? (saved ?? []).filter((it) => it.projectId != null && it.projectId !== projectId).length
+                  : (saved ?? []).filter((it) => it.projectId != null && !visibleProjectSet.has(it.projectId)).length;
+                return (
+                  <>
+                    {scope === 'project' && noActiveProject ? <div className="panel info">尚未打开项目——点左栏「全部项目」查看侧栏可见项目，或先在侧栏打开一个项目。收藏不会丢失。</div> : null}
+                    {savedErr != null ? <div className="panel warning">收藏读取失败：{userFacingSystemText(savedErr ?? '')}。可刷新重试</div> : null}
+                    {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
+                    {saved != null && saved.length === 0 ? (
+                      <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮即可收藏；收藏不会改动原内容，也不会共享给其他成员。" />
+                    ) : null}
+                    {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && noActiveProject) ? (
+                      <div className="panel info">
+                        当前范围没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}
+                        {linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联，不在项目范围显示（收藏仍保留）` : ''}。
+                        {otherHidden > 0 ? '可点左栏「全部项目」查看侧栏可见项目。' : ''}
+                      </div>
+                    ) : null}
+                    <div className="col" style={{ gap: 8 }}>
+                      {inScope.map((it) => (
+                        <div key={`${it.kind}:${it.ref}`} className="card tight">
+                          <div className="row tight wrap">
+                            <Icon name="bookmark" size={13} />
+                            <Tag tone="neutral">{SAVED_KIND_LABEL[it.kind] ?? it.kind}</Tag>
+                            <span className="small strong" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title ?? it.ref}>{it.title ?? it.ref}</span>
+                            <div className="spacer" />
+                            <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
+                            {it.kind === 'link' ? (
+                              <button className="btn ghost sm" title="复制链接（应用内不自动打开外部网址）" onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}>复制链接</button>
+                            ) : it.status === 'ok' ? (
+                              <button className="btn ghost sm" title="回到原处" onClick={() => locate(it.locate)}>回原处</button>
+                            ) : it.status === 'missing' ? (
+                              <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
+                            ) : (
+                              <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
+                            )}
+                            <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（不会删除原内容）">取消收藏</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>部分收藏内容已删除或无法访问。</div> : null}
+                  </>
+                );
+              })()
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );

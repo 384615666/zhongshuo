@@ -1,15 +1,18 @@
 /* R183 项目卡列（成员管理 / 任务看板共用）——用户 2026-11-04 第 2、3、9 项。
    左栏是一列独立项目卡（点击切本页数据范围），与右栏之间一条 1px 竖线。
-   几何目标：卡片到页面左缘的留白 = 卡片到右栏内容的留白（用户反馈「左边留白比右边多」）。
 
-   --project-rail-gap 的取值 = 页面水平内边距 - --project-rail-inner：
-   · 普通窗口 .page padding-inline 24px（base.css）→ 8 + 16 = 24；
-   · ≥1700px 带鱼屏 .page padding-inline 40px（base.css @media）→ 8 + 32 = 40。
-   这样左右两段留白相等，卡片列不再看起来偏右。 */
+   R188（用户 2026-11-07 第 2 项）：原来卡片左侧留白=页面内边距（24/40px），右侧到分隔线
+   只有 8px，用户截图标注「左右间距更大了」，要求两侧都收紧且相等。现在：
+   · 用到项目卡列的页面把左内边距统一收到 16px（.members-page / .tasks-board-page /
+     .fg-page / .library-page，本文件末尾）；
+   · --project-rail-inner = 16px（卡片到分隔线）。
+   于是「侧栏→卡片」=「卡片→分隔线」= 16px，比原来的 24/40 更紧凑，也不再左右不等。
+   竖线固定在 280px（左栏宽度），右侧内容与竖线的间距仍由 --project-rail-gap 决定
+   （16px；≥1700px 32px），不属于卡片自身留白。 */
 
 .project-split {
   --project-rail-width: 280px;
-  --project-rail-inner: 8px;
+  --project-rail-inner: 16px;
   --project-rail-gap: 16px;
   position: relative;
   display: flex;
@@ -215,5 +218,28 @@
   .project-content > .page-filters {
     position: static;
     box-shadow: none;
+  }
+}
+
+/* R188 第 2 项：用项目卡列的页面把左内边距收到 16px，与 --project-rail-inner 相等。
+   规则放在本文件末尾（构建顺序在 base.css 之后），覆盖 base.css 的 24px 与 ≥1700px 的 40px。
+   · 成员管理 / 任务看板：普通 .page；
+   · 文件与 Git：.fg-page（本页不滚动；r170-preview.css 的 `.page.fg-page { padding:0 0 18px }`
+     特异性更高，所以这里必须同样写成 `.page.fg-page` 才压得住）；
+   · 搜索与收藏：.library-page。 */
+.page.members-page,
+.page.tasks-board-page,
+.page.fg-page,
+.page.library-page {
+  padding-left: 16px;
+}
+
+/* ≤980px 左栏横排时，横向项目条也从同样的 16px 起排。 */
+@media (max-width: 980px) {
+  .page.members-page,
+  .page.tasks-board-page,
+  .page.fg-page,
+  .page.library-page {
+    padding-left: 16px;
   }
 }
