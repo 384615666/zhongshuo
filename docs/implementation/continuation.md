@@ -1,5 +1,15 @@
 # 续工记录（continuation）
 
+## 2026-11-07：R192 消息图片预览、收藏搜索、消息头像与设置精简（beta.37）
+
+用户 2026-11-07 基于 beta.36 反馈四项：①发送的消息应支持预览图查看——截图中的图片消息只有文件名与黑色圆点，实际是 `Icon` 缺少 `image` 字形时的回退；②收藏应支持搜索，只要按文字匹配即可；③对话串与私信中的消息头像偏小，用户测得约 35×35，希望改为 50×50；④隐藏设置页「数据与存储」中的「最近一次数据操作」与「从旧版本导入草稿」。
+
+实现：新增 `src/ui/hifi/components/AttachmentThumb.tsx`——图片附件复用 `attachment.previewImage` 按需读取（IntersectionObserver、最多 8 张缓存），失败/解码错误回退图标；`MessageChangedFiles` 图片卡改大预览布局（预览图在上、文件名/元信息与打开按钮在下，点击预览图打开共享预览），`GeneratedFiles`/`ThreadPage` 锚消息/`Room` 根消息附件显示真实小缩略图，`Icon.tsx` 补 `image` 字形；`LibraryPage` 收藏页签新增 `SearchField` 与 `savedItemMatchesText`（标题/ref/类型标签大小写不敏感包含匹配，空词显示全部，范围与收藏数据不变，无匹配显示空态）；`MessageView` 消息头像 `Avatar size 22→50`、`base.css` 新增 `.avatar-50`、`ui.tsx` 类型扩展；`SettingsPage` 删除「最近一次数据操作」「从旧版本导入草稿」两段 UI 及关联状态/导入调用，保留备份/恢复/草稿/清理/归档，`loader.ts` 内部写日志去除已隐藏入口的引导。未改 daemon 命令合同、schema 61、权限/audience 与数据。
+
+验证：`tests/unit` 68 文件 **595 项通过**；`tests/browser` 70 文件 **387 项通过**（新增 `r192Feedback` 5 项）；`tests/integration` 本地全量 249 文件（241 通过/2 跳过/6 失败）、2659 项（2600 通过/25 失败/18 预期失败/16 跳过），25 项失败均为既有本机未跟踪 R130/R180 混沌 20 项与 `coordinationManifestR154` 已知并发 5 项，与本轮无关；`tsc -p tsconfig.hifi.json` 0 错；`node scripts/build-ui.mjs` 通过（仅既有 `import.meta` CJS 警告）；新增 `scripts/capture-r192-ui.cjs` 隔离数据+假运行时 **10/10 断言通过**，证据 `dist/r192-ui/r192-review/`。独立复核 `verify-r192` 复跑 tsc/browser 70 文件 387 项/截图 10 项均通过；其发现的 `verify-daily-r68.cjs`（R68 历史一次性门，G2 依赖已隐藏的旧导入面板）已记为历史不适用，另补 `AttachmentThumb` 的 `img onError` 回退、`ThreadPage` 统一 `isImageAttachment`、清理 `.settings-data-operation` 样式与旧日志引导。
+
+交付：程序提交 `51ecad8`（含版本 beta.37），干净 worktree `dist/r192-source`（`51ecad8`，status 0）构建：便携镜像 BUILD `bld_cbb914d94cdf0c5d`（clean、632 文件 MANIFEST 632/632 逐项 SHA256）、安装器 BUILD `bld_78d6ed1b224c955e`（安装镜像 668 文件 MANIFEST 668/668 逐项复核），安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.37-x64.exe` **160,213,628 字节**，SHA256 `ef76f82c7be7988eade8209584255369e1eb5c86f001ff7d8a21bb4cef9095a4`，未签名；payload 审计 668 文件、privacyScanPassed、dataFilesIncluded=false。未安装/升级/卸载、未操作用户运行数据、零真实模型；未创建 GitHub Release。见 [R192](../reviews/r192-user-feedback-20261107.md)。
+
 ## 2026-11-07：R191 前端提示去英文与去括号说明（beta.36）
 
 用户 2026-11-07 截图反馈成员停用协调者时提示「操作失败：VALIDATION_INVALID: 协调者不可停用（房间 自动协作 路由依赖协调者——如需更换请先调整协调者）」，要求各种前端提示里的英文都去掉、括号里的说明也去掉。确认口径：只清提示类文案（报错/toast/错误条/空态/tooltip/placeholder/状态说明），错误码、命令名、参数名、枚举值与技术英文去掉，Git/AI/PDF/Word 等产品名保留；提示里的所有括号及括号内容去掉，安全关键信息不得丢失。
