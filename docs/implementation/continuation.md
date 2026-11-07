@@ -1,5 +1,13 @@
 # 续工记录（continuation）
 
+## 2026-11-07：R188 用户八项界面反馈 + 推送并发布 beta.33 安装包（含此前未提交的 R185–R187）
+
+用户在已安装 beta.32 上提八项界面反馈：①侧栏项目/房间平时不要抓取光标、真正拖动才 grabbing ②成员管理/看板共用的项目卡左右留白收到 16px 且相等 ③看板单卡归档按钮 ×→√ ④该按钮 title/aria-label 改「归档」短文案 ⑤看板去掉「房间」筛选下拉（旧 roomId 链接进入时 URL 归一、不再 toast）⑥文件与 Git 页左栏项目卡列取代顶栏项目下拉，切项目不再横向位移且同时切当前项目 ⑦搜索与收藏页左栏项目卡列取代「范围」下拉，「全部项目」=侧栏可见项目，点卡同时切当前项目 ⑧去掉「此文件夹未初始化 Git」面板。实现集中在 `src/ui/hifi`（并行队员 board-r188 / files-r188 / library-r188 与 Lead 共享 CSS），不改 daemon 命令合同、schema 61、不迁移数据。
+
+验证（独立队员 verify-r188，隔离数据/假运行时/零真实模型）：新 `scripts/capture-r188-ui.cjs` **14/14 场景、124/124 断言**全过；四页几何 1360×900 与 1873×740 实测 `pageLeft=246/paddingLeft=16/卡片 262..526/分隔线 542`→卡片左缘−页面左缘=16、卡片右缘−分隔线=16；光标平时 auto/pointer、拖动中 grabbing；看板归档 check 图标（polyline `20 6 9 17 4 12`）、title 归档；带 roomId 深链被 replace 清掉且无 toast；文件页切项目 rail/topbar/content 左移 0px、页签保留、侧栏+标题栏同步；非 Git 目录无未初始化面板；搜索页 `scope=visible`/`scope=project` 与 focusProject 均符合。更新后的 `capture-r183-ui.cjs` 回归 15/15 场景、86/86 断言；`capture-r170-ui.cjs` members/board 通过；hifi tsc 0、脚本 eslint 0；`memberChannelsR136+listOrderR183` 15 项、`boardView+dev18FollowSearch` 10 项通过。限定：光标为 computed style+合成 DragEvent（非 OS 级真鼠标）；搜索「全部项目=侧栏可见」为参数级（夹具 4 项目全可见，未做隐藏差分）；`verify-r85-daily-extension.cjs`、`verify-r78-board-races.cjs` 仍断言已删除的房间筛选语义，属过时一次性脚本，未跑。
+
+交付与发版：R188 前端提交 `ff1eead`、文档 `ab9575d`；用户要求「带上未推送的推送并发版」，故把此前只在本机候选、从未提交的 R185–R187（Harness 连接组件 0.1.4 新会话隔离、设置读取超时、模型清单/元数据查询阻塞与安装器自动配置组件）一并提交为 `4806a31`，版本升到 beta.33 提交 `e011eff` 并推送 `main`。在干净 worktree `dist/r188-release-source`（`e011eff`，status 0，node_modules junction）构建：装配镜像 BUILD `bld_939cab4058651446`（dirty=false，668 文件清单逐项 SHA256 校验）、安装器 BUILD `bld_5f808bc18b822162`，安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.33-x64.exe` **160,187,422 字节**、SHA256 `d46cb974ae7781ad4bcacf8fd485cb8d0a5dd51bc9781b7f0338f124a19663de`，未签名、仅安装版。tag `v0.1.3-beta.33` 指向 `e011eff`，已创建 GitHub Release `v0.1.3-beta.33`（Latest，附 exe/sha256/release.json，服务端 digest 与本地一致）。**未安装/升级/卸载、未运行静默安装验收、未操作用户程序与运行数据、零真实模型**；用户自行安装。详见 [R188](../reviews/r188-ui-feedback-20261107.md)。
+
 ## 2026-11-07：R187 元数据查询阻塞与安装器自动升级 Harness 组件（beta.32 候选）
 
 用户在beta.31仍遇room.list/成员工作量超时，另发现Harness模型列表读不到，随后确认未执行setup.cmd并要求整合进安装包。现场官方0.2.2-rc.1明确拒载旧0.1.3组件；模型查询原等待30秒并阻塞公共FIFO。现将runtimeCatalog/runtimeOptions独立执行、仍等此前写操作；正常写入彼此FIFO不变。明确拒载立即返回升级提示（现场约160ms）。安装器ssPostInstall自动调用随包setup --installer：未装Harness跳过、相同组件哈希只probe、需更新则官方plugin add；失败警告及完成页重试说明。保留原配置/MCP/会话，组件0.1.4，版本/schema61。
