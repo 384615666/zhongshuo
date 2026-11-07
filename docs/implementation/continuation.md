@@ -1,5 +1,15 @@
 # 续工记录（continuation）
 
+## 2026-11-08：R193 侧栏旧样式泄漏修复与统一左基线（beta.38）
+
+用户 2026-11-08 发来 beta.37 侧栏截图说「左侧边栏总看得不顺眼」，要求定位原因。诊断：同一份 `dist/ui/renderer/index.html` 先加载旧界面 `renderer/style.css`（其中 `.sidebar { width:240px; ... padding:12px; gap:10px; }`），再由 hifi `main.tsx` 注入 `hifi/app.css`；hifi 的 `.sidebar` 只声明 width/背景/边框/overflow，没有声明 padding/gap，旧规则继续命中新侧栏，导致整条侧栏内缩 12px、选中竖条离开窗口左缘（x=12 而不是 0）、每行名称可用宽度少 24px、顶部/项目区/底栏三段多出 10px gap。用 beta.37 安装版 CSS 在隔离渲染器复现，导航图标 x=44、项目图标/名 48/69、房间名 66、设置图标 28，与用户截图一致。旧 `verify-r135-sidebar.cjs` 自建页面只加载 hifi CSS、不加载 legacy 样式，因此长期未发现；R192 起截图虽然走真实页面，但没有侧栏坐标断言。另有两处与泄漏无关但和注释矛盾：设置比导航左突 16px；房间名比项目名左 3px（`--control-icon-compact` 实为 24px，旧注释按 22px 写 padding）。用户随后要求「一起都靠左一点吧，然后打包发版推送」。
+
+实现：`src/ui/hifi/styles/base.css` 显式给 `.sidebar` 补 `padding: 0; gap: 0`（阻断旧界面同名类泄漏）；`.sidebar-foot > .side-item` 补 `padding-left: 24px`（恢复任务/设置与顶部五个入口同基线）；`.side-row` gap 2→0、`.side-item-label-btn` 左内边距 2→0、`.side-item.sub` padding-left 16→12，最终所有图标（导航/项目/房间状态位/设置）落 x=32，项目名与房间名 x=53，导航/设置名 x=54（1px 来自 14/13px 图标）。版本升 `0.1.3-beta.38`（`package.json`、`packaging/windows/release.json`，numericVersion `0.1.3.38`）。新增 `scripts/capture-r193-ui.cjs`：真实 `index.html` 组合（同时加载 legacy 样式）+ 隔离数据 + 假运行时，断言侧栏 20 项几何（padding/gap=0、全部图标 x=32、名称列、选中条 x=0 宽 3px、无溢出）。未改 daemon 命令合同、schema 61、权限/audience 与数据。
+
+验证：`tsc -p tsconfig.hifi.json` 0 错；`node scripts/build-ui.mjs` 通过；`capture-r193-ui.cjs --run=r193-verify` **20/20 断言通过**（证据 `dist/r193-ui/r193-verify/`）；回归 `capture-r192-ui.cjs --run=r193-sidebar-unified` 10/10 通过；`tests/unit`+`tests/browser` **138 文件 982 项通过**；安装包内 `resources/app/dist/ui/renderer/hifi/app.css` 与主仓构建产物按换行归一后逐字节一致，修复确实进包。本轮只动 CSS/版本/验证脚本，未跑 integration 全量（与 daemon/合同/数据无交集）；旧 `verify-r135-sidebar.cjs` 仍因头像 PNG loader 缺失无法构建，属历史脚本问题，未作为门禁。未安装/升级/卸载、未启动安装版、未操作用户运行数据、零真实模型。
+
+交付：程序提交 `b5ed75c`（含版本 beta.38 与 R193 验证脚本）；干净 worktree `dist/r193-source`（`b5ed75c`，status 0，node_modules junction）构建：便携镜像 BUILD `bld_c0a36980380b43a0`（clean、632 文件 MANIFEST 632/632 逐项 SHA256）、安装器 BUILD `bld_b9e01d704d38ef22`（安装镜像 668 文件 MANIFEST 668/668 逐项复核；payload 审计 668 文件、privacyScanPassed=true、dataFilesIncluded=false、runAsNode=false）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.38-x64.exe` **160,218,557 字节**，SHA256 `16ddd6a1e76066caf026a2aece82bf695edb0c4eb6a4b881ab6d64ab930dd495`，未签名（NotSigned），附 `.sha256`/`.release.json`；PE 版本与 `installed-desktop.json` 均为 `0.1.3-beta.38` / `0.1.3.38`。推送 `main`，创建 tag `v0.1.3-beta.38` 与 GitHub Release（exe + sha256 + release.json；用户自行安装）。未覆盖用户已安装的 beta.37，未操作用户运行数据。见 [R193](../reviews/r193-sidebar-alignment-20261108.md)。
+
 ## 2026-11-07：R192 消息图片预览、收藏搜索、消息头像与设置精简（beta.37）
 
 用户 2026-11-07 基于 beta.36 反馈四项：①发送的消息应支持预览图查看——截图中的图片消息只有文件名与黑色圆点，实际是 `Icon` 缺少 `image` 字形时的回退；②收藏应支持搜索，只要按文字匹配即可；③对话串与私信中的消息头像偏小，用户测得约 35×35，希望改为 50×50；④隐藏设置页「数据与存储」中的「最近一次数据操作」与「从旧版本导入草稿」。
