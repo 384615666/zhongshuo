@@ -801,6 +801,51 @@ button.composer-file-token-open:hover {
 }
 
 /**
+ * R192：消息图片附件缩略图。
+ * 图片不再只显示文件图标（`Icon` 没有 image 字形时曾退化成黑点），在文件卡左侧/
+ * 行内芯片里显示真实图片；加载中或失败时保留同尺寸占位，不跳动。
+ */
+.attachment-thumb {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  line-height: 0;
+}
+.attachment-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.attachment-thumb-md { width: 56px; height: 56px; }
+.attachment-thumb-sm { width: 20px; height: 20px; border-radius: 4px; }
+.attachment-thumb-lg { width: 100%; height: 150px; border-radius: 10px; }
+.attachment-thumb.is-placeholder { background: var(--bg-surface-3); }
+/* 图片消息卡：大预览在上，文件名/元信息与打开按钮在下；不再和 180px 文本抢一行。 */
+.message-document-card.is-image { flex-direction: column; align-items: stretch; }
+.message-document-card.is-image .message-document-description { flex: none; width: 100%; }
+.message-document-card.is-image > .btn { align-self: flex-end; }
+.message-document-card.is-image > .open-split { align-self: flex-end; }
+.message-image-preview {
+  display: block;
+  width: min(240px, 100%);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.message-image-preview:disabled { cursor: default; }
+.message-image-preview:not(:disabled):hover .attachment-thumb { border-color: var(--accent-border); }
+
+/**
  * 只读态下同一条输入区里的其它控件（附件按钮、权限档位）也必须**看得出来**被禁用。
  *
  * 出处：视觉核对对比 d01（可写）与 d06（归档只读）时指出"回形针与计划模式按钮
@@ -1699,12 +1744,6 @@ button.composer-file-token-open:hover {
  */
 .settings-wide {
   overflow-x: auto;
-}
-
-.settings-data-operation .tag {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 /* 分区标题：一句话说明这一节是干什么的 */

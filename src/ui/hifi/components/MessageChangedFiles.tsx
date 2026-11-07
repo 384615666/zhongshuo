@@ -7,6 +7,7 @@ import {command} from '../bridge';
 import {MarkdownView} from '../preview/MarkdownView';
 import {DiffText} from '../preview/DiffText';
 import {Icon} from './Icon';
+import {AttachmentThumb, isImageAttachment} from './AttachmentThumb';
 import {Menu, MenuItem, Modal} from './ui';
 import {formatBytes} from '../lib/format';
 import {attachmentKindLabel} from '../lib/attachmentKindLabel';
@@ -151,8 +152,14 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
     <div className="message-document-cards">
       {documents.map(attachment => {
         const change = documentChanges?.get(attachment.artifactId);
-        return <div className="message-document-card" key={attachment.artifactId} data-zs-artifact-id={attachment.artifactId} data-zs-document={attachment.document ? '1' : undefined}>
-          <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={20}/>
+        const imageAttachment = isImageAttachment(attachment.filename, attachment.kind);
+        return <div className={`message-document-card${imageAttachment ? ' is-image' : ''}`} key={attachment.artifactId} data-zs-artifact-id={attachment.artifactId} data-zs-document={attachment.document ? '1' : undefined}>
+          {/* R192：图片附件显示真实缩略图（此前 Icon 没有 image 字形，只剩一个黑点）。 */}
+          {imageAttachment
+            ? <button type="button" className="message-image-preview" data-zs-image-preview-open={attachment.artifactId} aria-label={`预览 ${attachment.filename}`} title={`预览 ${attachment.filename}`} disabled={onOpen == null} onClick={() => onOpen?.(attachment)}>
+                <AttachmentThumb attachmentId={attachment.artifactId} filename={attachment.filename} kind={attachment.kind} size="lg" />
+              </button>
+            : <Icon name="file-text" size={20} />}
           <div className="message-document-description"><strong title={attachment.sourcePath ?? attachment.filename}>{attachment.filename}</strong>
             <span className="small faint">{attachment.document ? '文档 · ' : attachment.detailMarkdown ? '完整详情 · ' : ''}{attachmentKindLabel(attachment.kind)}{attachment.revision != null ? ` · v${attachment.revision}` : ''}{attachment.sizeBytes != null && Number.isFinite(attachment.sizeBytes) && attachment.sizeBytes > 0 ? ` · ${formatBytes(attachment.sizeBytes)}` : ''}{change ? ` · ${stateLabel[change.state]}` : ''}</span>
             {sourceNote(attachment, change)}
@@ -168,7 +175,9 @@ export function MessageChangedFiles({changes, attachments, documents = [], docum
         const attachment = findAttachment(file);
         const hosted = attachment?.document === true || attachment?.detailMarkdown === true;
         return <div className="message-document-card" key={file.id} data-zs-document-change={file.id} data-zs-artifact-id={attachment?.artifactId}>
-          <Icon name="file-text" size={20}/>
+          {attachment != null && isImageAttachment(attachment.filename, attachment.kind)
+            ? <AttachmentThumb attachmentId={attachment.artifactId} filename={attachment.filename} kind={attachment.kind} size="md" title={`预览 ${attachment.filename}`} />
+            : <Icon name="file-text" size={20}/>}
           <div className="message-document-description"><strong title={file.path}>{file.displayName}</strong>
             <span className="small faint">{stateLabel[file.state]} · {attachmentKindLabel(attachment?.kind ?? '')}{file.revision != null ? ` · v${file.revision}` : ''}{file.executionStatus !== 'SUCCEEDED' ? ' · 尚未完成交付' : ''}</span>
             {sourceNote(attachment, file)}

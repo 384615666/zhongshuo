@@ -851,6 +851,8 @@ code, pre, .mono {
 .avatar-22 { width: 22px; height: 22px; font-size: 11px; }
 .avatar-28 { width: 28px; height: 28px; font-size: 12px; }
 .avatar-36 { width: 36px; height: 36px; font-size: 14px; }
+/* R192：对话串与私信的消息头像（用户要求 50×50）。 */
+.avatar-50 { width: 50px; height: 50px; font-size: 18px; }
 
 .avatar .state-dot {
   position: absolute;

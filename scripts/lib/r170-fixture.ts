@@ -1,7 +1,7 @@
 /** R170 截图专用夹具：在 homepage-fixture 基础上让一次 AI 回合**真的写一个项目文件**，
  *  这样对话串里会出现带真实项目相对路径的「文件改动」卡片（打开方式 / 查看变更 / 绝对路径
  *  三个反馈点都需要这种真实数据，不能靠内存伪造）。 */
-import {mkdirSync,writeFileSync} from 'node:fs';
+import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
@@ -86,6 +86,33 @@ async function main(){
   script=output('活动照片已经按环节归档，共 24 张。');
   await command('message.submit',{target:{kind:'room_root',projectId,roomId:room2.room.id,conversationId:room2Row.conversationId},body:'整理活动照片，按环节归档。',intent:'default',mentions:[{kind:'member',memberId:claude}]});
   await worker.drain();
+  // R192 截图夹具（仅 --r192：其余旧脚本的夹具数据保持原样）：真实图片附件 +
+  // 可检索的收藏。图片用仓库根 logo.png（真实 PNG，走 attachment.uploadImage 的
+  // magic bytes/尺寸校验），在会话池、回复串与私信三处各出现一次。
+  if (process.argv.includes('--r192')) {
+    const imageBase64 = readFileSync(join(process.cwd(), 'logo.png')).toString('base64');
+    const roomImage = await command<{ attachmentId: string }>('attachment.uploadImage', {
+      conversationId: room.conversationId, filename: 'image.png', contentBase64: imageBase64,
+    });
+    await command('message.submit', {
+      target: { kind: 'room_root', projectId, roomId: room.id, conversationId: room.conversationId },
+      body: '这张图请一起看一下。', intent: 'record_only', mentions: [], attachmentRefs: [roomImage.attachmentId],
+    });
+    await command('message.submit', {
+      target: { kind: 'thread', projectId, conversationId: room.conversationId, threadId: chat.threadId },
+      body: '回复里补一张图。', intent: 'record_only', mentions: [], attachmentRefs: [roomImage.attachmentId],
+    });
+    const dmImage = await command<{ attachmentId: string }>('attachment.uploadImage', {
+      conversationId: dm, filename: '照片.png', contentBase64: imageBase64,
+    });
+    await command('message.submit', {
+      target: { kind: 'dm', projectId, conversationId: dm },
+      body: '私信里也发一张。', intent: 'record_only', mentions: [], attachmentRefs: [dmImage.attachmentId],
+    });
+    for (const title of ['读书会预算', '活动照片', '场地清单']) {
+      await command('saved.add', { kind: 'link', ref: `https://example.com/${encodeURIComponent(title)}`, title, projectId });
+    }
+  }
   // R171：成员管理要验证「多项目独立卡片 / 切项目不联动侧栏 / 房间数不闪 0」——
   // 额外打开 3 个演示项目（各有房间与成员），全部为本机隔离夹具，不接触用户数据。
   const workspaceRoot = dirname(project);

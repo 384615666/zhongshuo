@@ -327,7 +327,7 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
   }
   setLegacyImportCandidates(importable, scanError);
   if (importable.length > 0) {
-    recordWrite('draft.inherit', `发现 ${importable.length} 个未验证旧目录的草稿键（${importable.map((c) => c.dir).join('、')}）——真实 v3/v4 旧数据根没有身份标记，不能自动确认同根；如属你的旧数据根，请到「设置 → 草稿存储」逐键确认导入（未确认前不合并、不派发）`);
+    recordWrite('draft.inherit', `发现 ${importable.length} 个未验证旧目录的草稿键（${importable.map((c) => c.dir).join('、')}）——真实 v3/v4 旧数据根没有身份标记，不能自动确认同根；旧草稿导入入口当前不在设置页显示，未确认前不合并、不派发`);
   } else if (validated.length === 0 && candidates.length > 0) {
     recordWrite('draft.inherit', `发现 ${candidates.length} 个旧命名空间键但无一同属当前数据根（内嵌异根/标记异根）——不合并（无关根/他机数据不混入）`);
   }

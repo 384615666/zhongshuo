@@ -169,7 +169,7 @@ export function Avatar({
   name: string;
   ordinal?: number;
   color?: string;
-  size?: 16 | 18 | 22 | 28 | 36;
+  size?: 16 | 18 | 22 | 28 | 36 | 50;
   round?: boolean;
   state?: string;
   stateTitle?: string;

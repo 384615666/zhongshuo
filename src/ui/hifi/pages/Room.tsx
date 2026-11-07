@@ -15,6 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Composer } from '../components/Composer';
 import type { FormalSendOutcome } from '../components/Composer';
 import { Icon } from '../components/Icon';
+import { AttachmentThumb, isImageAttachment } from '../components/AttachmentThumb';
 import { latestReadableAgentMessageId, MessageView, RootMessagePreview } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
@@ -1042,7 +1043,9 @@ export function RootCard({
                   }, plainConv);
                 }}
               >
-                <Icon name="paperclip" size={12} />
+                {isImageAttachment(att.filename, att.kind)
+                  ? <AttachmentThumb attachmentId={att.artifactId} filename={att.filename} kind={att.kind} size="sm" />
+                  : <Icon name="paperclip" size={12} />}
                 <span className="truncate">{att.filename}</span>
                 <span className="msg-attach-kind mono-sm">{ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}</span>
               </button>
@@ -1164,7 +1167,9 @@ export function RootCard({
                 }, roomOf(s, message.roomId)?.conversationId ?? '');
               }}
             >
-              <Icon name={att.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
+              {isImageAttachment(att.filename, att.kind)
+                ? <AttachmentThumb attachmentId={att.artifactId} filename={att.filename} kind={att.kind} size="sm" />
+                : <Icon name="file-text" size={12} />}
               <span className="truncate">{att.filename}</span>
               <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}</span>
             </button>

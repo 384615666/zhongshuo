@@ -288,7 +288,7 @@ export function MessageView({
             <Icon name="settings" size={12} />
           </span>
         ) : (
-          <Avatar name={isHuman ? '我' : author?.displayName ?? '?'} ordinal={author?.ordinal} color={memberColor(isHuman ? 'you' : author?.id ?? '', author?.ordinal)} size={22} state={author?.workState} stateTitle={author?.workStateReason} subject={isHuman?'user':author!=null?`member:${author.id}`:undefined} />
+          <Avatar name={isHuman ? '我' : author?.displayName ?? '?'} ordinal={author?.ordinal} color={memberColor(isHuman ? 'you' : author?.id ?? '', author?.ordinal)} size={50} state={author?.workState} stateTitle={author?.workStateReason} subject={isHuman?'user':author!=null?`member:${author.id}`:undefined} />
         )}
       </div>
       <div className={`msg-body${isHuman ? ' is-human' : ''}`}>

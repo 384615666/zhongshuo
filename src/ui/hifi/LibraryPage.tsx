@@ -41,7 +41,7 @@ interface SearchData {
   tasks: Array<SearchRow & { kind: 'task'; title: string; status: string; createdAt: number | null }>;
   attachmentNote: string;
 }
-interface SavedItem { kind: 'message' | 'task' | 'delivery' | 'link'; ref: string; title: string | null; projectId: string | null; createdAt: number; status: 'ok' | 'missing' | 'forbidden'; locate: string | null }
+export interface SavedItem { kind: 'message' | 'task' | 'delivery' | 'link'; ref: string; title: string | null; projectId: string | null; createdAt: number; status: 'ok' | 'missing' | 'forbidden'; locate: string | null }
 
 const KIND_FILTERS: Array<{ value: 'all' | 'message' | 'thread' | 'task'; label: string }> = [
   { value: 'all', label: '全部' },
@@ -50,6 +50,18 @@ const KIND_FILTERS: Array<{ value: 'all' | 'message' | 'thread' | 'task'; label:
   { value: 'task', label: '任务' },
 ];
 const SAVED_KIND_LABEL: Record<string, string> = { message: '消息', task: '任务', delivery: '交付', link: '链接' };
+
+/**
+ * R192（用户第 2 项）：收藏页只需要一个「按文字匹配」的搜索——不引入作者/日期/类型等
+ * 额外检索维度，也不改 saved.list 合同。标题、链接和目标引用都参与匹配；空关键词=全显示。
+ * 单独导出便于浏览器测试固定这个最小口径。
+ */
+export function savedItemMatchesText(item: SavedItem, query: string): boolean {
+  const keyword = query.trim().toLocaleLowerCase();
+  if (keyword.length === 0) return true;
+  const haystack = [item.title ?? '', item.ref, SAVED_KIND_LABEL[item.kind] ?? item.kind].join('\n').toLocaleLowerCase();
+  return haystack.includes(keyword);
+}
 
 /** R68 §6：任务状态中文口径（与看板 STATUS_GROUPS 同义）——检索结果不把原始 DONE 当
  * 最终用户呈现；未知状态原样显示（不猜）。 */
@@ -69,6 +81,8 @@ export function LibraryPage() {
   const allRooms = useStore((s) => s.rooms);
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
   const [tab, setTab] = useState<'search' | 'saved'>('search');
+  /** R192：收藏页的文字搜索（本地过滤已装载的 saved.list 结果）。 */
+  const [savedQuery, setSavedQuery] = useState('');
   /** R188 第 7 项：范围只剩两档——'project'（左栏某张项目卡）与 'visible'（「全部项目」卡，
    *  =原来的侧栏可见集）。默认沿用原来的「当前项目」（=activeProjectId），由页内项目卡表达。 */
   const [scope, setScope] = useState<'project' | 'visible'>('project');
@@ -331,6 +345,15 @@ export function LibraryPage() {
                   <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
                 </button>
               </div>
+              {tab === 'saved' ? (
+                <SearchField
+                  ariaLabel="搜索收藏"
+                  value={savedQuery}
+                  onChange={setSavedQuery}
+                  placeholder="搜收藏标题或链接…"
+                  maxWidth={280}
+                />
+              ) : null}
               {tab === 'search' ? (
                 <>
                   <label className="field inline">
@@ -433,6 +456,8 @@ export function LibraryPage() {
                 const otherHidden = scope === 'project'
                   ? (saved ?? []).filter((it) => it.projectId != null && it.projectId !== projectId).length
                   : (saved ?? []).filter((it) => it.projectId != null && !visibleProjectSet.has(it.projectId)).length;
+                /** R192：搜索只在当前范围的结果里做文字过滤，不改变收藏本身与范围口径。 */
+                const filtered = inScope.filter((it) => savedItemMatchesText(it, savedQuery));
                 return (
                   <>
                     {scope === 'project' && noActiveProject ? <div className="panel info">尚未打开项目——点左栏「全部项目」查看侧栏可见项目，或先在侧栏打开一个项目。收藏不会丢失。</div> : null}
@@ -440,6 +465,9 @@ export function LibraryPage() {
                     {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
                     {saved != null && saved.length === 0 ? (
                       <EmptyState icon="bookmark" title="还没有收藏" />
+                    ) : null}
+                    {saved != null && inScope.length > 0 && filtered.length === 0 ? (
+                      <EmptyState icon="bookmark" title="没有匹配的收藏" />
                     ) : null}
                     {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && noActiveProject) ? (
                       <div className="panel info">
@@ -449,7 +477,7 @@ export function LibraryPage() {
                       </div>
                     ) : null}
                     <div className="col" style={{ gap: 8 }}>
-                      {inScope.map((it) => (
+                      {filtered.map((it) => (
                         <div key={`${it.kind}:${it.ref}`} className="card tight">
                           <div className="row tight wrap">
                             <Icon name="bookmark" size={13} />

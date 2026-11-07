@@ -20,6 +20,7 @@ import { ATTACHMENT_KIND_LABEL } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
+import { AttachmentThumb, isImageAttachment } from './components/AttachmentThumb';
 import { Tag } from './components/ui';
 import { useStore, loadThread, loadThreadOlder, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
 import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, toggleSavedMessage, type ReviewSnapshot } from './loader';
@@ -433,8 +434,10 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               {(anchor?.formalAttachments ?? []).length > 0 ? (
                 <div className="msg-inline-attachments" data-zs-inline-attachments="1">
                   {(anchor?.formalAttachments ?? []).map((a) => (
-                    <button key={a.artifactId} className={`inline-file-chip${a.kind === 'image_file' ? ' is-image' : ''}`} title={`预览 ${a.filename}；只读，不发送给 AI`} onClick={() => openPreviewAtt(a)}>
-                      <Icon name={a.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
+                    <button key={a.artifactId} className={`inline-file-chip${isImageAttachment(a.filename, a.kind) ? ' is-image' : ''}`} title={`预览 ${a.filename}；只读，不发送给 AI`} onClick={() => openPreviewAtt(a)}>
+                      {isImageAttachment(a.filename, a.kind)
+                        ? <AttachmentThumb attachmentId={a.artifactId} filename={a.filename} kind={a.kind} size="sm" />
+                        : <Icon name="file-text" size={12} />}
                       <span className="truncate">{a.filename}</span>
                       {/* r55：与回复芯片同一 kind 映射（此前只认 code/text——PPT 显示成「文本」）。 */}
                       <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>

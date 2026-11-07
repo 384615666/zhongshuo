@@ -11,6 +11,7 @@
  *  - 卡片位置由调用方决定：MessageView 把它放在正文之后、复制/引用/收藏之前。
  */
 import { Icon } from './Icon';
+import { AttachmentThumb, isImageAttachment } from './AttachmentThumb';
 import { formatBytes } from '../lib/format';
 import type { FormalAttachmentSummary } from '../data/types';
 import type { MessageFileChange } from '../../../contracts/messageFileChanges.ts';
@@ -155,7 +156,9 @@ export function GeneratedFiles({
             title={`打开 ${attachment.filename} · ${isDocument ? attachment.purpose ?? '文档' : attachment.detailMarkdown ? '详情文档' : kindLabel}${size != null ? ` · ${size}` : ''} · 只读预览，不发送给 AI`}
             onClick={() => onOpen?.(attachment)}
           >
-            <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
+            {isImageAttachment(attachment.filename, attachment.kind)
+              ? <AttachmentThumb attachmentId={attachment.artifactId} filename={attachment.filename} kind={attachment.kind} size="sm" title={`预览 ${attachment.filename}`} />
+              : <Icon name="file-text" size={12} />}
             <span className="truncate">{attachment.filename}</span>
             {attachment.revision != null ? <span className="inline-file-kind">v{attachment.revision}</span> : null}
             {size != null ? <span className="inline-file-kind">{size}</span> : null}

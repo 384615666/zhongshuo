@@ -19,9 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
 import { SettingsRow, ReadOnlyRow } from '../components/SettingsRow';
-import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, importLegacySnapshot, setNotificationsEnabled } from '../data/store';
-import { rescanLegacyImport } from '../loader';
-import { command, dataBridge, openAppLink, type AppLinkTarget, type DataOperationStatus } from '../bridge';
+import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, setNotificationsEnabled } from '../data/store';
+import { command, dataBridge, openAppLink, type AppLinkTarget } from '../bridge';
 import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
@@ -573,29 +572,20 @@ function SectionData() {
   const [clearConfirm,setClearConfirm]=useState(false);
   const [cleanupBusy,setCleanupBusy]=useState(false);
   const [cleanupResult,setCleanupResult]=useState<string|null>(null);
-  const [importBusy, setImportBusy] = useState<string | null>(null);
-  const [dataOp, setDataOp] = useState<DataOperationStatus | null>(null);
-  const [dataOpError, setDataOpError] = useState<string | null>(null);
   const [dataOpBusy, setDataOpBusy] = useState<'backup'|'import'|null>(null);
-  const reloadDataOp = useCallback(async () => {
-    try { setDataOp(await dataBridge().status()); setDataOpError(null); }
-    catch (error) { setDataOpError((error as Error).message); }
-  }, []);
   useEffect(() => {
     let done = false;
     void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch(() => { /* 不显示 */ });
-    void reloadDataOp();
     return () => { done = true; };
-  }, [reloadDataOp]);
+  }, []);
   const startDataOp = async (action: 'backup'|'import') => {
-    setDataOpBusy(action); setDataOpError(null);
+    setDataOpBusy(action);
     try {
       const result = await dataBridge().start(action);
       if (result.cancelled) { toast('已取消，没有复制或切换数据', 'info'); return; }
-      setDataOp((current) => current == null ? current : {...current, active: result.jobId == null ? current.active : {id:result.jobId,running:true,at:Date.now()}});
       toast(action === 'backup' ? '已开始备份；众说会正常关闭并在完成后自动打开' : '已开始恢复；新副本验证完成后才会切换并自动打开', 'success');
     } catch (error) {
-      const message=(error as Error).message;setDataOpError(message);toast(`没有开始数据操作：${message}`, 'error');
+      toast(`没有开始数据操作：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
     } finally { setDataOpBusy(null); }
   };
   const clearDrafts = () => {
@@ -606,18 +596,6 @@ function SectionData() {
     recordWrite('drafts.clear', `清空本地草稿（内存与保存快照同步清除；未确认发送保留保护）`);
     setCleared(`${new Date().toLocaleTimeString()} 已清除本地草稿，之后输入会重新保存`);
     toast('本地草稿已清除', 'success');
-  };
-  const legacy = draftPersist.legacyImport;
-  const doImport = async (key: string, dir: string) => {
-    setImportBusy(key);
-    try {
-      const r = importLegacySnapshot(key, dir);
-      if (!r.ok) { toast(userFacingSystemText(r.error ?? '导入失败'), 'error'); return; }
-      const o = r.outcome;
-      const refusedCount = o?.refusedVersions.length ?? 0;
-      toast(`已从 ${dir} 导入旧草稿 ${o?.mergedDrafts ?? 0} 条、待确认发送 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、跳过不支持的 ${refusedCount} 个来源，原文件保留` : ''}——原文件不动`, 'success');
-      recordWrite('draft.inherit', `用户确认导入旧目录 ${dir}（原文件保留）`);
-    } finally { setImportBusy(null); }
   };
   return (
     <SectionShell section="data" title="数据与存储" sub="数据位置、备份、草稿与归档。" cardAttrs={{ 'data-zs-data-guide': '1' }}>
@@ -632,18 +610,6 @@ function SectionData() {
           <button className="btn sm" disabled={dataOpBusy != null} data-zs-data-import="1" onClick={() => void startDataOp('import')}>
             <Icon name="folder" size={13} /> {dataOpBusy === 'import' ? '正在准备…' : '选择已有数据'}
           </button>
-        } />
-        <SettingsRow label="最近一次数据操作" hint="结果会在这里重新读取；失败或中断不会自动重试" control={
-          <div className="col settings-data-operation" style={{alignItems:'flex-end',gap:5,width:230,minWidth:0,maxWidth:'100%'}}>
-            {dataOpError != null ? <Tag tone="danger" icon="alert-triangle">无法读取：{userFacingSystemText(dataOpError ?? '')}</Tag> : dataOp?.latest == null ? <span className="small faint">还没有数据操作记录</span> : (
-              <Tag tone={dataOp.latest.state === 'succeeded' ? 'success' : dataOp.latest.state === 'failed' || dataOp.latest.state === 'unknown' ? 'warning' : 'info'} icon={dataOp.latest.state === 'succeeded' ? 'check-circle' : dataOp.latest.state === 'copying' || dataOp.latest.state === 'waiting-close' ? 'clock' : 'alert-triangle'}>
-                {dataOp.latest.state === 'succeeded' ? (dataOp.latest.action === 'import' ? '已使用新的数据副本' : '完整备份已完成') : dataOp.latest.state === 'copying' ? '正在复制' : dataOp.latest.state === 'waiting-close' ? '等待关闭' : dataOp.latest.state === 'failed' ? '未完成，原件保留' : '上次操作中断，未切换'}
-              </Tag>
-            )}
-            {dataOp?.active?.running ? <span className="small faint">数据操作仍在进行；完成前不会打开这份数据。</span> : null}
-            {dataOp?.latest?.error != null ? <span className="small" style={{maxWidth:360,textAlign:'right',color:'var(--warning)'}}>{userFacingSystemText(dataOp.latest.error ?? '')}</span> : null}
-            <button className="btn ghost sm" onClick={() => void reloadDataOp()}>刷新</button>
-          </div>
         } />
       </SettingsGroup>
       <SettingsGroup title="草稿">
@@ -670,43 +636,6 @@ function SectionData() {
         }}>{cleanupBusy?'清理中…':'清理存储'}</button>}/>
         {cleanupResult?<div className="small faint settings-note">{cleanupResult}</div>:null}
         {cleared != null ? <div className="small faint settings-note">{cleared}</div> : null}
-        <SettingsRow
-          label="从旧版本导入草稿"
-          hint="首次从旧版本升级或复制数据目录后，可在这里导入旧的草稿和未确认发送记录。"
-          control={(
-            <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重新扫描旧目录，结果见下方', 'info')); }}>重扫旧目录</button>
-          )}
-        >
-          <div className="small" style={{ lineHeight: 1.7, minWidth: 0, width: 'min(420px, 100%)' }}>
-            {legacy == null || legacy.candidates.length === 0 ? (
-              <div className="faint" style={{ marginTop: 4 }}>当前没有待确认的旧目录。</div>
-            ) : (
-              <div className="col" style={{ gap: 6, marginTop: 6 }} data-zs-legacy-candidates="1">
-                {legacy.error != null ? <div style={{ color: 'var(--warning,#b45309)' }}>上次扫描：{userFacingSystemText(legacy.error ?? '')}</div> : null}
-                {legacy.candidates.map((c) => (
-                  <div key={c.key} className="row tight" style={{ padding: '4px 6px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }} data-zs-legacy-candidate={c.dir}>
-                    <Icon name="folder" size={12} />
-                    <span className="mono-sm" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.key}>{c.dir}</span>
-                    {c.hasStateDb === true ? <Tag tone="info">含数据</Tag> : c.hasStateDb === false ? <Tag tone="neutral">无数据文件</Tag> : null}
-                    {c.importedAt != null ? (
-                      <Tag tone="success" icon="check">已导入 {new Date(c.importedAt).toLocaleTimeString()}</Tag>
-                    ) : (
-                      <button
-                        className="btn primary sm"
-                        data-zs-legacy-import={c.dir}
-                        disabled={importBusy === c.key}
-                        title={`导入该目录的旧草稿和待确认发送记录。旧记录会保留；导入后可查看提示并决定是否重试发送。`}
-                        onClick={() => void doImport(c.key, c.dir)}
-                      >
-                        {importBusy === c.key ? '导入中…' : '确认导入'}
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </SettingsRow>
       </SettingsGroup>
       <SettingsGroup title="归档与项目">
         {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
