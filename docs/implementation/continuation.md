@@ -1,5 +1,15 @@
 # 续工记录（continuation）
 
+## 2026-11-07：R190 七项界面细节（文件与 Git / 搜索与收藏 / Git 空态 / 提示居中；beta.35）
+
+用户 2026-11-07 基于 beta.34 反馈七项：①文件/Git 顶栏与下方面板贴太近；②搜索页两个页签偏上、作者名筛选不要；③搜索输入时不要弹「按 Enter 或点检索开始」；④去掉「范围：「X」· 搜索范围为消息…」「…收藏总计 N 条」「在线程回复消息上点书签按钮…」等开发口径；⑤文件预览 ⋯ 去掉「引用到 选择讨论位置」；⑥Git 页去掉「改动记录不受影响 / 任务改动仍会记录…」；⑦各种提示偏上，应居中。
+
+实现：文件页 fg-body 的 `margin:0 18px` 覆盖了共享 12px 上间距，改为 `var(--sp-3) 18px 0`；工具栏内 `.thread-tabs` 清零基础 `padding:0 12px 6px`（页签因此居中），删除作者筛选（含 author 状态、search.query 的 authorDisplayName 与 searchKey 依赖）；删除输入时的「按 Enter 或点检索开始」块与搜索空态 detail；删除范围说明整行、收藏空态长说明；`PreviewPane.quoteTarget` 改可选，文件页不再传（菜单项与「引用选区」浮标都不渲染）；GitPage 删掉「改动记录不受影响」整块（保留空态标题与读取失败重试）；成员/看板/搜索三页 `.page` 改 flex 列、`.project-split` 撑满（左栏仍 flex-start+sticky），空态 `flex:1` 垂直居中。
+
+验证：新增 `scripts/capture-r190-ui.cjs` **11/11 断言通过**（间隔 12px、页签中心=工具栏中心 82px、作者筛选不存在、无范围/搜索范围/收藏总计/书签文案、预览菜单无引用入口、非 Git 目录 Git 页无提示块且仍说明未初始化、空态居中、输入无提示），证据 `dist/r190-ui/r190-verify4/`；回归 R189 一致性 50/50、R188 14 场景 123 断言、R183 15 场景 86 断言；`memberChannelsR136 + listOrderR183 + r149UiBrandingCopy + r153ProductNavigation` 4 文件 18 项通过；hifi tsc 0、改动文件 eslint 0 新增（既有 16 条与 HEAD 一致）。
+
+交付：程序提交（含版本 beta.35）与安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.35-x64.exe`（干净 worktree 构建，未签名）；未安装/升级/卸载、未操作用户运行数据、零真实模型；未创建 GitHub Release。见 [R190](../reviews/r190-ui-feedback-20261107.md)。
+
 ## 2026-11-07：R189 四页视觉统一（成员管理 / 看板 / 文件与 Git / 搜索与收藏；beta.34）
 
 用户 2026-11-07 基于已安装 beta.33 反馈两条：①四个页面的项目卡片和标题样式不一致、有割裂感；②四个页面的顶部栏和搜索栏风格不一致。确认口径：项目卡统一「项目名 + 一行小字」，四页顶部统一为同一条灰底圆角工具栏（页签收进栏内）。

@@ -497,7 +497,8 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                     <div className="fg-pane-body">
                       <PreviewPane
                         context={{ kind: 'files', projectId, view: 'files', selection: selected.path }}
-                        quoteTarget={{ draftKey: `files:${projectId}`, label: '选择讨论位置' }}
+                        /* R190（用户第 5 项）：文件页不再提供「引用到 选择讨论位置」——
+                           不传 quoteTarget 即不渲染该菜单项（预览组件里已是可选 prop）。 */
                         className="files-preview-pane"
                         /*
                          * 必须给 showEmpty：共享预览在"没有标签"时会 return null，

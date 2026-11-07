@@ -130,7 +130,8 @@ export interface PreviewPaneProps {
   /** 当前上下文（决定 audience 可见性与引用目标） */
   context: ContextTarget;
   /** 引用默认目标草稿 key 与展示名（§7.2） */
-  quoteTarget: { draftKey: string; label: string };
+  /** R190：可选——文件与 Git 页不再提供「引用到讨论位置」入口，不传即可。 */
+  quoteTarget?: { draftKey: string; label: string };
   /** 单区域模式：与对话二选一显示 */
   singleRegion?: boolean;
   /** 返回对话（单区域模式） */
@@ -351,8 +352,11 @@ export function PreviewPane({
     if (absolutePath == null) { toast('这份文件没有可显示的本机路径', 'warn'); return; }
     void copyTextToClipboard(absolutePath).then((ok) => toast(ok ? `已复制完整路径：${absolutePath}` : '复制失败：剪贴板不可用', ok ? 'success' : 'error'));
   };
-  /** 引用到目标（r61 合同：引用卡直写；focus-composer）。 */
+  /** 引用到目标（r61 合同：引用卡直写；focus-composer）。
+   *  R190：quoteTarget 变可选——文件与 Git 页不再提供引用入口（用户要求去掉「引用到 选择讨论位置」），
+   *  未传时这两个入口都不渲染，doQuote 也不会被调用。 */
   const doQuote = (excerpt?: string) => {
+    if (quoteTarget == null) return false;
     const ok = quoteResource(active.resourceId, active.revision, quoteTarget.draftKey, quoteTarget.label, excerpt);
     if (ok) window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: quoteTarget.draftKey }));
     return ok;
@@ -604,7 +608,7 @@ export function PreviewPane({
         />
       </div>
 
-      {selection ? (
+      {selection && quoteTarget != null ? (
         <button
           type="button"
           className="preview-quote-selection"
@@ -660,9 +664,12 @@ export function PreviewPane({
       {moreAt ? (
         <Menu anchor={moreAt} onClose={() => setMoreAt(null)}>
           <div className="menu-label">{resource.title}</div>
-          <MenuItem icon="corner-down-right" title={`把这份文件的固定版本插入「${quoteTarget.label}」草稿；需你再次点击发送才会进入对话`} onClick={() => { doQuote(); setMoreAt(null); }}>
-            引用到 {quoteTarget.label}
-          </MenuItem>
+          {/* R190：文件与 Git 页不传 quoteTarget → 不显示「引用到 …」入口（用户要求去掉）。 */}
+          {quoteTarget != null ? (
+            <MenuItem icon="corner-down-right" title={`把这份文件的固定版本插入「${quoteTarget.label}」草稿；需你再次点击发送才会进入对话`} onClick={() => { doQuote(); setMoreAt(null); }}>
+              引用到 {quoteTarget.label}
+            </MenuItem>
+          ) : null}
           <MenuItem icon="info" title="完整路径、版本、大小、来源与可见范围" onClick={() => { setInfoOpen(true); setMoreAt(null); }}>文件信息</MenuItem>
           <MenuItem
             icon="download"

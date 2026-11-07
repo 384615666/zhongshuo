@@ -56,14 +56,14 @@
 }
 
 /* 文件树 / Git 两栏骨架吃掉右列剩余高度（与原 `.fg-page > .fg-body` 一致）。
-   工具栏已经在共享 .project-content 里与下方内容保持 --sp-3 间距（r189-consistency.css 里把
-   工具栏 margin-bottom 归零，由 `.project-content > * + *` 统一给间距），所以这里只保留左右
-   与顶部微调，避免和工具栏的间距叠加成两倍。 */
+   R190（用户第 1 项）：工具栏与下方「项目文件 / Git」面板原来贴在一起——因为这里的
+   `margin: 0 18px` 覆盖掉了共享 `.project-content > * + *` 给的 12px 上间距。现在显式
+   保留与其它三页一致的顶部间距（--sp-3），左右仍是原来的 18px。 */
 .fg-rail-content > .fg-body,
 .fg-rail-content > .git-layout {
   flex: 1 1 auto;
   min-height: 0;
-  margin: 0 18px;
+  margin: var(--sp-3) 18px 0;
 }
 
 /* 状态/错误面板：同上，按原 `.fg-page > .panel { margin-left/right: 18px }` 补回。 */

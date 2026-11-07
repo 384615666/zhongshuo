@@ -31,11 +31,14 @@
   line-height: 30px;
 }
 
-/* 页签不再是独立一行：作为工具栏的第一个控件，与 30px 控件同高、垂直居中。 */
+/* 页签不再是独立一行：作为工具栏的第一个控件，与 30px 控件同高、垂直居中。
+   R190（用户第 2 项）：基础 `.thread-tabs` 带 `padding: 0 12px 6px`（下内边距 6px），
+   放进工具栏后会把两个页签整体往上顶 3px，看起来「按钮偏上」。工具栏内清零内边距。 */
 .page-filters > .thread-tabs {
   flex: none;
   height: 30px;
   margin: 0;
+  padding: 0;
   align-items: center;
   gap: 2px;
 }
@@ -146,6 +149,57 @@
 .project-card-flag.muted {
   color: var(--text-3);
 }
+
+/* ============================================================
+   4) 空态/提示居中（R190 用户第 7 项）
+   ============================================================ */
+
+/* R190 实测：只给 .empty 加 flex:1 还不够——右列 .project-content 高度原本等于内容高度
+   （.project-split 默认 align-items:flex-start），所以「居中」只是在小盒子里居中，看起来
+   仍贴着顶部。这里让用项目卡列的三页把 .page 变成 flex 列、.project-split 撑满可用高度
+   （左栏自己写了 align-self:flex-start，仍是贴顶 + sticky，不受影响），空态就能在整块
+   内容区里垂直居中。 */
+.page.members-page,
+.page.tasks-board-page,
+.page.library-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.page.members-page > .project-split,
+.page.tasks-board-page > .project-split,
+.page.library-page > .project-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+}
+
+/* 空态占满右列剩余高度并垂直居中（四页内容区都是 .project-content 的 flex 列）。
+   `.page` 直排的页面（归档等）同样处理。 */
+.project-content > .empty,
+.page > .empty {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-height: 220px;
+}
+
+/* 文件页右列是「工具栏 + 固定块 + fg-body」，空态通常出现在 fg-body 内或紧跟工具栏；
+   让它至少占一段可读高度并居中。 */
+.fg-rail-content > .empty {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-height: 200px;
+}
+
+/* 右列里的单行提示面板（如「尚未打开项目…」「正在读取…」）也不要顶在最上边：
+   与空态一致地留出一段上方呼吸（不是整屏居中，避免把真实内容推走）。 */
+.project-content > .panel.info:first-of-type {
+  margin-top: var(--sp-2);
+}
+
+/* ============================================================
+   5) 工具栏内控件高度（沿用 R189）
+   ============================================================ */
 
 /* ≤980px：工具栏在窄屏保持同一套外观，允许换行（不横向溢出）。 */
 @media (max-width: 980px) {

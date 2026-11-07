@@ -261,17 +261,12 @@ export function GitPage({
         <EmptyState
           icon={branchReadError != null ? 'alert-triangle' : 'folder'}
           title={branchReadError != null ? '分支列表读取失败' : project?.isGit === false ? '尚未初始化 Git' : '没有 Git 数据'}
-          detail={branchReadError != null ? `${userFacingSystemText(branchReadError ?? '')}；当前分支/工作区仍可显示。` : '众说不会自动初始化 Git，也不修改你的项目配置。你可以自行初始化后回到这里。'}
+          detail={branchReadError != null ? `${userFacingSystemText(branchReadError ?? '')}；当前分支/工作区仍可显示。` : undefined}
         />
-        {branchReadError != null ? <div className="panel-actions"><button className="btn sm" onClick={() => void refreshGitState(projectId)}>重试读取</button></div> : <div className="panel">
-          <div className="panel-title"><Icon name="info" size={13} /> 改动记录不受影响</div>
-          任务改动仍会记录，并可查看 diff 与撤销。
-          <div className="panel-actions">
-            <button className="btn sm" onClick={() => navigate(`/project/${projectId}/files?tab=files`)}>
-              <Icon name="file-text" size={12} /> {embedded ? '返回文件' : '去看文件与改动'}
-            </button>
-          </div>
-        </div>}
+        {/* R190（用户第 6 项）：删掉「改动记录不受影响 / 任务改动仍会记录，并可查看 diff 与撤销」
+            这块开发口径提示（图5）。空态标题本身已说明「尚未初始化 Git」，文件与改动入口在顶部页签里。
+            只有读取失败时才保留一个明确的重试动作。 */}
+        {branchReadError != null ? <div className="panel-actions"><button className="btn sm" onClick={() => void refreshGitState(projectId)}>重试读取</button></div> : null}
       </>
     );
     // 合页模式：外壳（含页头、状态条、文件/Git 标签）由 FilesGitPage 提供，

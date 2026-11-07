@@ -81,7 +81,6 @@ export function LibraryPage() {
   const [moreFilters, setMoreFilters] = useState(false);
   /** 既有筛选（r56 H4 §5）：作者显示名/日期窗（本机时区）/会话（当前项目房间）——与
    * search.query 正式参数一一对应；服务端对全部类型统一生效（线程=锚消息、任务=根消息）。 */
-  const [author, setAuthor] = useState('');
   const [fromDay, setFromDay] = useState('');
   const [toDay, setToDay] = useState('');
   const [convId, setConvId] = useState('');
@@ -112,7 +111,6 @@ export function LibraryPage() {
       return p == null ? [] : [p];
     });
   }, [projects, listOrderVersion]);
-  const currentProjectName = projects.find((p) => p.id === projectId)?.displayName ?? '';
   /** 还没打开任何项目：scope='project' 不可用（和服务端「scope=project 需要 projectId」一致），
    *  界面明确引导去点「全部项目」，而不是静默搜出空结果。 */
   const noActiveProject = projectId == null || projectId === '';
@@ -135,7 +133,7 @@ export function LibraryPage() {
 
   const searchKey = JSON.stringify([q.trim(), scope,
     scope === 'project' ? projectId : [...visibleProjectSet].sort(),
-    kind, author.trim(), fromDay, toDay, scope === 'project' ? convId : '']);
+    kind, fromDay, toDay, scope === 'project' ? convId : '']);
   const visibleResult = resultKey === searchKey ? result : null;
   const visibleSearchErr = searchErrKey === searchKey ? searchErr : null;
   useEffect(() => {
@@ -193,8 +191,7 @@ export function LibraryPage() {
     try {
       const r = await command<SearchData>('search.query', {
         text, scope, ...(scope === 'project' ? { projectId } : {}), kind, page: nextPage, pageSize: 20,
-        ...(author.trim().length > 0 ? { authorDisplayName: author.trim() } : {}),
-        ...(fromDay !== '' ? { fromDay } : {}),
+          ...(fromDay !== '' ? { fromDay } : {}),
         ...(toDay !== '' ? { toDay } : {}),
         ...(scope === 'project' && convId !== '' ? { conversationId: convId } : {}),
       });
@@ -205,7 +202,7 @@ export function LibraryPage() {
     } finally {
       if (mountedRef.current && gen === searchGenRef.current) setSearching(false);
     }
-  }, [q, scope, projectId, kind, author, fromDay, toDay, convId, searchKey]);
+  }, [q, scope, projectId, kind, fromDay, toDay, convId, searchKey]);
 
   const loadSaved = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -256,13 +253,9 @@ export function LibraryPage() {
   const rows: Array<SearchRow> = visibleResult == null ? [] : [...visibleResult.messages, ...visibleResult.threads, ...visibleResult.tasks]
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   const total = rows.length;
-  /** 范围说明放在筛选行末尾（原来的「范围」下拉已由左栏项目卡承担）：让用户随时看清
-   *  当前结果属于哪个项目——文案与卡片标题一致，不另造术语。 */
-  const scopeNote = scope === 'project'
-    ? `范围：${currentProjectName !== '' ? `「${currentProjectName}」` : '当前项目'}`
-    : '范围：全部项目（侧栏可见）';
-  /** R189：搜索框与成员页共用同一个 <SearchField>（宽度有限），占位符只写「搜什么」；
-   *  当前范围由工具栏下方那行说明（scopeNote）负责，避免占位符被截断成「（Enter 检」。 */
+  /** R190（用户第 4 项）：删掉「范围：「X」· 搜索范围为消息、线程和任务标题，不含文件正文」
+   *  这类说明文字——当前范围已由左栏选中卡表达，正式版不再在页面上重复开发口径。
+   *  占位符只写「搜什么」，与成员页搜索框保持一致。 */
   const searchPlaceholder = '搜消息 / 线程 / 任务标题…';
 
   return (
@@ -352,22 +345,19 @@ export function LibraryPage() {
                     onEnter={() => searchNow(1)}
                   />
                   <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => searchNow(1)}>{searching ? '检索中…' : '检索'}</button>
-                  {/* R189：作者/日期/会话默认收起，保证工具栏与另外三页同高；展开后是同一盒子的第二排。 */}
+                  {/* R189：日期/会话默认收起，保证工具栏与另外三页同高；展开后是同一盒子的第二排。
+                      R190（用户第 2 项）：作者名筛选按用户要求去掉（不再提供按作者过滤）。 */}
                   <button
                     className="btn ghost sm"
                     data-zs-library-more={moreFilters ? 'open' : 'closed'}
                     aria-expanded={moreFilters}
-                    title="作者 / 日期 / 会话筛选"
+                    title="日期 / 会话筛选"
                     onClick={() => setMoreFilters((v) => !v)}
                   >
                     <Icon name="filter" size={12} /> {moreFilters ? '收起筛选' : '更多筛选'}
                   </button>
                   {moreFilters ? (
                     <div className="toolbar-more">
-                      <label className="field inline" title="按作者名称筛选">
-                        <span className="field-label">作者</span>
-                        <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
-                      </label>
                       <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
                         <span className="field-label">日期</span>
                         <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
@@ -385,11 +375,8 @@ export function LibraryPage() {
                 </>
               ) : null}
             </div>
-            {/* 范围说明放在工具栏下方一行：它是说明文字而不是控件，放进工具栏会把栏撑成两行
-                （正是「四页顶部栏不一致」的根因之一）；这里与成员页的只读提示同样式。 */}
-            <div className="faint small" data-zs-library-scope-note="1">
-              {tab === 'search' ? `${scopeNote} · 搜索范围为消息、线程和任务标题，不含文件正文` : `${scopeNote} · 收藏总计 ${saved?.length ?? 0} 条`}
-            </div>
+            {/* R190（用户第 4 项）：删掉「范围：「X」· 搜索范围为消息、线程和任务标题，不含文件正文」
+                与「… 收藏总计 N 条」这类开发口径说明——当前范围已由左栏选中卡表达，正式版不再重复提示。 */}
 
             {tab === 'search' ? (
               <>
@@ -397,11 +384,10 @@ export function LibraryPage() {
                 {visibleResult == null && visibleSearchErr == null && q.trim().length === 0 && !searching ? (
                   scope === 'project' && noActiveProject
                     ? <div className="panel info">尚未打开项目——点左栏「全部项目」查看侧栏可见项目，或先在侧栏打开一个项目。</div>
-                    : <EmptyState icon="search" title="输入关键词开始搜索" detail="按 Enter 检索，点击结果可回到原处。" />
+                    : <EmptyState icon="search" title="输入关键词开始搜索" />
                 ) : null}
-                {visibleResult == null && visibleSearchErr == null && (q.trim().length > 0 || searching) ? (
-                  <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
-                ) : null}
+                {/* R190（用户第 3 项）：输入过程中不再弹「按 Enter 或点「检索」开始」提示块；
+                    检索中状态由「检索」按钮自身（检索中…）表达。 */}
                 {visibleResult != null ? (
                   <>
                     {total === 0 ? (
@@ -453,7 +439,7 @@ export function LibraryPage() {
                     {savedErr != null ? <div className="panel warning">收藏读取失败：{userFacingSystemText(savedErr ?? '')}。可刷新重试</div> : null}
                     {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
                     {saved != null && saved.length === 0 ? (
-                      <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮即可收藏；收藏不会改动原内容，也不会共享给其他成员。" />
+                      <EmptyState icon="bookmark" title="还没有收藏" />
                     ) : null}
                     {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && noActiveProject) ? (
                       <div className="panel info">

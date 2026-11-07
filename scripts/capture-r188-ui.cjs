@@ -763,7 +763,7 @@ const scenesSource = String.raw`(() => {
       await wait(900);
       const search = lastCommand('search.query');
       extra.searchParams = search && search.params;
-      extra.scopeNote = textOf(q('.library-page [data-zs-library-scope-note]'));
+      extra.scopeNoteGone = q('.library-page [data-zs-library-scope-note]') == null && !document.body.innerText.includes('搜索范围为消息');
       extra.allCardCurrent = q('[data-zs-library-scope-all]') != null && q('[data-zs-library-scope-all]').classList.contains('is-current');
       extra.sidebarBefore = sidebarBefore;
       extra.sidebarAfter = sidebarActiveText();
@@ -773,7 +773,8 @@ const scenesSource = String.raw`(() => {
       extra.resultRowCount = qa('.library-page .card.tight').length;
       check('「全部项目」卡发出 search.query scope=visible（=侧栏可见项目）', extra.searchParams != null && extra.searchParams.scope === 'visible');
       check('「全部项目」卡显示选中态', extra.allCardCurrent);
-      check('范围说明写明「全部项目（侧栏可见）」', /全部项目（侧栏可见）/.test(extra.scopeNote));
+      // R190（用户第 4 项）：页面上的「范围：… · 搜索范围为消息…」说明已删除，正式版不再显示开发口径。
+      check('不再显示范围/搜索范围说明（R190）', extra.scopeNoteGone);
       check('点「全部项目」不切换当前项目（侧栏高亮不变）', extra.sidebarAfter === extra.sidebarBefore);
       check('点「全部项目」不切换当前项目（标题栏项目名不变）', extra.titlebarAfter === extra.titlebarBefore);
       // R189：占位符改为统一的「搜消息 / 线程 / 任务标题…」（与成员页搜索框同一组件），
@@ -799,16 +800,15 @@ const scenesSource = String.raw`(() => {
       extra.currentCardText = textOf(q('[data-zs-library-project].is-current'));
       extra.sidebarActive = sidebarActiveText();
       extra.titlebarProject = textOf(q('.zs-tb-project-name'));
-      extra.scopeNote = textOf(q('.library-page [data-zs-library-scope-note]'));
+      extra.scopeNoteGone = q('.library-page [data-zs-library-scope-note]') == null && !document.body.innerText.includes('搜索范围为消息');
       extra.placeholder = (qa('.library-page .page-filters input').find((el) => (el.getAttribute('placeholder') || '').indexOf('搜') >= 0) || {}).placeholder || '';
       extra.errorPanel = textOf(q('.library-page .panel.warning'));
       check('点项目卡同时切换当前项目（侧栏高亮=社区运营）', extra.sidebarActive.indexOf(targetName) >= 0);
       check('点项目卡同时切换当前项目（标题栏项目名=社区运营）', extra.titlebarProject.indexOf(targetName) >= 0);
       check('目标项目卡显示选中态', extra.currentCardId === targetId);
       check('切项目后 search.query scope=project 且带目标项目 ID', extra.searchParams != null && extra.searchParams.scope === 'project' && extra.searchParams.projectId === targetId);
-      check('范围说明切到该项目', /社区运营/.test(extra.scopeNote));
-      // R189：范围改由范围说明表达（占位符统一），断言说明里出现目标项目名。
-      check('范围说明切到该项目（占位符统一）', /社区运营/.test(extra.scopeNote) && (extra.placeholder || '').indexOf('搜消息') >= 0);
+      // R190（用户第 4 项）：范围说明已删除；切项目以侧栏/标题栏/项目卡选中态与检索参数为准。
+      check('切项目后仍不显示范围说明（R190）', extra.scopeNoteGone && (extra.placeholder || '').indexOf('搜消息') >= 0);
       check('切项目没有检索错误', extra.errorPanel === '');
       window.r188Extra = extra;
     } },
