@@ -1,5 +1,16 @@
 # 续工记录（continuation）
 
+## 2026-11-08：R198 Windows 通知图标黑块真正根因（AUMID 注册表键）与 beta.43
+
+用户安装 beta.42 后回复「问题还在」，通知头部仍是黑色方块（正文品牌小图正常）。beta.42 的 ICO DIB 修复经本机对照证明图标文件本身正确（系统图标 API 取 32×32 与 logo 逐像素一致、PE 图标 Frames=7/Verified=true、快捷方式/注册表/exe 都指向新图标）。本机用系统通知做对照：①AUMID 注册表键存在（IconUri=ICO/PNG/exe 三种都试）→ 黑块/占位字形/不显示；②删掉 `HKCU\Software\Classes\AppUserModelId\com.zhongshuo.desktop.app` 整键后用真实 AUMID 发同一条通知 → 同一快捷方式、同一图标，「众说 + 品牌图标」正常。结论：Toast 平台只要看到该 AUMID 键就优先用 IconUri/注册表显示名，而不是快捷方式图标；旧版本每次启动都会写这个键（R162 起），所以升级后黑块持续。证据：`dist/r198-before-black.png` / `dist/r198-after-logo.png`（ignored，系统通知截图裁剪）。
+
+实现：`src/ui/windowsAppIdentity.ts` 用 `windowsNotificationIdentityReset(appId)`（仅限 `com.zhongshuo.*`，生成 `reg delete HKCU\Software\Classes\AppUserModelId\<AUMID> /f`）取代 `windowsIdentityRegistration`；`src/ui/main.ts` 安装版启动调用重置（键不存在时失败静默忽略），不再写 DisplayName/IconUri；`packaging/windows/zhongshuo.iss` 删除 [Registry] 两条写入，快捷方式仍带 AppUserModelID 与品牌图标（通知名称/图标由「众说」快捷方式提供，对照已验证）；通知正文品牌图、点击激活、任务通知逻辑不变。`tests/unit/windowsIdentityR163.test.ts` 改为断言只删本应用 scoped 键、非法 AUMID 拒绝、main 不再写 AUMID DisplayName/IconUri；安装器快捷方式 AUMID 断言保留。
+
+验证：本机系统通知对照（修前黑块/删键后众说+品牌图标）；定向 3 文件 15 项通过；hifi tsc 0、根 tsc 29 条既有本机未跟踪夹具错误（本版 0 新增）；全量已跟踪套件与干净 worktree 构建复验见下。未在本机安装/升级/卸载，未在安装版上实测升级后第一条通知。
+
+交付：版本升 `0.1.3-beta.43`（`package.json`、`packaging/windows/release.json`，numericVersion `0.1.3.43`）；程序提交 `5a095d7`；干净 worktree `dist/r198-source` 构建便携镜像 BUILD `bld_78d3bb1f94d5ef83`（clean、632 文件 MANIFEST 逐项 SHA256）、安装器 BUILD `bld_4963e33c797e994d`（安装镜像 668 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.43-x64.exe` **160,491,524 字节**，SHA256 `b0c2d0aa4e20e8ace178ac336945c212bf8999d43d1b71b6f9aa87c8beac7013`，未签名，附 `.sha256`/`.release.json`。本记录提交后推送 `main`（`5a095d7` + 记录提交）、创建 tag `v0.1.3-beta.43` 与 GitHub Release「众说 0.1.3-beta.43」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/0.1.3-beta.43.md`）；用户自行安装。见 [R198](../reviews/r198-notification-identity-20261108.md)。
+
+
 ## 2026-11-08：R197 图片气泡 / 图片绝对路径 / 右键复制 / 通知图标黑块（beta.42）
 
 用户 2026-11-08 基于已安装 beta.41 发来五项截图反馈：①图片气泡上方空出一大截（并要求修改前端后自己截图核对）；②引用只能引文字、图片不能引用，要求引用内容含图片时附上图片绝对路径；③复制带图片的消息只复制图片名称，要改成绝对路径；④Windows 通知图标显示成黑图；⑤图片右键不能复制，要求添加复制功能。
