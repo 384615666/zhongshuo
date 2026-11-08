@@ -35,23 +35,23 @@
 
 ## 下载安装
 
-Windows 10/11 x64：[众说 1.0.1 安装包](https://github.com/384615666/zhongshuo/releases/download/v1.0.1/Zhongshuo-Setup-1.0.1-x64.exe)。SHA256 与版本信息见 [GitHub Release](https://github.com/384615666/zhongshuo/releases/tag/v1.0.1)；安装包未配置代码签名，SmartScreen 可能提示「未知发布者」。安装版仅支持当前 Windows 用户，无需管理员权限。
+Windows 10/11 x64：[众说 1.0.1 安装包](https://github.com/384615666/zhongshuo/releases/download/v1.0.1/Zhongshuo-Setup-1.0.1-x64.exe)。
 
 也可以按下面的[快速开始](#quick-start)从源码构建。
 
 ## 为什么是众说
 
-把文件夹当作项目，在房间里交代工作。不同 AI 可以分析、执行、互相核对；你在同一条对话里看进展、预览文件、继续修改。
+以文件夹为工作区，在每个工作区的房间里交代工作。不同 AI 可以分析、执行、互相核对；你可以看进展、预览文件、继续修改。
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h3>📁 文件夹就是项目</h3>
+      <h3>📁 本地文件夹就是工作区</h3>
       <p>直接打开本地文件夹，项目、房间和对话串按你已有的工作组织，不另外建一套工作流。</p>
     </td>
     <td width="50%" valign="top">
       <h3>🤝 按你的方式协作</h3>
-      <p>自动分工、指定一位执行、多人分工、共同研讨，或在原对话串里继续追问和返工。</p>
+      <p>自动分工、指定一位执行、多agent分工、共同研讨，或在原对话串里继续追问和返工。</p>
     </td>
   </tr>
   <tr>
@@ -72,10 +72,10 @@ Windows 10/11 x64：[众说 1.0.1 安装包](https://github.com/384615666/zhongs
 
 | 你想…… | 众说里可以…… |
 | --- | --- |
-| 让它做事 | 自动协作、指定成员执行、多人分工 |
+| 让它做事 | 自动协作、指定成员执行、多agent分工 |
 | 让它一起想 | 共同研讨、简短交流 |
 | 单独聊或记录 | 私信、文件评论 |
-| 继续或修改 | 在原串继续、停止 / 验收 / 返工 |
+| 继续或修改 | 继续、停止 / 验收 / 返工 |
 
 ## 界面
 
@@ -101,7 +101,7 @@ Windows 10/11 x64：[众说 1.0.1 安装包](https://github.com/384615666/zhongs
     <td width="50%" valign="top">
       <img src="site/assets/shots/thread.png" alt="回复串：进度、文件和结论留在原处">
       <br>
-      <sub><b>回复串</b> · 进度、文件和结论都在原处</sub>
+      <sub><b>回复串</b> · 进度、文件和结论一起展示</sub>
     </td>
   </tr>
 </table>
@@ -150,7 +150,7 @@ AI 成员使用电脑上已安装并配置的 Claude、Codex、DeepSeek Harness 
 <details>
 <summary><b>DeepSeek Harness / Pi 配置说明</b></summary>
 
-DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.1-rc.5`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；安装目录附带 `runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。
+DeepSeek Harness 适配官方 `@deepseek-ai/dsh@0.2.2-rc.1`。先安装该 CLI 和它要求的工具链，执行 `node scripts/build-dsh-runtime.mjs`，再执行 `node scripts/setup-deepseek-harness.mjs --install --artifact-dir dist/dsh-runtime` 安装众说专用连接组件；安装目录附带 `runtime-tools/deepseek-harness/setup.cmd`。众说使用 Harness 的 `zhongshuo` profile，需让模型和 MCP 配置在该 profile 生效；单独在 `dsh web` 中配置不代表专用 profile 已配置。
 
 Pi 直接连接已安装的官方 CLI，沿用其模型配置；同时兼容官方安装器和 npm 全局安装，无需额外插件。
 
