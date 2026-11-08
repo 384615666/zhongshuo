@@ -524,17 +524,21 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             ) : null}
 
             {/* 成员卡片（头像+名称+身份标签 / runtime 有效来源 / 在跑任务；右栏自适应列数）。
-                R183 第 6 项：去掉自动生成的说明与 ★协调者 标签；名称/说明编辑移进「AI 设置」弹窗。 */}
+                R183 第 6 项：去掉自动生成的说明与 ★协调者 标签；名称/说明编辑移进「AI 设置」弹窗。
+                R203 用户反馈：点 AI 成员卡片不再进入单独的「成员详情/配置」页，直接打开同一个
+                「AI 设置」弹窗；人类成员没有 AI 设置，卡片保持只读（操作按钮仍可用）。 */}
             <div className="grid members-cards">
               {visibleMembers?.map((m) => {
                 const rt = runtimeLabel(m);
                 const running = workload.data?.items.find(row=>row.memberId===m.id);
                 const description = m.description != null && m.description !== '' && m.description !== AUTO_ADDED_MEMBER_DESCRIPTION ? m.description : null;
+                const agent = m.principalType === 'agent';
+                const openSettings = () => { if (agent && !projArchived && !projRemoved) openBind(m); };
                 return (
-                  <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} 的成员详情`}
-                    role="link" tabIndex={0} style={{ cursor: 'pointer' }}
-                    onClick={(e) => { if ((e.target as HTMLElement).closest('button, a, input, select, summary')) return; navigate(`/project/${projectId}/member/${m.id}`); }}
-                    onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); navigate(`/project/${projectId}/member/${m.id}`); } }}>
+                  <div key={m.id} className="card" data-zs-member-card={m.id}
+                    title={agent ? `打开 ${m.displayName} 的 AI 设置` : `${m.displayName} · 人类成员`}
+                    style={{ cursor: agent && !projArchived && !projRemoved ? 'pointer' : 'default' }}
+                    onClick={(e) => { if ((e.target as HTMLElement).closest('button, a, input, select, summary')) return; openSettings(); }}>
                     <div className="row tight">
                       <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round subject={`member:${m.id}`} />
                       <div style={{ flex: 1, minWidth: 0 }}>

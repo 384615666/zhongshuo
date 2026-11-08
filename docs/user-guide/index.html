@@ -486,7 +486,7 @@ body.embedded .footer{display:none}
 <p>Windows 上，Harness 官方桌面版安装后提供的 <code>dsh</code> 入口可直接使用，也可以在高级设置选择 <code>DeepSeek Harness.exe</code>。Pi 兼容官方安装器和 npm 全局安装；默认程序仍为 <code>pi</code>。已安装好时无需重复安装 CLI，众说安装器会自动配置 Harness 连接组件。</p>
 <p>密钥由各自 CLI 管理，无需填进众说。两种渠道当前使用原生完整权限；只读、项目受限编辑暂未开放。Harness 连接组件 0.1.2 和官方 Pi 1.4.0 支持结果格式补交，补交时使用独立新会话，禁用所有工具，仅整理已有输出，不重复执行原任务。Pi 无需额外插件；其他版本在补交前会提示未认证。若提示 Harness 连接组件需要升级，运行新版安装目录中的 <code>runtime-tools/deepseek-harness/setup.cmd</code> 后再继续任务。旧失败任务不会自动重跑，可在原对话串点击 <strong>继续任务</strong>。</p>
 <h3>修改已有AI</h3>
-<p>进入 <strong>成员管理</strong>，在对应成员卡片上点 <strong>AI设置…</strong>。修改渠道或模型后，点 <strong>保存 AI 设置</strong>。</p>
+<p>进入 <strong>成员管理</strong>，点对应成员卡片（或卡片上的 <strong>AI设置…</strong>）直接打开 AI 设置。修改渠道或模型后，点 <strong>保存 AI 设置</strong>。</p>
 <p>Claude、Codex 只需要阅读和解释资料时，可以展开 <strong>高级：执行程序与权限</strong>，选择只读模式；需要修改文件时，选择对应的编辑权限。Harness、Pi 当前选择原生完整权限，旧的受限配置保留原值，不能通过切换渠道自动升级授权。</p>
 <p><a id="chat"></a></p>
 <h2>4. 发消息、看回复，再接着问</h2>
@@ -755,7 +755,7 @@ body.embedded .footer{display:none}
 <h3>AI还没回复</h3>
 <p>打开原对话串，阅读最新回复，并查看顶部任务状态。需要补充信息时，在原串回答；需要停止时点 <strong>停止任务</strong>。</p>
 <h3>提示模型或渠道不能用</h3>
-<p>进入 <strong>成员管理 → AI设置…</strong>，检查所选渠道和模型。账号登录失效时，在对应渠道重新登录，再回原任务点 <strong>按原请求继续</strong>。</p>
+<p>进入 <strong>成员管理</strong>，点该成员卡片（或 <strong>AI设置…</strong>），检查所选渠道和模型。账号登录失效时，在对应渠道重新登录，再回原任务点 <strong>按原请求继续</strong>。</p>
 <h3>想让AI真正修改文件</h3>
 <p>在原串写清楚文件名和修改目标，例如：<strong>“请修改活动安排.md，把开始时间改成下午3点。”</strong> 到成员的 <strong>AI设置… → 高级：执行程序与权限</strong>，选择允许编辑项目的权限。</p>
 <h3>关闭后再打开，怎么接着聊</h3>

@@ -32,7 +32,6 @@ describe('R136 member channel UI', () => {
 import {createElement} from 'react';
 import {createRoot} from 'react-dom/client';
 import {MembersPage,BindRuntimeModal} from '__ROOT__/src/ui/hifi/MembersPage.tsx';
-import {MemberDetailPage} from '__ROOT__/src/ui/hifi/pages/MemberDetailPage.tsx';
 import {EditTemplateModal,SaveMemberTemplateModal} from '__ROOT__/src/ui/hifi/components/MemberManagementForms.tsx';
 import * as store from '__ROOT__/src/ui/hifi/data/store.ts';
 import {RUNTIME_CHANNELS} from '__ROOT__/src/contracts/runtimeKinds.ts';
@@ -158,9 +157,13 @@ window.run=async()=>{
   check('two-step save writes profile with the opened revision',twoStepWrites[0].params.expectedRevision===revisionBeforeTwoStep&&twoStepWrites[0].params.displayName==='两步改名');
   check('two-step save writes runtime with the revision returned by update',twoStepWrites[1].params.expectedRevision===revisionBeforeTwoStep+1&&twoStepWrites[1].params.kind==='codex');
 
-  await mount(MemberDetailPage,{projectId:'p',memberId:'m1'});
-  await until(()=>document.querySelector('[data-zs-member-detail-bind]'));
-  document.querySelector('[data-zs-member-detail-bind]').click();await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  // R203：点 AI 成员卡片不再进入独立「成员详情」页，直接打开同一个「AI 设置」弹窗。
+  await mount(MembersPage,{projectId:'p'});
+  await until(()=>document.querySelector('[data-zs-member-card="m1"]'));
+  document.querySelector('[data-zs-member-card="m1"]').click();
+  await until(()=>document.querySelector('[aria-label="运行渠道"]'));
+  await until(()=>combo('运行渠道').textContent.includes(channel.label));
+  check('member card no longer mounts a separate detail page',!document.querySelector('[data-zs-member-detail]'));
   check('detail reopens Harness without coercion to Claude',combo('运行渠道').textContent.includes(channel.label));
   check('detail preserves model effort and program',document.querySelector('[aria-label="手动模型标识"]').value===channel.model&&combo('思考等级').textContent.includes('高')&&executionInput().value==='C:/test/'+channel.executable+'.exe');
   await choose('运行渠道','codex');
@@ -236,6 +239,6 @@ setTimeout(()=>app.exit(3),40000);
     const line = output.split(/\r?\n/).find(line=>line.startsWith('R136_RESULT '));
     const report = line == null ? {ok:false,error:output.slice(-5000)} : JSON.parse(line.slice('R136_RESULT '.length)) as {ok:boolean;checks?:Array<{name:string;ok:boolean}>;error?:string};
     expect(report,JSON.stringify(report)).toMatchObject({ok:true});
-    expect(report.checks).toHaveLength(46);
+    expect(report.checks).toHaveLength(47);
   }, 55000);
 });
