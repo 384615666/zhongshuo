@@ -32,9 +32,9 @@
 
 ## 交付
 
-- 程序/文档提交 PENDING_COMMIT。
-- 干净 worktree `dist/r209-source`（status 0，`dirty=false`）构建：便携镜像 BUILD `PENDING_BUILD1`（clean、PENDING_FILES1 文件 MANIFEST）、安装器 BUILD `PENDING_BUILD2`（安装镜像 PENDING_FILES2 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。
-- 安装包 `dist/installers/Zhongshuo-Setup-1.0.1-x64.exe` **PENDING_BYTES 字节**，SHA256 `PENDING_SHA`，未签名；PENDING_PUSH。
+- 程序/文档提交 `9c69bd5`。
+- 干净 worktree `dist/r209-source`（status 0，`dirty=false`）构建：便携镜像 BUILD `bld_4fc20640e91bbb56`（clean、633 文件 MANIFEST）、安装器 BUILD `bld_0707cfc0cf2954c9`（安装镜像 670 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。
+- 安装包 `dist/installers/Zhongshuo-Setup-1.0.1-x64.exe` **160,479,283 字节**，SHA256 `90224507bdede1a399ff047f316a6d7ab859c1e85ae583b9329e0043228d9f4c`，未签名；本记录提交后推送 `main`（`9c69bd5` + 记录提交）、创建 tag `v1.0.1` 与 GitHub Release「众说 1.0.1」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/1.0.1.md`）；用户自行安装。
 
 ## 已知边界
 
