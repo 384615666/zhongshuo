@@ -92,6 +92,11 @@
 .settings-card-body > [data-zs-notification-master] > .pset-row {
   padding: 13px 20px;
 }
+/* R204：我的名字行包在 [data-zs-viewer-name] 里，不是 settings-card-body 的直接子级；
+   之前漏掉这条 padding，导致该行输入框/保存按钮比其他行的控件更靠右、贴着卡片边缘。 */
+.settings-card-body > [data-zs-viewer-name] > .pset-row {
+  padding: 13px 20px;
+}
 .settings-card .pset-row-control.wide {
   align-items: flex-start;
 }
@@ -160,6 +165,7 @@
   }
   .settings-card-body > .pset-row,
   .settings-card-body > [data-zs-notification-master] > .pset-row,
+  .settings-card-body > [data-zs-viewer-name] > .pset-row,
   .settings-group > .pset-row,
   .settings-group > [data-zs-call-budget-setting] > .pset-row,
   .settings-group > [data-zs-notification-master] > .pset-row {
