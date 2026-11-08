@@ -28,17 +28,21 @@ describe('R157 单页设置（R170 整理后）', () => {
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
-  it('每个分区一张卡片：段标题 + 一句说明 + 行列表', () => {
+  it('每个分区一张卡片：段标题 + 行列表（不再有小字说明）', () => {
     const html = page();
     expect((html.match(/data-settings-section="/g) ?? [])).toHaveLength(5);
     expect((html.match(/settings-card-body/g) ?? [])).toHaveLength(5);
     for (const title of ['外观', '通知', 'AI 设置', '数据与存储', '帮助与关于']) {
       expect(html).toContain(`settings-section-title">${title}<`);
     }
-    // 每段只有一句说明，且 ≤24 字，不再有重复解释段落。
-    const subs = Array.from(html.matchAll(/settings-section-sub">([^<]*)</g), (m) => m[1]);
-    expect(subs).toHaveLength(5);
-    for (const sub of subs) expect(sub.length).toBeLessThanOrEqual(24);
+    // 用户要求去掉设置页的小字文案：页头说明与各分区说明都不再渲染。
+    expect(html).not.toContain('settings-section-sub');
+    expect(html).not.toContain('外观、通知、AI、数据与帮助都在这一页');
+    expect(html).not.toContain('主题、头像和名字；只在本机生效');
+    expect(html).not.toContain('桌面通知总开关。');
+    expect(html).not.toContain('调用预算与同时运行的 AI。');
+    expect(html).not.toContain('数据位置、备份、草稿与归档。');
+    expect(html).not.toContain('手册、链接、版本与诊断。');
   });
 
   it('删除了通用、对话串通知与 AI 成员的模型权限', () => {
@@ -118,6 +122,10 @@ describe('R157 单页设置（R170 整理后）', () => {
     expect(searchAppSettings('对话串')).toEqual([]);
     expect(searchAppSettings('AI 成员')).toEqual([]);
     expect(searchAppSettings('通用')).toEqual([]);
+    // 草稿设置已移除，不再能被搜索到；清理存储仍在。
+    expect(searchAppSettings('草稿')).toEqual([]);
+    expect(searchAppSettings('清理本地草稿')).toEqual([]);
+    expect(searchAppSettings('清理存储')).toContainEqual(expect.objectContaining({ section: 'data' }));
   });
 
   it('不再出现开发过程的说明文字', () => {
@@ -133,6 +141,17 @@ describe('R157 单页设置（R170 整理后）', () => {
     }
   });
 
+  it('去掉草稿的几个设置，保留清理存储', () => {
+    const html = page();
+    expect(html).not.toContain('草稿保存');
+    expect(html).not.toContain('清理本地草稿');
+    expect(html).not.toContain('重试保存');
+    expect(html).not.toContain('data-zs-draft-retry');
+    expect(html).not.toContain('data-zs-draft-recovery-note');
+    expect(html).not.toContain('草稿和未确认发送的保存状态');
+    expect(html).toContain('清理存储');
+  });
+
   /** R158/R170 排版：卡片分组、控件右对齐、去重、保留 data-zs-* 选择器。 */
   it('每个分区都按卡片分组，控件统一在右列', () => {
     const html = page();
@@ -143,9 +162,9 @@ describe('R157 单页设置（R170 整理后）', () => {
     expect(html).not.toContain('field-label">头像<');
     // 通知：行标签是开关本身的含义，不再重复同一个词
     expect(html).toContain('允许弹出系统通知');
-    // 数据：三个分组
+    // 数据：三个分组（草稿设置已移除）
     expect(html).toContain('数据位置与备份');
-    expect(html).toContain('>草稿<');
+    expect(html).not.toContain('>草稿<');
     expect(html).toContain('归档与项目');
     // 保留既有 data-zs-* 选择器（验收脚本依赖）
     for (const selector of [

@@ -1757,12 +1757,6 @@ button.composer-file-token-open:hover {
   font-weight: 680;
   letter-spacing: -0.01em;
 }
-.settings-section-sub {
-  margin-top: 3px;
-  font-size: var(--fs-12);
-  color: var(--text-3);
-  line-height: 1.6;
-}
 
 /* 折叠块（投递记录等技术明细收在这里，正文不出现） */
 .settings-why {

@@ -10,7 +10,7 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
  *  · 行统一「左标签 + 一行灰说明 / 右控件」，说明只留一行，不再重复解释；
  *  · 正文最大宽约 880px 居中，≤760px 时行内容上下排。
  *
- * 已接命令的设置读写并回读核对（app.settings / 主题 / runtime 绑定 / 数据与草稿存储 /
+ * 已接命令的设置读写并回读核对（app.settings / 主题 / runtime 绑定 / 数据存储 /
  * BUILD 身份）；桌面通知总开关使用 app.settings 并回读。
  * 操作手册与项目链接交给主进程用系统浏览器打开（见 bridge.openAppLink），应用内不再嵌入手册。
  * 项目设置独立于 /project/:id/settings（原归属保持——本页只放应用级）。
@@ -19,13 +19,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
 import { SettingsRow, ReadOnlyRow } from '../components/SettingsRow';
-import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, setNotificationsEnabled, setViewerName } from '../data/store';
+import { recordWrite, setTheme, setAppearanceState, setNotificationsEnabled, setViewerName } from '../data/store';
 import { command, dataBridge, openAppLink, type AppLinkTarget } from '../bridge';
 import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
 import { ExecutionConcurrencyPanel } from '../components/ExecutionConcurrencyPanel';
-import { Modal, Switch, Tag } from '../components/ui';
+import { Switch } from '../components/ui';
 import { AvatarPicker } from '../components/AvatarPicker';
 import {
   CALL_BUDGET_ENABLED_SETTING_KEY,
@@ -88,8 +88,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { section: 'runtime', label: '同时运行的 AI', keywords: '并发 并行 同时 运行 全局 每项目 同渠道 上限 concurrency', match: 'execution-concurrency' },
   { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
   { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
-  { section: 'data', label: '草稿保存与重试', keywords: '草稿 保存 锁定 重试', match: '草稿保存' },
-  { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
+  { section: 'data', label: '清理存储', keywords: '清理 存储 回收 空间 缓存 回执 变更前像', match: '清理存储' },
   { section: 'data', label: '归档管理', keywords: '归档 项目 房间 恢复历史', match: '归档管理' },
   { section: 'data', label: '已移除的项目', keywords: '移除 项目 重新关联', match: '已移除的项目' },
   { section: 'help', label: '操作手册', keywords: '帮助 文档 使用 教程 手册 浏览器 离线', match: 'open-manual' },
@@ -105,11 +104,9 @@ export function searchAppSettings(search: string): SearchEntry[] {
 }
 
 /** 单页里的一个段落：一张卡片 = 段标题 + 一句说明 + 行列表；自带锚点供深链与搜索定位。 */
-function SectionShell({ section, title, sub, cardAttrs, children }: {
+function SectionShell({ section, title, cardAttrs, children }: {
   section: SettingsSectionKey;
   title: string;
-  /** 一句话说明（≤24 字）；不再重复解释段落 */
-  sub: string;
   /** 落在分区卡片上的既有 data-zs-* 选择器（验收脚本依赖） */
   cardAttrs?: Record<`data-${string}`, string>;
   children: React.ReactNode;
@@ -125,7 +122,6 @@ function SectionShell({ section, title, sub, cardAttrs, children }: {
       {/* 保留 settings-section-head 类名：旧验收脚本仍用它判断设置页已就绪。 */}
       <header className="settings-section-head">
         <h2 className="settings-section-title">{title}</h2>
-        <p className="settings-section-sub">{sub}</p>
       </header>
       <div className="settings-card-body">{children}</div>
     </section>
@@ -189,7 +185,6 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
           <header className="settings-head">
             <div className="settings-head-text">
               <div className="page-title">设置</div>
-              <div className="page-sub">外观、通知、AI、数据与帮助都在这一页；改动会即时保存并回读确认。</div>
             </div>
             <div className="settings-search" role="search">
               <div className="row tight">
@@ -413,7 +408,7 @@ function SectionAppearance() {
     }
   }, []);
   return (
-    <SectionShell section="appearance" title="外观" sub="主题、头像和名字；只在本机生效。">
+    <SectionShell section="appearance" title="外观">
       <SettingsRow id="appearance-theme" label="主题" hint="浅色、深色随时切换" control={
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
@@ -542,7 +537,7 @@ export function DesktopNotificationsRow() {
 
 export function SectionNotifications() {
   return (
-    <SectionShell section="notifications" title="通知" sub="桌面通知总开关。">
+    <SectionShell section="notifications" title="通知">
       <DesktopNotificationsRow />
     </SectionShell>
   );
@@ -667,7 +662,7 @@ export function CallBudgetSettingsRow() {
 
 function SectionRuntime() {
   return (
-    <SectionShell section="runtime" title="AI 设置" sub="调用预算与同时运行的 AI。">
+    <SectionShell section="runtime" title="AI 设置">
       <SettingsGroup title="调用次数预算">
         <CallBudgetSettingsRow />
       </SettingsGroup>
@@ -684,10 +679,7 @@ function SectionRuntime() {
 /* ============================================================ 分区：数据与存储 ============================================================ */
 
 function SectionData() {
-  const draftPersist = useStore((st) => st.draftPersist);
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
-  const [cleared, setCleared] = useState<string | null>(null);
-  const [clearConfirm,setClearConfirm]=useState(false);
   const [cleanupBusy,setCleanupBusy]=useState(false);
   const [cleanupResult,setCleanupResult]=useState<string|null>(null);
   const [dataOpBusy, setDataOpBusy] = useState<'backup'|'import'|null>(null);
@@ -706,17 +698,8 @@ function SectionData() {
       toast(`没有开始数据操作：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
     } finally { setDataOpBusy(null); }
   };
-  const clearDrafts = () => {
-    setClearConfirm(false);
-    const r = clearPersistedSnapshot();
-    if (!r.ok) { toast(userFacingSystemText(r.error ?? '清理失败'), 'error'); return; }
-    if (!r.hadKey) { setCleared('没有已保存的草稿'); toast('没有已保存的草稿', 'info'); return; }
-    recordWrite('drafts.clear', `清空本地草稿（内存与保存快照同步清除；未确认发送保留保护）`);
-    setCleared(`${new Date().toLocaleTimeString()} 已清除本地草稿，之后输入会重新保存`);
-    toast('本地草稿已清除', 'success');
-  };
   return (
-    <SectionShell section="data" title="数据与存储" sub="数据位置、备份、草稿与归档。" cardAttrs={{ 'data-zs-data-guide': '1' }}>
+    <SectionShell section="data" title="数据与存储" cardAttrs={{ 'data-zs-data-guide': '1' }}>
       <SettingsGroup title="数据位置与备份">
         <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '读取中…'} />
         <SettingsRow id="备份全部数据" label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
@@ -729,31 +712,10 @@ function SectionData() {
             <Icon name="folder" size={13} /> {dataOpBusy === 'import' ? '正在准备…' : '选择已有数据'}
           </button>
         } />
-      </SettingsGroup>
-      <SettingsGroup title="草稿">
-        <SettingsRow id="草稿保存" label="草稿保存" hint="草稿和未确认发送的保存状态；刷新或崩溃后仍保留，普通草稿 24 小时过期">
-          <div className="small" style={{ lineHeight: 1.7 }}>
-            {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
-            {draftPersist.mode === 'locked' ? <Tag tone="warning" icon="alert-triangle">保全锁定：草稿已保留、不会被覆盖；发送暂不可用</Tag> : null}
-            {draftPersist.mode === 'off' ? <Tag tone="warning" icon="alert-triangle">不可用：{userFacingSystemText(draftPersist.error ?? '身份/存储未就绪')}</Tag> : null}
-            {draftPersist.mode === 'on' && draftPersist.error != null ? <Tag tone="warning" icon="alert-triangle">写入失败：{userFacingSystemText(draftPersist.error ?? '')}</Tag> : null}
-          </div>
-        </SettingsRow>
-        {draftPersist.recoveryNote != null ? (
-          <div className="small faint settings-note" data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div>
-        ) : null}
-        <SettingsRow id="清理本地草稿" label="重试 / 清理" hint="释放存储后可重试保存；清理会删除已保存的草稿，不可恢复" control={
-          <div className="row tight">
-            <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿保存，状态见上方', 'info'); }}>重试保存</button>
-            <button className="btn sm" disabled={draftPersist.mode==='locked'} onClick={()=>setClearConfirm(true)}>清理本地草稿</button>
-          </div>
-        } />
-        {clearConfirm?<Modal title="清理本地草稿" onClose={()=>setClearConfirm(false)} footer={<><button className="btn" onClick={()=>setClearConfirm(false)}>取消</button><button className="btn primary" onClick={clearDrafts}>确认清理</button></>}><p>将清除当前数据目录的本地草稿，无法恢复。发送结果尚未确认或处于保全锁定时会拒绝清理。</p></Modal>:null}
         <SettingsRow label="清理存储" hint="回收七天前无引用的变更前像、清理九十天前的回执正文；保留历史、撤销与防重复记录" control={<button className="btn sm" disabled={cleanupBusy} onClick={()=>{
           setCleanupBusy(true);void command<{reclaimedBytes:number;expiredReceipts:number;skippedActive:boolean}>('app.storage.cleanup',{}).then(r=>setCleanupResult(r.skippedActive?'仍有执行或待核对占用，请结束后重试':`已释放 ${(r.reclaimedBytes/1024/1024).toFixed(1)} 兆字节，清理 ${r.expiredReceipts} 条过期回执正文`)).catch(e=>toast(userFacingSystemText(e.message),'error')).finally(()=>setCleanupBusy(false));
         }}>{cleanupBusy?'清理中…':'清理存储'}</button>}/>
         {cleanupResult?<div className="small faint settings-note">{cleanupResult}</div>:null}
-        {cleared != null ? <div className="small faint settings-note">{cleared}</div> : null}
       </SettingsGroup>
       <SettingsGroup title="归档与项目">
         {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
@@ -799,7 +761,7 @@ function SectionHelp() {
     }
   };
   return (
-    <SectionShell section="help" title="帮助与关于" sub="手册、链接、版本与诊断。" cardAttrs={{ 'data-zs-app-links': '1' }}>
+    <SectionShell section="help" title="帮助与关于" cardAttrs={{ 'data-zs-app-links': '1' }}>
       <SettingsGroup title="手册与项目链接">
         {APP_LINKS.map((link) => (
           <SettingsRow
