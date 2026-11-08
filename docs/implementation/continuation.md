@@ -8,7 +8,7 @@
 
 主控复核（正常权限环境）：定向 4 文件 22 项通过；已跟踪全量 382 文件（380 通过/2 跳过；3410 通过/3 预期失败/16 跳过/0 失败，约 239 秒）；根 tsc 0、hifi tsc 0、build-ui/pack-daemon 通过；界面回归 capture-r201 21/21、r193 25/25、r195 41/41、r197 23/23。Codex 报告中的 187 项失败来自其受限环境（权限/Electron GPU），非产品回归。
 
-交付：版本升 `0.1.3-beta.47`（`0.1.3.47`）；程序提交 `9455277`（审计修复）+ 合并 `7617788`；干净 worktree `dist/r202-source` 构建便携镜像 `PENDING_BUILD1`（clean、PENDING_FILES1 文件 MANIFEST）、安装器 `PENDING_BUILD2`（PENDING_FILES2 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.47-x64.exe` **PENDING_BYTES 字节** SHA256 `PENDING_SHA`，未签名。PENDING_PUSH。未安装/升级/卸载、未操作用户数据、未调用真实模型。
+交付：版本升 `0.1.3-beta.47`（`0.1.3.47`）；程序提交 `9455277`（审计修复）+ 合并 `7617788`；干净 worktree `dist/r202-source` 构建便携镜像 `bld_5f29966fcc5e5ddd`（clean、633 文件 MANIFEST）、安装器 `bld_1f9c41178db9937c`（670 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.47-x64.exe` **160,445,635 字节** SHA256 `d0303ec076896a07ab41047bbcf3cf479db2ba8f55cebb60ed3c5def35d51981`，未签名。本记录提交后推送 `main`（`91ecc23` + 记录提交）、创建 tag `v0.1.3-beta.47` 与 GitHub Release「众说 0.1.3-beta.47」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/0.1.3-beta.47.md`）；用户自行安装。未安装/升级/卸载、未操作用户数据、未调用真实模型。
 
 
 ## 2026-11-08：R201 界面反馈 6 条（beta.46）
