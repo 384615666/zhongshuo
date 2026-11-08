@@ -1,5 +1,16 @@
 # 续工记录（continuation）
 
+## 2026-11-08：R202 独立代码审计（Codex gpt-6.1-sol/xhigh）+ 修复；beta.47
+
+用户要求「让 codex 子代理让 gpt-6.1-sol /xhigh 做代码审计，并且修复，没问题就打包发版」。Codex 子代理在独立 worktree/分支 `dist/r202-audit`（HEAD 为 beta.46 `4538a42`）完成审计，确认 4 个问题并修复；它受环境限制无法写 worktree Git 索引，主控代提交 `9455277`、复核后合并 `7617788`。
+
+审计发现与修复：F1 P1 Markdown 标签可伪装本机文件真实扩展名（`[报告.pdf](file:///C:/x/run.cmd)` 显示假名、点击执行 run.cmd）→ 本地文件条目始终显示真实路径 basename；F2 P2 `file:` URL 手工解析错误（localhost/查询串/fragment/编码/无效输入）→ 改用 URL 解析，拒绝无盘符相对路径、非法编码、编码分隔符等，不再伪造 UNC；F3 P1 图片副本目录 junction 可越界写入 → `attachment.absolutePath` 写入前 realpath 校验目录、lstat/realpath 校验目标、原子替换且保留旧副本/硬链目标；F4 P2 同大小图片篡改未检测 + 前端永久缓存 → 副本字节一致才复用（否则原子重建），前端只合并在途请求、完成即释放缓存。新增 `tests/browser/localFileLinksR202.test.ts`、`tests/browser/imageAttachmentPathsR202.test.ts`，增强 `tests/integration/imageAttachmentPathR197.test.ts`（真实 junction/同大小篡改/硬链保护）。审计报告：`docs/reviews/r202-audit-findings-20261108.md`（含主控复核附录）。
+
+主控复核（正常权限环境）：定向 4 文件 22 项通过；已跟踪全量 382 文件（380 通过/2 跳过；3410 通过/3 预期失败/16 跳过/0 失败，约 239 秒）；根 tsc 0、hifi tsc 0、build-ui/pack-daemon 通过；界面回归 capture-r201 21/21、r193 25/25、r195 41/41、r197 23/23。Codex 报告中的 187 项失败来自其受限环境（权限/Electron GPU），非产品回归。
+
+交付：版本升 `0.1.3-beta.47`（`0.1.3.47`）；程序提交 `9455277`（审计修复）+ 合并 `7617788`；干净 worktree `dist/r202-source` 构建便携镜像 `PENDING_BUILD1`（clean、PENDING_FILES1 文件 MANIFEST）、安装器 `PENDING_BUILD2`（PENDING_FILES2 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.47-x64.exe` **PENDING_BYTES 字节** SHA256 `PENDING_SHA`，未签名。PENDING_PUSH。未安装/升级/卸载、未操作用户数据、未调用真实模型。
+
+
 ## 2026-11-08：R201 界面反馈 6 条（beta.46）
 
 用户带截图反馈 6 条，全部修复并用隔离 Electron 截图验证：①「打开新的工作区」按钮 hover 底色错位（根因：`.side-heading button` 未清通用 button 的 6px/12px padding，20px 盒被撑成 24 宽、图标偏右；修复 `padding:0;flex:none`，实测按钮 20×20、图标/hover 同心 219=219）；②按钮 tooltip 改为「打开新的工作区」；③标题栏删除「当前项目 ▾」项目下拉（TitleBar 删 ProjectMenu/关联状态/ref，titlebar.css 删 `.zs-tb-project*` 规则；项目切换走侧栏）；④命令面板删除「退出键」按钮、「回车键」标签与 placeholder 键盘提示（键盘行为保留）；⑤LiveProgress 活动行单行：长文本 `.live-progress-activity-text` 省略、`.live-progress-ago` nowrap，实测单行 18.7px；⑥`file:///` 本地文件链接只显示文件名：新增 `src/ui/hifi/lib/localFileHref.ts`（仅 file: 绝对路径，盘符/UNC/百分号编码），MarkdownView 渲染 `LocalFileLink`（左键默认程序打开，右键复制文件地址/默认程序打开/文件管理器中显示/其它打开方式），不再出现原始地址或 `!`。
