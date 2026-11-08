@@ -1,5 +1,18 @@
 # 续工记录（continuation）
 
+## 2026-11-08：R199 侧栏「文件与 Git」图标改清晰文件图标（beta.44）
+
+用户发侧栏截图问「文件和 git 的图标是不是有问题」。诊断：该入口此前复用 `diff` 图标（两条竖线 + 两个小圆环 + 折线的分支/差异示意图），14px 侧栏尺寸下线宽 1.8、圆环压成小点，看起来像残缺笔画；且表达「差异」而非「文件」。渲染几何实测 14×14，未被压缩/裁切，属图形选择问题。修复：`src/ui/hifi/App.tsx` 侧栏「文件与 Git」改用 `file-text`（与文件页「文件」页签同一图形），其余图标/名称基线/hover/选中态/导航不变；`diff` 仍用于差异/Git 页面语义位置。验证：`capture-r193-ui.cjs` **25/25**（图标 x=32、名称列、选中条 3px 贴左缘、工作区标题固定、无溢出），截图 `dist/r193-ui/r193-icon-fix/02-sidebar.png`、放大证据 `dist/sidebar-files-icon-new.png`；hifi tsc 0、build-ui/pack-daemon 通过；干净 worktree 根 tsc 0、全量套件与安装包复验见下。交付：版本升 `0.1.3-beta.44`（`0.1.3.44`）；程序提交 `bd281eb`；干净 worktree `dist/r199-source` 构建便携镜像 `bld_71d44b3e1c3e522e`（clean、632 文件 MANIFEST）、安装器 `bld_048ed97dd1f39457`（668 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.44-x64.exe` **160,492,378 字节**，SHA256 `f3febff4b22a905b12628c3bbf9dbece952f24bce42bf4dfb71c615d25358983`，未签名。本记录提交后推送 `main`（`bd281eb` + 记录提交）、创建 tag `v0.1.3-beta.44` 与 GitHub Release「众说 0.1.3-beta.44」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/0.1.3-beta.44.md`）；用户自行安装。未在本机安装/升级/卸载、未操作用户数据、未调用真实模型。见 [R199](../reviews/r199-sidebar-files-icon-20261108.md)。
+
+
+## 2026-11-08：R199 对话串隐藏详情，直接保留参与成员（源码未打包）
+
+用户要求隐藏对话串详情，只保留截图红框中的本串成员名单。顶部入口由「详情」改为「参与成员」，点击直接显示本串名单、实时状态、移出与添加操作；删除任务概况/活动与进展/运行/研讨的分组导航及「实际执行成员」、任务详情更新时间和刷新栏，不再为成员页挂载 task.details 轮询。旧 task/activity/run/deliberation tab 链接兼容落到成员页。成果确认/修改、交付历史与子任务定位继续由成果入口或原交付/子任务深链进入，显示成果选中态，不恢复详情分组；任务继续/结束与状态提示沿用统一状态条。成员 CAS、权限与运行数据不变。
+
+验证：更新既有 R153 隔离界面验收，覆盖旧链接落到成员页、没有详情文案和额外详情读取、移出/重新添加使用最新版本、交付仍可达；纳入单元/浏览器回归 **140 文件 / 994 项全部通过**（node node_modules/vitest/vitest.mjs run tests/browser tests/unit --maxWorkers=4）。hifi tsc 通过、build-ui 通过（既有 import.meta/CJS 警告保留）；ESLint 相对 HEAD 同为 Room.tsx 的 12 条既有错误，无新增；diff-check、两份修改脚本语法检查通过。隔离真实 daemon + 假运行时重新截图成员页与任务状态页（dist/user-guide-capture/run-f6686b42、run-0b6677a5），已人工查看截图；手册 README/index.html 与 08-progress/26-thread-members 图片同步。R153 浏览器证据在 dist/r153-product-navigation/（ignored）。
+
+交付范围：源码与手册，版本仍 0.1.3-beta.43，尚未提交/推送或制作新安装包；未安装/升级、未操作用户运行数据、未调用真实模型。
+
 ## 2026-11-08：R198 Windows 通知图标黑块真正根因（AUMID 注册表键）与 beta.43
 
 用户安装 beta.42 后回复「问题还在」，通知头部仍是黑色方块（正文品牌小图正常）。beta.42 的 ICO DIB 修复经本机对照证明图标文件本身正确（系统图标 API 取 32×32 与 logo 逐像素一致、PE 图标 Frames=7/Verified=true、快捷方式/注册表/exe 都指向新图标）。本机用系统通知做对照：①AUMID 注册表键存在（IconUri=ICO/PNG/exe 三种都试）→ 黑块/占位字形/不显示；②删掉 `HKCU\Software\Classes\AppUserModelId\com.zhongshuo.desktop.app` 整键后用真实 AUMID 发同一条通知 → 同一快捷方式、同一图标，「众说 + 品牌图标」正常。结论：Toast 平台只要看到该 AUMID 键就优先用 IconUri/注册表显示名，而不是快捷方式图标；旧版本每次启动都会写这个键（R162 起），所以升级后黑块持续。证据：`dist/r198-before-black.png` / `dist/r198-after-logo.png`（ignored，系统通知截图裁剪）。
