@@ -41,3 +41,10 @@
 - 操作手册的安装向导两张截图（21/22）仍是旧截图，安装器界面未变化；其余截图均为当前 1.0 界面。
 - gh-pages 部署为静态页面，无构建步骤；后续主页/手册改动需再次同步 gh-pages。
 - 线上 CDN 可能有缓存，部署后验证以 GitHub Pages build 状态与最终抓取为准。
+
+## 部署与线上验证（已执行）
+
+- GitHub Pages 源分支 `gh-pages` 已更新到提交 `e5e99cf`（保留 `CNAME=zhongshuo.lsjx.xyz`），Pages build 状态 `built`。
+- 线上 `https://zhongshuo.lsjx.xyz/` 抓取验证：HTTP 200，包含「1.0 正式版」「下载 Windows 版」与 `v1.0.1/Zhongshuo-Setup-1.0.1-x64.exe` 下载链接；不再包含旧的「当前提供源码构建方式」。
+- 线上 `https://zhongshuo.lsjx.xyz/docs/user-guide/index.html`：HTTP 200，包含「Windows 桌面版 · 1.0.1」与「下载原文件 / 另存为」新文案。
+- GitHub Release `v1.0.1` 已发布，资产 `Zhongshuo-Setup-1.0.1-x64.exe`（160,479,283 字节，SHA256 `90224507bdede1a399ff047f316a6d7ab859c1e85ae583b9329e0043228d9f4c`）、`.sha256`、`.release.json` 已上传。
