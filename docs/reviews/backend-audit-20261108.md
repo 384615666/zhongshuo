@@ -103,3 +103,7 @@ node node_modules/vitest/vitest.mjs run --config scripts/audits/backend-20261108
 | diff-check | 退出 0 |
 
 最终回归命令使用 `dist/backend-audit-20261108/fix-regression-files.txt` 中的明确文件清单，`--maxWorkers=4 --reporter=json --outputFile=dist/backend-audit-20261108/fix-regression-final.json`；日志为同目录 `fix-regression-final.log`。初次扩大回归中发现的规划详情与提醒材料遗漏已修复；一次并行写入的短时序断言在定向重跑及最终扩大回归均通过。未进行真实模型、安装版或用户数据验收。
+
+## 后续落地（R196，beta.41）
+
+用户 2026-11-08 要求把审计修复与所有未提交改动一起提交并打包发版。本报告的源码修复、审计回归与侧栏「工作区」未提交改动已随程序提交 `ed51d34`（版本 `0.1.3-beta.41`）落地；干净 worktree `dist/r196-source` 构建安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.41-x64.exe`（160,216,471 字节，SHA256 `a8a9a14bae78e6c03a6e5e479a49018eb07c39a086d35064872b48b44120bb06`，未签名），记录提交后推送 `main`、tag `v0.1.3-beta.41` 与 GitHub Release。交付细节与干净 worktree 复验数字见 [R196 记录](r196-backend-audit-release-20261108.md)。

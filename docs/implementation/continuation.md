@@ -1,6 +1,16 @@
 # 续工记录（continuation）
 
-## 2026-11-08：后端审计修复——请求材料边界与停止后的原成员续接（源码，未打包）
+## 2026-11-08：R196 后端审计修复落地 + 未提交改动收口 + beta.41 发版
+
+用户 2026-11-08：「我让 gpt 审计后修复完了 bug，你把现在所有没提交的一起提交，并且打包发版。」本轮把 GPT 审计修复（请求材料边界、停止后继续保留原成员/模式）、此前一直未提交的侧栏「工作区」改动与相关文案，全部提交并打包发版；审计第 1 项「历史图片随上下文发送」经用户复核符合「全部带图」的既定产品决定，保持现状。
+
+实现：`turnInput.ts` 缺少显式线程水位时固定到任务根消息序号（主池根消息按串内 0），不再读取实时串尾，DELIBERATE 每阶段按所绑定请求的 `input_thread_seq` 装配，提醒按完整派发键绑定当前唤醒消息及序号，协作子任务通过协调运行的正式附件来源保留规划/交接完整详情；`threadReplies.ts` 新增 `selectStoppedThreadRecipients`（按最后实际运行定位请求、路由与候选范围，覆盖协调整合/自动恢复/格式补交来源），`commands.ts` 的正式继续动作与未显式重新指定成员/模式的普通续接共用该选择，保留原成员、模式与研讨子集、忽略未执行后续队列；原成员停用/移出时原子拒绝并整体回滚，显式重新选择可继续；`dispatchWorker.ts` 同步提醒与 DELIBERATE 边界。侧栏：工作区标题固定在导航与滚动列表之间，打开/切换入口收进标题右侧（新增 `folder-plus` 图标），删除旧底部「打开/切换项目」条目，`capture-r193-ui.cjs` 增加 24 项相关断言（标题固定、按钮含图标、旧入口移除、滚动时标题不动）；成员管理/看板/文件页空态与手册「切换项目」文案同步。审计回归新增 `tests/integration/backendAudit20261108.test.ts`（10 项）纳入默认套件，`reminderBoundary` 增补「后来提交的请求不进入已创建提醒输入」；独立入口保留 `scripts/audits/backend-20261108.*`。未改 schema 61、权限/audience、图片能力门与旧信封/停止代次语义。
+
+验证：已跟踪全量测试 + 新增回归 **378 文件 / 3387 通过 / 3 预期失败 / 16 跳过 / 0 失败**（`--maxWorkers=4`，约 222 秒；排除默认禁用的 GitHub 远端沙箱与 Word COM 验收）；干净 worktree 复跑单元+浏览器+审计回归 **142 文件 / 1011 项通过**；干净 worktree 根 `tsc --noEmit` 0 错、hifi tsc 0 错、`build-ui`/`pack-daemon` 通过；干净 worktree 内 `capture-r195-ui.cjs` **41/41**、`capture-r193-ui.cjs` **25/25**（侧栏工作区几何/滚动断言全过）。审计报告自身的修复后验证（新增对抗回归 10/10、关联 4 文件 76 项、扩大回归 377 文件 3385 通过/16 跳过/0 失败）见 [审计报告](../reviews/backend-audit-20261108.md)。
+
+交付：程序提交 `ed51d34`（23 文件：daemon 4、hifi 侧栏 7、daemon 审计回归 2、审计报告/入口 3、手册与版本文件等），版本升 `0.1.3-beta.41`（`package.json`、`packaging/windows/release.json`，numericVersion `0.1.3.41`）；此前 R195 拆分提交时保留在工作区的侧栏「工作区」改动与文案本轮全部提交，工作区不再保留产品代码改动；仍只有此前各轮标注为「本机未跟踪」的 R130/R131/R180 混沌套件、夹具与历史审计报告未提交（依赖本机历史数据，进入默认套件会在干净环境失败，保持未跟踪、未进包）。干净 worktree `dist/r196-source`（`ed51d34`，status 0，dirty=false）构建：便携镜像 BUILD `bld_442c3de79ddbffaa`（clean、632 文件 MANIFEST 逐项 SHA256）、安装器 BUILD `bld_c809db5b12a4bc3b`（安装镜像 668 文件 MANIFEST 逐项 SHA256；payload-audit `files=668`、`runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.41-x64.exe` **160,216,471 字节**，SHA256 `a8a9a14bae78e6c03a6e5e479a49018eb07c39a086d35064872b48b44120bb06`，未签名，附 `.sha256`/`.release.json`。本记录提交后推送 `main`（`ed51d34` + 记录提交）、创建 tag `v0.1.3-beta.41` 与 GitHub Release「众说 0.1.3-beta.41」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/0.1.3-beta.41.md`）；用户自行安装。未在本机安装/升级/卸载、未操作用户程序与运行数据、未调用真实模型。见 [R196](../reviews/r196-backend-audit-release-20261108.md)。
+
+## 2026-11-08：后端审计修复——请求材料边界与停止后的原成员续接（源码，未打包；已随 R196 提交发版）
 
 用户复核本轮审计：第 1 项历史图片随上下文发送符合“已去掉仅发送文字、全部带图”的产品决定，保持现状并撤回缺陷判定；授权修复第 2 项后续排队附件提前进入前一轮输入、第 3 项停止后继续会更换执行成员或扩大研讨名单。
 
