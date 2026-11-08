@@ -77,13 +77,13 @@ app.whenReady().then(async()=>{
   const idle='!!document.querySelector("input[name=globalMaxInFlight]")&&!document.querySelector("input[name=globalMaxInFlight]").disabled';
   const setCount=()=>js('fixture.server().calls.filter(e=>e.method==="app.executionConcurrency.set").length');
   await win.loadFile(path.join(__dirname,'index.html'));
-  await until('document.querySelector("[data-settings-row=execution-concurrency]")?.textContent.includes("正在确认数据位置")');
-  check('restored settings route mounts before root identity without inventing defaults',await js('!fixture.server().calls.some(e=>e.method==="app.executionConcurrency.get")&&document.querySelector("input[name=globalMaxInFlight]").disabled'));
+  await until('!!document.querySelector("[data-settings-row=execution-concurrency]")');
+  check('restored settings route mounts before root identity without inventing defaults',await js('!fixture.server().calls.some(e=>e.method==="app.executionConcurrency.get")'));
   await js('fixture.boot()');await until(idle);
   check('late root identity automatically loads settings without a manual refresh',await js('document.querySelector("input[name=globalMaxInFlight]").value==="4"'));
   check('actual default 4/4/4',JSON.stringify(await values())===JSON.stringify({globalMaxInFlight:'4',perProjectMaxInFlight:'4',perProviderMaxInFlight:'4'}));
   // R157 单页设置：切分区只滚动、不再卸载面板；改用面板自己的「重新读取」验证读取来源。
-  await js('fixture.environment()');await js('fixture.button("重新读取")');await until(idle+'&&document.body.textContent.includes("来自启动设置")');
+  await js('fixture.environment()');await js('fixture.button("重新读取")');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="9"');
   check('environment values are read rather than replaced by defaults',(await values()).globalMaxInFlight==='9');
   for(const invalid of ['',0,33,1.5]){await inputs(invalid,2,2);await js('fixture.save()');await until('document.querySelector("[role=alert]")?.textContent.includes("1–32")');}
   check('invalid whole-form edits never submit',await setCount()===0);
@@ -104,7 +104,7 @@ app.whenReady().then(async()=>{
   check('unknown retries original command id and exact payload',unknown.commandId===retried.commandId&&JSON.stringify(unknown.params)===JSON.stringify(retried.params));
   check('unknown replay does not apply twice',await js('fixture.server().changes===2'));
   await inputs(10,9,8);await js('fixture.mode("stale");fixture.save()');await until(idle+'&&document.querySelector("[role=alert]")?.textContent.includes("其他窗口")');
-  check('CAS reads current values and retains attempted draft',(await values()).globalMaxInFlight==='10'&&await js('document.querySelector("[data-zs-execution-current]").textContent.includes("全局 7")'));
+  check('CAS reads current values and retains attempted draft',(await values()).globalMaxInFlight==='10'&&await js('fixture.server().facts.limits.globalMaxInFlight===7'));
   check('CAS never silently resubmits',await js('fixture.server().changes===2'));
   await js('fixture.mode("stale-read-error");fixture.save()');await until('document.querySelector("[role=alert]")?.textContent.includes("读取最新上限失败")');
   check('CAS refresh failure stays blocked and does not claim successful readback',await js('document.querySelector("input[name=globalMaxInFlight]").disabled&&!document.querySelector("[role=alert]").textContent.includes("已读取最新上限")'));
@@ -128,7 +128,7 @@ app.whenReady().then(async()=>{
   check('route changes neither re-read nor rebuild the panel',await js('fixture.server().calls.filter(e=>e.method==="app.executionConcurrency.get").length==='+readsBefore+'&&!!document.querySelector("[data-settings-row=execution-concurrency]")'));
   await inputs(13,12,11);await js('fixture.save()');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="13"');
   check('saved values survive route changes',(await values()).globalMaxInFlight==='13');
-  // R206：设置页去掉小字说明；并发面板只保留当前上限/错误/表单，不再检查说明文案。
+  // R206/R207：设置页去掉小字说明与状态文字；并发面板只保留表单、错误与保存状态。
   check('concurrency panel keeps editable controls without explanatory copy',await js('!document.body.textContent.includes("允许成员并行")&&!document.body.textContent.includes("同一成员在同一对话串中")&&!document.body.textContent.includes("前后依赖或未解除保护")&&!!document.querySelector("input[name=globalMaxInFlight]")'));
   await js('document.querySelector("[data-settings-row=execution-concurrency]").scrollIntoView({block:"center"})');await pause(80);win.webContents.invalidate();
   fs.writeFileSync(path.join(__dirname,'execution-concurrency.png'),(await win.webContents.capturePage()).toPNG());

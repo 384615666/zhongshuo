@@ -361,7 +361,6 @@ export function ViewerNameRow() {
                 {busy ? '保存中…' : '保存'}
               </button>
             </div>
-            <span className="small faint" style={{ whiteSpace: 'nowrap' }}>{status}</span>
           </div>
         )}
       />
@@ -419,7 +418,7 @@ function SectionAppearance() {
         <Switch
           checked={showAvatars}
           disabled={busy === 'visibility'}
-          label={showAvatars ? '显示' : '隐藏'}
+          label={<span className="visually-hidden">显示头像</span>}
           onChange={(next) => void save('visibility', { showAvatars: next })}
         />
       } />
@@ -521,7 +520,7 @@ export function DesktopNotificationsRow() {
           <Switch
             checked={enabled}
             disabled={loading || busy || readError != null}
-            label={enabled ? '已开启' : '已关闭'}
+            label={<span className="visually-hidden">允许弹出系统通知</span>}
             onChange={(next) => void save(next)}
           />
         )}
@@ -639,7 +638,7 @@ export function CallBudgetSettingsRow() {
           <Switch
             checked={enabled}
             disabled={loading || busy || readError != null}
-            label={enabled ? '开启' : '关闭'}
+            label={<span className="visually-hidden">启用调用次数预算</span>}
             onChange={(next) => void save(next)}
           />
         )}
@@ -771,7 +770,7 @@ function SectionHelp() {
         ))}
       </SettingsGroup>
       <SettingsGroup title="版本">
-        <ReadOnlyRow id="版本与构建" label="应用" value="众说 · 本地多成员协作工作台" />
+        <ReadOnlyRow id="版本与构建" label="应用" value="众说 · 本地多Agent协作工作台" />
         <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '读取中…'} />
       </SettingsGroup>
       <SettingsGroup title="诊断">

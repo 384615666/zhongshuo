@@ -143,7 +143,6 @@ export function ExecutionConcurrencyPanel({ readOnly = false }: { readOnly?: boo
       <div className="pset-row">
         <div className="pset-row-label">
           <div className="pset-row-name">同时运行的 AI</div>
-          {facts ? <div className="small faint" data-zs-execution-current>当前上限：全局 {facts.limits.globalMaxInFlight} · 每项目 {facts.limits.perProjectMaxInFlight} · 同渠道 {facts.limits.perProviderMaxInFlight}{facts.source === 'environment' ? '，来自启动设置' : facts.source === 'default' ? '，默认值' : ''}</div> : <div className="small faint">{loading ? '读取中…' : '尚未确认当前上限'}</div>}
         </div>
       </div>
       {fields.map(field => <SettingsRow key={field.key} label={field.label} control={<input className="input pset-number" type="number" inputMode="numeric" name={field.key} aria-label={`${field.label}同时运行上限`} min={1} max={32} step={1} value={draft[field.key]} disabled={disabled} onChange={e => { setDraft(current => ({ ...current, [field.key]: e.target.value })); setSaved(false); }} />} />)}

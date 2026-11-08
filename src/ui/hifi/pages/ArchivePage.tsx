@@ -96,9 +96,9 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
   };
 
   return (
-    <>
+    <div className={`archive-manager${embedded ? ' archive-embedded' : ''}`} data-zs-archive-manager="1">
       {/* 筛选行（原型：搜索与项目下拉同基准；清除筛选就地）。 */}
-      <div className="page-filters archive-filters">
+      <div className={`page-filters archive-filters${embedded && groups.length === 0 && index.data ? ' archive-filters-empty' : ''}`}>
         <div className="row tight archive-filter-search" style={{ border: '1px solid var(--border)', borderRadius: 7, padding: '0 8px', background: 'var(--bg-surface)', flex: '1 1 220px', maxWidth: 300 }}>
           <Icon name="search" size={13} className="faint" style={{ flex: 'none' }} />
           <input
@@ -122,18 +122,20 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
           </button>
         ) : null}
         <div className="spacer" />
-        <span className="small faint">{index.data?`共 ${groups.length} 个项目 · ${totalRooms} 个房间${index.data.nextCursor?'，还有更早内容':''}`:'尚未读取'}</span>
+        {embedded ? null : <span className="small faint">{index.data?`共 ${groups.length} 个项目 · ${totalRooms} 个房间${index.data.nextCursor?'，还有更早内容':''}`:'尚未读取'}</span>}
         <button className="btn sm" disabled={index.reading||busy!=null} onClick={()=>void index.load()}>{index.reading?'读取中…':'刷新归档'}</button>
       </div>
       {index.error?<div className="panel warning" role="alert">归档读取失败：{userFacingSystemText(index.error ?? '')}。{index.data?'已显示的内容保持不变。':'尚未取得归档清单。'}可点击刷新重试。</div>:null}
       {!index.data?<div className="panel">{index.error?'归档尚未读取成功':'正在读取归档…'}</div>:groups.length === 0 ? (
-        <EmptyState
-          icon="archive"
-          title={keyword.trim()||index.data.nextCursor?'已读取内容中没有匹配房间':projectFilter ? '这个项目没有归档内容' : '没有归档内容'}
-          detail={keyword.trim()||index.data.nextCursor?'可清除搜索，或继续加载更多归档。':projectFilter
-            ? '这个项目当前既没有整体归档，也没有单独归档的房间。可以点上方「清除项目筛选」看别的项目。'
-            : '还没有项目或房间被归档。归档后的项目与房间会出现在这里，随时可以恢复；归档不删除任何记录与磁盘文件。'}
-        />
+        embedded
+          ? <div className="small faint" data-zs-archive-empty="1">没有归档内容</div>
+          : <EmptyState
+              icon="archive"
+              title={keyword.trim()||index.data.nextCursor?'已读取内容中没有匹配房间':projectFilter ? '这个项目没有归档内容' : '没有归档内容'}
+              detail={keyword.trim()||index.data.nextCursor?'可清除搜索，或继续加载更多归档。':projectFilter
+                ? '这个项目当前既没有整体归档，也没有单独归档的房间。可以点上方「清除项目筛选」看别的项目。'
+                : '还没有项目或房间被归档。归档后的项目与房间会出现在这里，随时可以恢复；归档不删除任何记录与磁盘文件。'}
+            />
       ) : (
         <div className="col" style={{ gap: 14 }}>
           {groups.map((g) => (
@@ -211,6 +213,6 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
         </div>
       )}
       {index.data?.nextCursor?<div className="row" style={{marginTop:12}}><button className="btn" disabled={index.reading||index.capped} onClick={()=>void index.load(true)}>{index.reading?'读取中…':'加载更多归档'}</button><span className="small faint">{index.capped?'已达到单次加载上限 1200 条；请按项目缩小范围后继续。':'当前清单尚未读完，请继续加载。'}</span></div>:null}
-    </>
+    </div>
   );
 }

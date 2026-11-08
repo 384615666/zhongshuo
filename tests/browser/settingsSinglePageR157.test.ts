@@ -120,6 +120,14 @@ describe('R157 单页设置（R170 整理后）', () => {
     ]) expect(html).not.toContain(copy);
     expect(html).not.toContain('pset-row-hint');
     expect(html).not.toContain('field-hint');
+    // R207：状态小字也不再显示；版本名称改为「本地多Agent协作工作台」。
+    const visible = html.replace(/<[^>]*>/g, '');
+    expect(visible).not.toContain('当前显示「你」');
+    expect(visible).not.toContain('已开启');
+    expect(visible).not.toContain('已关闭');
+    expect(visible).not.toContain('当前上限');
+    expect(html).toContain('众说 · 本地多Agent协作工作台');
+    expect(html).not.toContain('本地多成员协作工作台');
   });
 
   it('深链仍按分区解析，旧写法映射到现分区', () => {

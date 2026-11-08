@@ -178,3 +178,81 @@
     padding-right: 14px;
   }
 }
+
+/* ============================================================
+   R207：去掉页头/分区/行内小字与状态文字后重新排版
+   目标：行高紧凑一致、标签与控件垂直居中；头像/归档等大控件
+   单独按顶部对齐，不再留下小字消失后的空档。
+   ============================================================ */
+.settings-section + .settings-section {
+  /* .settings-sections 已有 18px gap；这里不要再叠加 margin，否则段间空 40px。 */
+  margin-top: 0;
+}
+.settings-card > .settings-section-head {
+  padding: 12px 20px 8px;
+}
+.settings-card .settings-section-title {
+  line-height: 1.35;
+}
+.settings-card-body {
+  padding: 0 0 8px;
+}
+.settings-card-body > .pset-row,
+.settings-card-body > [data-zs-notification-master] > .pset-row,
+.settings-card-body > [data-zs-viewer-name] > .pset-row,
+.settings-group > .pset-row,
+.settings-group > [data-zs-call-budget-setting] > .pset-row,
+.settings-group > [data-zs-notification-master] > .pset-row {
+  align-items: center;
+  min-height: 46px;
+  padding: 9px 20px;
+}
+.settings-card .pset-row-label {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 20px;
+}
+.settings-card .pset-row-control {
+  align-items: center;
+  padding-top: 0;
+}
+/* 大控件（头像、归档、诊断）按顶部对齐，标签与首行对齐 */
+.settings-card .pset-row:has([data-zs-avatar-settings]),
+.settings-card .pset-row:has(.settings-embed) {
+  align-items: flex-start;
+  min-height: 0;
+}
+.settings-card .pset-row:has([data-zs-avatar-settings]) .pset-row-label,
+.settings-card .pset-row:has(.settings-embed) .pset-row-label {
+  padding-top: 8px;
+}
+.settings-card [data-zs-avatar-picker] {
+  margin-bottom: 0;
+}
+.settings-card [data-zs-avatar-settings] {
+  max-width: 100%;
+}
+/* 嵌入的并发面板：摊平卡片外边距与行高度，避免多出一段空白 */
+.settings-embed-flat {
+  padding: 0 20px 4px;
+}
+.settings-embed-flat > .card {
+  margin: 0 !important;
+}
+.settings-embed-flat .pset-row {
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 0;
+}
+.settings-embed-flat .pset-row-control {
+  padding-top: 0;
+}
+.settings-group-title {
+  padding: 10px 20px 2px;
+}
+
+/* R207：设置页里归档为空时不再显示整行筛选/刷新，只留「没有归档内容」。 */
+.settings-embed .archive-embedded .archive-filters-empty {
+  display: none;
+}

@@ -95,7 +95,7 @@ const scenesSource = String.raw`(() => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await wait(120);
     q('[data-zs-viewer-name-save="1"]').click();
-    await until(() => q('[data-zs-viewer-name="set"]') != null && textOf(q('[data-zs-viewer-name-status]')).includes(name), '名字已保存并回读', 20000);
+    await until(() => q('[data-zs-viewer-name="set"]') != null && (q('[data-zs-viewer-name-status]')?.getAttribute('data-zs-viewer-name-status') || '').includes(name), '名字已保存并回读', 20000);
   }
 
   /** 打开房间输入区的「本次运行设置」菜单。 */
@@ -110,7 +110,7 @@ const scenesSource = String.raw`(() => {
   window.runMain = async () => {
     // ── 9) 设置里改名字（真值写 daemon，后面用刷新验证持久化） ──
     await applyViewerName('阿众测试');
-    extra.savedName = textOf(q('[data-zs-viewer-name-status]'));
+    extra.savedName = q('[data-zs-viewer-name-status]')?.getAttribute('data-zs-viewer-name-status') || '';
 
     // ── 3) 对话串：操作条在消息内容下方；1) 对话串图片真预览；9) 本人署名 ──
     await go(threadRoute);
@@ -311,7 +311,7 @@ const scenesSource = String.raw`(() => {
     const input = q('[data-zs-viewer-name-input="1"]');
     extra.reloadedName = input.value;
     check('刷新后设置页输入框仍是已保存的名字', input.value === '阿众测试', input.value);
-    check('刷新后状态行显示已设置名字', textOf(q('[data-zs-viewer-name-status]')).includes('阿众测试'), textOf(q('[data-zs-viewer-name-status]')));
+    check('刷新后状态行显示已设置名字', (q('[data-zs-viewer-name-status]')?.getAttribute('data-zs-viewer-name-status') || '').includes('阿众测试'), q('[data-zs-viewer-name-status]')?.getAttribute('data-zs-viewer-name-status') || '');
     await go(threadRoute);
     await until(() => q('.msg-list.is-replies'), '回复串（刷新后）', 30000);
     await wait(1400);

@@ -9,8 +9,9 @@ describe('R153 execution concurrency settings UI', () => {
     for (const query of ['并发', '同时运行', '每项目', '同渠道', 'concurrency']) expect(searchAppSettings(query)).toContainEqual(expect.objectContaining({ section: 'runtime', match: 'execution-concurrency' }));
     expect(renderToStaticMarkup(createElement(SettingsPage, { query: { section: 'runtime' } }))).toContain('data-settings-row="execution-concurrency"');
     const html = renderToStaticMarkup(createElement(ExecutionConcurrencyPanel));
-    expect(html).toContain('读取中…');
-    expect(html).not.toContain('当前上限：');
+    // R207：设置页去掉状态小字（当前上限/读取中），面板只保留表单与错误/只读提示。
+    expect(html).not.toContain('当前上限');
+    expect(html).not.toContain('读取中…');
     expect(html.match(/type="number"/g)).toHaveLength(3);
   });
 
