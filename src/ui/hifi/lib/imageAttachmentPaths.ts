@@ -11,7 +11,7 @@
  *  - 图片判定与消息内缩略图同口径（AttachmentThumb.isImageAttachment），不另立一套；
  *  - 有 `sourcePath`（项目内真实文件变更）时直接用「项目根 + 相对路径」，不请求 daemon；
  *  - 其余托管附件走正式只读命令 `attachment.absolutePath`（audience 校验、原件 sha256
- *    核对、可读扩展名路径副本都在 daemon），按 attachmentId 做模块级缓存；
+ *    核对、可读扩展名路径副本都在 daemon），按 attachmentId 合并在途请求；
  *  - 取路径失败返回 null，调用方退回到文件名——不伪造路径，也不让复制/引用整体失败。
  */
 
@@ -43,7 +43,7 @@ export interface AttachmentAbsolutePathResult {
   bytes: number;
 }
 
-/** attachmentId → 绝对路径请求（成功结果常驻；失败不缓存，下次仍可重试）。 */
+/** 只合并在途请求；每次新操作都让 daemon 重新核验/修复可能被改写或删除的副本。 */
 const pathCache = new Map<string, Promise<string | null>>();
 
 function basenameOf(path: string | null | undefined): string {
@@ -88,13 +88,12 @@ function requestAttachmentAbsolutePath(attachmentId: string): Promise<string | n
   const request = command<AttachmentAbsolutePathResult>('attachment.absolutePath', { attachmentId })
     .then((result) => {
       const path = typeof result?.path === 'string' && result.path.length > 0 ? result.path : null;
-      if (path == null) pathCache.delete(attachmentId);
       return path;
     })
     .catch(() => {
-      pathCache.delete(attachmentId);
       return null;
-    });
+    })
+    .finally(() => { pathCache.delete(attachmentId); });
   pathCache.set(attachmentId, request);
   return request;
 }
