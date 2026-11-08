@@ -466,7 +466,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                   </button>
                 );
               })}
-              {visibleProjects.length === 0 ? <div className="project-rail-empty faint small">还没有项目。先从侧栏「打开/切换项目」添加。</div> : null}
+              {visibleProjects.length === 0 ? <div className="project-rail-empty faint small">还没有项目。点侧栏「工作区」右侧的按钮添加。</div> : null}
             </div>
           </aside>
 

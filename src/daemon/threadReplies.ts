@@ -10,6 +10,7 @@ import {assessTaskRedispatchReadiness} from '../persistence/stores/recoveryGuard
 import {enqueueOutbox} from '../persistence/outbox.ts';
 import {appendDomainEvent} from '../persistence/events.ts';
 import type {ConversationReplyRow} from './conversationReplies.ts';
+import {coordinationRoster} from './coordination.ts';
 
 export interface ThreadReplyScopeMember {
   memberId:string;displayName:string;description:string|null;writeScope:string|null;unavailableReason?:string;
@@ -125,6 +126,50 @@ export interface GeneralThreadReply extends ConversationReplyRow {
   isGeneral:true;routeJson:string;rosterJson:string;membershipVersion:string;
   sourceDeliveryId:string|null;sourceTaskStatus:string;
   deliberationBudgetJson:string|null;dispatchIdentity:string;resultMessageId:string|null;
+}
+
+/** Continue the last stopped request's route, rather than reselecting from the
+ * root owner or today's whole thread roster. Configuration snapshots are taken
+ * afresh by enqueueThreadReply after this membership check. */
+export function selectStoppedThreadRecipients(db:ZhongshuoDatabase,threadId:string,expectedVersion?:string):ThreadReplySelection {
+  const snapshot=readThreadMembers(db,threadId);
+  if(expectedVersion&&expectedVersion!==snapshot.version)throw new DaemonCommandError('STALE_REVISION','本串成员已变化，请刷新名单后再发送；输入保留');
+  const task=db.prepare(`SELECT t.id,t.route_json FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`)
+    .get(threadId) as {id:string;route_json:string|null}|undefined;
+  if(!task)throw new DaemonCommandError('STALE_REVISION','原任务不存在，请刷新后重新选择 AI');
+  const run=db.prepare('SELECT id,dispatch_identity FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1')
+    .get(task.id) as {id:string;dispatch_identity:string|null}|undefined;
+  const request=run?db.prepare(`SELECT q.member_id,q.route_json,q.run_id FROM thread_reply_requests q
+    WHERE q.task_id=? AND q.thread_id=? AND (
+      q.run_id=? OR q.dispatch_identity=?
+      OR q.run_id IN (SELECT coordination_run_id FROM coordination_integration_attempts WHERE execution_run_id=?)
+      OR q.dispatch_key IN (
+        SELECT dispatch_key FROM agent_turns WHERE run_id=?
+        UNION SELECT json_extract(d.value,'$.dispatchKey') FROM daemon_state d JOIN agent_turns a ON d.key='execution-context:'||a.id
+          WHERE a.run_id=? AND json_valid(d.value)
+        UNION SELECT source.dispatch_key FROM format_repair_workitems f JOIN agent_turns source ON source.id=f.source_turn_id
+          JOIN agent_turns repair ON repair.id=f.consumed_turn_id WHERE repair.run_id=?))
+    ORDER BY q.rowid DESC LIMIT 1`).get(task.id,threadId,run.id,run.dispatch_identity,run.id,run.id,run.id,run.id) as
+      {member_id:string;route_json:string;run_id:string}|undefined:undefined;
+  let route:TopLevelRouteOutcome;
+  try{route=JSON.parse(request?.route_json??task.route_json??'null') as TopLevelRouteOutcome;}
+  catch{throw new DaemonCommandError('STALE_REVISION','原执行的成员选择无法读取，请重新选择 AI 后发送');}
+  if(!route||route.kind!=='dispatch'||!['DIRECT','AUTO','DELIBERATE'].includes(route.mode)
+    ||!Array.isArray(route.frozenMemberIds)||!route.frozenMemberIds.length
+    ||route.frozenMemberIds.some(id=>typeof id!=='string'||!id)
+    ||!Array.isArray(route.initialWakeMemberIds))
+    throw new DaemonCommandError('STALE_REVISION','原执行的成员选择不完整，请重新选择 AI 后发送');
+  const memberId=request?.member_id??(route.mode==='DIRECT'?route.targetMemberId:route.mode==='AUTO'?route.coordinatorMemberId:route.initialWakeMemberIds[0]);
+  if(!memberId||!route.frozenMemberIds.includes(memberId)||route.mode==='DELIBERATE'&&route.frozenMemberIds.length<2)
+    throw new DaemonCommandError('STALE_REVISION','原执行的成员选择不完整，请重新选择 AI 后发送');
+  if(route.frozenMemberIds.some(id=>!snapshot.eligibleMemberIds.includes(id)))
+    throw new DaemonCommandError('MEMBER_UNAVAILABLE','原执行的 AI 已移出或停用，请重新选择成员后发送；输入保留');
+  const available=new Set((db.prepare(`SELECT pm.id FROM room_members rm JOIN project_members pm ON pm.id=rm.member_id
+    WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent'`).all(snapshot.roomId,snapshot.projectId) as {id:string}[]).map(row=>row.id));
+  const removed=new Set((db.prepare("SELECT member_id FROM thread_agent_followers WHERE thread_id=? AND status!='following'").all(threadId) as {member_id:string}[]).map(row=>row.member_id));
+  const original=coordinationRoster(db,task.id,request?.run_id??run?.id).map(member=>member.memberId);
+  const candidateIds=[...new Set([...route.frozenMemberIds,...original.filter(id=>available.has(id)&&!removed.has(id))])];
+  return{memberId,recipientIds:[...route.frozenMemberIds],candidateIds,inviteIds:[],route,membershipVersion:snapshot.version};
 }
 
 export function assertThreadTaskReady(db:ZhongshuoDatabase,threadId:string){

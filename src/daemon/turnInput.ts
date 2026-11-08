@@ -142,6 +142,15 @@ function selectedRoomDetailMessageIds(db:ZhongshuoDatabase,task:AssemblyTaskRef,
     const upstream=db.prepare(`SELECT DISTINCT m.id FROM messages m JOIN task_dependencies d ON d.depends_on_task_id=m.task_id
       WHERE d.task_id=? AND m.author_type='agent' AND m.status='final'`).all(task.id) as {id:string}[];
     for(const row of upstream)ids.add(row.id);
+    // The coordinator publishes its full planning/handoff detail after the
+    // request boundary but before enqueuing this child. Bind that causal input
+    // through its run's managed artifacts, not through the live thread head.
+    if(coordination.runId){
+      const planning=db.prepare(`SELECT DISTINCT m.id FROM messages m JOIN message_attachments ma ON ma.message_id=m.id
+        JOIN artifacts a ON a.id=ma.artifact_id WHERE m.thread_id=? AND m.author_type='agent'
+        AND ma.id LIKE 'matt_detail_%' AND a.run_id=?`).all(task.threadId,coordination.runId) as {id:string}[];
+      for(const row of planning)ids.add(row.id);
+    }
   }else if(coordination?.phase==='integration'&&coordination.runId){
     const upstream=db.prepare(`SELECT DISTINCT m.id FROM messages m JOIN coordination_steps s ON s.child_task_id=m.task_id
       WHERE s.run_id=? AND m.author_type='agent' AND m.status='final'`).all(coordination.runId) as {id:string}[];
@@ -175,7 +184,7 @@ export interface AssemblyTaskRef {
   taskRevision: number;
   /** DM 输入水位（第十九轮四）：本轮用户消息 conversation_seq——历史边界（房间任务为 null）。 */
   inputThroughSeq?: number | null;
-  /** Ordinary reply boundary: later queued human inputs must not leak into this turn. */
+  /** Accepted request boundary; absent values use the root message's sequence, never the live thread head. */
   inputThreadMessageSeq?: number;
 }
 
@@ -280,7 +289,8 @@ async function assembleWithMissingCaches(input: AssembledTurnInput): Promise<Dom
 }
 
 function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRow[]): DomainResult<AssembledTurn> {
-  const { db, task } = input;
+  const { db } = input;
+  let { task } = input;
   if (task.conversationKind === 'dm') return assembleDmTurn(input, missingCaches);
   if (task.threadId == null) {
     return assemblyFailure('missing-thread', '房间任务缺少线程引用');
@@ -291,12 +301,15 @@ function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRo
     return assemblyFailure('missing-root-message', '任务缺少根消息引用');
   }
   const root = db
-    .prepare('SELECT id, body_json, author_type, author_id FROM messages WHERE id = ?')
-    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; author_id: string } | undefined;
+    .prepare('SELECT id, body_json, author_type, author_id, thread_message_seq FROM messages WHERE id = ?')
+    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; author_id: string; thread_message_seq:number|null } | undefined;
   if (root == null) return assemblyFailure('missing-root-message', '根消息记录不存在');
   if (!isAcceptableRootAuthor(root.author_type, root.author_id)) {
     return assemblyFailure('root-not-user-request', '根消息作者不是用户（任务原始请求缺失）');
   }
+  // A room-root message precedes thread sequence 1. Child tasks inherit their
+  // originating request as root; retries must keep that same boundary too.
+  task = {...task,inputThreadMessageSeq:task.inputThreadMessageSeq??root.thread_message_seq??0};
   const rootBody = JSON.parse(root.body_json) as { text: string };
   // DEV-24 文本附件注入（第二十六轮五·能力④经授权交给模型；第二十七轮二扩展）：
   // 根消息 + **线程跟进消息**挂的 text_file 附件都进入本轮输入（跟进附件不漏；均为组装时
@@ -349,7 +362,8 @@ function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRo
   const history = (task.inputThreadMessageSeq==null?db
     .prepare('SELECT id, body_json, author_id, author_type, thread_message_seq FROM messages WHERE thread_id = ? ORDER BY thread_message_seq')
     .all(task.threadId):db.prepare(`SELECT id,body_json,author_id,author_type,thread_message_seq FROM messages WHERE thread_id=?
-      AND (author_type='agent' OR (thread_message_seq<=? AND json_extract(body_json,'$.conversationIntent')='default'))
+      AND (author_type='agent' OR (thread_message_seq<=? AND (json_extract(body_json,'$.conversationIntent')='default'
+        OR author_type='system' AND author_id GLOB 'reminder:*')))
       ORDER BY thread_message_seq DESC LIMIT 201`).all(task.threadId,task.inputThreadMessageSeq).reverse()) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
   const historyTruncated=task.inputThreadMessageSeq!=null&&history.length>200;if(historyTruncated)history.shift();
   // Explicit reply/dependency/integration details are mandatory even when the
@@ -358,7 +372,7 @@ function assembleTurn(input: AssembledTurnInput, missingCaches?: DocAttachmentRo
   if(selectedDetailIds.size>0){
     const ids=[...selectedDetailIds];
     const required=db.prepare(`SELECT id,body_json,author_id,author_type,thread_message_seq FROM messages
-      WHERE thread_id=? AND (? IS NULL OR thread_message_seq<=?)
+      WHERE thread_id=? AND (? IS NULL OR author_type='agent' OR thread_message_seq<=?)
         AND id IN (${ids.map(()=> '?').join(',')})
         AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=messages.id AND ma.id LIKE 'matt_detail_%')
           OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL

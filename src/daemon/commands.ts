@@ -29,7 +29,7 @@ import { VIEWER_DISPLAY_NAME_SETTING_KEY, normalizeViewerDisplayName } from '../
 import { callBudgetSnapshotObject, freezeTaskCallBudget, parsePersistedCallBudgetSnapshot, resolveNewCallBudget, supportsCallBudgetSnapshots } from './callBudget.ts';
 import {DaemonCommandError} from './commandError.ts';
 import {assertNavigationPinAvailable,readNavigationPins,writeNavigationPin} from './navigationPins.ts';
-import {selectThreadRecipients,assertThreadTaskReady,enqueueThreadReply,createTaskForRecordThread} from './threadReplies.ts';
+import {selectThreadRecipients,selectStoppedThreadRecipients,assertThreadTaskReady,enqueueThreadReply,createTaskForRecordThread} from './threadReplies.ts';
 export {DaemonCommandError} from './commandError.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -1797,12 +1797,23 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
         const threadTaskSnapshot=params.target.kind==='thread'&&params.intent==='default'
-          ?deps.db.prepare(`SELECT t.id,t.status,t.revision,t.stop_generation,
-            (SELECT mode FROM workflow_runs WHERE task_id=t.id ORDER BY rowid DESC LIMIT 1) mode
-            FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(params.target.threadId) as {id:string;status:string;revision:number;stop_generation:number;mode:string|null}|undefined
+          ?deps.db.prepare(`SELECT t.id,t.status,t.revision,t.stop_generation
+            FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(params.target.threadId) as {id:string;status:string;revision:number;stop_generation:number}|undefined
           :undefined;
-        if(threadTaskSnapshot?.status==='CANCELLED'&&threadTaskSnapshot.mode==='DELIBERATE'
-          &&params.intent==='default'&&!params.collaboration&&!params.mentions.length)params.collaboration='deliberate';
+        const acceptedThreadReplay=params.target.kind==='thread'
+          &&deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)!=null;
+        const inheritStoppedSelection=!acceptedThreadReplay&&threadTaskSnapshot?.status==='CANCELLED'
+          &&params.intent==='default'&&!params.collaboration&&!params.mentions.length;
+        const selectSubmittedThreadRecipients=()=>{
+          const target=params.target;
+          if(target.kind!=='thread')throw new DaemonCommandError('THREAD_SCOPE_MISMATCH','当前请求不是回复串消息');
+          return inheritStoppedSelection?selectStoppedThreadRecipients(deps.db,target.threadId,params.threadMemberVersion)
+            :selectThreadRecipients(deps.db,target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,target);
+        };
+        if(inheritStoppedSelection){
+          const inheritedRoute=selectSubmittedThreadRecipients().route;
+          if(inheritedRoute.kind==='dispatch'&&inheritedRoute.mode==='DELIBERATE')params.collaboration='deliberate';
+        }
         const requestedDeliberationBudget = parseDeliberationBudget(params.deliberationBudget);
         const resolveRequestCallBudget = (mode: CallBudgetMode, overrideLimit?: number | null): FrozenCallBudgetPolicy => {
           try {
@@ -1818,20 +1829,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if(requestedDeliberationBudget!=null&&params.collaboration!=='deliberate'){
           throw new DaemonCommandError('VALIDATION_INVALID','本次研讨预算只适用于房间独立研讨与回复串独立研讨；当前草稿保留');
         }
-        const acceptedThreadReplay=params.target.kind==='thread'
-          &&deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)!=null;
         if (params.collaboration === 'deliberate' && !acceptedThreadReplay) {
           let frozenMemberCount:number;
           if(params.target.kind==='thread'){
             assertThreadTaskReady(deps.db,params.target.threadId);
-            const preflight=selectThreadRecipients(
-              deps.db,
-              params.target.threadId,
-              params.mentions as MentionNode[],
-              params.threadMemberVersion,
-              'deliberate',
-              params.target,
-            );
+            const preflight=selectSubmittedThreadRecipients();
             if(preflight.route.kind!=='dispatch'||preflight.route.mode!=='DELIBERATE'){
               throw new DaemonCommandError('VALIDATION_INVALID','本次未形成有效的回复串独立研讨名单；请至少选择两位当前串内可用 AI，草稿保留');
             }
@@ -1888,7 +1890,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
             if(params.target.kind==='thread'){
               assertThreadTaskReady(deps.db,params.target.threadId);
-              return selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,params.target).candidateIds;
+              return selectSubmittedThreadRecipients().candidateIds;
             }
             const target=params.target;
             const route=resolveTopLevelRoute({intent:'default',collaboration:params.collaboration,mentions:params.mentions as MentionNode[],room:{coordinatorMemberId:coordinatorOf(deps.db,target.roomId),enabledAgentMemberIds:enabledAgents(deps.db,target.roomId)}});
@@ -1898,7 +1900,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             return [...members].sort();
           };
           const coordinator=params.target.kind==='room_root'?coordinatorOf(deps.db,params.target.roomId):null;
-          const preparedThreadSelection=params.target.kind==='thread'?JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,params.target)):null;
+          const preparedThreadSelection=params.target.kind==='thread'?JSON.stringify(selectSubmittedThreadRecipients()):null;
           const members=preparationMembers();
           const bindings=members.map(memberId=>({memberId,runtime:resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null)}));
           for(const {memberId,runtime} of bindings){
@@ -1911,7 +1913,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           submitReplayGuard();
           if(params.target.kind==='room_root'&&coordinator!==coordinatorOf(deps.db,params.target.roomId))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间协调成员变化；未提交，草稿保留');
-          if(params.target.kind==='thread'&&preparedThreadSelection!==JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,params.target)))throw new DaemonCommandError('CONFIGURATION_NOT_READY','准备期间本串收件人已变化，请确认名单后再发送；草稿保留');
+          if(params.target.kind==='thread'&&preparedThreadSelection!==JSON.stringify(selectSubmittedThreadRecipients()))throw new DaemonCommandError('CONFIGURATION_NOT_READY','准备期间本串收件人已变化，请确认名单后再发送；草稿保留');
           if(JSON.stringify(members)!==JSON.stringify(preparationMembers())||bindings.some(b=>JSON.stringify(b.runtime)!==JSON.stringify(resolveMemberRuntime(deps.db,b.memberId,process.env.ZS_RUNTIME??null))))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间房间名单或成员配置变化；未提交，草稿保留');
           assertPreparedRuntimeConfigurations(preparedConfigurations);
 
@@ -1961,11 +1963,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
-              const selection=params.intent==='default'?selectThreadRecipients(deps.db,thread.id,params.mentions as MentionNode[],params.threadMemberVersion,params.collaboration,target):undefined;
+              const selection=params.intent==='default'?selectSubmittedThreadRecipients():undefined;
               if(params.intent==='default'){
                 const current=thread.root_task_id?deps.db.prepare('SELECT status,revision,stop_generation FROM tasks WHERE id=?').get(thread.root_task_id) as {status:string;revision:number;stop_generation:number}|undefined:undefined;
-                if(current?.status==='CANCELLED'&&(!threadTaskSnapshot||threadTaskSnapshot.id!==thread.root_task_id
-                  ||current.revision!==threadTaskSnapshot.revision||current.stop_generation!==threadTaskSnapshot.stop_generation))
+                if(current&&(current.status==='CANCELLED'||inheritStoppedSelection)&&(!threadTaskSnapshot||threadTaskSnapshot.id!==thread.root_task_id
+                  ||current.status!==threadTaskSnapshot.status||current.revision!==threadTaskSnapshot.revision||current.stop_generation!==threadTaskSnapshot.stop_generation))
                   throw new DaemonCommandError('STALE_REVISION','发送期间任务停止状态已变化；请刷新后重新发送，输入保留');
                 const released=thread.root_task_id?continueInterruptedTask(deps.db,thread.root_task_id):[];
                 for(const id of released)continuedTurns.add(id);
@@ -5489,14 +5491,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             if(isDispatchGateHeld(deps.db))openDispatchGate(deps.db);
           }
           if(resumeStopped){
-            const thread=deps.db.prepare(`SELECT th.id,th.project_id,th.conversation_id,th.room_id,th.last_message_seq,
-              (SELECT mode FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1) mode
-              FROM conversation_threads th WHERE th.root_task_id=?`).get(task.id,task.id) as
-              {id:string;project_id:string;conversation_id:string;room_id:string;last_message_seq:number;mode:string}|undefined;
+            const thread=deps.db.prepare(`SELECT th.id,th.project_id,th.conversation_id,th.room_id,th.last_message_seq
+              FROM conversation_threads th WHERE th.root_task_id=?`).get(task.id) as
+              {id:string;project_id:string;conversation_id:string;room_id:string;last_message_seq:number}|undefined;
             if(thread){
               // Use the same per-message path as typing Continue. The stopped
               // run may itself be a follow-up with a different route/member.
-              const selection=selectThreadRecipients(deps.db,thread.id,[],undefined,thread.mode==='DELIBERATE'?'deliberate':undefined);
+              const selection=selectStoppedThreadRecipients(deps.db,thread.id);
               if(selection.route.kind!=='dispatch')throw new DaemonCommandError('VALIDATION_INVALID','本串没有可继续的 AI');
               const maxTurns=selection.route.mode==='DELIBERATE'
                 ?deriveDeliberateMaxTurns(selection.route.frozenMemberIds.length,{expectsCheckpointRound3:true}).withRevision:undefined;

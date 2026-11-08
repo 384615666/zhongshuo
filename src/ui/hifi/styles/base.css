@@ -289,7 +289,9 @@ code, pre, .mono {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 8px 12px;
+  /* 顶部不留内边距：「工作区」标题已移到滚动区外（见 .sidebar-workspace-head），
+     列表紧接着标题往下滚。 */
+  padding: 0 8px 12px;
 }
 
 /* ---------- 第十五批：三段式侧栏 ----------
@@ -298,6 +300,14 @@ code, pre, .mono {
 .sidebar-top {
   flex: none;
   padding: 8px 8px 4px;
+}
+
+/* 「工作区」标题固定在导航与可滚动列表之间（用户 2026-11-08 第 1 项）：
+   项目/房间再多，标题与右侧打开/切换按钮也停在原位，只有下面的列表滚动。 */
+.sidebar-workspace-head {
+  flex: none;
+  padding: 8px 8px 0;
+  background: var(--bg-app);
 }
 
 /* 项目行：展开箭头与"切换项目"是两个动作，用 flex 分成两个点击区。
@@ -749,6 +759,15 @@ code, pre, .mono {
 .side-heading button:hover {
   background: var(--bg-active);
   color: var(--text);
+}
+/* 打开/切换工作区时按钮短暂禁用：图标保留、只降低不透明度，避免行高变化。 */
+.side-heading button:disabled {
+  opacity: var(--control-disabled-opacity);
+  cursor: default;
+}
+.side-heading button:disabled:hover {
+  background: transparent;
+  color: var(--text-3);
 }
 
 .side-item {

@@ -562,6 +562,19 @@ export class DispatchWorker {
       if(blocked){setConversationReplyState(this.db,conversationRequest.messageId,'blocked',blocked.message);this.audit(task,null,null,'conversation.replyBlocked',{messageId:conversationRequest.messageId,...blocked});if(current&&!generalRequest)this.transitionTask(task.id,'BLOCKED');failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
       conversationInput={text:(JSON.parse(message!.body_json) as {text:string}).text,seq:conversationRequest.inputSeq};
     }
+    if(!conversationInput&&task.kind!=='dm_turn'){
+      const reminder=executionDispatchKey.match(/^task:(.+):reminder:([^:]+):(\d+)$/);
+      if(reminder&&reminder[1]===task.id){
+        const message=this.db.prepare(`SELECT body_json,thread_message_seq FROM messages WHERE id=? AND task_id=? AND thread_id=?
+          AND author_type='system' AND author_id=?`).get(`msg_rem_${reminder[2]}_${reminder[3]}`,task.id,task.conversation_thread_id,`reminder:${reminder[2]}`) as
+          {body_json:string;thread_message_seq:number}|undefined;
+        if(!message){
+          this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'reminder-input-missing',dispatchKey:executionDispatchKey});
+          await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);return;
+        }
+        conversationInput={text:(JSON.parse(message.body_json) as {text:string}).text,seq:message.thread_message_seq};
+      }
+    }
     // DM 归档门（第十九轮六）：归档即禁止新派发——领取/会话建立/startTurn 各窗口统一拦下
     //（任务保持 ACTIVE=队列暂停语义，续跑由 restore 后 dm.resume 显式控制）。
     if (task.kind === 'dm_turn') {
@@ -1737,8 +1750,10 @@ export class DispatchWorker {
     try{
       if(frozen.length && !memberScope?.writeScope)throw Error(memberScope?.unavailableReason??'成员未包含在发送时的配置快照内');
       writeAccess=effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined);
+      const request=this.db.prepare('SELECT input_thread_seq FROM thread_reply_requests WHERE task_id=? AND run_id=?')
+        .get(task.id,run.id) as {input_thread_seq:number}|undefined;
       const preparation=assembleDirectTurnWithAttachmentCache({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),writeAccess,skipFileDiscovery:true,
-        task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq},
+        task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq,inputThreadMessageSeq:request?.input_thread_seq},
         identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
         budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns,...(budget.callBudget?{callBudget:budget.callBudget}:{})}});
       materials=preparation instanceof Promise?await preparation:preparation;

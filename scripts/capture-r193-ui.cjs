@@ -136,6 +136,43 @@ const scenesSource = String.raw`(() => {
     check('选中竖条宽 3px', parseFloat(before.width) === 3, before.width);
     check('选中竖条左缘 = 侧栏 x=0（不再被 12px 内边距推进来）', near(barX, 0), barX);
 
+    const wsHead = q('.sidebar-workspace-head');
+    const wsHeading = wsHead?.querySelector('.side-heading');
+    const wsOpen = wsHead?.querySelector('[data-zs-open-project="hifi"]');
+    const legacyOpen = q('.sidebar-scroll > .side-item[data-zs-open-project]');
+    extra.workspace = {
+      text: (wsHeading?.textContent || '').trim(),
+      openButton: wsOpen != null,
+      icon: wsOpen?.querySelector('svg') != null,
+      insideScroll: wsHead?.closest('.sidebar-scroll') != null,
+      headingBottom: wsHead == null ? null : +wsHead.getBoundingClientRect().bottom.toFixed(1),
+      scrollTop: q('.sidebar-scroll')?.getBoundingClientRect().top ?? null,
+    };
+    check('侧栏标题为「工作区」', (wsHeading?.textContent || '').includes('工作区'), extra.workspace.text);
+    check('工作区标题在滚动区之外（固定）', wsHead != null && wsHead.closest('.sidebar-scroll') === null && extra.workspace.headingBottom <= extra.workspace.scrollTop + 0.5, extra.workspace);
+    check('工作区标题右侧有打开/切换按钮（含图标）', wsOpen != null && wsOpen.querySelector('svg') != null, extra.workspace);
+    check('旧的底部「打开/切换项目」入口已移除', legacyOpen == null);
+
+    const scroll = q('.sidebar-scroll');
+    const headTopBefore = wsHead.getBoundingClientRect().top;
+    const oldFlex = scroll.style.flex, oldMaxHeight = scroll.style.maxHeight;
+    let scrolled = 0, headTopAfter = headTopBefore;
+    try {
+      scroll.style.flex = 'none';
+      scroll.style.maxHeight = '140px';
+      scroll.scrollTop = 99999;
+      await wait(150);
+      scrolled = scroll.scrollTop;
+      headTopAfter = wsHead.getBoundingClientRect().top;
+    } finally {
+      scroll.scrollTop = 0;
+      scroll.style.flex = oldFlex;
+      scroll.style.maxHeight = oldMaxHeight;
+      await wait(80);
+    }
+    extra.workspace.scrollCheck = { scrolled, headTopBefore, headTopAfter };
+    check('项目列表滚动时工作区标题不动', scrolled > 0 && Math.abs(headTopAfter - headTopBefore) <= 0.5, extra.workspace.scrollCheck);
+
     const rows = qa('.sidebar .side-item, .sidebar .side-row');
     const overflow = rows.filter((el) => rect(el).right > sidebarBox.right + 0.5).map((el) => ({ cls: el.className, right: rect(el).right }));
     extra.overflow = overflow;
@@ -169,6 +206,10 @@ app.on('browser-window-created', (_e, win) => {
       const result = await js('window.run()');
       await js('window.location.hash = "#/library"');
       await sleep(1400);
+      try {
+        await js('(() => { const cards = Array.from(document.querySelectorAll("[data-zs-library-project]")); if (cards[0]) cards[0].click(); return cards.length; })()');
+        await sleep(1200);
+      } catch (e) { console.error('shot select project fail ' + e); }
       try { fs.writeFileSync(path.join(OUT, '01-library.png'), (await win.webContents.capturePage()).toPNG()); } catch (e) { console.error('shot library fail ' + e); }
       try { fs.writeFileSync(path.join(OUT, '02-sidebar.png'), (await win.webContents.capturePage({ x: 0, y: 38, width: 246, height: 862 })).toPNG()); } catch (e) { console.error('shot sidebar fail ' + e); }
       fs.writeFileSync(RESULT, JSON.stringify(result, null, 2));

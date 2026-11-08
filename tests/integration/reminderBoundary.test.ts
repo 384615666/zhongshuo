@@ -225,11 +225,16 @@ describe('第二十五轮·三：目标与授权链（跟进既有任务，不�
     expect(JSON.parse(followUp.body_json).text).toContain('【提醒触发】跟进提醒');
     const followDispatchKey = `task:${taskId}:reminder:${reminderId}:${at}`;
     expect((db.prepare('SELECT dispatch_key FROM outbox WHERE dispatch_key = ?').get(followDispatchKey) as { dispatch_key: string }).dispatch_key).toBe(followDispatchKey);
+    // A later accepted user request has its own queue item. It must not become
+    // part of this already-created reminder's input when the worker starts.
+    await cmd('message.submit', { target: { kind: 'thread', projectId: 'p1', conversationId: 'conv_room', threadId },
+      body: 'LATER_REQUEST_AFTER_REMINDER', intent: 'default', mentions: [] });
     // worker 消费跟进派发 → 输入含提醒模板体；调用台账+1。
     const { worker: worker2, adapter: adapter2 } = makeWorker(db, [validDone('跟进完成')]);
     await worker2.runOnce();
     expect(adapter2.startTurnLog.length).toBe(1);
     expect(adapter2.startTurnLog[0]!.text).toContain('【提醒触发】跟进提醒'); // 结果回到原线程（输入含跟进）
+    expect(adapter2.startTurnLog[0]!.text).not.toContain('LATER_REQUEST_AFTER_REMINDER');
     void startTurnBefore;
     db.close();
   }, 60_000);

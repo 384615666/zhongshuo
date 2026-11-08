@@ -605,6 +605,23 @@ export default function App() {
                 <span className="side-marks dm-unread-marks"><NavUnreadCount count={dmUnread} where="私信" /></span>
               </button>
             </div>
+            {/* 固定在导航和可滚动列表之间：房间再多，标题与右侧打开/切换按钮也停在原位。 */}
+            <div className="sidebar-workspace-head">
+              <div className="side-heading">
+                <span>工作区</span>
+                <button
+                  className="side-heading-action"
+                  data-zs-open-project="hifi"
+                  title="打开/切换工作区：选择项目文件夹；已打开的项目会切换到前台，其它项目保留在侧栏"
+                  aria-label={folderPickerBusy ? '正在打开项目文件夹' : '打开/切换工作区'}
+                  aria-busy={folderPickerBusy}
+                  disabled={folderPickerBusy}
+                  onClick={() => { void chooseFolder(); }}
+                >
+                  <Icon name="folder-plus" size={14} />
+                </button>
+              </div>
+            </div>
             <div className="sidebar-scroll">
               {pinnedRooms.length>0?<section className="conversation-pins" data-zs-pinned-rooms="1" aria-label="置顶房间">
                 <div className="side-heading">置顶</div>
@@ -615,7 +632,6 @@ export default function App() {
                   return <RoomNavItem key={pin.itemId} projectId={pin.projectId} roomId={pin.itemId} name={room?.name??pin.label} active={pin.itemId===activeRoomId} projectName={owner.displayName}/>;
                 })}
               </section>:null}
-              <div className="side-heading">项目</div>
               {project == null ? (
                 <div className="side-empty">
                   {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `连接失败：${s.bootError ?? '未知'}` : '尚未打开项目'}
@@ -714,17 +730,6 @@ export default function App() {
                     </div>
                   );
                 })}
-              <button
-                className="side-item"
-                data-zs-open-project="hifi"
-                title="选择项目文件夹；已打开的项目会切换到前台，其它项目保留在侧栏"
-                onClick={() => { void chooseFolder(); }}
-                aria-busy={folderPickerBusy}
-                disabled={folderPickerBusy}
-              >
-                <Icon name="folder" size={13} />
-                <span className="side-item-label">{folderPickerBusy ? '正在打开…' : '打开/切换项目'}</span>
-              </button>
             </div>
             <div className="sidebar-foot">
               {recoveryAttention ? <button
