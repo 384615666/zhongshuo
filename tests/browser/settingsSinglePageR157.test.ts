@@ -92,10 +92,34 @@ describe('R157 单页设置（R170 整理后）', () => {
   it('帮助与关于提供操作手册、GitHub 与产品主页的外部入口', () => {
     const html = page();
     for (const target of ['manual', 'github', 'homepage']) expect(html).toContain(`data-zs-open-link="${target}"`);
-    expect(html).toContain('https://github.com/384615666/zhongshuo');
-    expect(html).toContain('https://zhongshuo.lsjx.xyz');
+    // R206：链接说明（含 URL）不再作为小字渲染；入口按钮仍保留。
+    expect(html).not.toContain('https://github.com/384615666/zhongshuo');
+    expect(html).not.toContain('https://zhongshuo.lsjx.xyz');
     // 手册交给系统浏览器打开，应用内不再嵌 iframe。
     expect(html).not.toContain('<iframe');
+  });
+
+  it('设置页不再显示行内小字说明（R206）', () => {
+    const html = page();
+    for (const copy of [
+      '浅色、深色随时切换',
+      '默认显示个人和 AI 头像，姓名始终保留',
+      '聊天里你自己那一侧显示这张；AI 成员头像在成员管理里设置',
+      '聊天里你自己消息的署名；留空继续显示「你」',
+      '关闭后，任务完成、需要处理、等待输入或待验收时不再弹出系统通知',
+      '默认关闭。开启后，AI 调用达到上限时暂停',
+      '选择保存位置；众说正常关闭后复制并逐个核对',
+      '查看已归档项目和房间的历史，或恢复使用',
+      '用系统默认浏览器打开随程序附带的离线手册',
+      '超出上限的任务会等待',
+      '所有项目合计',
+      '同一成员在同一对话串中仍依次执行',
+      '只在本机读取；复制内容不含正文',
+      'PNG、JPEG 或 WebP 图片，大小不超过 384 千字节',
+      '默认上限：单人执行',
+    ]) expect(html).not.toContain(copy);
+    expect(html).not.toContain('pset-row-hint');
+    expect(html).not.toContain('field-hint');
   });
 
   it('深链仍按分区解析，旧写法映射到现分区', () => {

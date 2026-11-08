@@ -22,6 +22,7 @@ export function AvatarPicker({
   disabled,
   allowCustom = true,
   hideLabel = false,
+  hideHint = false,
   onChange,
 }: {
   value: string | null;
@@ -30,6 +31,8 @@ export function AvatarPicker({
   allowCustom?: boolean;
   /** 外层卡片标题已经写了「我的头像」时，不再重复渲染「头像」字段名。 */
   hideLabel?: boolean;
+  /** 设置页精简：不显示 PNG/JPEG 大小等小字说明。 */
+  hideHint?: boolean;
   onChange: (dataUrl: string | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -128,11 +131,13 @@ export function AvatarPicker({
           <Icon name="trash" size={12} /> 恢复默认
         </button>
       </div>
-      <div className="field-hint">
-        {allowCustom
-          ? 'PNG、JPEG 或 WebP 图片，大小不超过 384 千字节。点已选中的预置图可取消选择。'
-          : '模板只保存预设头像；上传的图片属于具体成员，不会写进模板。点已选中的预置图可取消选择。'}
-      </div>
+      {hideHint ? null : (
+        <div className="field-hint">
+          {allowCustom
+            ? 'PNG、JPEG 或 WebP 图片，大小不超过 384 千字节。点已选中的预置图可取消选择。'
+            : '模板只保存预设头像；上传的图片属于具体成员，不会写进模板。点已选中的预置图可取消选择。'}
+        </div>
+      )}
     </div>
   );
 }

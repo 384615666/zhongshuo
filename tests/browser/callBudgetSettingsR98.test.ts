@@ -55,7 +55,7 @@ describe('R98 AI 设置里的调用预算开关', () => {
     expect(callBudgetSettingReadBackMatches('true', false)).toBe(false);
   });
 
-  it('初始语义为默认关闭、持续计数，并渲染真实默认上限', () => {
+  it('初始语义为默认关闭、持续计数，并保留真实默认上限数据属性（不再显示小字说明）', () => {
     const html = renderToStaticMarkup(createElement(CallBudgetSettingsRow));
     expect(html).toContain(`data-zs-call-budget-setting="${CALL_BUDGET_ENABLED_SETTING_KEY}"`);
     expect(html).toContain('data-zs-call-budget-enabled="false"');
@@ -66,13 +66,12 @@ describe('R98 AI 设置里的调用预算开关', () => {
     expect(html).toContain(
       `data-zs-call-budget-defaults="DIRECT:${DEFAULT_CALL_BUDGET_LIMITS.DIRECT},AUTO:${DEFAULT_CALL_BUDGET_LIMITS.AUTO},DELIBERATE:${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}"`,
     );
-    expect(html).toContain('默认关闭');
-    expect(html).toContain('更改对新请求生效');
-    expect(html).toContain(`单人执行 ${DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次`);
-    expect(html).toContain(`自动协作 ${DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次`);
-    expect(html).toContain(`双人独立研讨 ${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次，随人数调整`);
-    const text = html.replace(/<[^>]*>/g, '');
-    expect(text).not.toMatch(/DIRECT|AUTO|DELIBERATE/);
-    expect(text.match(/默认上限/g)).toHaveLength(1);
+    // R206：设置页去掉小字说明，默认上限只保留机器可读属性，不再渲染可见文案。
+    expect(html).not.toContain('默认上限');
+    expect(html).not.toContain('默认关闭');
+    expect(html).not.toContain('更改对新请求生效');
+    expect(html).not.toContain('单人执行');
+    expect(html).not.toContain('自动协作');
+    expect(html).not.toContain('双人独立研讨');
   });
 });

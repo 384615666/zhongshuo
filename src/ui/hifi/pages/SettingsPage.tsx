@@ -332,7 +332,7 @@ export function ViewerNameRow() {
       <SettingsRow
         id="appearance-viewer-name"
         label="我的名字"
-        hint="聊天里你自己消息的署名；留空继续显示「你」，AI 成员名在成员管理里设置"
+       
         wide
         control={(
           <div className="col" style={{ gap: 4, alignItems: 'flex-end' }} data-zs-viewer-name-control="1">
@@ -409,13 +409,13 @@ function SectionAppearance() {
   }, []);
   return (
     <SectionShell section="appearance" title="外观">
-      <SettingsRow id="appearance-theme" label="主题" hint="浅色、深色随时切换" control={
+      <SettingsRow id="appearance-theme" label="主题" control={
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
           <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>深色</button>
         </div>
       } />
-      <SettingsRow id="appearance-avatars" label="显示头像" hint="默认显示个人和 AI 头像，姓名始终保留" control={
+      <SettingsRow id="appearance-avatars" label="显示头像" control={
         <Switch
           checked={showAvatars}
           disabled={busy === 'visibility'}
@@ -426,7 +426,7 @@ function SectionAppearance() {
       <SettingsRow
         id="appearance-avatar-images"
         label="我的头像"
-        hint="聊天里你自己那一侧显示这张；AI 成员头像在成员管理里设置"
+       
         wide
         control={
           <div data-zs-avatar-settings="1">
@@ -434,6 +434,7 @@ function SectionAppearance() {
               value={myAvatar}
               disabled={busy != null}
               hideLabel
+              hideHint
               onChange={(dataUrl) => void save('avatar:user', { avatar: { subject: 'user', dataUrl } })}
             />
           </div>
@@ -515,7 +516,7 @@ export function DesktopNotificationsRow() {
       <SettingsRow
         id="notification-desktop"
         label="允许弹出系统通知"
-        hint="关闭后，任务完成、需要处理、等待输入或待验收时不再弹出系统通知；任务与未读照常保留。"
+       
         control={(
           <Switch
             checked={enabled}
@@ -628,12 +629,12 @@ export function CallBudgetSettingsRow() {
       data-zs-call-budget-enabled={enabled ? 'true' : 'false'}
       data-zs-call-budget-enforcement={enabled ? 'enabled' : 'disabled'}
       data-zs-call-budget-counting="always"
+      data-zs-call-budget-defaults={`DIRECT:${DEFAULT_CALL_BUDGET_LIMITS.DIRECT},AUTO:${DEFAULT_CALL_BUDGET_LIMITS.AUTO},DELIBERATE:${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}`}
       data-zs-call-budget-status={status}
     >
       <SettingsRow
         id="call-budget"
         label="启用调用次数预算"
-        hint="默认关闭。开启后，AI 调用达到上限时暂停；关闭时只计数。更改对新请求生效。"
         control={(
           <Switch
             checked={enabled}
@@ -642,14 +643,7 @@ export function CallBudgetSettingsRow() {
             onChange={(next) => void save(next)}
           />
         )}
-      >
-        <div
-          className="small faint"
-          data-zs-call-budget-defaults={`DIRECT:${DEFAULT_CALL_BUDGET_LIMITS.DIRECT},AUTO:${DEFAULT_CALL_BUDGET_LIMITS.AUTO},DELIBERATE:${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}`}
-        >
-          默认上限：单人执行 {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次 · 自动协作 {DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次 · 双人独立研讨 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次，随人数调整
-        </div>
-      </SettingsRow>
+      />
       {readError != null ? (
         <div className="panel warning" data-zs-call-budget-read-error="1">
           暂时无法确认调用预算设置：{userFacingSystemText(readError ?? '')}
@@ -702,17 +696,17 @@ function SectionData() {
     <SectionShell section="data" title="数据与存储" cardAttrs={{ 'data-zs-data-guide': '1' }}>
       <SettingsGroup title="数据位置与备份">
         <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '读取中…'} />
-        <SettingsRow id="备份全部数据" label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
+        <SettingsRow id="备份全部数据" label="备份全部数据" control={
           <button className="btn primary sm" disabled={dataOpBusy != null} data-zs-data-backup="1" onClick={() => void startDataOp('backup')}>
             <Icon name="download" size={13} /> {dataOpBusy === 'backup' ? '正在准备…' : '备份全部数据'}
           </button>
         } />
-        <SettingsRow id="使用已有数据" label="使用已有数据或从备份恢复" hint="选择旧包、数据文件夹或完整备份，再选择新副本保存位置；验证成功后才切换" control={
+        <SettingsRow id="使用已有数据" label="使用已有数据或从备份恢复" control={
           <button className="btn sm" disabled={dataOpBusy != null} data-zs-data-import="1" onClick={() => void startDataOp('import')}>
             <Icon name="folder" size={13} /> {dataOpBusy === 'import' ? '正在准备…' : '选择已有数据'}
           </button>
         } />
-        <SettingsRow label="清理存储" hint="回收七天前无引用的变更前像、清理九十天前的回执正文；保留历史、撤销与防重复记录" control={<button className="btn sm" disabled={cleanupBusy} onClick={()=>{
+        <SettingsRow label="清理存储" control={<button className="btn sm" disabled={cleanupBusy} onClick={()=>{
           setCleanupBusy(true);void command<{reclaimedBytes:number;expiredReceipts:number;skippedActive:boolean}>('app.storage.cleanup',{}).then(r=>setCleanupResult(r.skippedActive?'仍有执行或待核对占用，请结束后重试':`已释放 ${(r.reclaimedBytes/1024/1024).toFixed(1)} 兆字节，清理 ${r.expiredReceipts} 条过期回执正文`)).catch(e=>toast(userFacingSystemText(e.message),'error')).finally(()=>setCleanupBusy(false));
         }}>{cleanupBusy?'清理中…':'清理存储'}</button>}/>
         {cleanupResult?<div className="small faint settings-note">{cleanupResult}</div>:null}
@@ -720,12 +714,12 @@ function SectionData() {
       <SettingsGroup title="归档与项目">
         {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
             「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}
-        <SettingsRow id="归档管理" label="归档管理" hint="查看已归档项目和房间的历史，或恢复使用；已有文件与记录会保留">
+        <SettingsRow id="归档管理" label="归档管理">
           <div className="settings-embed">
             <ArchiveManager embedded />
           </div>
         </SettingsRow>
-        <SettingsRow id="已移除的项目" label="已移除的项目" hint="移除只解除应用里的关联，磁盘与历史不动；在欢迎页「打开本地文件夹」重新打开同一目录即可恢复原来的项目" control={
+        <SettingsRow id="已移除的项目" label="已移除的项目" control={
           <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
         } />
       </SettingsGroup>
@@ -735,10 +729,10 @@ function SectionData() {
 
 /* ============================================================ 分区：帮助与关于 ============================================================ */
 
-const APP_LINKS: Array<{ target: AppLinkTarget; row: string; label: string; hint: string; action: string }> = [
-  { target: 'manual', row: 'open-manual', label: '操作手册', hint: '用系统默认浏览器打开随程序附带的离线手册，内容与当前版本一致', action: '打开手册' },
-  { target: 'github', row: 'open-github', label: 'GitHub 仓库', hint: 'https://github.com/384615666/zhongshuo', action: '打开 GitHub' },
-  { target: 'homepage', row: 'open-homepage', label: '产品主页', hint: 'https://zhongshuo.lsjx.xyz', action: '打开主页' },
+const APP_LINKS: Array<{ target: AppLinkTarget; row: string; label: string; action: string }> = [
+  { target: 'manual', row: 'open-manual', label: '操作手册', action: '打开手册' },
+  { target: 'github', row: 'open-github', label: 'GitHub 仓库', action: '打开 GitHub' },
+  { target: 'homepage', row: 'open-homepage', label: '产品主页', action: '打开主页' },
 ];
 
 function SectionHelp() {
@@ -768,7 +762,6 @@ function SectionHelp() {
             key={link.target}
             id={link.row}
             label={link.label}
-            hint={link.hint}
             control={(
               <button className="btn sm" data-zs-open-link={link.target} disabled={linkBusy != null} onClick={() => void open(link.target, link.label)}>
                 <Icon name="external-link" size={13} /> {linkBusy === link.target ? '正在打开…' : link.action}

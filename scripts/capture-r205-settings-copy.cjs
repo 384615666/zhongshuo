@@ -53,11 +53,15 @@ const scenesSource = String.raw`(() => {
     extra.sectionSubs = qa('.settings-section-sub').length;
     extra.draftRows = qa('[data-zs-draft-retry],[data-zs-draft-recovery-note]').length;
     extra.sectionTitles = qa('.settings-section-title').map((el) => (el.textContent || '').trim());
+    extra.hints = qa('.settings-single .pset-row-hint').length;
+    extra.fieldHints = qa('.settings-single .field-hint').length;
     extra.dataGroups = qa('[data-settings-section="data"] .settings-group-title').map((el) => (el.textContent || '').trim());
     extra.storageCleanup = text.includes('清理存储');
 
     check('设置页不再渲染页头小字', extra.pageSubs === 0, extra.pageSubs);
     check('各分区不再渲染小字说明', extra.sectionSubs === 0, extra.sectionSubs);
+    check('设置行内小字说明为 0', extra.hints === 0, extra.hints);
+    check('头像字段小字说明为 0', extra.fieldHints === 0, extra.fieldHints);
     for (const copy of [
       '外观、通知、AI、数据与帮助都在这一页',
       '主题、头像和名字；只在本机生效',
@@ -65,6 +69,19 @@ const scenesSource = String.raw`(() => {
       '调用预算与同时运行的 AI。',
       '数据位置、备份、草稿与归档。',
       '手册、链接、版本与诊断。',
+      '浅色、深色随时切换',
+      '默认显示个人和 AI 头像，姓名始终保留',
+      '聊天里你自己那一侧显示这张；AI 成员头像在成员管理里设置',
+      '聊天里你自己消息的署名；留空继续显示「你」',
+      '关闭后，任务完成、需要处理、等待输入或待验收时不再弹出系统通知',
+      '默认关闭。开启后，AI 调用达到上限时暂停',
+      '选择保存位置；众说正常关闭后复制并逐个核对',
+      '默认上限：单人执行',
+      '超出上限的任务会等待',
+      '所有项目合计',
+      '同一成员在同一对话串中仍依次执行',
+      '只在本机读取；复制内容不含正文',
+      'PNG、JPEG 或 WebP 图片，大小不超过 384 千字节',
     ]) check('不再出现小字：' + copy, !text.includes(copy));
     check('分区标题仍在', ['外观', '通知', 'AI 设置', '数据与存储', '帮助与关于'].every((title) => extra.sectionTitles.includes(title)), extra.sectionTitles);
     check('设置页没有草稿设置分组', !extra.dataGroups.includes('草稿'), extra.dataGroups);

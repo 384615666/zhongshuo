@@ -128,7 +128,8 @@ app.whenReady().then(async()=>{
   check('route changes neither re-read nor rebuild the panel',await js('fixture.server().calls.filter(e=>e.method==="app.executionConcurrency.get").length==='+readsBefore+'&&!!document.querySelector("[data-settings-row=execution-concurrency]")'));
   await inputs(13,12,11);await js('fixture.save()');await until(idle+'&&document.querySelector("input[name=globalMaxInFlight]").value==="13"');
   check('saved values survive route changes',(await values()).globalMaxInFlight==='13');
-  check('copy explains project writing, dependencies and retained protection',await js('document.body.textContent.includes("允许成员并行")&&document.body.textContent.includes("同一成员在同一对话串中")&&document.body.textContent.includes("前后依赖或未解除保护")'));
+  // R206：设置页去掉小字说明；并发面板只保留当前上限/错误/表单，不再检查说明文案。
+  check('concurrency panel keeps editable controls without explanatory copy',await js('!document.body.textContent.includes("允许成员并行")&&!document.body.textContent.includes("同一成员在同一对话串中")&&!document.body.textContent.includes("前后依赖或未解除保护")&&!!document.querySelector("input[name=globalMaxInFlight]")'));
   await js('document.querySelector("[data-settings-row=execution-concurrency]").scrollIntoView({block:"center"})');await pause(80);win.webContents.invalidate();
   fs.writeFileSync(path.join(__dirname,'execution-concurrency.png'),(await win.webContents.capturePage()).toPNG());
   await js('fixture.search("并发")');await until('document.querySelector(".settings-search-hit")?.textContent.includes("同时运行的 AI")');

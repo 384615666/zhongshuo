@@ -24,7 +24,6 @@ export function LocalDiagnostics(){
   const copy=async()=>{try{await navigator.clipboard.writeText(JSON.stringify(report(),null,2));setCopyState('已复制脱敏诊断；请自行决定分享给谁。');}catch{setCopyState('复制失败；可选择下方脱敏文本复制。');}};
   const service=facts.projectId===projectId?facts.service:null;
   return <div className="card" data-zs-local-diagnostics="1"><div className="row wrap tight"><button className="btn sm" disabled={facts.loading} onClick={()=>{setOpened(true);void refresh();}}>查看诊断 / 刷新</button><button className="btn sm" disabled={!opened} onClick={()=>void copy()}>复制诊断</button></div>
-    <div className="small faint">只在本机读取；复制内容不含正文、提示词、密钥、图片或完整私密路径。</div>
     {copyState?<div role="status">{copyState}</div>:null}
     {opened?<><div>连接：{({online:'已连接',offline:'已断开',recovering:'正在恢复',failed:'连接失败',suspended:'已暂停'} as Record<string,string>)[conn] ?? '状态未知'} · 服务：{service?.service??'尚未读取'} · 更新：{facts.at?new Date(facts.at).toLocaleString():'尚未成功读取'}</div>
       {facts.error?<div className="panel warning">诊断读取失败；保留上次读取结果。确认连接可用后点刷新，必要时正常关窗重开。不会重发或继续任务。</div>:null}
