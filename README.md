@@ -6,7 +6,7 @@
   <a href="https://github.com/384615666/zhongshuo"><img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%2F11-2563eb?style=flat-square&logo=windows&logoColor=white"></a>
   <a href="#为什么是众说"><img alt="local-first" src="https://img.shields.io/badge/local--first-0f766e?style=flat-square"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-172431?style=flat-square"></a>
-  <a href="https://github.com/384615666/zhongshuo"><img alt="status beta" src="https://img.shields.io/badge/status-beta-2563eb?style=flat-square"></a>
+  <a href="https://github.com/384615666/zhongshuo"><img alt="status 1.0" src="https://img.shields.io/badge/status-1.0-0f766e?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -25,7 +25,19 @@
 
 <p align="center"><sub>同一个项目、同一间房：多个 AI 分工、讨论、执行，进度与成果留在回复串里。</sub></p>
 
+<p align="center">
+  <a href="https://github.com/384615666/zhongshuo/releases/download/v1.0.0/Zhongshuo-Setup-1.0.0-x64.exe"><b>⬇ 下载众说 1.0 Windows 安装包</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/384615666/zhongshuo/releases/tag/v1.0.0">版本与 SHA256</a>
+</p>
+
 ---
+
+## 下载安装
+
+Windows 10/11 x64：[众说 1.0.0 安装包](https://github.com/384615666/zhongshuo/releases/download/v1.0.0/Zhongshuo-Setup-1.0.0-x64.exe)。SHA256 与版本信息见 [GitHub Release](https://github.com/384615666/zhongshuo/releases/tag/v1.0.0)；安装包未配置代码签名，SmartScreen 可能提示「未知发布者」。安装版仅支持当前 Windows 用户，无需管理员权限。
+
+也可以按下面的[快速开始](#quick-start)从源码构建。
 
 ## 为什么是众说
 
@@ -98,7 +110,7 @@
 
 ## 快速开始
 
-> 需要 **Windows 10/11**、**Node.js 24+**、**pnpm**、**Git**；并先在电脑上安装、登录至少一个 AI CLI。
+> 直接下载安装包最快；从源码构建需要 **Windows 10/11**、**Node.js 24+**、**pnpm**、**Git**，并先在电脑上安装、登录至少一个 AI CLI。
 
 ```powershell
 git clone https://github.com/384615666/zhongshuo.git
@@ -181,7 +193,7 @@ pnpm build:ui
 ---
 
 <p align="center">
-  <sub>Windows 本地多 AI 协作工作台 · 项目持续开发中</sub><br>
+  <sub>Windows 本地多 AI 协作工作台 · 1.0 正式版</sub><br>
   <a href="site/index.html">产品主页</a> &nbsp;·&nbsp;
   <a href="docs/user-guide/README.md">操作手册</a> &nbsp;·&nbsp;
   <a href="LICENSE">MIT License</a> &nbsp;·&nbsp;

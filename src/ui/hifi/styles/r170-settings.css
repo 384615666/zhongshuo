@@ -256,3 +256,9 @@
 .settings-embed .archive-embedded .archive-filters-empty {
   display: none;
 }
+
+/* R208：设置页「我的头像」上传/恢复按钮组靠右，与头像行右缘对齐。 */
+.settings-card [data-zs-avatar-picker] > .row {
+  justify-content: flex-end;
+}
+

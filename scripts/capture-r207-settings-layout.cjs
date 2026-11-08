@@ -80,6 +80,13 @@ const scenesSource = String.raw`(() => {
     check('简单设置行高度紧凑（≤80px）', rows.filter((r) => !r.hasAvatar && !r.hasEmbed).every((r) => r.h != null && r.h <= 80), rows.filter((r) => !r.hasAvatar && !r.hasEmbed && (r.h == null || r.h > 80)));
     const avatar = rows.find((r) => r.hasAvatar);
     check('头像行不再留下大块空档（≤130px）', avatar == null || (avatar.h != null && avatar.h <= 130), avatar);
+    const picker = q('[data-zs-avatar-settings] [data-zs-avatar-picker]');
+    const pickerRows = picker == null ? [] : Array.from(picker.querySelectorAll(':scope > .row'));
+    const actionRow = pickerRows[pickerRows.length - 1];
+    const actionRect = rect(actionRow);
+    const controlRect = rect(q('[data-settings-row="appearance-avatar-images"] .pset-row-control'));
+    extra.avatarActionRow = { action: actionRect, control: controlRect };
+    check('头像上传/恢复按钮组靠右对齐', actionRect != null && controlRect != null && Math.abs(actionRect.right - controlRect.right) <= 1.5, extra.avatarActionRow);
 
     const heads = qa('.settings-section-head').map((el) => rect(el)?.h ?? null);
     extra.sectionHeadHeights = heads;

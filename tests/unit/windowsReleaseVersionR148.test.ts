@@ -20,7 +20,7 @@ describe('R148/R150 Windows stable release versions',()=>{
     for(let i=1;i<ordered.length;i++)expect(ordered[i]!>ordered[i-1]!).toBe(true);
   });
   it('uses the current core version for beta shorthand',()=>{
-    expect(parseVersions(['beta.1'])[0]).toEqual({version:'0.1.3-beta.1',numericVersion:'0.1.3.1'});
+    expect(parseVersions(['beta.1'])[0]).toEqual({version:'1.0.0-beta.1',numericVersion:'1.0.0.1'});
   });
   it('rejects invalid or ambiguous versions instead of creating misleading installer metadata',()=>{
     const versions=['0.1','v0.1.0','00.1.0','0.1.0-beta.-1','0.1.0-beta.65535','65536.0.0','0.1.0-rc.1','0.1.0.4','0.1.0-beta.01'];
