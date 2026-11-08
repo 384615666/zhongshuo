@@ -325,7 +325,7 @@ function renderInline(text: string, tableCell = false): React.ReactNode[] {
         if (m) {
           const localPath = localPathFromFileHref(m[3]);
           if (localPath != null) {
-            const named = m[2].trim() !== '' ? m[2].trim() : fileNameFromLocalPath(localPath);
+            const named = fileNameFromLocalPath(localPath);
             out.push(<LocalFileLink key={`f${pi}-${si}-${li}`} path={localPath} name={named} />);
             return;
           }

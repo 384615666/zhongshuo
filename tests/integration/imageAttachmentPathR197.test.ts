@@ -9,11 +9,11 @@
  *  - 读托管原件（readVerifiedBlob：受控句柄 + 实际字节 sha256 核对）后按 magic bytes
  *    得到的 mime 定扩展名（png/jpg/gif/webp/bmp）；
  *  - 在 {appData}/attachment-paths/ 下生成 `{hash前16位}-{安全化原文件名主干}.{ext}` 的
- *    绝对路径副本（优先硬链原件，失败退回复制；已存在且大小一致复用）；
+ *    绝对路径副本（原子写入真实副本；已存在且字节一致复用，拒绝符号链接/junction）；
  *  - 返回 { attachmentId, filename, mime, path, bytes }；远程通道 FORBIDDEN（仅本机）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync, symlinkSync, readdirSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -77,6 +77,64 @@ function makeEnv() {
 }
 
 describe('R197 attachment.absolutePath：可读扩展名路径 + 原件字节一致 + 稳定复用', () => {
+  it('repairs a same-size modified copy without changing the managed original', async () => {
+    const env = makeEnv();
+    try {
+      const png = makePng(31, 31);
+      const up = await env.cmd<{ attachmentId: string }>('attachment.uploadImage', {
+        conversationId: 'dm_a', filename: 'repair.png', contentBase64: png.toString('base64'),
+      });
+      const abs = await env.cmd<AbsolutePathData>('attachment.absolutePath', { attachmentId: up.attachmentId });
+      writeFileSync(abs.path, Buffer.alloc(png.length, 0x41));
+      const again = await env.cmd<AbsolutePathData>('attachment.absolutePath', { attachmentId: up.attachmentId });
+      expect(readFileSync(again.path)).toEqual(png);
+      rmSync(again.path);
+      const recreated = await env.cmd<AbsolutePathData>('attachment.absolutePath', { attachmentId: up.attachmentId });
+      expect(readFileSync(recreated.path)).toEqual(png);
+      const preview = await env.cmd<{ dataUrl: string }>('attachment.previewImage', { attachmentId: up.attachmentId });
+      expect(Buffer.from(preview.dataUrl.split(',')[1]!, 'base64')).toEqual(png);
+    } finally { env.close(); }
+  });
+
+  it('replaces a modified hard-linked destination without writing through to the linked file', async () => {
+    const env = makeEnv();
+    try {
+      const png = makePng(29, 29);
+      const up = await env.cmd<{ attachmentId: string }>('attachment.uploadImage', {
+        conversationId: 'dm_a', filename: 'hardlink.png', contentBase64: png.toString('base64'),
+      });
+      const abs = await env.cmd<AbsolutePathData>('attachment.absolutePath', { attachmentId: up.attachmentId });
+      rmSync(abs.path);
+      const other = join(tmpRoot, 'hardlink-original.txt');
+      const sentinel = Buffer.alloc(png.length, 0x42);
+      writeFileSync(other, sentinel);
+      linkSync(other, abs.path);
+      await env.cmd<AbsolutePathData>('attachment.absolutePath', { attachmentId: up.attachmentId });
+      expect(readFileSync(abs.path)).toEqual(png);
+      expect(readFileSync(other)).toEqual(sentinel);
+    } finally { env.close(); }
+  });
+
+  it('rejects an attachment-paths directory junction before writing outside app data', async () => {
+    const env = makeEnv();
+    try {
+      const profile = mkdtempSync(join(tmpRoot, 'junction-profile-'));
+      const outside = mkdtempSync(join(tmpRoot, 'outside-'));
+      const deps = { ...env.deps, appDataDir: profile };
+      const upload = await env.dispatch(deps, 'attachment.uploadImage', {
+        conversationId: 'dm_a', filename: 'junction.png', contentBase64: makePng(30, 30).toString('base64'),
+      });
+      expect(upload.ok).toBe(true);
+      symlinkSync(outside, join(profile, 'attachment-paths'), process.platform === 'win32' ? 'junction' : 'dir');
+      const result = await env.dispatch(deps, 'attachment.absolutePath', {
+        attachmentId: (upload.data as { attachmentId: string }).attachmentId,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('FORBIDDEN');
+      expect(readdirSync(outside)).toEqual([]);
+    } finally { env.close(); }
+  });
+
   it('上传 PNG 后返回 .png 绝对路径；文件存在且字节等于上传原件；重复调用同路径', async () => {
     const env = makeEnv();
     const png = makePng(32, 32);

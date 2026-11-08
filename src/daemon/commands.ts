@@ -17,7 +17,7 @@ import {runtimeCatalog} from './runtimeCatalog.ts';
 import { executionConcurrencyCommand } from './executionConcurrency.ts';
 import type {PreparedRuntimeConfiguration} from './prepareCodexConfiguration.ts';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync, lstatSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,snapshotConversationWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import {snapshotRedispatchExecution} from './redispatchExecution.ts';
 import { coordinationRoster,coordinationRoomMembers, freezeCoordinationScope, resumeBlockedCoordinationChild,settleSupersededCoordinationSteps } from './coordination.ts';
@@ -3876,7 +3876,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 原件仍在托管存储（{appData}/blobstore/{hash}.bin），本命令只在
         // {appData}/attachment-paths/ 下生成带真实图片扩展名的稳定副本（真实复制，不硬链：
         // 用户或 AI 若按这个路径原地覆盖图片，不能因此改坏内容寻址的托管原件）；
-        // 同名且大小正确即复用。audience 与 previewImage 完全一致；路径只落在应用数据目录内。
+        // 同名且字节正确才复用。audience 与 previewImage 完全一致；路径只落在应用数据目录内。
         // 远程设备不需要也不应拿到本机磁盘路径。像素解码/OCR 仍不在 daemon。
         if (deps.remoteAudit != null) throw new DaemonCommandError('FORBIDDEN', '图片绝对路径仅限本机使用');
         const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
@@ -3895,21 +3895,29 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
         const ext = IMAGE_EXT_BY_MIME[meta.meta.mime] ?? 'png';
         const stem = safeImageFileStem(row.source_name);
-        const dir = join(appData, 'attachment-paths');
+        const dir = resolve(appData, 'attachment-paths');
         mkdirSync(dir, { recursive: true });
+        if (realpathSync(dir) !== dir) {
+          throw new DaemonCommandError('FORBIDDEN', '图片副本目录含符号链接/junction——拒绝');
+        }
         const target = resolve(join(dir, `${row.hash.slice(0, 16)}-${stem}.${ext}`));
         const appDataRoot = resolve(appData);
         const appDataSep = appDataRoot.includes('/') ? '/' : '\\';
         if (target !== appDataRoot && !target.startsWith(appDataRoot + appDataSep)) {
           throw new DaemonCommandError('FORBIDDEN', '图片路径越出应用数据目录——拒绝');
         }
-        let existingBytes: number | null = null;
-        try { existingBytes = existsSync(target) ? statSync(target).size : null; } catch { existingBytes = null; }
-        if (existingBytes !== verified.raw.length) {
-          try { if (existsSync(target)) rmSync(target, { force: true }); } catch { /* 清不掉就交给下方写入覆盖 */ }
-          // 真实复制（字节已 sha256 核验），不做硬链：路径副本被改写不应影响托管原件。
-          writeFileSync(target, verified.raw);
+        let reusable = false;
+        try {
+          const info = lstatSync(target);
+          if (info.isSymbolicLink() || realpathSync(target) !== target) {
+            throw new DaemonCommandError('FORBIDDEN', '图片副本路径含符号链接/junction——拒绝');
+          }
+          reusable = info.isFile() && info.size === verified.raw.length && readFileSync(target).equals(verified.raw);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
+        // 原子替换，写入失败保留旧副本，也不会原地改写已有硬链的目标。
+        if (!reusable) atomicWriteFile(target, verified.raw);
         return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name ?? `${stem}.${ext}`, mime: meta.meta.mime, path: target, bytes: verified.raw.length } });
       }
       case 'attachment.uploadPdf': {
