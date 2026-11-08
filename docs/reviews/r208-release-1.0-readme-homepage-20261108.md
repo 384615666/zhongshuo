@@ -39,9 +39,9 @@
 
 ## 交付
 
-- 版本 `1.0.0`，程序提交 PENDING_COMMIT。
-- 干净 worktree `dist/r208-source`（status 0，`dirty=false`）构建：便携镜像 BUILD `PENDING_BUILD1`（clean、PENDING_FILES1 文件 MANIFEST）、安装器 BUILD `PENDING_BUILD2`（安装镜像 PENDING_FILES2 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。
-- 安装包 `dist/installers/Zhongshuo-Setup-1.0.0-x64.exe` **PENDING_BYTES 字节**，SHA256 `PENDING_SHA`，未签名；PENDING_PUSH。
+- 版本 `1.0.0`，程序提交 `ecf8d30`。
+- 干净 worktree `dist/r208-source`（status 0，`dirty=false`）构建：便携镜像 BUILD `bld_098eac201e6f7b39`（clean、633 文件 MANIFEST）、安装器 BUILD `bld_1f1a9083853937ff`（安装镜像 670 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。
+- 安装包 `dist/installers/Zhongshuo-Setup-1.0.0-x64.exe` **160,453,097 字节**，SHA256 `e35b576a9612aaff0f0a28298206a55f8778b4bd7da3b2c189d2d090b9d7fa9c`，未签名；本记录提交后推送 `main`（`ecf8d30` + 记录提交）、创建 tag `v1.0.0` 与 GitHub Release「众说 1.0.0」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/1.0.0.md`）；用户自行安装。
 - GitHub Release 使用 tag `v1.0.0`、正文取 `docs/releases/1.0.0.md`；README/主页下载链接与 Release 资产同名，发布后即可访问。
 
 ## 已知边界
