@@ -897,6 +897,33 @@ function rootPathOf(db: ZhongshuoDatabase, projectId: string): string | null {
   return (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(projectId) as { canonical_path: string } | undefined)?.canonical_path ?? null;
 }
 
+/* ---------------- R197：图片附件可读绝对路径 ---------------- */
+
+/** 图片 mime → 可读扩展名（附件原件在托管存储里一律 {hash}.bin，路径副本要能直接双击打开）。 */
+const IMAGE_EXT_BY_MIME: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp' };
+
+/** 原文件名 → 可读且安全的文件主干：去掉目录部分/控制字符/Windows 非法字符，长度上限 40；
+ * 清洗后为空时用 image（不把路径分隔符或控制字符带进落盘名，也不允许借名字穿越目录）。 */
+function safeImageFileStem(filename: string | null): string {
+  const raw = (filename ?? '').trim();
+  const base = basename(raw.replace(/\\/g, '/'));
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const withoutControls = Array.from(stem)
+    .filter((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join('');
+  const cleaned = withoutControls
+    .replace(/[\\/:*?"<>|]/g, '_') // 路径分隔符 + Windows 非法字符
+    .replace(/\s+/g, ' ')
+    .replace(/^[.\s]+/, '')
+    .slice(0, 40)
+    .replace(/[.\s]+$/, '');
+  return cleaned.length > 0 ? cleaned : 'image';
+}
+
 /** 任务受阻/失败原因（第三十八轮 #4：BLOCKED/FAILED 行显示人话——不做无解释的「blocked」）。
  * 取任务最近一条相关事件（turn.startupFailed / task.statusChanged BLOCKED / 准入拒绝），按事件
  * reason/message 映射；无事件=如实 null（不虚构）。纯读。 */
@@ -3843,6 +3870,47 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const meta = validateImageBuffer(verified.raw);
         if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
         return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'sent-with-message' } });
+      }
+      case 'attachment.absolutePath': {
+        // R197 第 2/3/5 项：图片附件的**可读绝对路径**（复制消息/引用/右键复制路径用）。
+        // 原件仍在托管存储（{appData}/blobstore/{hash}.bin），本命令只在
+        // {appData}/attachment-paths/ 下生成带真实图片扩展名的稳定副本（真实复制，不硬链：
+        // 用户或 AI 若按这个路径原地覆盖图片，不能因此改坏内容寻址的托管原件）；
+        // 同名且大小正确即复用。audience 与 previewImage 完全一致；路径只落在应用数据目录内。
+        // 远程设备不需要也不应拿到本机磁盘路径。像素解码/OCR 仍不在 daemon。
+        if (deps.remoteAudit != null) throw new DaemonCommandError('FORBIDDEN', '图片绝对路径仅限本机使用');
+        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        const convId = params.conversationId ?? row.conversation_id;
+        assertConversationAudience(deps.db, deps.localUserId, convId);
+        if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
+        if (row.kind !== 'image_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非图片附件范围`);
+        const appData = deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd();
+        const storeRoot = join(appData, 'blobstore');
+        const verified = readVerifiedBlob(row.blob_path, row.hash, storeRoot);
+        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+        const meta = validateImageBuffer(verified.raw);
+        if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
+        const ext = IMAGE_EXT_BY_MIME[meta.meta.mime] ?? 'png';
+        const stem = safeImageFileStem(row.source_name);
+        const dir = join(appData, 'attachment-paths');
+        mkdirSync(dir, { recursive: true });
+        const target = resolve(join(dir, `${row.hash.slice(0, 16)}-${stem}.${ext}`));
+        const appDataRoot = resolve(appData);
+        const appDataSep = appDataRoot.includes('/') ? '/' : '\\';
+        if (target !== appDataRoot && !target.startsWith(appDataRoot + appDataSep)) {
+          throw new DaemonCommandError('FORBIDDEN', '图片路径越出应用数据目录——拒绝');
+        }
+        let existingBytes: number | null = null;
+        try { existingBytes = existsSync(target) ? statSync(target).size : null; } catch { existingBytes = null; }
+        if (existingBytes !== verified.raw.length) {
+          try { if (existsSync(target)) rmSync(target, { force: true }); } catch { /* 清不掉就交给下方写入覆盖 */ }
+          // 真实复制（字节已 sha256 核验），不做硬链：路径副本被改写不应影响托管原件。
+          writeFileSync(target, verified.raw);
+        }
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name ?? `${stem}.${ext}`, mime: meta.meta.mime, path: target, bytes: verified.raw.length } });
       }
       case 'attachment.uploadPdf': {
         // PDF 附件（第二十八轮五→第二十九轮二重构）：能力①保存原件+隔离解析验证（子进程

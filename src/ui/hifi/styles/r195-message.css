@@ -170,3 +170,37 @@
   height: 100%;
   object-fit: cover;
 }
+
+/* ---------------- R197 第 1 项：图片-only 本人消息气泡贴合 ---------------- */
+
+/* 用户反馈：只发了图片的本人消息，气泡上方的 10/14 内边距 + 图片网格 8px 上间距把照片
+   撑在一块浅蓝大框里。这里仅对「正文为空、带图片附件」的本人气泡收紧到 4px，并去掉
+   图片网格上间距，让照片贴合气泡；其余消息（有正文/只有文件/他人消息）样式完全不变。
+   钩子：MessageView 给 .msg-human-bubble 输出 data-zs-image-only="1"。
+   特异性说明：components.css 的 `.msg-list.is-replies .msg-human-bubble`（0,3,0）会压过
+   单类+属性的规则，因此回复串/私信容器内再用同前缀的规则覆盖一次。 */
+.msg-human-bubble[data-zs-image-only="1"] {
+  padding: 4px;
+}
+
+.msg-human-bubble[data-zs-image-only="1"] .msg-image-grid {
+  margin-top: 0;
+}
+
+/* 附件区自身还有 9px 上间距（components.css .msg-attachment-footer）：图片-only 气泡里
+   一并归零，否则 4px 边距上仍会空出一截。 */
+.msg-human-bubble[data-zs-image-only="1"] .msg-attachment-footer {
+  margin-top: 0;
+}
+
+.msg-list.is-replies .msg-human-bubble[data-zs-image-only="1"] {
+  padding: 4px;
+}
+
+.msg-list.is-replies .msg-human-bubble[data-zs-image-only="1"] .msg-image-grid {
+  margin-top: 0;
+}
+
+.msg-list.is-replies .msg-human-bubble[data-zs-image-only="1"] .msg-attachment-footer {
+  margin-top: 0;
+}

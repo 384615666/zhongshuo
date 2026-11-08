@@ -41,6 +41,7 @@ import {markDmRead} from './loader';
 import type { DmConversation } from './data/types';
 import { useElementWidth } from './lib/useElementWidth';
 import { SIDEBAR_WIDTH } from './lib/layout';
+import { appendImagePathsToText, imagePathLinesForMessage } from './lib/imageAttachmentPaths';
 import { audienceAllows, resourceOf } from './lib/resource';
 import { autoHidePreviewForConversation, shouldAutoHidePreviewFor } from './data/actions-preview';
 import { PreviewPane, PreviewReopenButton } from './preview/PreviewPane';
@@ -669,14 +670,19 @@ export function DmPage() {
                           toast(`收藏操作失败：${userFacingSystemText(r.error ?? '未知错误')}；状态未变`, 'error');
                         })}
                         onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${userFacingSystemText((e as Error).message ?? '')}`, 'error')); }}
-                        onQuote={(_message, selectedText) => {
+                        onQuote={async (_message, selectedText) => {
+                          // R197 第 2 项：引用内容含图片时，把图片绝对路径追加到引用文本（选中文字优先）。
+                          const lines = await imagePathLinesForMessage(
+                            m,
+                            st.projects.find((project) => project.id === active.projectId)?.rootPath ?? null,
+                          ).catch(() => []);
                           const quoted = addConversationQuoteToDraft(`dm:${active.id}`, {
                             messageId: m.id,
                             authorLabel: m.authorType === 'human'
                               ? viewerDisplayLabel(st.viewerName)
                               : membersAll.find((member) => member.id === m.authorId)?.displayName ?? '助手消息',
                             threadMessageSeq: m.threadMessageSeq,
-                            text: selectedText ?? m.body,
+                            text: appendImagePathsToText(selectedText ?? m.body, lines),
                           });
                           if (!quoted.ok) {
                             toast(quoted.error, 'error');

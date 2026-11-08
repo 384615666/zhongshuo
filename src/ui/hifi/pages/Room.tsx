@@ -27,6 +27,8 @@ import { ExecutionWaitActions } from '../components/ExecutionWaitActions';
 import { coordinationProgressHint } from '../lib/coordinationProgressHint';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
+import { copyTextToClipboard } from '../lib/localOpen';
+import { appendImagePathsToText, imagePathLinesForMessage } from '../lib/imageAttachmentPaths';
 import {
   buildRoomRootEnvelope, buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview,
   executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed,
@@ -394,15 +396,18 @@ export function RoomPage({
    *  - 引用正文全文进入草稿的 conversationQuotes（不再截 400 字、不再塞进可编辑正文）；
    *  - 有选中文字时只引所选（messageSelectionText 只接受完整落在本条消息内的选区）；
    *  - 本人消息的来源标签用设置里的显示名，未设置仍是「你」。
+   * R197 第 2 项：引用内容含图片时，把图片的可读绝对路径追加到引用文本里
+   *（选中文字优先，图片路径始终附上；取不到路径时只写文件名）。
    */
-  const addRoomQuote = (message: Message, selectedText?: string): void => {
-    const text = selectedText ?? chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType);
+  const addRoomQuote = async (message: Message, selectedText?: string): Promise<void> => {
+    const base = selectedText ?? chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType);
+    const lines = await imagePathLinesForMessage(message, ownerProject?.rootPath ?? null).catch(() => []);
     const quoted = addConversationQuoteToDraft(`room:${message.roomId}`, {
       messageId: message.id,
       authorLabel: message.authorType === 'human'
         ? viewerDisplayLabel(s.viewerName)
         : byId(s.members, message.authorId)?.displayName ?? '助手消息',
-      text,
+      text: appendImagePathsToText(base, lines),
     });
     if (!quoted.ok) {
       toast(quoted.error, 'error');
@@ -936,6 +941,8 @@ function RootCardActions({ message, saved, onQuote }: {
   const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
   /** 按下时先取选区：按钮默认动作会把选区收起来，click 里已经读不到。 */
   const selectedTextRef=useRef('');
+  /** R197 第 3 项：主池卡片「复制」也把图片附件的绝对路径带上。 */
+  const projectRoot=useStore((x)=>x.projects.find((project)=>project.id===message.projectId)?.rootPath ?? null);
   const visibleBody=chatAnswer(message.body,message.authorType);
   const captureSelection=(button:HTMLButtonElement):void=>{
     const body=button.closest('.root-card')?.querySelector('.root-body') ?? null;
@@ -943,8 +950,8 @@ function RootCardActions({ message, saved, onQuote }: {
   };
   const copy=async():Promise<void>=>{
     try{
-      if(navigator.clipboard==null)throw Error('clipboard unavailable');
-      await navigator.clipboard.writeText(visibleBody);
+      const lines=await imagePathLinesForMessage(message,projectRoot).catch(()=>[]);
+      if(!await copyTextToClipboard(appendImagePathsToText(visibleBody,lines)))throw Error('clipboard unavailable');
       setCopyState('copied');
       window.setTimeout(()=>setCopyState('idle'),1400);
     }catch{
@@ -1821,16 +1828,19 @@ function ThreadPanel({
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
-  const insertMessageAction = (message: Message, kind: 'quote' | 'correction', selectedText?: string) => {
+  const insertMessageAction = async (message: Message, kind: 'quote' | 'correction', selectedText?: string): Promise<void> => {
     if (kind === 'quote') {
-      const text = selectedText ?? chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType);
+      // R197 第 2 项：引用内容含图片时，把图片绝对路径追加到引用文本（选中文字优先）。
+      const base = selectedText ?? chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType);
+      const projectRoot = s.projects.find((project) => project.id === message.projectId)?.rootPath ?? null;
+      const lines = await imagePathLinesForMessage(message, projectRoot).catch(() => []);
       const quoted = addConversationQuoteToDraft(`thread:${thread.id}`, {
         messageId: message.id,
         authorLabel: message.authorType === 'human'
           ? viewerDisplayLabel(s.viewerName)
           : byId(s.members, message.authorId)?.displayName ?? '助手消息',
         threadMessageSeq: message.threadMessageSeq,
-        text,
+        text: appendImagePathsToText(base, lines),
       });
       if (!quoted.ok) {
         toast(quoted.error, 'error');

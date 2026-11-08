@@ -89,6 +89,20 @@ contextBridge.exposeInMainWorld('zsLocalFiles', {
 });
 
 /**
+ * 剪贴板图片窄桥（R197 第 5 项：消息内图片右键「复制图片」）：renderer 只提交一个
+ * data:image/... 的 data URL；main 侧 senderFrame 白名单 + 前缀/长度校验 + 解码非空后
+ * 才写系统剪贴板（不暴露任意二进制写入口，也不接受非图片内容）。
+ */
+export interface ZsClipboardBridge {
+  copyImage(dataUrl: string): Promise<{ ok: boolean; error?: string }>;
+}
+
+contextBridge.exposeInMainWorld('zsClipboard', {
+  copyImage: (dataUrl: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('zs:clipboard.copyImage', dataUrl),
+} as ZsClipboardBridge);
+
+/**
  * 外部链接窄桥（R157）：设置页「操作手册 / GitHub / 主页」——renderer 只提交枚举目标，
  * 解析与白名单在 main（zs:open-app-link）：manual=随包手册文件，其余=写死的 https。
  * **不接受任意 URL/路径**（传非枚举值由 main 拒绝）。

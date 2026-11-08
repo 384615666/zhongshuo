@@ -15,7 +15,7 @@ import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
 import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageCopy, stageLabel, turnStatusCopy } from '../lib/format';
 import type { CollaborationStage, Message, ProjectMember, RouteMode } from '../data/types';
-import { recordLocalOnly, stripInlineAttachmentTokens, useStore } from '../data/store';
+import { recordLocalOnly, stripInlineAttachmentTokens, toast, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
 import { MarkdownView, outlineOf } from '../preview/MarkdownView';
@@ -23,6 +23,11 @@ import { ATTACHMENT_KIND_LABEL, GeneratedFiles, normalizeFormalAttachments } fro
 import { AttachmentThumb, isImageAttachment } from './AttachmentThumb';
 import { viewerDisplayLabel } from '../../../contracts/viewerIdentity';
 import type { MessageRepairLineage } from '../../../contracts/repairLineage';
+import { command } from '../bridge';
+import { copyTextToClipboard } from '../lib/localOpen';
+import {
+  appendImagePathsToText, imagePathLinesForMessage, resolveImageAttachmentAbsolutePath,
+} from '../lib/imageAttachmentPaths';
 
 /* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
 export { ATTACHMENT_KIND_LABEL };
@@ -160,6 +165,43 @@ function MessageAttachments({
 /* ---------------- 消息内图片缩略图（R195 第 1 项） ---------------- */
 
 /**
+ * R197 第 5 项：把图片 data URL 写进系统剪贴板。
+ * 优先主进程窄桥 `zsClipboard.copyImage`（原生剪贴板，Electron 里最可靠）；桥不可用或
+ * 写入失败时退回 canvas + 浏览器剪贴板；两条路都失败返回 false（界面 toast 如实说明，
+ * 不假装已复制）。只在渲染器内处理 data URL，不新增文件系统读取入口。
+ */
+async function copyImageDataUrlToClipboard(dataUrl: string): Promise<boolean> {
+  const bridge = (window as unknown as { zsClipboard?: { copyImage?(url: string): Promise<{ ok: boolean }> } }).zsClipboard;
+  if (bridge != null && typeof bridge.copyImage === 'function') {
+    try {
+      const result = await bridge.copyImage(dataUrl);
+      if (result?.ok === true) return true;
+    } catch { /* 主进程拒绝/不可用——继续走浏览器回退 */ }
+  }
+  try {
+    const image = new Image();
+    image.src = dataUrl;
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('图片解码失败'));
+    });
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (width <= 0 || height <= 0) return false;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (context == null) return false;
+    context.drawImage(image, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((value) => resolve(value), 'image/png'));
+    if (blob == null || navigator.clipboard?.write == null) return false;
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return true;
+  } catch { return false; }
+}
+
+/**
  * 图片附件的消息内缩略图（微信式）。
  *
  * 用户反馈：对话里的图片附件和普通文件一样只是一个文件名 chip，看不出内容。
@@ -172,15 +214,50 @@ function MessageAttachments({
  * 稳定钩子：data-zs-message-images（数量）、data-zs-message-image-layout
  * （single/grid）、data-zs-message-image-open（附件 id）、
  * data-zs-message-image（loading/ready/failed，由 AttachmentThumb 输出）。
+ * R197 第 5 项右键菜单钩子：data-zs-image-menu（菜单容器）、data-zs-copy-image
+ * （复制图片项）、data-zs-copy-image-path（复制图片路径项）。
  */
 function MessageImages({
-  attachments, onOpen,
+  attachments, onOpen, projectRoot,
 }: {
   attachments: readonly FormalAttachmentSummary[];
   onOpen?: (att: FormalAttachmentSummary) => void;
+  /** 项目根目录：解析 sourcePath 形式的图片绝对路径（右键「复制图片路径」用）。 */
+  projectRoot?: string | null;
 }) {
+  const [menu, setMenu] = useState<{ x: number; y: number; attachment: FormalAttachmentSummary; dataUrl: string | null } | null>(null);
   if (attachments.length === 0) return null;
   const single = attachments.length === 1;
+
+  /** R197 第 5 项：复制图片本体（dataUrl 优先用页面上已加载的 <img>，否则向 daemon 取预览字节）。 */
+  const copyImage = async (attachment: FormalAttachmentSummary, dataUrlHint: string | null): Promise<void> => {
+    let dataUrl = typeof dataUrlHint === 'string' && dataUrlHint.startsWith('data:image/') ? dataUrlHint : null;
+    if (dataUrl == null) {
+      try {
+        const preview = await command<{ dataUrl?: string }>('attachment.previewImage', { attachmentId: attachment.artifactId });
+        dataUrl = typeof preview?.dataUrl === 'string' && preview.dataUrl.length > 0 ? preview.dataUrl : null;
+      } catch { dataUrl = null; }
+    }
+    if (dataUrl != null && await copyImageDataUrlToClipboard(dataUrl)) {
+      toast('图片已复制到剪贴板', 'success');
+      return;
+    }
+    toast('复制图片失败，可改用复制图片路径', 'error');
+  };
+
+  /** R197 第 5 项：复制图片绝对路径（sourcePath → 项目路径；托管附件 → attachment.absolutePath）。 */
+  const copyImagePath = async (attachment: FormalAttachmentSummary): Promise<void> => {
+    const path = await resolveImageAttachmentAbsolutePath(
+      { attachmentId: attachment.artifactId, filename: attachment.filename, sourcePath: attachment.sourcePath },
+      projectRoot ?? null,
+    );
+    if (path != null && await copyTextToClipboard(path)) {
+      toast('图片路径已复制', 'success');
+      return;
+    }
+    toast(path == null ? '暂时取不到这张图片的本机路径' : '复制图片路径失败', 'error');
+  };
+
   return (
     <div
       className={`msg-image-grid${single ? ' is-single' : ''}`}
@@ -197,11 +274,46 @@ function MessageImages({
           title={`预览 ${attachment.filename} · 只读预览，不发送给 AI`}
           aria-label={`预览图片 ${attachment.filename}`}
           disabled={onOpen == null}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const img = event.currentTarget.querySelector('img');
+            setMenu({ x: event.clientX, y: event.clientY, attachment, dataUrl: img?.getAttribute('src') ?? null });
+          }}
           onClick={() => onOpen?.(attachment)}
         >
           <AttachmentThumb attachmentId={attachment.artifactId} filename={attachment.filename} kind={attachment.kind} size="lg" messageImage />
         </button>
       ))}
+      {menu != null ? (
+        <Menu anchor={{ x: menu.x, y: menu.y }} onClose={() => setMenu(null)}>
+          <div data-zs-image-menu="1">
+            <div className="menu-label">图片</div>
+            <div
+              data-zs-copy-image="1"
+              onClick={() => {
+                if (menu == null) return;
+                const target = menu;
+                setMenu(null);
+                void copyImage(target.attachment, target.dataUrl);
+              }}
+            >
+              <MenuItem icon="copy" title="把这张图片复制到系统剪贴板">复制图片</MenuItem>
+            </div>
+            <div
+              data-zs-copy-image-path="1"
+              onClick={() => {
+                if (menu == null) return;
+                const target = menu;
+                setMenu(null);
+                void copyImagePath(target.attachment);
+              }}
+            >
+              <MenuItem icon="file-text" title="复制这张图片在本机的完整路径">复制图片路径</MenuItem>
+            </div>
+          </div>
+        </Menu>
+      ) : null}
     </div>
   );
 }
@@ -287,6 +399,8 @@ export function MessageView({
   const [selectionMenu, setSelectionMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   /* R195 第 9 项：本人消息署名用设置里的名字；未设置时仍是「你」，默认观感不变。 */
   const viewerName = useStore((x) => x.viewerName);
+  /** R197 第 3 项：复制消息时把图片附件写成「可读文件名 + 本机绝对路径」——项目根用于 sourcePath。 */
+  const projectRoot = useStore((x) => x.projects.find((project) => project.id === message.projectId)?.rootPath ?? null);
   const viewerLabel = viewerDisplayLabel(viewerName);
   const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const isSystem = message.authorType === 'system';
@@ -294,6 +408,12 @@ export function MessageView({
   const formalAttachments = normalizeFormalAttachments(message.formalAttachments);
   const hasDetail = formalAttachments.some((attachment) => attachment.detailMarkdown === true) || typeof message.detailMarkdown === 'string';
   const roleClass=isSystem?' msg-system':isHuman?' msg-human':' msg-agent';
+  /**
+   * R197 第 1 项：本人只发图片、没有正文时，气泡按图片贴合（CSS 4px 边距 + 图片网格无
+   * 上间距）——不再让照片浮在 10/14 内边距的浅蓝大框里。其余消息保持原气泡。
+   */
+  const imageOnlyBubble = isHuman && visibleBody.trim().length === 0
+    && formalAttachments.some((attachment) => isImageAttachment(attachment.filename, attachment.kind));
   const repairLineage = message.formalRepairLineage?.state === 'repaired'
     && (message.id === message.formalRepairLineage.sourceMessageId || message.id === message.formalRepairLineage.replacementMessageId)
     ? message.formalRepairLineage
@@ -303,9 +423,18 @@ export function MessageView({
   const isRepairReplacement = repairRole === 'replacement' && message.id === repairLineage?.replacementMessageId;
   const copyMessage=async():Promise<void>=>{
     try{
-      if(navigator.clipboard==null)throw Error('clipboard unavailable');
-      const attachmentCopy = (message.formalAttachments ?? []).map((attachment) => attachment.filename).join('\n');
-      await navigator.clipboard.writeText([visibleBody, attachmentCopy].filter((part) => part.trim().length > 0).join('\n'));
+      /*
+       * R197 第 3 项：带图片的消息复制内容 = 正文 + 非图片附件名 + 图片绝对路径
+       *（`[图片] 文件名` 换行绝对路径）；取路径失败只写文件名，不伪造路径。
+       */
+      const imageLines = await imagePathLinesForMessage(message, projectRoot);
+      const attachmentNames = (message.formalAttachments ?? [])
+        .filter((attachment) => !isImageAttachment(attachment.filename, attachment.kind))
+        .map((attachment) => attachment.filename);
+      const base = [visibleBody, attachmentNames.join('\n')].filter((part) => part.trim().length > 0).join('\n');
+      const text = appendImagePathsToText(base, imageLines);
+      if (text.trim().length === 0) throw Error('empty message');
+      if (!await copyTextToClipboard(text)) throw Error('clipboard unavailable');
       setCopyState('copied');
       window.setTimeout(()=>setCopyState('idle'),1400);
     }catch{
@@ -396,7 +525,7 @@ export function MessageView({
               <span className="msg-time">{clockTime(message.createdAt)}</span>
               {message.saved ? <Icon name="bookmark" size={11} className="faint" /> : null}
             </div>
-            {isHuman && readingAids === true ? <div className="msg-human-bubble">{messageContent}</div> : messageContent}
+            {isHuman && readingAids === true ? <div className="msg-human-bubble" data-zs-image-only={imageOnlyBubble ? '1' : undefined}>{messageContent}</div> : messageContent}
             {message.formalReplyExecution&&message.formalReplyExecution.status!=='succeeded'?<div className="faint" data-zs-reply-execution={message.formalReplyExecution.status} role={['failed','blocked','unknown'].includes(message.formalReplyExecution.status)?'alert':undefined}>
               {message.formalReplyExecution.status==='queued'?'已发送，等待 AI 回复':message.formalReplyExecution.status==='running'?'AI 正在回复':message.formalReplyExecution.error??'本次回复未完成'}
               {['failed','blocked','unknown'].includes(message.formalReplyExecution.status)&&message.threadId?<button className="btn sm ghost" onClick={()=>navigate(message.formalReplyExecution?.status==='unknown'?'/recovery':`/thread/${encodeURIComponent(message.threadId!)}?tab=run`)}>查看{message.formalReplyExecution.status==='unknown'?'恢复状态':'运行历史'}</button>:null}
@@ -694,6 +823,8 @@ function MessageFooter({
   onOpenAttachment?: (att: FormalAttachmentSummary) => void;
   onOpenResource?: (resourceId: string, revision?: number) => void;
 }) {
+  /* R197 第 5 项：右键「复制图片路径」需要项目根（sourcePath 以项目内相对路径记录）。 */
+  const projectRoot = useStore((x) => x.projects.find((project) => project.id === message.projectId)?.rootPath ?? null);
   const formalIds = new Set(formalAttachments.map((attachment) => attachment.artifactId));
   const observedSnapshot = message.authorId === 'system:file-snapshot' && message.id.startsWith('msg_observed_');
   /*
@@ -707,7 +838,7 @@ function MessageFooter({
   const fileAttachments = formalAttachments.filter((attachment) => !previewImageIds.has(attachment.artifactId));
   return (
     <div className="msg-attachment-footer">
-      <MessageImages attachments={previewImages} onOpen={onOpenAttachment} />
+      <MessageImages attachments={previewImages} onOpen={onOpenAttachment} projectRoot={projectRoot} />
       {/* 观察到的图片同样不是最终交付：保留原来的「非最终」事实，不因为换成缩略图就丢掉。 */}
       {observedSnapshot && previewImages.length > 0 ? <div className="small faint" data-zs-non-final-file="1">非最终</div> : null}
       <GeneratedFiles attachments={fileAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} nonFinal={observedSnapshot} projectId={message.projectId} />

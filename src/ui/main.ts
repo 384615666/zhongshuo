@@ -6,7 +6,7 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, shell, Notification as ElectronNotification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen, Tray, Menu, nativeImage, shell, Notification as ElectronNotification, clipboard, ClipboardItem } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -984,6 +984,31 @@ let dataOperationStarting = false;
     if (picked.canceled || picked.filePath == null || picked.filePath.length === 0) return { ok: false, cancelled: true };
     atomicWriteFile(picked.filePath, raw);
     return { ok: true, path: picked.filePath, bytes: raw.length };
+  });
+  // 剪贴板图片窄桥（R197 第 5 项：消息内图片右键「复制图片」）：renderer 只提交一个
+  // data:image/... 的 data URL——main 侧校验来源（同 zs:window/saveAs 的 senderFrame 白名单）、
+  // 前缀、长度上限（24MB，与图片上传通道 8MB 的 base64 膨胀裕量相容）并真实解码成功后才写
+  // 系统剪贴板；不暴露任意文件/二进制写入口，失败原因以中文返回（界面用 toast 如实提示）。
+  ipcMain.handle('zs:clipboard.copyImage', async (event, dataUrl: unknown) => {
+    assertTrustedSender(event);
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+      return { ok: false, error: '剪贴板图片格式无效：只支持图片内容' };
+    }
+    if (dataUrl.length > 24 * 1024 * 1024) {
+      return { ok: false, error: '图片过大，无法复制到剪贴板' };
+    }
+    try {
+      const image = nativeImage.createFromDataURL(dataUrl);
+      if (image.isEmpty()) return { ok: false, error: '图片解码失败，无法复制到剪贴板' };
+      // Electron 44 起剪贴板走 W3C 风格异步 Clipboard API（write(ClipboardItem[])）；旧式
+      // writeImage 已不在类型/运行面。这里把已解码图片统一转 PNG Blob 写入，与渲染器
+      // navigator.clipboard 的 ClipboardItem 同构，粘贴到聊天工具/图片编辑器即真实图片。
+      const png = image.toPNG();
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })]);
+      return { ok: true };
+    } catch (cause) {
+      return { ok: false, error: `系统剪贴板写入失败：${cause instanceof Error ? cause.message : String(cause)}` };
+    }
   });
   const pushWindowState = (): void => {
     if (win.isDestroyed()) return;
