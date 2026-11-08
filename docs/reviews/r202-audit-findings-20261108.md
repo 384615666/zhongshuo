@@ -74,3 +74,13 @@
 分支仍为 `r202-audit`、HEAD `4538a42`。最近已有提交：`4538a42`（R201 交付记录）、`31a6f66`（R201 修复）、`0e9f48c`（R200 交付记录）。工作区不干净：4 个生产文件、1 个已有测试文件修改，新增 2 个行为测试和本报告，共 8 个本轮文件。测试留下的临时 profile 已移入 ignored `dist/r202-audit/fixture-leftover-r115`，没有遗留用户文件改动。
 
 可审查补丁：`dist/r202-audit/r202-fixes.patch`（包括上述 8 个文件；不需要 Git 索引即可生成）。所有日志、对照报告、测试构建和补丁均在本 worktree 内；后续应在允许写该 worktree Git 索引的会话提交这些文件。
+
+## 主控复核（2026-11-08，正常权限环境）
+
+Codex 审计在受限环境无法提交（worktree Git 索引不可写），主控代为提交为 `9455277`（8 个文件：4 个生产修复 + 1 个既有测试增强 + 2 个新行为测试 + 本报告）。原报告第 5–8 项的 187 项失败来自该环境的权限/Electron GPU 限制，不代表产品回归；主控在正常环境复核如下：
+
+- 定向：`node node_modules/vitest/vitest.mjs run tests/browser/localFileLinksR202.test.ts tests/browser/imageAttachmentPathsR202.test.ts tests/integration/imageAttachmentPathR197.test.ts tests/integration/r201UiFeedback.test.ts` → **4 文件 / 22 项通过**。
+- 已跟踪全量（382 文件：`git ls-files tests/unit tests/integration tests/browser` 的 `*.test.ts`，排除 `githubSandbox.test.ts`，`--maxWorkers=4`）→ **380 通过 / 2 跳过；3410 项通过 / 3 预期失败 / 16 跳过 / 0 失败**（约 239 秒）。
+- `tsc --noEmit`（根）0；`tsc --noEmit -p tsconfig.hifi.json` 0；`build-ui` / `pack-daemon` 通过。
+- 界面回归（正常 GPU）：`capture-r201-ui.cjs` 21/21、`capture-r193-ui.cjs` 25/25、`capture-r195-ui.cjs` 41/41、`capture-r197-ui.cjs` 23/23。
+- 结论：F1–F4 修复通过复核，纳入 beta.47；本报告的"未解决及验证限制"仅保留为受限环境说明，不阻塞发版。
