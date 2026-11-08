@@ -1,11 +1,6 @@
 /**
- * 线程内的就地导航（§17.1 + 用户反馈）
- *
- * 设计取向：任务详情、研讨详情、运行详情、成果预览**都在回复串的 tab 里就地渲染**，
- * 不再有独立页面，也不再弹覆盖层。好处是点开详情不会丢掉房间、回复串与阅读位置。
- *
- * 因此"打开某个实体"这类动作不再是 `navigate('/task/xxx')`，而是
- * "切到该实体所属房间与线程，并选中对应 tab"。
+ * 串内导航：回复、成果与参与成员。
+ * 旧任务/运行/活动/研讨链接保留解析，统一落到成员页；交付链接保留成果确认。
  */
 
 import type { AppState, ThreadTabKey } from '../data/types';
@@ -35,38 +30,11 @@ export function isThreadTabKey(v: string | undefined): v is ThreadTabKey {
   return Boolean(v && (THREAD_TABS as string[]).includes(v));
 }
 
-/* ============================================================
-   顶层视图与「详情」分组（界面信息减负施工任务书 §2 / §8）
-
-   回复串原来有 8 个常驻页签（回复/成果/活动/成员/任务详情/交付/研讨详情/运行详情）。
-   减负后常驻只剩三个视图，其余进「详情」的分组。
-
-   URL 仍然沿用**既有 tab 键**（不新增、不改名）：
-   界面从键推出顶层视图与分组，旧链接因此原样可用、前进/后退不用迁移，
-   站内既有的 9 处 `?tab=…` 深链也不必逐个改写。
-   ============================================================ */
-
-/** 常驻顶层视图：回复 / 成果（讨论串为附件）/ 详情 */
+/** details 是内部兼容键；界面常驻入口显示「参与成员」。 */
 export type ThreadView = 'replies' | 'artifacts' | 'details';
 
-/** 「详情」内部的分组。默认概况，其余按需展开/定位 */
-export type DetailsSection =
-  | 'overview'
-  | 'members'
-  | 'activity'
-  | 'run'
-  | 'delivery'
-  | 'deliberation';
-
-/** 分组导航顺序（也是"自动展开/定位"的目标顺序） */
-export const DETAILS_SECTIONS: DetailsSection[] = [
-  'overview',
-  'members',
-  'activity',
-  'run',
-  'delivery',
-  'deliberation',
-];
+export type DetailsSection = 'members' | 'delivery';
+export const DETAILS_SECTIONS: DetailsSection[] = ['members', 'delivery'];
 
 /** 旧 tab 键 → 顶层视图（任务书 §8 映射表） */
 export function viewOfTab(tab: ThreadTabKey): ThreadView {
@@ -75,31 +43,24 @@ export function viewOfTab(tab: ThreadTabKey): ThreadView {
   return 'details';
 }
 
-/** 旧 tab 键 → 详情分组；非详情键返回 undefined */
+/** 旧详情链接落到成员页；交付链接继续保留成果确认入口。 */
 export function detailsSectionOfTab(tab: ThreadTabKey): DetailsSection | undefined {
   switch (tab) {
-    case 'task': return 'overview';
+    case 'task':
+    case 'activity':
+    case 'run':
+    case 'deliberation':
     case 'members': return 'members';
-    case 'activity': return 'activity';
-    case 'run': return 'run';
     case 'delivery': return 'delivery';
-    case 'deliberation': return 'deliberation';
     default: return undefined;
   }
 }
 
-/** 顶层视图（＋详情分组）→ 写回 URL 的 tab 键。保持既有键名，不迁移 URL */
-export function tabFor(view: ThreadView, section: DetailsSection = 'overview'): ThreadTabKey {
+/** 顶层视图写回既有 URL 键。 */
+export function tabFor(view: ThreadView, section: DetailsSection = 'members'): ThreadTabKey {
   if (view === 'replies') return 'replies';
   if (view === 'artifacts') return 'artifacts';
-  switch (section) {
-    case 'members': return 'members';
-    case 'activity': return 'activity';
-    case 'run': return 'run';
-    case 'delivery': return 'delivery';
-    case 'deliberation': return 'deliberation';
-    default: return 'task';
-  }
+  return section;
 }
 
 export interface ThreadTarget {

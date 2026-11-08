@@ -12,7 +12,7 @@ import {RecoveryPanel} from '../../../src/ui/hifi/components/RecoveryPanel.tsx';
 import * as store from '../../../src/ui/hifi/data/store.ts';
 import {navigate} from '../../../src/ui/hifi/lib/router.ts';
 const calls=[],opened=[],legacy=[];
-let undoMode='succeeded',undoRows=[];
+let undoMode='succeeded',undoRows=[],memberIds=['m'],membershipVersion=1;
 const member={id:'m',projectId:'p',profileId:'',displayName:'测试成员',ordinal:1,principalType:'agent',enabled:true,workState:'idle',model:'fixture',effort:'low',internalSubagents:false,isCoordinatorDefault:true};
 const room={id:'r',projectId:'p',conversationId:'rc',name:'测试房间',coordinatorMemberId:'m',memberIds:['m'],revision:1,unread:0};
 const thread={id:'t',projectId:'p',roomId:'r',conversationId:'rc',anchorMessageId:'root',rootTaskId:'rt',status:'open',lastMessageSeq:0,revision:1};
@@ -42,12 +42,13 @@ window.zs={command:async env=>{
   case 'recovery.status':return success({gateHeld:false,unknownTurns:[],pendingRelease:[],activeUndos:undoRows,interruptedRuns:[],pendingDispatchCount:0,pendingDispatchKeys:[],heldLeases:[],stopRecord:null});
   case 'changeset.undo':await new Promise(resolve=>setTimeout(resolve,100));if(undoMode==='error')return {ok:false,error:{code:'WORKSPACE_BUSY',message:'该项目仍有文件修改正在进行'}};if(undoMode!=='failed')undoRows=[];return success({status:undoMode,manualPaths:undoMode==='succeeded'?[]:['result.txt'],steps:[]});
   case 'navigation.preferences.update':return success({});
-  case 'thread.get':return p.threadId==='t'?success({thread,anchor,readSeq:0}):{ok:false,error:{code:'RESOURCE_NOT_FOUND',message:'找不到该对话串'}};
+  case 'thread.get':return p.threadId==='t'?success({thread,anchor,lastReadSeq:0,members:{projectId:'p',threadId:'t',roomId:'r',version:'v'+membershipVersion,memberIds,eligibleMemberIds:memberIds,runningMemberIds:[]}}):{ok:false,error:{code:'RESOURCE_NOT_FOUND',message:'找不到该对话串'}};
   case 'thread.history':return success({items:[],nextCursor:null,rootAttachments:[]});
   case 'thread.subscriptions':return success({items:[]});
-  case 'thread.membership':return success({projectId:'p',threadId:'t',roomId:'r',version:'v1',memberIds:['m'],eligibleMemberIds:['m'],runningMemberIds:[]});
-  case 'task.get':return success({task});
-  case 'room.pool':return success({items:[],nextCursor:null});
+  case 'thread.membership':return success({projectId:'p',threadId:'t',roomId:'r',version:'v'+membershipVersion,memberIds,eligibleMemberIds:memberIds,runningMemberIds:[]});
+  case 'thread.members.change':if(p.expectedVersion!=='v'+membershipVersion)throw Error('CAS mismatch');memberIds=p.action==='remove'?memberIds.filter(id=>id!==p.memberId):[...memberIds,p.memberId];membershipVersion++;return success({});
+  case 'task.get':return success({task:{...task,room_id:'r',conversation_thread_id:'t',room_task_number:1,review_policy:'auto_deliver',owner_member_id:'m'},activeRun:task.activeRun});
+  case 'room.pool':return success({items:[{threadId:'t',anchorMessageId:'root',taskId:'rt',taskStatus:'DONE',taskTitle:task.title,taskRevision:1,roomTaskNumber:1,lastMessageSeq:0,body:anchor.body,createdAt:1,latestRun:task.latestRun}],nextCursor:null});
   case 'room.list':return success({items:[room]});
   case 'room.members':return success({memberIds:['m'],members:[member]});
   case 'run.progress':return success({items:[]});
@@ -71,7 +72,7 @@ window.r153={calls,opened,legacy,mount,navigate,
  recover:()=>{conversations[0].interruptedTasks=[{taskId:'recover-dt',title:'保留的中断任务',lastRunId:'failed-run',lastRunStatus:'FAILED',recoverable:true,blockReason:null}];store.setState(s=>({...s,dms:dmRows()}));},
  snapshot:()=>({text:document.body.innerText,hash:location.hash,menu:document.querySelector('[role="menu"]')?.textContent,
   titles:[...document.querySelectorAll('[title]')].map(el=>el.title).join('\n'),legacyOn:document.body.classList.contains('legacy-on'),legacy:legacy.slice(),
-  selected:[...document.querySelectorAll('[aria-selected="true"]')].map(el=>el.textContent),formalDetails:!!document.querySelector('.thread-details .details-subnav[aria-label="详情分组"]'),dmTitles:store.getState().dms.map(c=>c.title),records:!!document.querySelector('[data-zs-dm-task-records]'),
+  selected:[...document.querySelectorAll('[aria-selected="true"]')].map(el=>el.textContent),members:!!document.querySelector('[data-zs-thread-members]'),formalDetails:!!document.querySelector('.thread-details .details-subnav[aria-label="详情分组"]'),dmTitles:store.getState().dms.map(c=>c.title),records:!!document.querySelector('[data-zs-dm-task-records]'),
   archived:conversations[0].archivedAt!=null,calls:calls.slice(),opened:opened.slice()})};
 `;
 
@@ -129,9 +130,21 @@ app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:144
    await js('r153.mount("compat-thread")');await until('r153.snapshot().text.includes("更多任务信息")','compat details');
    await js('document.querySelector("details.panel.info:last-of-type").open=true');await click(label);s=await snap();
    check('compat-'+tab+'-links-to-current-thread',s.hash==='#/thread/t?tab='+tab&&!s.legacyOn,s.hash);
-   await js('r153.mount("app")');await until('!!document.querySelector(".details-subnav")','current thread details');await pause(100);s=await snap();
-   check('current-'+tab+'-route-shows-details',!s.legacyOn&&s.formalDetails&&!s.text.includes('更多任务信息')&&s.selected.some(text=>text.includes(tab==='deliberation'?'任务概况':label)),{selected:s.selected,formalDetails:s.formalDetails,text:s.text});
+   await js('r153.mount("app")');await until('r153.snapshot().members','current thread members');await pause(100);s=await snap();
+   check('current-'+tab+'-route-shows-members',!s.legacyOn&&!s.formalDetails&&!s.text.includes('更多任务信息')&&s.selected.some(text=>text.includes('参与成员')),{selected:s.selected,text:s.text});
   }
+  await js('r153.navigate("/thread/t")');await until('!!document.querySelector(".msg-list.is-replies")','thread replies');
+  const detailsReads=(await snap()).calls.filter(c=>c.method==='task.details').length;
+  await click('参与成员');await until('r153.snapshot().members&&r153.snapshot().text.includes("移出")','member list');s=await snap();
+  check('member-page-hides-task-details',!s.formalDetails&&!['实际执行成员','任务概况','刷新详情','运行详情','研讨记录'].some(text=>s.text.includes(text))&&!s.selected.some(text=>text.trim()==='详情'),s.text);
+  check('member-page-does-not-read-task-details',s.calls.filter(c=>c.method==='task.details').length===detailsReads);
+  await capture('thread-members');
+  await click('移出');await until('r153.snapshot().text.includes("还没有 AI 参与")','member removed');s=await snap();
+  check('member-remove-keeps-scoped-version',s.calls.some(c=>c.method==='thread.members.change'&&c.params.threadId==='t'&&c.params.memberId==='m'&&c.params.action==='remove'&&c.params.expectedVersion==='v1'));
+  await click('添加到本串');await until('r153.snapshot().text.includes("移出")','member restored');s=await snap();
+  check('member-add-uses-refreshed-version',s.calls.some(c=>c.method==='thread.members.change'&&c.params.action==='add'&&c.params.expectedVersion==='v2'));
+  await js('r153.navigate("/thread/t?tab=delivery")');await until('!!document.querySelector("[data-zs-thread-delivery]")','delivery review');s=await snap();
+  check('delivery-review-remains-under-results',!s.members&&!s.formalDetails&&s.selected.some(text=>text.includes('成果')),s.text);
   await js('r153.navigate("/dm/c2")');await until('!!document.querySelector("[data-zs-dm-ops]")','second DM');await menu();s=await snap();
   check('switch-DM-does-not-restore-transition-entry',!s.menu.includes('原界面')&&!s.legacyOn,s.menu);
   await js('r153.navigate("/thread/missing")');await until('r153.snapshot().text.includes("找不到该对话串")','missing thread error');s=await snap();
