@@ -28,9 +28,9 @@
 
 ## 交付
 
-- 版本 `0.1.3-beta.48`（numericVersion `0.1.3.48`），程序提交 PENDING_COMMIT。
-- 干净 worktree `dist/r203-source`（status 0，`dirty=false`）构建：便携镜像 BUILD `PENDING_BUILD1`（clean、PENDING_FILES1 文件 MANIFEST）、安装器 BUILD `PENDING_BUILD2`（安装镜像 PENDING_FILES2 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。
-- 安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.48-x64.exe` **PENDING_BYTES 字节**，SHA256 `PENDING_SHA`，未签名；PENDING_PUSH。
+- 版本 `0.1.3-beta.48`（numericVersion `0.1.3.48`），程序提交 `fe56893`。
+- 干净 worktree `dist/r203-source`（status 0，`dirty=false`）构建：便携镜像 BUILD `bld_cc3181c6c7cef99c`（clean、633 文件 MANIFEST）、安装器 BUILD `bld_d30809365a039de5`（安装镜像 670 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。
+- 安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.48-x64.exe` **160,451,966 字节**，SHA256 `3c8eedd748d0d4960f8c9b2155d4f5b36809970f9c3d55feeae1d57a8079f4d8`，未签名；本记录提交后推送 `main`（`6bc5a14` + `fe56893` + 记录提交）、创建 tag `v0.1.3-beta.48` 与 GitHub Release「众说 0.1.3-beta.48」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/0.1.3-beta.48.md`）；用户自行安装。
 
 ## 已知边界
 
