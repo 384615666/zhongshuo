@@ -35,10 +35,16 @@ export function repairLegacyAppShortcuts(programs:string,exe:string,icon:string,
   return repaired;
 }
 
-/** Registry branding belongs to this app's AUMID, not to the notification body.
- * reg.exe receives structured arguments; executable/icon paths are never code. */
-export function windowsIdentityRegistration(appId:string,icon:string):string[][]{
-  if(!/^com\.zhongshuo\.[A-Za-z0-9._-]{1,140}$/.test(appId)||!win32.isAbsolute(icon))throw Error('Invalid application notification identity');
+/**
+ * Toast 身份图标（R198）：Windows 桌面通知的应用图标/名称来自 AUMID **快捷方式**；
+ * 一旦 `HKCU\Software\Classes\AppUserModelId\<AUMID>` 键存在，Toast 平台会优先用该键的
+ * `IconUri`/显示名，而实测该键的 IconUri 指向随包 ICO/PNG 时都渲染成黑色方块/占位字形
+ * （删掉整键后同一 AUMID 的快捷方式图标与名称能正常显示）。所以这里不再写 DisplayName/
+ * IconUri，而是**删除**本应用 AUMID 的这个键，让 Windows 回退到先装好的「众说」快捷方式。
+ * 只处理本应用 scoped AUMID；命令参数结构化传给 reg.exe，不拼接命令串。
+ */
+export function windowsNotificationIdentityReset(appId:string):string[][]{
+  if(!/^com\.zhongshuo\.[A-Za-z0-9._-]{1,140}$/.test(appId))throw Error('Invalid application notification identity');
   const key=`HKCU\\Software\\Classes\\AppUserModelId\\${appId}`;
-  return [['add',key,'/v','DisplayName','/t','REG_SZ','/d',WINDOWS_APP_NAME,'/f'],['add',key,'/v','IconUri','/t','REG_SZ','/d',icon,'/f']];
+  return [['delete',key,'/f']];
 }

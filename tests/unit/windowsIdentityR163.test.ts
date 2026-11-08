@@ -1,6 +1,9 @@
 import {describe,it,expect} from 'vitest';
 import type {ShortcutDetails} from 'electron';
-import {repairLegacyAppShortcuts,windowsIdentityRegistration,windowsRelaunchCommand,type ShortcutIo} from '../../src/ui/windowsAppIdentity.ts';
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {repairLegacyAppShortcuts,windowsNotificationIdentityReset,windowsRelaunchCommand,type ShortcutIo} from '../../src/ui/windowsAppIdentity.ts';
 
 const programs='C:\\User\\Programs',exe='C:\\Apps\\Zhongshuo\\Zhongshuo.exe',icon='C:\\Apps\\Zhongshuo\\logo.ico',appId='com.zhongshuo.desktop.app';
 function fixture(){
@@ -32,10 +35,19 @@ describe('R163 Windows identity repair',()=>{
     repairLegacyAppShortcuts(programs,exe,icon,appId,{...f.io,write:()=>false});expect(f.removed).toEqual([]);
     repairLegacyAppShortcuts(programs,exe,icon,appId,{...f.io,write:(path,value)=>f.io.write(path,{...value,toastActivatorClsid:'lost'})});expect(f.removed).toEqual([]);
   });
-  it('registers only a scoped AUMID and passes a quoted or spaced icon path as a single literal argument',()=>{
-    const special="C:\\Apps\\it’s $mine\\logo.ico",commands=windowsIdentityRegistration(appId,special);
-    expect(commands.some(args=>args.includes('DisplayName')&&args.includes('众说'))).toBe(true);
-    expect(commands.some(args=>args.includes('IconUri')&&args.includes(special))).toBe(true);
-    expect(()=>windowsIdentityRegistration('foreign.app',special)).toThrow();expect(()=>windowsIdentityRegistration(appId,'relative.ico')).toThrow();
+  it('resets the scoped AUMID key so Windows falls back to the shortcut icon and name',()=>{
+    // R198：Toast 平台一旦看到 AUMID 注册表键就用它的 IconUri/显示名（实测渲染成黑块/占位
+    // 字形）；删掉整键后同一 AUMID 的快捷方式图标 + 名称正常。这里只允许删除本应用 scoped 键。
+    const commands=windowsNotificationIdentityReset(appId);
+    expect(commands).toEqual([['delete','HKCU\\Software\\Classes\\AppUserModelId\\'+appId,'/f']]);
+    expect(()=>windowsNotificationIdentityReset('foreign.app')).toThrow();
+    expect(()=>windowsNotificationIdentityReset('com.zhongshuo.')).toThrow();
+  });
+  it('main process no longer writes DisplayName/IconUri for the AUMID',()=>{
+    const root=resolve(fileURLToPath(new URL('../..',import.meta.url)));
+    const main=readFileSync(resolve(root,'src/ui/main.ts'),'utf8');
+    expect(main).toContain('windowsNotificationIdentityReset(desktopAppId)');
+    expect(main).not.toContain('windowsIdentityRegistration');
+    expect(main).not.toContain('Notification identity registration');
   });
 });

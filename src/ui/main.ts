@@ -14,7 +14,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { ConnectionMonitor } from './connectionMonitor.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { spawn,spawnSync, type ChildProcess } from 'node:child_process';
-import {repairLegacyAppShortcuts,windowsIdentityRegistration,windowsRelaunchCommand,WINDOWS_APP_NAME} from './windowsAppIdentity.ts';
+import {repairLegacyAppShortcuts,windowsNotificationIdentityReset,windowsRelaunchCommand,WINDOWS_APP_NAME} from './windowsAppIdentity.ts';
 import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
 import type { PipeClient } from '../contracts/daemonIpc.ts';
 import {claimActiveDataOperation,dataControlPaths,dataLocationHash,loadDataCopyJob,prepareDataCopyJob,processAlive,readActiveDataOperation,readDataJobStatus,readDataLocation,reconcileInterruptedDataOperation,releaseActiveDataOperation,type DataCopyJob,type DataJobStatus} from '../contracts/dataCopyJob.ts';
@@ -565,15 +565,18 @@ function removeStaleStartMenuShortcuts(): void {
   });
   if(repaired.length)try{appendFileSync(join(app.getPath('userData'),'stale-start-menu-cleanup.log'),`${new Date().toISOString()} repaired ${repaired.length} owned shortcut(s)\n`);}catch{/* diagnostic only */}
 }
-function registerNotificationIdentity():void{
+/**
+ * R198：删除本应用 AUMID 的注册表键，让 Windows 通知回退到「众说」快捷方式的图标与名称。
+ * 旧实现往该键写 DisplayName/IconUri，但 Toast 平台用 IconUri 渲染时会显示黑色方块/占位
+ * 字形（同一 AUMID 删键后快捷方式图标正常）。键不存在时 reg delete 失败属正常，忽略。
+ */
+function resetNotificationIdentity():void{
   if(process.platform!=='win32'||!installedDesktop)return;
   try{
-    const candidate=resolveDesktopIconPath(),icon=existsSync(candidate)?candidate:process.execPath;
-    for(const args of windowsIdentityRegistration(desktopAppId,icon)){
-      const result=spawnSync('reg.exe',args,{windowsHide:true,stdio:'ignore'});
-      if(result.status!==0)throw Error('Windows notification identity registration failed');
+    for(const args of windowsNotificationIdentityReset(desktopAppId)){
+      spawnSync('reg.exe',args,{windowsHide:true,stdio:'ignore'});
     }
-  }catch(error){process.stderr.write(`[desktop] ${error instanceof Error?error.message:'Notification identity registration failed'}\n`);}
+  }catch(error){process.stderr.write(`[desktop] ${error instanceof Error?error.message:'Notification identity reset failed'}\n`);}
 }
 
 app.whenReady().then(async () => {
@@ -582,7 +585,7 @@ app.whenReady().then(async () => {
     dialog.showErrorBox('路径过长','安装或数据目录路径过长，请缩短路径后重新打开众说。');app.quit();return;
   }
   if (installedConfigurationError != null) throw Error(installedConfigurationError);
-  registerNotificationIdentity();
+  resetNotificationIdentity();
   removeStaleStartMenuShortcuts();
   // 系统有时在窗口出现后才把开始菜单项落盘：启动后再复查一次（幂等、失败忽略）。
   const staleShortcutTimer = setTimeout(removeStaleStartMenuShortcuts, 4_000);
