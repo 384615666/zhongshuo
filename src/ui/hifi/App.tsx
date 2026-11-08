@@ -576,7 +576,7 @@ export default function App() {
                 title="文件与 Git：查看项目目录与 Git 状态"
                 onClick={() => navigate(project != null ? `/project/${project.id}/files` : '/files')}
               >
-                <Icon name="diff" size={14} />
+                <Icon name="file-text" size={14} />
                 <span className="side-item-label">文件与 Git</span>
               </button>
               <button
