@@ -48,7 +48,8 @@ writeFileSync(
   ['tokens.css', 'base.css', 'components.css', 'preview.css', 'titlebar.css', 'h1-overrides.css',
     'r170-preview.css', 'r170-members.css', 'r170-board.css', 'r170-settings.css',
     'r183-project-rail.css', 'r183-sidebar-order.css', 'r183-board.css',
-    'r188-files.css', 'r188-library.css', 'r189-consistency.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
+    'r188-files.css', 'r188-library.css', 'r189-consistency.css',
+    'r195-message.css', 'r195-composer.css', 'r195-room.css', 'r195-pages.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
   'utf8',
 );
 

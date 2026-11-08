@@ -979,11 +979,13 @@ export function GitPage({
           </div>
         </div>
 
-        {/* 最近一次操作失败：不静默（§16.5）。成功态已并入状态条，不在这里重复占一块。 */}
+        {/* 最近一次操作失败：不静默（§16.5）。成功态已并入状态条，不在这里重复占一块。
+            R195（用户图3）：非 Git 目录是中性形态（上面的空态已说明并提前返回），不会走到这里；
+            失败原因经 userFacingSystemText 清洗，原始 Git stderr 不上屏。 */}
         {git.lastOp && !git.lastOp.ok ? (
           <div className="panel danger" style={{ marginBottom: 14 }}>
             <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
-            {git.lastOp.detail}
+            {userFacingSystemText(git.lastOp.detail)}
             <span className="small faint"> · {relTime(git.lastOp.at)}</span>
           </div>
         ) : null}

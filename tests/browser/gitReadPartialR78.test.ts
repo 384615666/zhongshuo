@@ -73,3 +73,32 @@ describe('R78 Git 部分只读失败保留事实', () => {
     expect(getState().git.p1?.status.map((e) => e.path)).toEqual(['new.md']);
   });
 });
+
+/** R195 用户图3：非 Git 目录不是读取失败——bridge 清洗后的中文消息 / error.code 都要能识别。 */
+describe('R195 非 Git 目录是中性形态', () => {
+  it('按 error.code 或中文消息识别为中性，清掉读失败与上次状态失败，不弹错', async () => {
+    // 先造一次真实读取失败：它必须如实留下（不能被吞成「非 Git」）。
+    vi.stubGlobal('window', { zs: { command: async () => fail('仓库索引不可读') } });
+    await refreshGitState('p1');
+    expect(getState().git.p1?.notARepo).toBeUndefined();
+    expect(getState().git.p1?.readErrors?.status).toContain('仓库索引不可读');
+    expect(getState().git.p1?.lastOp).toMatchObject({ op: 'git.status', ok: false });
+
+    const replies = [
+      { code: 'NOT_A_GIT_REPO', message: '此目录不是 Git 仓库' },
+      { code: 'ERROR', message: '目录不是 git 仓库' },
+      { code: 'ERROR', message: 'NOT_A_GIT_REPO: 目录不是 git 仓库：fatal: not a git repository : .git' },
+    ];
+    for (const reply of replies) {
+      vi.stubGlobal('window', { zs: { command: async () => ({ ok: false, error: reply }) } });
+      await refreshGitState('p1');
+      const g = getState().git.p1 as GitState;
+      expect(g.notARepo, reply.message).toBe(true);
+      expect(g.readErrors, reply.message).toBeUndefined();
+      expect(g.lastOp, reply.message).toBeUndefined();
+      expect(g.status, reply.message).toEqual([]);
+      expect(getState().projects.find((p) => p.id === 'p1')?.isGit, reply.message).toBe(false);
+      expect(getState().ui.toast, reply.message).toBeUndefined();
+    }
+  });
+});

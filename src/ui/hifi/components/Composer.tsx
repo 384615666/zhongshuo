@@ -2710,6 +2710,7 @@ export function Composer({
                 onClick={(event) => setModeMenuAnchor(anchorFromElement(event.currentTarget))}
                 aria-haspopup="dialog"
                 title="独立研讨：先独立分析，再互评汇总；点击调整成员"
+                data-zs-deliberation-chip="1"
               >
                 <Icon name="users" size={11} />
                 独立研讨 · {effectiveMentionIds.includes('all') ? '全体' : `${effectiveMentionIds.filter((id) => id !== 'all').length}人`}
@@ -2959,14 +2960,12 @@ export function Composer({
               {formalLimits?.access?(writeHint?.key===writeContext?userFacingSystemText(writeHint.error??writeHint.reason):'正在读取 AI 执行权限'):<>当前：{currentMode.label} · {currentMode.v01.available?currentMode.desc:currentMode.v01.reason}</>}
             </div>
           </div>
-          {canUseDeliberate&&!inputDisabledReason?<MenuItem icon="users" onClick={()=>{
-            if (deliberate) {
-              setModeMenuAnchor(runSettingsAnchor);
-            } else {
-              enableDeliberate();
-            }
+          {/* R195 第 8 项：成员名单只在「独立研讨 · N人」芯片打开的成员弹层里设置。
+              这里只保留模式的开启 / 关闭，不再出现「调整独立研讨成员」这一重复入口。 */}
+          {canUseDeliberate && !deliberate && !inputDisabledReason ? <MenuItem icon="users" onClick={() => {
+            enableDeliberate();
             setRunSettingsAnchor(null);
-          }} hint={deliberate?'已开启':undefined}>{deliberate?'调整独立研讨成员':'独立研讨'}</MenuItem>:null}
+          }}>独立研讨</MenuItem> : null}
           {canUseDeliberate && deliberate && !inputDisabledReason ? <MenuItem icon="users" onClick={() => {
             setDeliberate(false);
             setRunSettingsAnchor(null);
@@ -2980,20 +2979,32 @@ export function Composer({
           <div className="composer-mode-menu-note">
             只使用当前{target.kind==='thread'?'回复串':'房间'}内可用成员。
           </div>
-          <div className="composer-mode-members">
+          {/* R195 第 6 项：成员行统一单行等高——勾选列 / 名称列 / 运行时提示列三列对齐，
+              再长的运行时提示也只省略号截断（全文走 title），不再把整行折成两行。
+              样式见 styles/r195-composer.css。 */}
+          <div className="composer-mode-members" data-zs-deliberation-members="1">
             {members.filter((member) => availableDeliberateIds.includes(member.id)).map((member) => {
               const selected = deliberateMemberIds.includes(member.id);
+              const runtimeText = runtimeDisplayOf(member);
               return (
                 <button
                   key={member.id}
                   type="button"
-                  className={`menu-item${selected ? ' active' : ''}`}
+                  className={`menu-item composer-mode-member${selected ? ' active' : ''}`}
                   onClick={() => toggleDeliberateMember(member.id)}
                   aria-pressed={selected}
+                  title={`${memberLabel(member)} · ${runtimeText}`}
+                  data-zs-deliberation-member-row={member.id}
                 >
-                  <Icon name={selected ? 'check-circle' : 'circle'} size={14} />
-                  <span className="truncate" style={{ flex: 1 }}>{memberLabel(member)}</span>
-                  <span className="hint">{runtimeDisplayOf(member)}</span>
+                  <span className="composer-mode-member-check" data-zs-deliberation-member-check="1">
+                    <Icon name={selected ? 'check-circle' : 'circle'} size={14} />
+                  </span>
+                  <span className="composer-mode-member-name" data-zs-deliberation-member-name="1">{memberLabel(member)}</span>
+                  <span
+                    className="hint composer-mode-member-runtime"
+                    title={runtimeText}
+                    data-zs-deliberation-member-runtime="1"
+                  >{runtimeText}</span>
                 </button>
               );
             })}

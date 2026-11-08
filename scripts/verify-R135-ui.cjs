@@ -87,7 +87,8 @@ function renderComposer(){const key=draftKey();reactRoot.render(frame(createElem
 }})));}
 async function mountComposer(saved={}){await unmount();store.setDraftFull(draftKey(),{body:'@分析员 请保留这份草稿',mentions:[ids[0]],attachments:[],access:'auto_edit',sendAs:'ai',collaboration:'deliberate',deliberateMemberIds:[ids[0],ids[1]],budgetMaxTurns:30,analysisOnly:true,...saved});renderComposer();await until(()=>editor());await pause(60);}
 async function runMenu(){document.querySelector('[aria-label="本次运行设置"]').click();await until(()=>document.querySelector('.menu-label')?.textContent==='本次运行设置');await pause(25);}
-async function membersMenu(){await runMenu();clickText('调整独立研讨成员');await until(()=>document.querySelector('.menu-label')?.textContent==='独立研讨成员');await pause(25);}
+/* R195 第 8 项：成员名单只由「独立研讨 · N人」芯片打开，不再在运行设置菜单里重复给入口。 */
+async function membersMenu(){await until(()=>document.querySelector('.composer-mode-chip'));document.querySelector('.composer-mode-chip').click();await until(()=>document.querySelector('.menu-label')?.textContent==='独立研讨成员');await pause(25);}
 function draftFields(){const d=store.getDraftFull(draftKey());return {body:d.body,mentions:d.mentions,attachments:d.attachments,access:d.access,sendAs:d.sendAs,budgetMaxTurns:d.budgetMaxTurns,analysisOnly:d.analysisOnly,deliberateMemberIds:d.deliberateMemberIds};}
 async function send(label,collaboration){const before=sends.length;document.querySelector('.composer-send').click();await until(()=>sends.length===before+1);await pause(30);const p=sends.at(-1);eq(label+'_collaboration',p.collaboration,collaboration);eq(label+'_access',p.access,'auto_edit');eq(label+'_legacy_single_mode_not_sent',p.analysisOnly,undefined);return p;}
 let selectedFields;
@@ -105,11 +106,12 @@ window.runComposer=async()=>{
   eq('deliberate_envelope_mode',envelopes.at(-1).params.collaboration,'deliberate');
   eq('deliberate_envelope_budget',envelopes.at(-1).params.deliberationBudget,{maxTurns:30});
   await runMenu();const primary=document.querySelector('.menu');
-  eq('primary_contains_parallel_actions',['调整独立研讨成员','回到自然协作'].every(text=>[...primary.querySelectorAll(':scope > button')].some(b=>b.textContent.trim().startsWith(text))),true);
+  // R195 第 8 项：运行设置只剩「回到自然协作」，成员调整入口只在芯片弹层里。
+  eq('primary_contains_natural_exit_only',[...primary.querySelectorAll(':scope > button')].some(b=>b.textContent.trim().startsWith('回到自然协作'))&&!primary.textContent.includes('调整独立研讨成员'),true);
   eq('opening_primary_keeps_draft',draftFields(),selectedFields);
   eq('chip_tooltip_only_member_action',document.querySelector('.composer-mode-chip').title,'独立研讨：先独立分析，再互评汇总；点击调整成员');
 };
-window.memberScreenshot=async()=>{clickText('调整独立研讨成员');await until(()=>document.querySelector('.composer-mode-members'));};
+window.memberScreenshot=async()=>{document.querySelector('.composer-mode-chip').click();await until(()=>document.querySelector('.composer-mode-members'));};
 window.finishComposer=async()=>{
   clickText('完成');await runMenu();const beforeWrites=calls.length,beforeSends=sends.length;clickText('回到自然协作');await pause(40);
   eq('natural_exit_closes_menu',document.querySelector('.menu')==null,true);eq('natural_exit_removes_chip',document.querySelector('.composer-mode-chip')==null,true);
@@ -182,7 +184,7 @@ try{
     '# R135 UI 定向回归', '',
     '仅修改 RecoveryPanel.tsx、Composer.tsx，新增 verify-R135-ui.cjs 与 uiR135.test.ts。未提交。', '',
     '恢复面板四个定位入口共用成功关闭回调；失败保留弹窗，在弹窗内及 toast 显示可读错误，重试清理旧错误。导航仍经正式只读深链，不调用任务执行命令。', '',
-    '“回到自然协作”移到“本次运行设置”一级，与“调整独立研讨成员”并列。成员菜单仅选择成员与完成；底部 chip tooltip 仅提示调整成员。未更改成员初始化/草稿保存/权限/单次发送规则。', '',
+    '“回到自然协作”留在“本次运行设置”一级；R195 起成员调整只在“独立研讨 · N人”芯片弹层里，不再重复出现在运行设置菜单。成员菜单仅选择成员与完成；底部 chip tooltip 仅提示调整成员。未更改成员初始化/草稿保存/权限/单次发送规则。', '',
     '验证：正式 React 组件、CSS、命令桥、loader 深链和路由，在独立 Electron 内执行 DOM 点击；RPC 用内存合成回包。未启动 daemon、未打开数据库、未连接真实模型。路由落点用合成页面展示，未验证整套 Room/ThreadPanel 或后端执行。', '',
     '命令：node node_modules/vitest/vitest.mjs run tests/browser/uiR135.test.ts（该测试调用 node scripts/verify-R135-ui.cjs 的同一个 verifier）。', '',
     `Electron 退出码 ${run.status}；${report.checks.length} 个检查，${report.checks.filter(c => !c.ok).length} 失败。真实业务调用 0。`, '',

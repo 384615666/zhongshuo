@@ -313,7 +313,13 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                   /* R189：工具栏只有 48px 高，状态条必须是**单行**——原来这里用多个 flex 子项
                      （仓库类型 / 分隔符 / 分支 / 改动数）会折成两行把工具栏撑到 62px，
                      与其它三页不一致。完整状态仍在 title 里，界面只留一句紧凑说明。 */
-                  <span className="fg-statusbar fg-statusbar--inline" title={detail} data-zs-files-status="1">
+                  /* R195：data-zs-git-not-a-repo 是非 Git 中性态钩子——验证时可据此断言两块失败面板都不存在。 */
+                  <span
+                    className="fg-statusbar fg-statusbar--inline"
+                    title={detail}
+                    data-zs-files-status="1"
+                    data-zs-git-not-a-repo={git != null && git.notARepo === true ? '1' : undefined}
+                  >
                     <span>
                       {isGit && git
                         ? `${git.currentBranch} · ${changedFileCount} 个未提交改动`
@@ -350,7 +356,12 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
               </div>
             </div>
 
-            {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
+            {/* R195（用户图3）：这两块只在**真实 Git 失败**时出现。普通非 Git 目录由
+                actions-git 的 refreshGitState 按结构码/消息判定为中性态（notARepo、清掉
+                readErrors 与 git.status 的 lastOp），不会再落成「读取失败」或「未完成」；
+                这里再加一道中性态门禁，避免旧状态残留时误报。失败原因全部经
+                userFacingSystemText 清洗，不出现原始 Git stderr。 */}
+            {git?.notARepo !== true && git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
               <div className="panel warning" style={{ marginBottom: 10 }} data-zs-git-read-errors="1">
                 <div className="panel-title"><Icon name="alert-triangle" size={13} /> Git 部分信息读取失败</div>
                 {git.readErrors.status != null ? <div>仓库状态：{userFacingSystemText(git.readErrors.status)}；显示上次读取的结果</div> : null}
@@ -364,7 +375,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                 真实 Git 执行错误/权限/目录失效仍在此。R188 第 8 项删掉了「此文件夹未初始化
                 Git」的中性提示面板（用户嫌它是废话）：非 Git 目录不再单独占一块，顶栏 Git
                 页签上仍有「未初始化」小字，Git 页本身也会说明。 */}
-            {git?.lastOp && !git.lastOp.ok ? (
+            {git?.notARepo !== true && git?.lastOp && !git.lastOp.ok ? (
               <div className="panel danger" style={{ marginBottom: 14 }}>
                 <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
                 {userFacingSystemText(git.lastOp.detail)}

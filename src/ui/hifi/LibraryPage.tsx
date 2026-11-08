@@ -380,15 +380,23 @@ export function LibraryPage() {
                     <Icon name="filter" size={12} /> {moreFilters ? '收起筛选' : '更多筛选'}
                   </button>
                   {moreFilters ? (
-                    <div className="toolbar-more">
-                      <label className="field inline" title="日期按本机时区；结束日期当天包含在内">
+                    /* R195（用户图6）：展开行重排。原来四个控件直接塞在灰工具栏的第二行：
+                       日期输入写死宽度、标签与控件各按自己的行高排、日期与会话之间没有分组，
+                       整条工具栏像被临时挤出来的一行。现在拆成「日期」「会话」两组，组内
+                       控件与标签同一 30px 基线、两个日期输入等宽，两组之间用竖线分开；
+                       具体尺寸/分隔/间距在 styles/r195-pages.css。收起时这一块不渲染，
+                       工具栏仍是单行 48px（R189/R190 门禁口径）。 */
+                    <div className="toolbar-more library-more-panel" data-zs-library-more-panel="1">
+                      <label className="field inline library-more-group" data-zs-library-more-group="date" title="日期按本机时区；结束日期当天包含在内">
                         <span className="field-label">日期</span>
-                        <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
-                        <span className="faint small">至</span>
-                        <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
+                        <span className="library-more-range">
+                          <input className="input library-more-date" type="date" aria-label="开始日期" value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
+                          <span className="library-more-sep">至</span>
+                          <input className="input library-more-date" type="date" aria-label="结束日期" value={toDay} onChange={(e) => setToDay(e.target.value)} />
+                        </span>
                       </label>
                       {scope === 'project' && rooms.length > 0 ? (
-                        <label className="field inline" title="限定会话，仅当前项目的房间">
+                        <label className="field inline library-more-group" data-zs-library-more-group="conversation" title="限定会话，仅当前项目的房间">
                           <span className="field-label">会话</span>
                           <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
                         </label>

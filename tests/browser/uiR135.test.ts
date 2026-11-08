@@ -21,7 +21,7 @@ describe('R135 production RecoveryPanel and Composer in isolated Electron', () =
     for (const name of [
       'recovery_1_failure_keeps_dialog', 'recovery_1_pending_keeps_dialog',
       'recovery_1_success_closes_once', 'recovery_3_formal_route',
-      'primary_contains_parallel_actions', 'member_menu_has_no_mode_exit',
+      'primary_contains_natural_exit_only', 'member_menu_has_no_mode_exit',
       'natural_exit_only_changes_collaboration', 'natural_send_body_mentions_only',
       'natural_send_omits_deliberation_budget', 'thread_primary_offers_natural_exit',
       'readonly_menu_has_no_mode_actions', 'only_read_rpcs_no_dispatch_or_resume',

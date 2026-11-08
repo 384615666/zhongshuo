@@ -16,7 +16,7 @@ import { Composer } from '../components/Composer';
 import type { FormalSendOutcome } from '../components/Composer';
 import { Icon } from '../components/Icon';
 import { AttachmentThumb, isImageAttachment } from '../components/AttachmentThumb';
-import { latestReadableAgentMessageId, MessageView, RootMessagePreview } from '../components/MessageView';
+import { latestReadableAgentMessageId, messageSelectionText, MessageView, RootMessagePreview } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
@@ -34,7 +34,7 @@ import {
   loadThreadOlder, threadHistoryWindow,
 } from '../loader';
 import {
-  stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown, queueDraftInsert,
+  stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown,
   addConversationQuoteToDraft, stripInlineAttachmentTokens,
 } from '../data/store';
 import { command, openExportDir } from '../bridge';
@@ -59,6 +59,7 @@ import {
 } from '../lib/threadNav';
 import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary,ProjectMember } from '../data/types';
 import type { ConversationQuote } from '../data/store';
+import { viewerDisplayLabel } from '../../../contracts/viewerIdentity';
 /* ---------- UX-PREVIEW-01：共享预览（§17.9） ---------- */
 import { audienceAllows, resourceOf } from '../lib/resource';
 import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
@@ -167,6 +168,12 @@ export function RoomPage({
   const [roomTab, setRoomTab] = useState<'chat' | 'tasks' | 'files'>('chat');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection,setSettingsSection]=useState<'general'|'members'|'archive'>('general');
+  /**
+   * R195 第 2 项：主池卡片的「引用」改走结构化引用卡，与对话串/私信同一通道。
+   * 这里只保存一次性插入信号（id 驱动 Composer 去重应用），引用正文由 store 草稿保存。
+   * 带上 roomId：切到别的房间时不把上一间的引用塞进新草稿。
+   */
+  const [roomQuote, setRoomQuote] = useState<{ id: number; quote: ConversationQuote; roomId: string }>();
   /** 房间「⋯」菜单锚点（房间设置/成员/归档统一入口） */
   // 所有 Hook 必须在任何 early return 之前调用（rules-of-hooks）。
   // 宽度 Hook 必须始终早于 if (!room) 的提前返回调用；否则房间删除时
@@ -383,6 +390,31 @@ export function RoomPage({
     : { draftKey: `room:${room.id}`, label: room.name };
 
   /**
+   * R195 第 2 项：主池卡片的「引用」改成结构化引用卡——与对话串/私信一致：
+   *  - 引用正文全文进入草稿的 conversationQuotes（不再截 400 字、不再塞进可编辑正文）；
+   *  - 有选中文字时只引所选（messageSelectionText 只接受完整落在本条消息内的选区）；
+   *  - 本人消息的来源标签用设置里的显示名，未设置仍是「你」。
+   */
+  const addRoomQuote = (message: Message, selectedText?: string): void => {
+    const text = selectedText ?? chatAnswer(stripInlineAttachmentTokens(message.body), message.authorType);
+    const quoted = addConversationQuoteToDraft(`room:${message.roomId}`, {
+      messageId: message.id,
+      authorLabel: message.authorType === 'human'
+        ? viewerDisplayLabel(s.viewerName)
+        : byId(s.members, message.authorId)?.displayName ?? '助手消息',
+      text,
+    });
+    if (!quoted.ok) {
+      toast(quoted.error, 'error');
+      return;
+    }
+    setRoomQuote({ id: Date.now(), quote: quoted.quote, roomId: message.roomId });
+    toast('已添加对话引用', 'info');
+  };
+  /** 只把当前房间的引用插入信号交给输入区，切房间不串草稿。 */
+  const visibleRoomQuote = roomQuote?.roomId === roomId ? roomQuote : undefined;
+
+  /**
    * 双区并排时的宽度分配（用户要求："不用记忆，用当前的左右宽度"）。
    *
    * 历史缺陷：`resolveLayout` 算出 contextWidth / previewWidth，但 JSX 只用 data-layout，
@@ -590,7 +622,7 @@ export function RoomPage({
           </button>
                 </div>
 
-        {roomTab === 'chat' ? <RoomPool roomId={room.id} threadId={threadId} onOpenSettings={() => {setSettingsSection('members');setSettingsOpen(true);}} onOpenResource={openResource} /> : null}
+        {roomTab === 'chat' ? <RoomPool roomId={room.id} threadId={threadId} onOpenSettings={() => {setSettingsSection('members');setSettingsOpen(true);}} onOpenResource={openResource} onQuote={addRoomQuote} insertQuote={visibleRoomQuote} /> : null}
         {roomTab === 'tasks' ? <RoomTasks roomId={room.id} /> : null}
         {roomTab === 'files' ? <RoomFiles roomId={room.id} onOpenResource={openResource} /> : null}
       </div>
@@ -698,13 +730,17 @@ export function WriteOccupancyLine({ lease }: { lease: NonNullable<AppState['wri
 }
 
 function RoomPool({
-  roomId, threadId, onOpenSettings, onOpenResource,
+  roomId, threadId, onOpenSettings, onOpenResource, onQuote, insertQuote,
 }: {
   roomId: string;
   threadId?: string;
   onOpenSettings: () => void;
   /** UX-PREVIEW-01：打开消息携带的资源（主池入口，§17.9） */
   onOpenResource?: (resourceId: string, revision?: number, from?: ContextLocation) => void;
+  /** R195 第 2 项：主池卡片「引用」→ 结构化引用卡（与对话串一致）。 */
+  onQuote: (message: Message, selectedText?: string) => void;
+  /** R195 第 2 项：新加入的结构化引用（id 驱动 Composer 去重应用）。 */
+  insertQuote?: { id: number; quote: ConversationQuote };
 }) {
   const s = useStore((x) => x);
   const roots = useMemo(
@@ -761,6 +797,7 @@ function RoomPool({
             key={m.id}
             message={m}
             onOpenResource={onOpenResource}
+            onQuote={onQuote}
             /* 归属用「本卡对应的线程」判断，不能用 m.threadId：
                顶层 anchor 的 thread_id 本来就是 NULL（§3.4），
                与"当前没打开任何线程"（threadId === undefined）比较会全部相等，
@@ -774,6 +811,7 @@ function RoomPool({
         <Composer
           target={{ kind: 'room_root', roomId }}
           draftKey={`room:${roomId}`}
+          insertQuote={insertQuote}
           formalLimits={FORMAL_LIMITS}
           attachmentUpload={room.conversationId != null && room.conversationId !== '' ? { conversationId: room.conversationId } : undefined}
           sendDisabledReason={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
@@ -840,9 +878,69 @@ function RoomPool({
 
 /* ---------------- 主池原消息卡 ---------------- */
 
-function RootCardActions({ message, saved }: { message: Message; saved: boolean }) {
+/**
+ * R195 第 1 项：主池卡片里的图片附件预览（与 MessageView 的消息内图片网格同口径）。
+ *
+ * - 单图按原始比例显示，最长边不超过 220px；多图 104×104 小网格；
+ * - 读取复用 AttachmentThumb（attachment.previewImage + 视口懒加载 + LRU），
+ *   不新增文件系统入口；点击只走外层传入的 openAttachment 共享预览；
+ * - 非图片附件不进入这里，仍由调用方渲染文件 chip。
+ * 稳定钩子：data-zs-room-card-image、data-zs-room-card-image-count、
+ * data-zs-message-image-open（附件 id）、data-zs-message-image（加载状态）。
+ */
+function RoomCardImages({
+  attachments, onOpen,
+}: {
+  attachments: readonly FormalAttachmentSummary[];
+  onOpen: (att: FormalAttachmentSummary) => void;
+}) {
+  if (attachments.length === 0) return null;
+  const single = attachments.length === 1;
+  return (
+    <div
+      className={`msg-image-grid${single ? ' is-single' : ''}`}
+      data-zs-room-card-image="1"
+      data-zs-room-card-image-count={attachments.length}
+      data-zs-message-image-layout={single ? 'single' : 'grid'}
+    >
+      {attachments.map((att) => (
+        <button
+          key={att.artifactId}
+          type="button"
+          className="msg-image-tile"
+          data-zs-artifact-id={att.artifactId}
+          data-zs-message-image-open={att.artifactId}
+          title={`预览 ${att.filename} · 只读预览，不发送给 AI`}
+          aria-label={`预览图片 ${att.filename}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen(att);
+          }}
+        >
+          <AttachmentThumb attachmentId={att.artifactId} filename={att.filename} kind={att.kind} size="lg" messageImage />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * R195 第 3 项：操作条从卡足移到消息正文正下方，与对话串/私信「气泡下方」一致。
+ * R195 第 2 项：「引用」不再往输入区塞纯文本，改为结构化引用卡（全文、选中优先）。
+ */
+function RootCardActions({ message, saved, onQuote }: {
+  message: Message;
+  saved: boolean;
+  onQuote?: (message: Message, selectedText?: string) => void;
+}) {
   const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
+  /** 按下时先取选区：按钮默认动作会把选区收起来，click 里已经读不到。 */
+  const selectedTextRef=useRef('');
   const visibleBody=chatAnswer(message.body,message.authorType);
+  const captureSelection=(button:HTMLButtonElement):void=>{
+    const body=button.closest('.root-card')?.querySelector('.root-body') ?? null;
+    selectedTextRef.current=messageSelectionText(body,window.getSelection());
+  };
   const copy=async():Promise<void>=>{
     try{
       if(navigator.clipboard==null)throw Error('clipboard unavailable');
@@ -857,10 +955,10 @@ function RootCardActions({ message, saved }: { message: Message; saved: boolean 
   return (
     <div className="root-card-actions" onClick={(event)=>event.stopPropagation()}>
       <button type="button" className="btn ghost sm" title="复制可读正文" onClick={()=>void copy()}><Icon name="copy" size={12}/> 复制</button>
-      <button type="button" className="btn ghost sm" title="引用到输入区" onClick={()=>{
-        const key=`room:${message.roomId}`;
-        queueDraftInsert(key,`> ${visibleBody.replace(/\s+/g,' ').trim().slice(0,400)}`);
-        window.dispatchEvent(new CustomEvent('zs:focus-composer',{detail:key}));
+      <button type="button" className="btn ghost sm" title="引用到输入区" onMouseDown={(event)=>captureSelection(event.currentTarget)} onClick={()=>{
+        const selected=selectedTextRef.current.trim().length>0 ? selectedTextRef.current : undefined;
+        selectedTextRef.current='';
+        onQuote?.(message,selected);
       }}><Icon name="corner-down-right" size={12}/> 引用</button>
       <button type="button" className="btn ghost sm" data-zs-saved={saved?'1':undefined} title={saved?'取消收藏':'收藏，不改动原消息'} onClick={()=>{
         void toggleSavedMessage(message,message.projectId).then(r=>{if(r.ok)toast(r.saved ? '已收藏' : '已取消收藏','success');else if(!r.busy)toast(userFacingSystemText(r.error??'收藏失败'),'error');});
@@ -870,12 +968,15 @@ function RootCardActions({ message, saved }: { message: Message; saved: boolean 
   );
 }
 
+
 export function RootCard({
-  message, selected, onOpenResource,
+  message, selected, onOpenResource, onQuote,
 }: {
   message: Message;
   selected: boolean;
   onOpenResource?: (resourceId: string, revision?: number, from?: ContextLocation) => void;
+  /** R195 第 2 项：主池卡片「引用」→ 结构化引用卡（与对话串一致）。 */
+  onQuote?: (message: Message, selectedText?: string) => void;
 }) {
   const s = useStore((x) => x);
   const thread = s.threads.find((t) => t.anchorMessageId === message.id);
@@ -1001,6 +1102,20 @@ export function RootCard({
   }, [task, run, executionBlocker, preDispatchFailure, executionStatus, s.changeSets, s.issues, s.turns, s.threadProgress, s.members, thread, delivery, deliveryDetail]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
+  /**
+   * R195 第 1 项：主池卡片的图片附件也按消息内预览渲染（单图大图、多图小网格）；
+   * 非图片附件保持文件 chip。点击仍走既有共享预览通道，不新增文件系统入口。
+   */
+  const cardAttachments = message.formalAttachments ?? [];
+  const cardImageAtts = cardAttachments.filter((att) => isImageAttachment(att.filename, att.kind));
+  const cardFileAtts = cardAttachments.filter((att) => !isImageAttachment(att.filename, att.kind));
+  const cardConversationId = roomOf(s, message.roomId)?.conversationId ?? '';
+  const openCardAttachment = (att: FormalAttachmentSummary): void => {
+    openAttachment(att, {
+      target: { kind: 'room', projectId: message.projectId, roomId: message.roomId, view: 'chat' },
+      messageId: message.id,
+    }, cardConversationId);
+  };
 
   /**
    * **没有串的主池消息也必须渲染**（UX-PREVIEW-01 修复的实际缺陷）。
@@ -1014,8 +1129,6 @@ export function RootCard({
    * 不显示任务号、状态、回复数与"打开回复串"（那些它确实没有）。
    */
   if (!thread) {
-    const atts = message.formalAttachments ?? [];
-    const plainConv = roomOf(s, message.roomId)?.conversationId ?? '';
     return (
       <div className="root-card plain">
         <div className="root-card-head">
@@ -1025,10 +1138,14 @@ export function RootCard({
         </div>
         <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
 
-        {/* 附件：**无 taskId 也能打开只读预览**（PV-01 的核心证据；正式=真实 attachmentId） */}
-        {atts.length > 0 ? (
+        {/* R195 第 1 项：图片附件按消息内大图/小网格预览，点击仍走只读共享预览。 */}
+        <RoomCardImages attachments={cardImageAtts} onOpen={openCardAttachment}/>
+
+        {/* 附件：**无 taskId 也能打开只读预览**（PV-01 的核心证据；正式=真实 attachmentId）。
+            R195 第 1 项后这里只保留非图片文件 chip。 */}
+        {cardFileAtts.length > 0 ? (
           <div className="msg-attach-row">
-            {atts.map((att) => (
+            {cardFileAtts.map((att) => (
               <button
                 key={att.artifactId}
                 data-zs-artifact-id={att.artifactId}
@@ -1036,15 +1153,10 @@ export function RootCard({
                 title={`打开 ${att.filename}，${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}；只读预览，不会创建任务或发送消息`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  openAttachment(att, {
-                    target: { kind: 'room', projectId: message.projectId, roomId: message.roomId, view: 'chat' },
-                    messageId: message.id,
-                  }, plainConv);
+                  openCardAttachment(att);
                 }}
               >
-                {isImageAttachment(att.filename, att.kind)
-                  ? <AttachmentThumb attachmentId={att.artifactId} filename={att.filename} kind={att.kind} size="sm" />
-                  : <Icon name="paperclip" size={12} />}
+                <Icon name="paperclip" size={12} />
                 <span className="truncate">{att.filename}</span>
                 <span className="msg-attach-kind mono-sm">{ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}</span>
               </button>
@@ -1052,10 +1164,13 @@ export function RootCard({
           </div>
         ) : null}
 
+        {/* R195 第 3 项：复制/引用/收藏在整条消息内容（文字+图片/文件）之后、卡足之前。 */}
+        <div className="root-card-actions-row">
+          <RootCardActions message={message} saved={saved} onQuote={onQuote}/>
+        </div>
+
         <div className="root-foot">
           <span className="small faint">这条消息没有创建任务，因此没有回复串</span>
-          <div className="spacer" />
-          <RootCardActions message={message} saved={saved}/>
         </div>
       </div>
     );
@@ -1149,32 +1264,37 @@ export function RootCard({
       {deliveryFactLine ? <div className="faint small" data-zs-delivery-fact={delivery?.status}>{deliveryFactLine}</div> : null}
       <div className="root-body"><RootMessagePreview message={message} /></div>
 
-      {/* 主池消息携带的附件（正式=真实 attachmentId 芯片——点击只读预览，不发送给 AI）。 */}
-      {(message.formalAttachments ?? []).length > 0 ? (
+      {/* R195 第 1 项：图片附件按消息内预览显示（单图大图、多图 104 小网格），
+          点击仍走既有只读共享预览；非图片附件保持文件 chip。 */}
+      <RoomCardImages attachments={cardImageAtts} onOpen={openCardAttachment}/>
+
+      {/* 主池消息携带的非图片附件（正式=真实 attachmentId 芯片——点击只读预览，不发送给 AI）。 */}
+      {cardFileAtts.length > 0 ? (
         <div className="msg-inline-attachments" data-zs-inline-attachments="1">
-          {(message.formalAttachments ?? []).map((att) => (
+          {cardFileAtts.map((att) => (
             <button
               key={att.artifactId}
               data-zs-artifact-id={att.artifactId}
-              className={`inline-file-chip${att.kind === 'image_file' ? ' is-image' : ''}`}
+              className="inline-file-chip"
               title={`打开 ${att.filename}，${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}；只读预览，不发送给 AI`}
               onClick={(e) => {
                 e.stopPropagation();
-                openAttachment(att, {
-                  target: { kind: 'room', projectId: message.projectId, roomId: message.roomId, view: 'chat' },
-                  messageId: message.id,
-                }, roomOf(s, message.roomId)?.conversationId ?? '');
+                openCardAttachment(att);
               }}
             >
-              {isImageAttachment(att.filename, att.kind)
-                ? <AttachmentThumb attachmentId={att.artifactId} filename={att.filename} kind={att.kind} size="sm" />
-                : <Icon name="file-text" size={12} />}
+              <Icon name="file-text" size={12} />
               <span className="truncate">{att.filename}</span>
               <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}</span>
             </button>
           ))}
         </div>
       ) : null}
+
+      {/* R195 第 3 项：复制/引用/收藏在整条消息内容（文字+图片/文件）之后、
+          线程预览之前，与对话串/私信「气泡下方」的位置统一；卡足只保留回复数等入口。 */}
+      <div className="root-card-actions-row">
+        <RootCardActions message={message} saved={saved} onQuote={onQuote}/>
+      </div>
 
       <AnalysisContinueAction failure={preDispatchFailure} roomId={message.roomId}/>
 
@@ -1195,7 +1315,7 @@ export function RootCard({
           {preview.map((p) => (
             <div key={p.id} className="root-preview-row">
               <span className="root-preview-author">
-                {p.authorType === 'human' ? '你' : memberLabel(byId(s.members, p.authorId))}
+                {p.authorType === 'human' ? viewerDisplayLabel(s.viewerName) : memberLabel(byId(s.members, p.authorId))}
               </span>
               <span className="root-preview-text">{p.body}</span>
             </div>
@@ -1221,8 +1341,6 @@ export function RootCard({
           {replies} 条回复
         </button>
         {unread > 0 ? <Tag tone="info" icon="message-square">{unread} 条未读</Tag> : null}
-        <div className="spacer" />
-        <RootCardActions message={message} saved={saved}/>
       </div>
     </div>
   );
@@ -1709,7 +1827,7 @@ function ThreadPanel({
       const quoted = addConversationQuoteToDraft(`thread:${thread.id}`, {
         messageId: message.id,
         authorLabel: message.authorType === 'human'
-          ? '你'
+          ? viewerDisplayLabel(s.viewerName)
           : byId(s.members, message.authorId)?.displayName ?? '助手消息',
         threadMessageSeq: message.threadMessageSeq,
         text,

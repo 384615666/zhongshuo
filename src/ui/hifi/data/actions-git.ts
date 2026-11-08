@@ -149,10 +149,22 @@ export async function refreshGitState(projectId: string): Promise<void> {
     recordWrite('git.status', `分支 ${status.branch} · ${statusEntries.length} 个未提交改动`);
   } catch (e) {
     if (!current()) return;
-    const msg = String((e as Error).message);
+    const err = e != null && typeof e === 'object'
+      ? (e as { message?: unknown; code?: unknown })
+      : null;
+    const msg = typeof err?.message === 'string' ? err.message : String(e ?? '');
+    const errCode = typeof err?.code === 'string' ? err.code : '';
+    // R195（用户图3）：bridge 抛出的 Error 消息已经被 userFacingSystemText 清洗成中文，
+    // 结构码只挂在 error.code 上——原来只认 msg.startsWith('NOT_A_GIT_REPO')，于是普通
+    // 非 Git 目录被当成真实读取失败，同时出现「部分信息读取失败」和「读取仓库状态未完成」
+    // 两块提示。现在按结构码或消息里的非仓库事实判定：这是中性形态，不是失败。
+    const notARepo = errCode === 'NOT_A_GIT_REPO'
+      || msg.startsWith('NOT_A_GIT_REPO')
+      || /不是\s*git\s*仓库/i.test(msg)
+      || /\bnot a git repository\b/i.test(msg);
     // R71：普通非 Git 目录是支持的项目形态——中性标注（isGit=false），不进失败横幅；
     // 真实 Git 执行错误/权限/目录失效仍走红「失败」面板（不吞错）。
-    if (msg.startsWith('NOT_A_GIT_REPO')) {
+    if (notARepo) {
       setState((s) => {
         const cur2 = s.git[projectId] ?? emptyGit();
         return {
@@ -160,7 +172,18 @@ export async function refreshGitState(projectId: string): Promise<void> {
           projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, isGit: false } : pr)),
           // R72：非 Git 同样按本次回执清**失效的仓库投影**（旧分支/状态/远端/历史不再显示——
           // 仓库→普通目录往返不留幻影）；用户输入的提交信息/reflog 草稿不属于服务端投影，保留。
-          git: { ...s.git, [projectId]: { ...emptyGit(), commitMessage: cur2.commitMessage, reflog: cur2.reflog, notARepo: true, lastOp: undefined } },
+          // R195：本次读取不是失败——一并清掉 readErrors 与 git.status 的 lastOp（否则旧失败
+          // 面板会残留）；其它写操作（暂存/提交等）的 lastOp 属于各自事实，保留。
+          git: {
+            ...s.git,
+            [projectId]: {
+              ...emptyGit(),
+              commitMessage: cur2.commitMessage,
+              reflog: cur2.reflog,
+              notARepo: true,
+              lastOp: cur2.lastOp?.op === 'git.status' ? undefined : cur2.lastOp,
+            },
+          },
         };
       });
       recordWrite('git.status', '此文件夹未初始化 Git，属正常状态，文件阅读与预览不受影响');

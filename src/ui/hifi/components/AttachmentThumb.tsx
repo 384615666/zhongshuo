@@ -11,6 +11,9 @@
  *  - 缩略图按需加载：进入视口附近才请求（IntersectionObserver），并在模块内做小型
  *    LRU 缓存（最多 8 张），避免长对话来回滚动重复取原图。
  *  - 加载失败只退回图标，不冒充有图；点击行为仍由外层按钮（打开共享预览）负责。
+ *  - R195 第 1 项：在消息图片网格里使用时（`messageImage`），宿主额外输出
+ *    `data-zs-message-image=loading|ready|failed`，截图脚本据此断言是否真的
+ *    渲染了 <img>、是否已加载、失败时是否退回图标；尺寸完全交给网格 CSS。
  */
 import { useEffect, useRef, useState } from 'react';
 import { command } from '../bridge';
@@ -56,6 +59,7 @@ export function AttachmentThumb({
   kind,
   size = 'md',
   title,
+  messageImage = false,
 }: {
   attachmentId: string;
   filename: string;
@@ -63,6 +67,8 @@ export function AttachmentThumb({
   /** md=消息文件卡左侧缩略图；sm=行内附件芯片的小图；lg=图片消息卡的大预览。 */
   size?: 'sm' | 'md' | 'lg';
   title?: string;
+  /** 消息图片网格内使用：额外输出 data-zs-message-image 状态钩子。 */
+  messageImage?: boolean;
 }) {
   const image = isImageAttachment(filename, kind);
   const [src, setSrc] = useState<string | null>(() => (image ? cache.get(attachmentId) ?? null : null));
@@ -108,6 +114,7 @@ export function AttachmentThumb({
       ref={hostRef}
       className={`attachment-thumb attachment-thumb-${size}${image ? '' : ' is-file'}${src == null ? ' is-placeholder' : ''}`}
       data-zs-attachment-thumb={state}
+      data-zs-message-image={messageImage ? state : undefined}
       title={title}
       aria-hidden={image ? undefined : 'true'}
     >

@@ -23,6 +23,12 @@ export function userFacingSystemText(value:string):string {
   if (/该任务已有在途恢复派发/.test(value)) return '已有继续请求在处理中，请稍候查看任务进展。';
   if (/protection_state\s*=\s*['"]?retained\b/i.test(value)) return '上次执行尚未确认结束。请点击“检查中断”查看具体成员和程序检查结果，解除占用后再继续。';
 
+  // R195（用户图3）：普通非 Git 目录是支持的项目形态，不是「读取失败」。daemon 的原始
+  // Git stderr（fatal: not a git repository ...）与中文里的「不是 git 仓库」都收敛成一句
+  // 中性说明，绝不把 stderr 原样上屏。这里只处理非仓库判定本身，其它 Git 原始 stderr 的
+  // fatal: 前缀在下面统一去掉（权限、路径、账号等安全关键信息仍如实保留）。
+  if (/\bnot a git repository\b/i.test(value) || /不是\s*git\s*仓库/i.test(value)) return '此目录不是 Git 仓库';
+
   // 路径、文件名、网址先占位保护，避免下面的英文清理误伤真实路径。
   const guarded:string[]=[];
   const guard=(text:string,pattern:RegExp)=>text.replace(pattern,(match)=>{guarded.push(match);return `\uE000${guarded.length-1}\uE000`;});
@@ -34,6 +40,9 @@ export function userFacingSystemText(value:string):string {
 
   // 去掉 Electron/传输层包装。
   text=text.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,'').replace(/^Error:\s*/,'');
+  // R195：Git 原始 stderr 的 fatal:/error: 前缀不是用户可读信息——只去前缀，后面的原因
+  //（权限、路径、账号等安全关键信息）仍如实保留。
+  text=text.replace(/\bfatal:\s*/gi,'').replace(/\berror:\s*(?=[\u4e00-\u9fff])/gi,'');
 
   // 错误码：开头的码连同冒号一起去掉；句中带下划线的码也去掉。
   text=text.replace(/^(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|ERROR)\s*[:：]\s*/,'');

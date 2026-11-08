@@ -151,6 +151,11 @@ export interface HifiExtension {
    */
   notificationsEnabled: boolean;
   /**
+   * R195 第 9 项：用户自己的显示名（真值在 app.settings：ui.viewer.displayName）。
+   * 空串=未设置——界面继续显示「你」，不改变默认观感；只影响显示，不写消息正文。
+   */
+  viewerName: string;
+  /**
    * r61 P5 草稿/未知信封持久化状态：mode=on（identity 就绪、localStorage 可写）时每次草稿/
    * 信封/上传项变更即快照落盘；error 非空=最近一次持久化失败（内存仍生效，UI 如实提示
    * 「未持久化——刷新/崩溃会丢」，不静默）。mode=off=身份不可用（浏览器宿主/服务未就绪）
@@ -196,6 +201,7 @@ function makeEmptyState(): HifiState {
     memberRuntimes: {},
     dispatchGuard: null,
     notificationsEnabled: true,
+    viewerName: '',
     draftPersist: { mode: 'off', error: null, recoveryNote: null, legacyImport: null },
   };
 }
@@ -1571,6 +1577,15 @@ export function setAppearanceState(showAvatars:boolean,avatars:Record<string,str
  */
 export function setNotificationsEnabled(enabled: boolean) {
   setState((s) => (s.notificationsEnabled === enabled ? s : { ...s, notificationsEnabled: enabled }));
+}
+
+/**
+ * R195 第 9 项：用户显示名的本地投影（真值在 daemon 的 app.settings）。
+ * 启动读取与设置页写入成功后调用；空串=恢复默认「你」。
+ */
+export function setViewerName(raw: string) {
+  const name = raw.trim();
+  setState((s) => (s.viewerName === name ? s : { ...s, viewerName: name }));
 }
 
 /* ---------- 写操作留痕（真实侧：只记不改状态——供诊断展示，H3 归位） ---------- */

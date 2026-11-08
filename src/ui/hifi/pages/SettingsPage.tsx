@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
 import { SettingsRow, ReadOnlyRow } from '../components/SettingsRow';
-import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, setNotificationsEnabled } from '../data/store';
+import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, setNotificationsEnabled, setViewerName } from '../data/store';
 import { command, dataBridge, openAppLink, type AppLinkTarget } from '../bridge';
 import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
@@ -38,6 +38,12 @@ import {
   parseTaskNotificationsEnabledSetting,
   serializeTaskNotificationsEnabledSetting,
 } from '../../../contracts/taskNotifications';
+import {
+  VIEWER_DISPLAY_NAME_SETTING_KEY,
+  VIEWER_DISPLAY_NAME_MAX_LENGTH,
+  normalizeViewerDisplayName,
+  viewerDisplayLabel,
+} from '../../../contracts/viewerIdentity';
 
 /**
  * 现分区 + 一个只用于深链兼容的 `general`：
@@ -75,6 +81,7 @@ type SearchEntry = { section: SettingsSectionKey; label: string; keywords: strin
 const SEARCH_INDEX: SearchEntry[] = [
   { section: 'appearance', label: '主题', keywords: '外观 主题 深色 浅色 暗色', match: 'appearance-theme' },
   { section: 'appearance', label: '显示头像', keywords: '头像 显示 图片', match: 'appearance-avatars' },
+  { section: 'appearance', label: '我的名字', keywords: '名字 名称 昵称 称呼 署名 显示名 本人 用户你', match: 'appearance-viewer-name' },
   { section: 'appearance', label: '设置我的头像', keywords: '我的头像 个人头像 上传 更换 恢复默认 图片', match: 'appearance-avatar-images' },
   { section: 'notifications', label: '桌面通知开关', keywords: '通知 桌面 弹窗 提醒 开关 关闭 开启', match: 'notification-desktop' },
   { section: 'runtime', label: '启用调用次数预算', keywords: '调用预算 调用次数 次数预算 启用 开启 关闭 上限 callBudget budget DIRECT AUTO DELIBERATE', match: 'call-budget' },
@@ -263,6 +270,116 @@ function findByLabel(text: string): HTMLElement | null {
 
 /* ============================================================ 分区：外观 ============================================================ */
 
+/**
+ * R195 第 9 项：用户自己的显示名（app.settings：ui.viewer.displayName）。
+ * 写入后严格回读：读回不一致就如实报「没有保存成功」，不把本地草稿冒充成已保存。
+ * 空值=恢复默认「你」——键仍保留，不删任何数据。
+ */
+export function ViewerNameRow() {
+  const viewerName = useStore((s) => s.viewerName);
+  const [draft, setDraft] = useState(viewerName);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const generation = useRef(0);
+
+  const reload = useCallback(async () => {
+    const current = ++generation.current;
+    setLoading(true);
+    try {
+      const result = await command<{ values: Record<string, string | null> }>('app.settings.get', {
+        keys: [VIEWER_DISPLAY_NAME_SETTING_KEY],
+      });
+      if (current !== generation.current) return;
+      const name = normalizeViewerDisplayName(result.values[VIEWER_DISPLAY_NAME_SETTING_KEY]);
+      setViewerName(name);
+      setDraft(name);
+      setReadError(null);
+    } catch (error) {
+      if (current !== generation.current) return;
+      setReadError((error as Error).message);
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void reload(); return () => { generation.current += 1; }; }, [reload]);
+
+  const save = async (): Promise<void> => {
+    const normalized = normalizeViewerDisplayName(draft);
+    setBusy(true);
+    try {
+      await command('app.settings.set', { key: VIEWER_DISPLAY_NAME_SETTING_KEY, value: normalized });
+      const result = await command<{ values: Record<string, string | null> }>('app.settings.get', {
+        keys: [VIEWER_DISPLAY_NAME_SETTING_KEY],
+      });
+      const stored = normalizeViewerDisplayName(result.values[VIEWER_DISPLAY_NAME_SETTING_KEY]);
+      if (stored !== normalized) {
+        setReadError('名字没有保存成功，请重试。');
+        toast('名字没有保存成功，请重试', 'error');
+        return;
+      }
+      setViewerName(stored);
+      setDraft(stored);
+      setReadError(null);
+      recordWrite('app.settings.set', `我的名字 = ${stored.length > 0 ? stored : '默认「你」'}（已回读核对）`);
+      toast(stored.length > 0 ? `名字已保存为「${stored}」` : '已恢复默认显示「你」', 'success');
+    } catch (error) {
+      toast(`名字保存失败：${userFacingSystemText((error as Error).message ?? '')}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = loading ? '读取中…' : readError != null ? '无法确认设置' : viewerName.length > 0 ? `当前显示「${viewerName}」` : '当前显示「你」';
+  return (
+    <div data-zs-viewer-name={viewerName.length > 0 ? 'set' : 'default'} data-zs-viewer-name-value={viewerName} data-zs-viewer-name-status={status}>
+      <SettingsRow
+        id="appearance-viewer-name"
+        label="我的名字"
+        hint="聊天里你自己消息的署名；留空继续显示「你」，AI 成员名在成员管理里设置"
+        wide
+        control={(
+          <div className="col" style={{ gap: 4, alignItems: 'flex-end' }} data-zs-viewer-name-control="1">
+            <div className="row tight">
+              <input
+                className="input sm"
+                data-zs-viewer-name-input="1"
+                value={draft}
+                maxLength={VIEWER_DISPLAY_NAME_MAX_LENGTH}
+                placeholder={`未设置时显示「${viewerDisplayLabel('')}」`}
+                disabled={loading || busy}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return;
+                  event.preventDefault();
+                  void save();
+                }}
+              />
+              <button
+                type="button"
+                className="btn primary sm"
+                data-zs-viewer-name-save="1"
+                disabled={loading || busy || normalizeViewerDisplayName(draft) === viewerName}
+                onClick={() => void save()}
+              >
+                {busy ? '保存中…' : '保存'}
+              </button>
+            </div>
+            <span className="small faint" style={{ whiteSpace: 'nowrap' }}>{status}</span>
+          </div>
+        )}
+      />
+      {readError != null ? (
+        <div className="panel warning" data-zs-viewer-name-read-error="1">
+          暂时无法确认名字设置：{userFacingSystemText(readError)}
+          <button className="btn sm" onClick={() => void reload()}>重试读取</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SectionAppearance() {
   const theme = useStore((s) => s.ui.theme);
   const showAvatars = useStore((s) => s.ui.showAvatars === true);
@@ -296,7 +413,7 @@ function SectionAppearance() {
     }
   }, []);
   return (
-    <SectionShell section="appearance" title="外观" sub="主题和头像；只在本机生效。">
+    <SectionShell section="appearance" title="外观" sub="主题、头像和名字；只在本机生效。">
       <SettingsRow id="appearance-theme" label="主题" hint="浅色、深色随时切换" control={
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
@@ -327,6 +444,7 @@ function SectionAppearance() {
           </div>
         }
       />
+      <ViewerNameRow />
     </SectionShell>
   );
 }

@@ -44,7 +44,9 @@ describe('R98 panel-adaptive message layout', () => {
     expect(rule(componentsCss, '.msg-inline-attachments')).toContain('width: 100%');
     expect(rule(componentsCss, '.inline-file-chip')).toContain('max-width: 100%');
     expect(componentsCss).toContain('@container zs-message-panel (max-width: 560px)');
-    expect(componentsCss).toContain('.msg-list.is-replies .msg.msg-human .msg-body > .msg-actions { grid-column: 2; }');
+    // R195 第 3 项：操作条不再用 grid 挪到作者行，统一回到正文之后（气泡下方）。
+    expect(componentsCss).not.toContain('.msg-body > .msg-actions');
+    expect(componentsCss).not.toContain('.msg-body > .msg-head');
   });
 });
 

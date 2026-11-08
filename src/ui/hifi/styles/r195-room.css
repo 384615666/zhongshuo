@@ -1,0 +1,159 @@
+/* R195：房间主池卡片图片预览与操作条 + 私信带鱼屏执行状态条。
+ *
+ * 第 1 项（房间卡片）：图片附件不再只是「小缩略图 + 文件名」的行内 chip，
+ * 改为消息内预览（单图大图、多图 104 小网格，点击仍走只读共享预览）；
+ * 非图片附件保持文件 chip。
+ *
+ * 第 3 项（房间卡片）：复制/引用/收藏从 `.root-foot`（卡足、线程预览之后）
+ * 移到 `.root-card-actions-row`（整条消息内容——文字+图片/文件——之后，
+ * 线程预览之前），与对话串/私信「气泡下方」的位置统一；卡足只保留回复数
+ * 与未读，不重复渲染操作条。操作条沿用卡足里的小号弱化按钮观感，避免
+ * `btn ghost sm` 默认内边距把卡片撑高。
+ *
+ * 第 5 项（私信带鱼屏）：`ExecutionStatus` 在 `surface="thread"` 且超宽视口时由组件
+ * 自己把宽度收到 `--zs-execution-band-max` 并水平居中（视口判断在组件里做，
+ * 保证 1360/1873 等常规宽度不改变原布局）。这里只提供上限变量与操作按钮组
+ * 的兜底，并挂 data-zs 钩子供截图脚本断言：
+ *   - `[data-zs-execution-band-width]`：状态条元素，宽视口下内容块宽度上限 1024；
+ *   - `[data-zs-execution-band-centered]`：宽视口下为 `1`，表示内容块水平居中；
+ *   - `[data-zs-execution-actions]`：文字、标签右侧的操作按钮组。
+ *
+ * ⚠ 本文件为 R195 新增样式表，需在 `scripts/build-ui.mjs` 的样式清单中登记
+ * （本轮由主控统一处理，队员不改该脚本）。
+ */
+
+/* ---------- 第 1 项：房间主池卡片的图片附件预览 ---------- */
+
+/* 与 MessageView 的消息内图片网格同口径（r195-message.css）：房卡片沿用同一组
+   .msg-image-grid / .msg-image-tile 类名；这里用 data-zs-room-card-image 限定作用域，
+   保证只在主池卡片内生效，并给 r195-message.css 未覆盖时的兜底尺寸。 */
+.root-card [data-zs-room-card-image] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--sp-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.root-card [data-zs-room-card-image] .msg-image-tile {
+  position: relative;
+  flex: none;
+  width: 104px;
+  height: 104px;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface-2);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.root-card [data-zs-room-card-image] .msg-image-tile:hover {
+  border-color: var(--accent-border);
+}
+
+.root-card [data-zs-room-card-image] .msg-image-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.root-card [data-zs-room-card-image] .attachment-thumb {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.root-card [data-zs-room-card-image] .attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 单图：原始比例、最长边 220px，不裁切内容。 */
+.root-card [data-zs-room-card-image].is-single {
+  display: block;
+}
+
+.root-card [data-zs-room-card-image].is-single .msg-image-tile {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 12px;
+}
+
+.root-card [data-zs-room-card-image].is-single .attachment-thumb {
+  display: block;
+  width: fit-content;
+  height: auto;
+  max-width: 220px;
+  max-height: 220px;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.root-card [data-zs-room-card-image].is-single .attachment-thumb img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 220px;
+  max-height: 220px;
+  object-fit: contain;
+}
+
+/* 加载中 / 失败时保留一块等待区，避免单图从图标大小跳成大图。
+   失败时 AttachmentThumb 只显示图标，不冒充有图。 */
+.root-card [data-zs-room-card-image].is-single .attachment-thumb.is-placeholder {
+  display: inline-grid;
+  place-items: center;
+  width: 180px;
+  height: 135px;
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+}
+
+/* ---------- 第 3 项：房间主池卡片操作条移到正文正下方 ---------- */
+
+.root-card-actions-row {
+  display: flex;
+  align-items: center;
+  margin-top: var(--sp-1);
+}
+
+.root-card-actions-row .root-card-actions {
+  gap: 2px;
+}
+
+.root-card-actions-row .root-card-actions button {
+  min-height: 0;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.root-card-actions-row .root-card-actions button:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* ---------- 第 5 项：私信带鱼屏执行状态条 ---------- */
+
+.zs-execution-thread-band {
+  --zs-execution-band-max: 1024px;
+}
+
+/* 操作按钮成组：不再被极长的详情文字推到行尾之外，窄窗时整组换行。 */
+.zs-execution-thread-band [data-zs-execution-actions] {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}

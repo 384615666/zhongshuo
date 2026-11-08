@@ -1,4 +1,5 @@
 import { userFacingSystemText } from '../../contracts/userFacingText';
+import { viewerDisplayLabel } from '../../contracts/viewerIdentity';
 import {TaskExecutionStatusView} from './components/TaskExecutionStatusView';
 /**
  * 私信页（r56 H4 §5 扩展 → R66 P2/P5 原型布局还原）：真实 conversation.list/history/
@@ -672,7 +673,7 @@ export function DmPage() {
                           const quoted = addConversationQuoteToDraft(`dm:${active.id}`, {
                             messageId: m.id,
                             authorLabel: m.authorType === 'human'
-                              ? '你'
+                              ? viewerDisplayLabel(st.viewerName)
                               : membersAll.find((member) => member.id === m.authorId)?.displayName ?? '助手消息',
                             threadMessageSeq: m.threadMessageSeq,
                             text: selectedText ?? m.body,

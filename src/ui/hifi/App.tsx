@@ -13,9 +13,10 @@ import {ProjectConversationList} from './components/ProjectConversationList';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms, pickAndOpenFolder } from './shell';
-import { getState, setAppearanceState, setNotificationsEnabled } from './data/store';
+import { getState, setAppearanceState, setNotificationsEnabled, setViewerName } from './data/store';
 import { command } from './bridge';
 import { TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, parseTaskNotificationsEnabledSetting } from '../../contracts/taskNotifications';
+import { VIEWER_DISPLAY_NAME_SETTING_KEY, normalizeViewerDisplayName } from '../../contracts/viewerIdentity';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { requestRecoveryOpen, OPEN_RECOVERY_EVENT, RECOVERY_CHANGED_EVENT, type RecoveryTarget, type RecoveryStatus } from './lib/recovery';
@@ -290,11 +291,16 @@ export default function App() {
   // R157 桌面通知总开关：真值在 daemon（app.settings；未设置=开启）。
   // 启动先读一次，通知控制器按它决定是否弹系统通知；读取失败保持默认开启，
   // 设置页会再读一次并如实显示「无法确认设置」，不用猜测值冒充。
+  // R195 第 9 项：同一次读取带上用户名字（ui.viewer.displayName）；未设置=「你」。
   useEffect(()=>{
     let cancelled=false;
-    void command<{values:Record<string,string|null>}>('app.settings.get',{keys:[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]})
-      .then(value=>{if(!cancelled)setNotificationsEnabled(parseTaskNotificationsEnabledSetting(value.values[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]));})
-      .catch(()=>{/* 保持默认开启 */});
+    void command<{values:Record<string,string|null>}>('app.settings.get',{keys:[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, VIEWER_DISPLAY_NAME_SETTING_KEY]})
+      .then(value=>{
+        if(cancelled)return;
+        setNotificationsEnabled(parseTaskNotificationsEnabledSetting(value.values[TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]));
+        setViewerName(normalizeViewerDisplayName(value.values[VIEWER_DISPLAY_NAME_SETTING_KEY]));
+      })
+      .catch(()=>{/* 保持默认开启与默认「你」 */});
     return()=>{cancelled=true;};
   },[]);
 

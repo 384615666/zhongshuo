@@ -25,6 +25,7 @@ import {readThreadMembers,persistThreadMember,readThreadProgress,readDmProgress}
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
 import { CALL_BUDGET_ENABLED_SETTING_KEY, type CallBudgetMode, type FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
 import { TASK_NOTIFICATIONS_ENABLED_SETTING_KEY } from '../contracts/taskNotifications.ts';
+import { VIEWER_DISPLAY_NAME_SETTING_KEY, normalizeViewerDisplayName } from '../contracts/viewerIdentity.ts';
 import { callBudgetSnapshotObject, freezeTaskCallBudget, parsePersistedCallBudgetSnapshot, resolveNewCallBudget, supportsCallBudgetSnapshots } from './callBudget.ts';
 import {DaemonCommandError} from './commandError.ts';
 import {assertNavigationPinAvailable,readNavigationPins,writeNavigationPin} from './navigationPins.ts';
@@ -5010,7 +5011,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
-        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY])).min(1) }).parse(env.params);
+        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, VIEWER_DISPLAY_NAME_SETTING_KEY])).min(1) }).parse(env.params);
         const values: Record<string, string | null> = {};
         for (const key of params.keys) {
           const row = deps.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(`app:setting:${key}`) as { value: string } | undefined;
@@ -5020,8 +5021,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'app.settings.set': {
         const params = z.strictObject({
-          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY]),
-          value: z.string().min(1).max(600),
+          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY, TASK_NOTIFICATIONS_ENABLED_SETTING_KEY, VIEWER_DISPLAY_NAME_SETTING_KEY]),
+          // R195 第 9 项：用户名字允许用空值恢复默认显示（见下面的归一化），其它键仍各自校验。
+          value: z.string().max(600),
         }).parse(env.params);
         const result = run(() => {
           const allowed: Record<string, string[]> = {
@@ -5032,9 +5034,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (allowed[params.key] != null && !allowed[params.key]!.includes(params.value)) {
             throw new DaemonCommandError('VALIDATION_INVALID', `设置 ${params.key} 不接受值 ${params.value}（允许：${allowed[params.key]!.join('/')}）`);
           }
+          let value = params.value;
+          if (params.key === VIEWER_DISPLAY_NAME_SETTING_KEY) {
+            // 名字只影响显示：空白/超长归一化；空值=恢复默认「你」，不删键也不改其它事实。
+            value = normalizeViewerDisplayName(params.value);
+          } else if (params.key === 'ui.autoOpenProjectPath' && value.trim().length === 0) {
+            throw new DaemonCommandError('VALIDATION_INVALID', '项目路径不能为空');
+          }
           deps.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at')
-            .run(`app:setting:${params.key}`, params.value, Date.now());
-          return { key: params.key, value: params.value };
+            .run(`app:setting:${params.key}`, value, Date.now());
+          return { key: params.key, value };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }

@@ -1,4 +1,5 @@
 import { userFacingSystemText } from '../../../contracts/userFacingText';
+import { useEffect, useState } from 'react';
 import type {
   TaskExecutionAction,
   TaskExecutionMember,
@@ -8,6 +9,33 @@ import type {
 import { Icon, type IconName } from './Icon';
 import { Tag } from './ui';
 import { taskStatusCopy } from '../lib/format';
+
+/**
+ * R195 第 5 项（图4）：私信在带鱼屏下，执行状态条被拉满整行、文字与按钮分居两端。
+ * 处理口径：
+ *  - **只限超宽视口**才把状态条内部内容收到约 1024px 并水平居中；
+ *    1360/1873 等常规宽度保持原布局，不因修复产生回归；
+ *  - 操作按钮收进一个组（data-zs-execution-actions），文字与按钮不再被空白拉开；
+ *  - 提供 data-zs 钩子供截图脚本断言内容块宽度与居中状态。
+ */
+const THREAD_BAND_MAX_WIDTH = 1024;
+const THREAD_BAND_WIDE_QUERY = '(min-width: 2000px)';
+
+function useWideThreadBand(enabled: boolean): boolean {
+  const [wide, setWide] = useState(() =>
+    enabled && typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia(THREAD_BAND_WIDE_QUERY).matches);
+  useEffect(() => {
+    if (!enabled) { setWide(false); return; }
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(THREAD_BAND_WIDE_QUERY);
+    const sync = () => setWide(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, [enabled]);
+  return enabled && wide;
+}
 
 const MEMBER_STATUS_COPY: Record<string, string> = {
   PENDING: '待派发', DISPATCHING: '正在派发', RUNNING: '运行中', WAITING_APPROVAL: '等待授权',
@@ -230,23 +258,35 @@ export function ExecutionStatus({
   const nextStep=status.phase==='FAILED'||status.phase==='NOT_STARTED_FAILED'
     ?status.actions.some(action=>action.kind==='continue'||action.kind==='retry')?'可继续任务；不再处理时可结束任务。':status.actions.some(action=>action.kind==='recover')?'可以继续任务。':status.actions.some(action=>action.kind==='close')?'可查看原因，或结束这项任务。':'请查看原因后决定下一步。'
     :null;
+  const wideBand=useWideThreadBand(threadNotice);
+  const closeActions=density==='compact'?remainingActions.filter(action=>action.kind==='close'):[];
+  const showInlineActions=firstAction!=null||closeActions.length>0||(density==='compact'&&onOpenDetails!=null);
 
   return (
     <section
-      className={`panel${status.phase === 'FAILED' || status.phase === 'NOT_STARTED_FAILED' || status.phase === 'UNKNOWN' ? ' danger' : status.phase === 'WAITING_FOR_USER' || status.phase === 'ADMISSION_WAITING' || status.phase === 'WAITING_FOR_PEER' || status.phase === 'STOPPING' ? ' warning' : taskExecutionNeedsReview(status) ? ' warning' : status.phase === 'COMPLETED' ? ' success' : ' info'}${className == null ? '' : ` ${className}`}`}
+      className={`panel${status.phase === 'FAILED' || status.phase === 'NOT_STARTED_FAILED' || status.phase === 'UNKNOWN' ? ' danger' : status.phase === 'WAITING_FOR_USER' || status.phase === 'ADMISSION_WAITING' || status.phase === 'WAITING_FOR_PEER' || status.phase === 'STOPPING' ? ' warning' : taskExecutionNeedsReview(status) ? ' warning' : status.phase === 'COMPLETED' ? ' success' : ' info'}${threadNotice ? ' zs-execution-thread-band' : ''}${className == null ? '' : ` ${className}`}`}
       role="status"
       aria-live="polite"
       data-zs-execution-status={status.schemaVersion}
       data-zs-execution-phase={status.phase}
       data-zs-execution-density={density}
+      data-zs-execution-surface={surface}
       data-zs-performing-members={status.actualPerformingMembers.map(member => member.displayName).join(',')}
       data-zs-waiting-members={status.waitingMembers.map(member => member.displayName).join(',')}
       data-zs-heartbeat-used={status.evidence.heartbeatUsedAsActivity ? '1' : '0'}
-      style={{ margin: 0, padding: '8px 10px', overflow: 'hidden' }}
+      data-zs-execution-band-width={threadNotice ? (wideBand ? String(THREAD_BAND_MAX_WIDTH) : 'auto') : undefined}
+      data-zs-execution-band-centered={threadNotice ? (wideBand ? '1' : '0') : undefined}
+      style={{
+        margin: wideBand ? '0 auto' : 0,
+        width: wideBand ? '100%' : undefined,
+        maxWidth: wideBand ? `var(--zs-execution-band-max, ${THREAD_BAND_MAX_WIDTH}px)` : undefined,
+        padding: '8px 10px',
+        overflow: 'hidden',
+      }}
     >
-      <div className="row tight wrap" style={{ alignItems: 'center', gap: 7, minHeight: 22 }}>
+      <div className="row tight wrap" style={{ alignItems: 'center', gap: 7, minHeight: 22, ...(wideBand ? { justifyContent: 'center' } : {}) }}>
         <Tag tone={presentation.tone} icon={presentation.icon}>{summary.label}</Tag>
-        {summary.main!==summary.label?<span className="small strong truncate" style={{ flex: 1, minWidth: 120 }} data-zs-execution-summary>
+        {summary.main!==summary.label?<span className="small strong truncate" style={wideBand ? { flex: '0 1 auto', minWidth: 0, maxWidth: 420 } : { flex: 1, minWidth: 120 }} data-zs-execution-summary>
           {summary.main}
         </span>:null}
         {summary.detail != null ? (
@@ -254,7 +294,7 @@ export function ExecutionStatus({
              统一收进本行（单行省略，完整内容在 title 提示里）。 */
           <span
             className="small faint truncate"
-            style={{ flex: 1, minWidth: 120 }}
+            style={wideBand ? { flex: '0 1 auto', minWidth: 0, maxWidth: 520 } : { flex: 1, minWidth: 120 }}
             data-zs-execution-detail
             data-zs-thread-notice-body={threadNotice ? '1' : undefined}
             title={threadNotice ? [noticeDetail, nextStep].filter((part): part is string => part != null && part !== '').join('\n') : summary.detail}
@@ -262,26 +302,30 @@ export function ExecutionStatus({
             {threadNotice ? noticeDetail : summary.detail}
           </span>
         ) : null}
-        {firstAction != null ? (
-          <button
-            type="button"
-            className={`btn sm${firstAction.kind === 'continue' || firstAction.kind === 'recover' || firstAction.kind === 'retry' ? ' primary' : ' ghost'}`}
-            data-zs-execution-action={firstAction.kind}
-            data-zs-action-id={firstAction.id}
-            disabled={onAction == null||busy}
-            title={onAction == null ? '此处暂不可操作，请打开对应任务详情' : undefined}
-            onClick={onAction == null ? undefined : () => onAction(firstAction)}
-          >
-            <Icon name={ACTION_ICON[firstAction.kind]} size={12} />
-            {busy&&['continue','recover'].includes(firstAction.kind)?'正在继续…':['continue','recover'].includes(firstAction.kind)?'继续任务':firstAction.label}
-          </button>
+        {showInlineActions ? (
+          <div className="row tight wrap" data-zs-execution-actions="1" style={{ flex: 'none', gap: 7 }}>
+            {firstAction != null ? (
+              <button
+                type="button"
+                className={`btn sm${firstAction.kind === 'continue' || firstAction.kind === 'recover' || firstAction.kind === 'retry' ? ' primary' : ' ghost'}`}
+                data-zs-execution-action={firstAction.kind}
+                data-zs-action-id={firstAction.id}
+                disabled={onAction == null||busy}
+                title={onAction == null ? '此处暂不可操作，请打开对应任务详情' : undefined}
+                onClick={onAction == null ? undefined : () => onAction(firstAction)}
+              >
+                <Icon name={ACTION_ICON[firstAction.kind]} size={12} />
+                {busy&&['continue','recover'].includes(firstAction.kind)?'正在继续…':['continue','recover'].includes(firstAction.kind)?'继续任务':firstAction.label}
+              </button>
+            ) : null}
+            {closeActions.map(action=><button
+              type="button" key={action.id} className="btn sm ghost" data-zs-execution-action="close" data-zs-action-id={action.id}
+              disabled={onAction==null||busy} onClick={onAction==null?undefined:()=>onAction(action)}>
+              <Icon name="x" size={12}/>{action.label}
+            </button>)}
+            {density==='compact'&&onOpenDetails?<button type="button" className="btn sm ghost" data-zs-execution-details onClick={onOpenDetails}>{['FAILED','NOT_STARTED_FAILED','UNKNOWN'].includes(status.phase)?'查看原因':'查看详情'}</button>:null}
+          </div>
         ) : null}
-        {density==='compact'?remainingActions.filter(action=>action.kind==='close').map(action=><button
-          type="button" key={action.id} className="btn sm ghost" data-zs-execution-action="close" data-zs-action-id={action.id}
-          disabled={onAction==null||busy} onClick={onAction==null?undefined:()=>onAction(action)}>
-          <Icon name="x" size={12}/>{action.label}
-        </button>):null}
-        {density==='compact'&&onOpenDetails?<button type="button" className="btn sm ghost" data-zs-execution-details onClick={onOpenDetails}>{['FAILED','NOT_STARTED_FAILED','UNKNOWN'].includes(status.phase)?'查看原因':'查看详情'}</button>:null}
       </div>
       {density === 'detail' ? (
         <>

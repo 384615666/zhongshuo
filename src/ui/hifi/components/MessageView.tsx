@@ -20,6 +20,8 @@ import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
 import { MarkdownView, outlineOf } from '../preview/MarkdownView';
 import { ATTACHMENT_KIND_LABEL, GeneratedFiles, normalizeFormalAttachments } from './GeneratedFiles';
+import { AttachmentThumb, isImageAttachment } from './AttachmentThumb';
+import { viewerDisplayLabel } from '../../../contracts/viewerIdentity';
 import type { MessageRepairLineage } from '../../../contracts/repairLineage';
 
 /* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
@@ -77,6 +79,8 @@ export function collaborationStageText(mark: CollaborationStage): string {
  *
  * 现在附件经 `Message.attachmentIds` 关联到资源，chip 显示真实标题与版本。
  * 无 taskId 的主池消息同样渲染（§17.9 第 1 条）。
+ * R195 第 1 项：图片资源不再渲染成文件名 chip——有可渲染内容时直接出缩略图，
+ * 有正式附件身份时才走 `attachment.previewImage` 通道，二者都没有才保留文件 chip。
  */
 function MessageAttachments({
   message, onOpen, excludeIds,
@@ -95,6 +99,38 @@ function MessageAttachments({
         const res = resourceOf(s, link.resourceId);
         if (!res) return null;
         const rev = revisionOf(res, link.revision);
+        const formal = res.formalAttachment;
+        const imageContent = rev?.content.kind === 'image' ? rev.content : null;
+        /* R195 第 1 项：原型 resources 通道的图片同样直接显示缩略图，不再只是一个文件名。 */
+        if (imageContent != null) {
+          return (
+            <button
+              key={link.id}
+              type="button"
+              className="msg-attach-image"
+              data-zs-message-image="ready"
+              data-zs-message-image-open={link.resourceId}
+              title={`预览 ${res.title} · 只读预览，不发送给 AI`}
+              onClick={() => onOpen?.(link.resourceId, link.revision)}
+            >
+              <img src={imageContent.dataUrl} alt="" draggable={false} />
+            </button>
+          );
+        }
+        if (formal != null && isImageAttachment(res.title, formal.kind)) {
+          return (
+            <button
+              key={link.id}
+              type="button"
+              className="msg-attach-image"
+              data-zs-message-image-open={link.resourceId}
+              title={`预览 ${res.title} · 只读预览，不发送给 AI`}
+              onClick={() => onOpen?.(link.resourceId, link.revision)}
+            >
+              <AttachmentThumb attachmentId={formal.attachmentId} filename={res.title} kind={formal.kind} size="lg" messageImage />
+            </button>
+          );
+        }
         const kindLabel =
           rev?.content.kind === 'image' ? '图片'
             : rev?.content.kind === 'markdown' ? 'Markdown'
@@ -117,6 +153,55 @@ function MessageAttachments({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/* ---------------- 消息内图片缩略图（R195 第 1 项） ---------------- */
+
+/**
+ * 图片附件的消息内缩略图（微信式）。
+ *
+ * 用户反馈：对话里的图片附件和普通文件一样只是一个文件名 chip，看不出内容。
+ * 这里把图片从文件卡里拆出来：
+ *  - 单图按原始比例显示，最长边不超过 220px（不裁切内容）；
+ *  - 多图 104×104 小网格，object-fit: cover 裁切出方形缩略图；
+ *  - 点击仍走 `onOpenAttachment` 的共享预览，不新增文件系统读取入口；
+ *  - 读取复用 AttachmentThumb（attachment.previewImage + 视口内懒加载 + LRU），
+ *    失败时退回图标并给出 data-zs-message-image=failed，不冒充有图。
+ * 稳定钩子：data-zs-message-images（数量）、data-zs-message-image-layout
+ * （single/grid）、data-zs-message-image-open（附件 id）、
+ * data-zs-message-image（loading/ready/failed，由 AttachmentThumb 输出）。
+ */
+function MessageImages({
+  attachments, onOpen,
+}: {
+  attachments: readonly FormalAttachmentSummary[];
+  onOpen?: (att: FormalAttachmentSummary) => void;
+}) {
+  if (attachments.length === 0) return null;
+  const single = attachments.length === 1;
+  return (
+    <div
+      className={`msg-image-grid${single ? ' is-single' : ''}`}
+      data-zs-message-images={attachments.length}
+      data-zs-message-image-layout={single ? 'single' : 'grid'}
+    >
+      {attachments.map((attachment) => (
+        <button
+          key={attachment.artifactId}
+          type="button"
+          className="msg-image-tile"
+          data-zs-artifact-id={attachment.artifactId}
+          data-zs-message-image-open={attachment.artifactId}
+          title={`预览 ${attachment.filename} · 只读预览，不发送给 AI`}
+          aria-label={`预览图片 ${attachment.filename}`}
+          disabled={onOpen == null}
+          onClick={() => onOpen?.(attachment)}
+        >
+          <AttachmentThumb attachmentId={attachment.artifactId} filename={attachment.filename} kind={attachment.kind} size="lg" messageImage />
+        </button>
+      ))}
     </div>
   );
 }
@@ -200,6 +285,9 @@ export function MessageView({
   const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
   const rootRef = useRef<HTMLDivElement>(null);
   const [selectionMenu, setSelectionMenu] = useState<{ x: number; y: number; text: string } | null>(null);
+  /* R195 第 9 项：本人消息署名用设置里的名字；未设置时仍是「你」，默认观感不变。 */
+  const viewerName = useStore((x) => x.viewerName);
+  const viewerLabel = viewerDisplayLabel(viewerName);
   const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
@@ -288,7 +376,7 @@ export function MessageView({
             <Icon name="settings" size={12} />
           </span>
         ) : (
-          <Avatar name={isHuman ? '我' : author?.displayName ?? '?'} ordinal={author?.ordinal} color={memberColor(isHuman ? 'you' : author?.id ?? '', author?.ordinal)} size={50} state={author?.workState} stateTitle={author?.workStateReason} subject={isHuman?'user':author!=null?`member:${author.id}`:undefined} />
+          <Avatar name={isHuman ? viewerLabel : author?.displayName ?? '?'} ordinal={author?.ordinal} color={memberColor(isHuman ? 'you' : author?.id ?? '', author?.ordinal)} size={50} state={author?.workState} stateTitle={author?.workStateReason} subject={isHuman?'user':author!=null?`member:${author.id}`:undefined} />
         )}
       </div>
       <div className={`msg-body${isHuman ? ' is-human' : ''}`}>
@@ -298,7 +386,7 @@ export function MessageView({
           <>
             <div className="msg-head">
               {!isHuman && author != null ? <span className="msg-dot" aria-hidden="true" style={{ background: memberColor(author.id, author.ordinal) }} /> : null}
-              <span className="msg-author">{isHuman ? '你' : author?.displayName ?? '未知成员'}</span>
+              <span className="msg-author" data-zs-message-author={isHuman ? 'viewer' : 'member'}>{isHuman ? viewerLabel : author?.displayName ?? '未知成员'}</span>
               {!isHuman && author?.ordinal && author.ordinal > 1 ? <span className="small faint">#{author.ordinal}</span> : null}
               {message.collaborationStage != null ? <span className="msg-stage-tag"><Tag tone="info" icon="layers" title="已保存的研讨结果">{collaborationStageText(message.collaborationStage)}</Tag></span> : null}
               {isRepairedSource ? <Tag tone="neutral" icon="refresh" title="此文保留为历史原文，当前有效版本已补交">原答已补交</Tag> : null}
@@ -608,9 +696,21 @@ function MessageFooter({
 }) {
   const formalIds = new Set(formalAttachments.map((attachment) => attachment.artifactId));
   const observedSnapshot = message.authorId === 'system:file-snapshot' && message.id.startsWith('msg_observed_');
+  /*
+   * R195 第 1 项：图片附件在消息里直接显示缩略图，不再混在文件卡/文件 chip 里。
+   * 参与本轮文件变更的图片仍交给文件变更卡（保留 hash 与差异关联），不进缩略图网格，
+   * 避免同一张图既出现在网格又在变更列表里重复。
+   */
+  const changeLinkedIds = new Set((message.fileChanges ?? []).flatMap((change) => (change.artifactId == null ? [] : [change.artifactId])));
+  const previewImages = formalAttachments.filter((attachment) => isImageAttachment(attachment.filename, attachment.kind) && !changeLinkedIds.has(attachment.artifactId));
+  const previewImageIds = new Set(previewImages.map((attachment) => attachment.artifactId));
+  const fileAttachments = formalAttachments.filter((attachment) => !previewImageIds.has(attachment.artifactId));
   return (
     <div className="msg-attachment-footer">
-      <GeneratedFiles attachments={message.formalAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} nonFinal={observedSnapshot} projectId={message.projectId} />
+      <MessageImages attachments={previewImages} onOpen={onOpenAttachment} />
+      {/* 观察到的图片同样不是最终交付：保留原来的「非最终」事实，不因为换成缩略图就丢掉。 */}
+      {observedSnapshot && previewImages.length > 0 ? <div className="small faint" data-zs-non-final-file="1">非最终</div> : null}
+      <GeneratedFiles attachments={fileAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} nonFinal={observedSnapshot} projectId={message.projectId} />
       <MessageAttachments message={message} excludeIds={formalIds} onOpen={onOpenResource} />
     </div>
   );

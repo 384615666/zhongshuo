@@ -1,0 +1,74 @@
+/**
+ * R195 第 6 项：独立研讨成员弹层统一为单行、等高。
+ *
+ * 现象：DeepSeek Harness 的运行时提示很长（渠道 · 模型，例如
+ * 「DeepSeek Harness · magpie/workbuddy-ai/deepseek-v4.1-flash-sg」），
+ * `.menu-item .hint` 既没有 `white-space: nowrap` 也没有省略号，在
+ * `.menu`（max-width: 320px）里按空格折成两行，整行被撑高；
+ * 勾选图标、名称的缩进与其它成员行的基线因此对不上。
+ *
+ * 处理：把每行拆成三个固定列，行本身固定为控件高度：
+ *  - 勾选列固定 16px 宽（内容居中），所有行勾选图标落在同一 x；
+ *  - 名称列可压缩，单行省略号；
+ *  - 运行时提示列上限 128px，单行省略号，全文由 title 提供。
+ * 行高统一用 --control-height（30px），与共享菜单项一致；
+ * 这样即使以后有更长的渠道 / 模型名，也只是省略号变长，不再折行。
+ *
+ * 稳定钩子（由 Composer.tsx 输出，验证脚本按行高与省略号断言）：
+ *  - data-zs-deliberation-members        成员行容器
+ *  - data-zs-deliberation-member-row     单行（值 = 成员 id）
+ *  - data-zs-deliberation-member-check   勾选列
+ *  - data-zs-deliberation-member-name    名称列
+ *  - data-zs-deliberation-member-runtime 运行时提示列（title 为全文）
+ */
+
+.composer-mode-members > .composer-mode-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  width: 100%;
+  height: var(--control-height);
+  min-height: var(--control-height);
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+/* 勾选图标固定列：不参与压缩，也不随名称长度左右移动 */
+.composer-mode-member-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.composer-mode-member-check > svg {
+  flex: none;
+}
+
+/* 名称：从左列基线开始，超长单行省略号 */
+.composer-mode-member-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 右侧运行时提示：单行省略号，全文在 title；宽度上限避免把弹层撑到两行。
+   上限按「弹层最宽 320px、名称列优先完整」估算：128px 已含 12px 左内边距，
+   让「DeepSeek Harness」这类较长的产品名仍能完整显示，只截断渠道与模型。 */
+.composer-mode-member-runtime {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 128px;
+  margin-left: auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

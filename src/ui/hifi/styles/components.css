@@ -824,7 +824,9 @@ button.composer-file-token-open:hover {
 }
 .attachment-thumb-md { width: 56px; height: 56px; }
 .attachment-thumb-sm { width: 20px; height: 20px; border-radius: 4px; }
-.attachment-thumb-lg { width: 100%; height: 150px; border-radius: 10px; }
+/* R195 第 1 项：lg 不再固定 150px 高，随所在卡片宽度保持 3:2，窄卡片不压缩图片、
+   宽卡片不会只剩一条缝；消息图片网格会再按单图/多图覆盖具体尺寸（r195-message.css）。 */
+.attachment-thumb-lg { width: 100%; height: auto; aspect-ratio: 3 / 2; border-radius: 10px; }
 .attachment-thumb.is-placeholder { background: var(--bg-surface-3); }
 /* 图片消息卡：大预览在上，文件名/元信息与打开按钮在下；不再和 180px 文本抢一行。 */
 .message-document-card.is-image { flex-direction: column; align-items: stretch; }
@@ -2260,6 +2262,9 @@ button.composer-file-token-open:hover {
  * 回复串排版（仅 .msg-list.is-replies：Room 回复串与 ThreadPage 回复页签）。
  * 其余 .msg-list（DM / 详情 / 附件列表等）不受影响。
  * 只动展示层：间距、气泡宽度、操作行出现方式、正文节奏、表格。DOM 与消息契约不变。
+ * R195 第 3 项：不再用 grid-row 把操作条挪到作者行——此前「复制/引用/收藏」在
+ * 气泡上方，与房间卡片「引用在卡片底部」的落点相反；现在所有对话面的操作条都在
+ * 正文之后的自然行（气泡下方），Tab 顺序不变，悬停/聚焦显形与 human 右对齐保留。
  */
 .msg-list.is-replies {
   gap: 0;
@@ -2298,34 +2303,6 @@ button.composer-file-token-open:hover {
   border-radius: var(--r-lg);
   background: var(--accent-soft);
 }
-/* 作者行与操作条同排：操作条只在悬停 / 聚焦时显形，不再单独占一行（DOM 顺序不变，键盘 Tab 顺序不变） */
-.msg-list.is-replies .msg:not(.system) .msg-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-}
-.msg-list.is-replies .msg:not(.system) .msg-body > * {
-  grid-column: 1 / -1;
-}
-.msg-list.is-replies .msg:not(.system) .msg-body > .msg-head {
-  grid-column: 1;
-  grid-row: 1;
-}
-.msg-list.is-replies .msg:not(.system) .msg-body > .msg-actions {
-  grid-column: 2;
-  grid-row: 1;
-  /* 负外边距让操作条的外框与作者行等高，行高不被撑开 */
-  margin: -6px 0 -3px;
-  padding: 2px 4px;
-  min-height: 0;
-  border: 1px solid transparent;
-  border-radius: var(--r-md);
-}
-.msg-list.is-replies .msg.msg-human:not(.system) .msg-body {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-}
-.msg-list.is-replies .msg.msg-human:not(.system) .msg-body > .msg-actions { grid-column: 2; }
-.msg-list.is-replies .msg.msg-human:not(.system) .msg-body > .msg-head { grid-column: 3; }
 /* 正文节奏 */
 .msg-list.is-replies .md-view { line-height: 1.75; }
 .msg-list.is-replies .md-p { margin: 10px 0; }
@@ -2352,16 +2329,11 @@ button.composer-file-token-open:hover {
   background: var(--bg-surface-2);
 }
 .msg-list.is-replies .md-table-wrap { overflow-x: auto; }
-/* 操作按钮默认隐形（反应表情历史仍常显），悬停 / 聚焦时连同浮条外框一起浮现；触屏常显 */
+/* 操作按钮默认隐形（反应表情历史仍常显），悬停 / 聚焦时显形；触屏常显。
+   操作条现在位于正文之后，不再有浮条外框，因此无需重置边框 / 底色。 */
 .msg-list.is-replies .msg-actions > :where(.msg-action-btn, .msg-action-feedback) {
   opacity: 0;
   transition: opacity 0.12s ease;
-}
-.msg-list.is-replies .msg:hover .msg-actions,
-.msg-list.is-replies .msg:focus-within .msg-actions {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
 }
 .msg-list.is-replies .msg:hover .msg-actions > *,
 .msg-list.is-replies .msg:focus-within .msg-actions > * {
@@ -2513,19 +2485,12 @@ button.composer-file-token-open:hover {
 
 @media (max-width: 560px) {
   .msg-list.is-replies { padding: 12px; }
-  .msg-list.is-replies .msg-body {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .msg-list.is-replies .msg.msg-human .msg-body {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .msg-list.is-replies .msg.msg-human .msg-body > .msg-actions { grid-column: 2; }
-  .msg-list.is-replies .msg.msg-human .msg-body > .msg-head { grid-column: 1; justify-content: flex-start; }
   /*
-   * 窄屏把操作条收成图标入口，避免 112px 换行后把作者行到正文之间撑出
-   * 两三个空按钮行。aria-label/title 仍完整，键盘聚焦环和触屏常显保留。
+   * 窄屏把操作条收成图标入口，避免按钮标签在气泡下换行成两三个空按钮行。
+   * aria-label/title 仍完整，键盘聚焦环和触屏常显保留；human 的右对齐由
+   * 全局 .msg.msg-human .msg-actions 规则负责，这里不再统一右对齐 agent 操作条。
    */
-  .msg-list.is-replies .msg-actions { max-width: none; flex-wrap: nowrap; gap: 2px; justify-content: flex-end; }
+  .msg-list.is-replies .msg-actions { max-width: none; flex-wrap: nowrap; gap: 2px; }
   .msg-list.is-replies .msg-action-btn { padding-inline: 6px; font-size: 0; }
   .msg-list.is-replies .msg-human-bubble { max-width: calc(100% - 8px); }
   .msg-list.is-replies .md-spec { grid-template-columns: 64px minmax(0, 1fr); }
@@ -2537,19 +2502,11 @@ button.composer-file-token-open:hover {
  * 作者行、操作行与正文也会一起切换，不会继续按整窗媒体查询排版。
  */
 @container zs-message-panel (max-width: 560px) {
-  .msg-list.is-replies .msg-body {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .msg-list.is-replies .msg.msg-human .msg-body {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .msg-list.is-replies .msg.msg-human .msg-body > .msg-actions { grid-column: 2; }
-  .msg-list.is-replies .msg.msg-human .msg-body > .msg-head { grid-column: 1; justify-content: flex-start; }
+  /* 操作条在正文之后：窄面板同样收成图标入口；human 右对齐由全局规则负责。 */
   .msg-list.is-replies .msg-actions {
     max-width: none;
     flex-wrap: nowrap;
     gap: 2px;
-    justify-content: flex-end;
   }
   .msg-list.is-replies .msg-action-btn {
     padding-inline: 6px;

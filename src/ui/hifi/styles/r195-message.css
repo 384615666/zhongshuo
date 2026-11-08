@@ -1,0 +1,172 @@
+/**
+ * R195 第 1 项：对话消息里的图片附件改为消息内真实缩略图（微信式）。
+ *
+ * 现象：用户发在对话（回复串 / 私信）里的图片，此前和普通文件一样只落进
+ * 文件卡或文件名 chip，看不出内容，要点开预览才知道发了什么。
+ *
+ * 处理（组件见 components/MessageView.tsx 的 MessageImages）：
+ *  - 图片附件不再进文件卡，直接渲染缩略图，点击仍打开现有共享预览；
+ *  - 单图按原始比例显示，最长边 220px 以内，不裁切内容；
+ *  - 多图用 104×104 小网格，object-fit: cover 裁出方形缩略图；
+ *  - 非图片附件保持原来的文件 chip / 文件卡，行为不变；
+ *  - 加载失败时由 AttachmentThumb 退回图标，不冒充已经加载出图片。
+ *
+ * 读取通道不变：仍走 AttachmentThumb 的 attachment.previewImage（audience 与
+ * 原件核对在 daemon），进入视口附近才请求，并在模块内做小型 LRU 缓存。
+ *
+ * 稳定钩子（截图 / 验收脚本按这些断言，不依赖类名）：
+ *  - data-zs-message-images          图片网格容器；值 = 本条消息的图片数量
+ *  - data-zs-message-image-layout    值 single（单图）/ grid（多图）
+ *  - data-zs-message-image-open      单张缩略图按钮；值 = 附件 id，点击打开共享预览
+ *  - data-zs-message-image           缩略图状态 loading / ready / failed
+ *  - data-zs-attachment-thumb        与缩略图共用（AttachmentThumb 原有钩子）
+ */
+
+/* ---------------- 多图小网格 ---------------- */
+
+.msg-image-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.msg-image-tile {
+  position: relative;
+  flex: none;
+  width: 104px;
+  height: 104px;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface-2);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.msg-image-tile:hover {
+  border-color: var(--accent-border);
+}
+
+.msg-image-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.msg-image-tile:disabled {
+  cursor: default;
+}
+
+/* 缩略图铺满按钮；圆角由按钮的 overflow 负责 */
+.msg-image-tile .attachment-thumb {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.msg-image-tile .attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ---------------- 单图：原始比例、最长边 220px ---------------- */
+
+.msg-image-grid.is-single {
+  display: block;
+}
+
+.msg-image-grid.is-single .msg-image-tile {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 12px;
+}
+
+.msg-image-grid.is-single .attachment-thumb {
+  display: inline-grid;
+  width: auto;
+  height: auto;
+  max-width: 220px;
+  max-height: 220px;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.msg-image-grid.is-single .attachment-thumb img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 220px;
+  max-height: 220px;
+  object-fit: contain;
+}
+
+/* 加载中 / 失败时的占位：保留一块等待区，避免单图从图标大小跳成大图。
+   失败时 AttachmentThumb 只显示图标，不冒充有图。 */
+.msg-image-grid.is-single .attachment-thumb.is-placeholder {
+  display: inline-grid;
+  place-items: center;
+  width: 180px;
+  height: 135px;
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+}
+
+/* ---------------- 原型 resources 通道的图片附件 ---------------- */
+
+/* MessageView.MessageAttachments 走的是旧的 resources 通道（有内联图片内容或
+   正式附件身份时才出图）；尺寸与多图网格保持一致，非图片仍是文件名 chip。 */
+.msg-attach-image {
+  flex: none;
+  width: 104px;
+  height: 104px;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface-2);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.msg-attach-image:hover {
+  border-color: var(--accent-border);
+}
+
+.msg-attach-image:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.msg-attach-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.msg-attach-image .attachment-thumb {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.msg-attach-image .attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

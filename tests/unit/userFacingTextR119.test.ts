@@ -48,6 +48,17 @@ describe('R119/R191 program-generated UI copy',()=>{
     expect(userFacingSystemText('仅 UNKNOWN turn 可对账（实际：FAILED）')).toBe('仅结果待确认轮次可对账');
     expect(userFacingSystemText('调用次数预算开关只接受 true/false，读到：x')).toBe('调用次数预算开关只接受开或关，读到：x');
   });
+  it('never shows raw git stderr for a plain non-git folder',()=>{
+    // R195 用户图3：非 Git 目录是支持的项目形态，原始 Git stderr 不得进入用户可见文本。
+    expect(userFacingSystemText('NOT_A_GIT_REPO: 目录不是 git 仓库（D:/work/demo）：fatal: not a git repository (or any of the parent directories): .git'))
+      .toBe('此目录不是 Git 仓库');
+    expect(userFacingSystemText('目录不是 git 仓库：fatal: not a git repository : .git')).toBe('此目录不是 Git 仓库');
+    expect(userFacingSystemText('fatal: not a git repository : .git')).toBe('此目录不是 Git 仓库');
+    expect(userFacingSystemText('不是 git 仓库')).toBe('此目录不是 Git 仓库');
+    // 其它 Git 原始 stderr 只去掉 fatal: 前缀——后面的权限等安全关键信息仍如实保留。
+    expect(userFacingSystemText('读取失败：fatal: 权限不足，请检查目录')).toBe('读取失败：权限不足，请检查目录');
+    expect(userFacingSystemText('暂存失败：fatal: not a git repository : .git')).not.toMatch(/fatal:|not a git repository/i);
+  });
   it('never leaves error codes or parentheses in translated system text',()=>{
     const samples=[
       'VALIDATION_INVALID: 协调者不可停用（房间 AUTO 路由依赖协调者——如需更换请先调整协调者）',
