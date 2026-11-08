@@ -1,5 +1,14 @@
 # 续工记录（continuation）
 
+## 2026-11-08：R201 界面反馈 6 条（beta.46）
+
+用户带截图反馈 6 条，全部修复并用隔离 Electron 截图验证：①「打开新的工作区」按钮 hover 底色错位（根因：`.side-heading button` 未清通用 button 的 6px/12px padding，20px 盒被撑成 24 宽、图标偏右；修复 `padding:0;flex:none`，实测按钮 20×20、图标/hover 同心 219=219）；②按钮 tooltip 改为「打开新的工作区」；③标题栏删除「当前项目 ▾」项目下拉（TitleBar 删 ProjectMenu/关联状态/ref，titlebar.css 删 `.zs-tb-project*` 规则；项目切换走侧栏）；④命令面板删除「退出键」按钮、「回车键」标签与 placeholder 键盘提示（键盘行为保留）；⑤LiveProgress 活动行单行：长文本 `.live-progress-activity-text` 省略、`.live-progress-ago` nowrap，实测单行 18.7px；⑥`file:///` 本地文件链接只显示文件名：新增 `src/ui/hifi/lib/localFileHref.ts`（仅 file: 绝对路径，盘符/UNC/百分号编码），MarkdownView 渲染 `LocalFileLink`（左键默认程序打开，右键复制文件地址/默认程序打开/文件管理器中显示/其它打开方式），不再出现原始地址或 `!`。
+
+验证：新增 `scripts/capture-r201-ui.cjs`（21/21：按钮几何与 hover、tooltip、标题栏、命令面板、两个 file:/// 链接右键复制到绝对路径、LiveProgress 单行）+ `tests/integration/r201UiFeedback.test.ts`（file:/// 解析 5 例 + 源码合同）；`r90TitlebarButtonContract` 更新为无项目下拉合同；`capture-r193` 25/25、`capture-r195` 41/41、`capture-r197` 23/23 复跑通过；hifi tsc 0；已跟踪全量测试 379 文件执行 377 通过/2 跳过、3394 通过/3 预期失败/16 跳过/0 失败。未安装/升级/卸载、未操作用户数据、未调用真实模型。
+
+交付：版本升 `0.1.3-beta.46`（`0.1.3.46`）；程序提交 `31a6f66`；干净 worktree `dist/r201-source` 构建便携镜像 `bld_c0c51f487c8b5862`（clean、633 文件 MANIFEST）、安装器 `bld_c41c359aa2386e1c`（670 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-0.1.3-beta.46-x64.exe` **160,467,484 字节** SHA256 `112520278f9a5946ed679b2fc273ba20aa3258a0ce78d6b67da283716e289ef2`，未签名。本记录提交后推送 `main`（`31a6f66` + 记录提交）、创建 tag `v0.1.3-beta.46` 与 GitHub Release「众说 0.1.3-beta.46」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/0.1.3-beta.46.md`）；用户自行安装。见 [R201](../reviews/r201-ui-feedback-20261108.md)。
+
+
 ## 2026-11-08：R200 对话串页签简化 + 串内成员管理（另一 AI 改动，主控提交打包；beta.45）
 
 用户：「另一个 ai 也修改了代码，你一起帮他提交打包吧」。工作区有另一 AI 完成的未提交改动（7 个已跟踪文件 + 1 张新手册截图），主控未改其设计，原样提交并在干净 worktree 复验后打包。
