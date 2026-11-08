@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="site/index.html">产品主页</a>
+  <a href="https://zhongshuo.lsjx.xyz/">产品主页</a>
   &nbsp;·&nbsp;
   <a href="docs/user-guide/README.md">操作手册</a>
   &nbsp;·&nbsp;
@@ -26,16 +26,16 @@
 <p align="center"><sub>同一个项目、同一间房：多个 AI 分工、讨论、执行，进度与成果留在回复串里。</sub></p>
 
 <p align="center">
-  <a href="https://github.com/384615666/zhongshuo/releases/download/v1.0.0/Zhongshuo-Setup-1.0.0-x64.exe"><b>⬇ 下载众说 1.0 Windows 安装包</b></a>
+  <a href="https://github.com/384615666/zhongshuo/releases/download/v1.0.1/Zhongshuo-Setup-1.0.1-x64.exe"><b>⬇ 下载众说 1.0 Windows 安装包</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/384615666/zhongshuo/releases/tag/v1.0.0">版本与 SHA256</a>
+  <a href="https://github.com/384615666/zhongshuo/releases/tag/v1.0.1">版本与 SHA256</a>
 </p>
 
 ---
 
 ## 下载安装
 
-Windows 10/11 x64：[众说 1.0.0 安装包](https://github.com/384615666/zhongshuo/releases/download/v1.0.0/Zhongshuo-Setup-1.0.0-x64.exe)。SHA256 与版本信息见 [GitHub Release](https://github.com/384615666/zhongshuo/releases/tag/v1.0.0)；安装包未配置代码签名，SmartScreen 可能提示「未知发布者」。安装版仅支持当前 Windows 用户，无需管理员权限。
+Windows 10/11 x64：[众说 1.0.1 安装包](https://github.com/384615666/zhongshuo/releases/download/v1.0.1/Zhongshuo-Setup-1.0.1-x64.exe)。SHA256 与版本信息见 [GitHub Release](https://github.com/384615666/zhongshuo/releases/tag/v1.0.1)；安装包未配置代码签名，SmartScreen 可能提示「未知发布者」。安装版仅支持当前 Windows 用户，无需管理员权限。
 
 也可以按下面的[快速开始](#quick-start)从源码构建。
 
@@ -194,7 +194,7 @@ pnpm build:ui
 
 <p align="center">
   <sub>Windows 本地多 AI 协作工作台 · 1.0 正式版</sub><br>
-  <a href="site/index.html">产品主页</a> &nbsp;·&nbsp;
+  <a href="https://zhongshuo.lsjx.xyz/">产品主页</a> &nbsp;·&nbsp;
   <a href="docs/user-guide/README.md">操作手册</a> &nbsp;·&nbsp;
   <a href="LICENSE">MIT License</a> &nbsp;·&nbsp;
   <a href="THIRD_PARTY_NOTICES.md">第三方说明</a>

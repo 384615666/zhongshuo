@@ -1,5 +1,8 @@
 import {describe, expect, it} from 'vitest';
 import {spawnSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 function parseVersions(versions: string[]) {
   const script=`import {releaseVersion} from './scripts/make-windows-installer.mjs';
@@ -20,7 +23,10 @@ describe('R148/R150 Windows stable release versions',()=>{
     for(let i=1;i<ordered.length;i++)expect(ordered[i]!>ordered[i-1]!).toBe(true);
   });
   it('uses the current core version for beta shorthand',()=>{
-    expect(parseVersions(['beta.1'])[0]).toEqual({version:'1.0.0-beta.1',numericVersion:'1.0.0.1'});
+    const root=resolve(fileURLToPath(new URL('../..',import.meta.url)));
+    const version=JSON.parse(readFileSync(resolve(root,'package.json'),'utf8')).version as string;
+    const core=version.split('-')[0]!;
+    expect(parseVersions(['beta.1'])[0]).toEqual({version:`${core}-beta.1`,numericVersion:`${core}.1`});
   });
   it('rejects invalid or ambiguous versions instead of creating misleading installer metadata',()=>{
     const versions=['0.1','v0.1.0','00.1.0','0.1.0-beta.-1','0.1.0-beta.65535','65536.0.0','0.1.0-rc.1','0.1.0.4','0.1.0-beta.01'];

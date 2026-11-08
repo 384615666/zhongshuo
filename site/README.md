@@ -66,7 +66,7 @@ node scripts/capture-homepage-discussion.cjs
 
 页面事实以根目录 README 与 `docs/user-guide/README.md` 为准。1.0 发版时已同步：
 
-- 下载按钮指向 GitHub Release `v1.0.0` 的 `Zhongshuo-Setup-1.0.0-x64.exe`；后续发版需要同步页面上的版本号与下载链接。
+- 下载按钮指向 GitHub Release `v1.0.1` 的 `Zhongshuo-Setup-1.0.1-x64.exe`；后续发版需要同步页面上的版本号与下载链接。
 - 「数据不出本机」仍不写：聊天与文件保存在本机，但 AI 请求会经 Claude/Codex 等渠道发出。
 - 「主题偏好会保存」仍不写：深色主题可切换，但已知重启后会回浅色。
 - 页面已标注「1.0 正式版」；不再写「项目仍在持续开发中」。安装包未配置代码签名，页面已注明。
