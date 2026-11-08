@@ -2406,6 +2406,19 @@ button.composer-file-token-open:hover {
   min-width: 0;
   margin-top: 5px;
   overflow-wrap: anywhere;
+  /* R201 第 5 项：活动一行展示——长命令省略号截断，「最近活动 X 秒前」固定尾部单行。 */
+  flex-wrap: nowrap;
+}
+.live-progress-activity-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-progress-ago {
+  flex: none;
+  white-space: nowrap;
 }
 .live-progress-activity[data-zs-live-activity="failure"] { color: var(--danger); }
 .live-progress-text {

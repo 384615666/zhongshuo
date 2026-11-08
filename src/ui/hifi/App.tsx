@@ -612,8 +612,8 @@ export default function App() {
                 <button
                   className="side-heading-action"
                   data-zs-open-project="hifi"
-                  title="打开/切换工作区：选择项目文件夹；已打开的项目会切换到前台，其它项目保留在侧栏"
-                  aria-label={folderPickerBusy ? '正在打开项目文件夹' : '打开/切换工作区'}
+                  title="打开新的工作区"
+                  aria-label={folderPickerBusy ? '正在打开新的工作区' : '打开新的工作区'}
                   aria-busy={folderPickerBusy}
                   disabled={folderPickerBusy}
                   onClick={() => { void chooseFolder(); }}

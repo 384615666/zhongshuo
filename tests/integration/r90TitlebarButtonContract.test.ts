@@ -14,7 +14,7 @@ const root = resolve(import.meta.dirname, '..', '..');
 const read = (path: string): string => readFileSync(resolve(root, path), 'utf8');
 
 describe('R90 titlebar and shared control contract', () => {
-  it('keeps normal titlebar chrome to brand/project and only exposes an actionable connection status when needed', () => {
+  it('keeps normal titlebar chrome to brand and only exposes an actionable connection status when needed', () => {
     const source = read('src/ui/hifi/components/TitleBar.tsx');
 
     expect(source).not.toContain('guard.fakeAllowed');
@@ -25,8 +25,10 @@ describe('R90 titlebar and shared control contract', () => {
     expect(source).toContain('connectionLabel != null ?');
     expect(source).toContain('className="zs-tb-status zs-tb-no-drag"');
     expect(source).toContain("navigate('/settings?section=help')");
-    expect(source).toContain('className="zs-tb-project zs-tb-no-drag"');
-    expect(source).toContain('className="zs-tb-project-name"');
+    // R201 第 3 项：标题栏不再有项目/切换工作区下拉（项目切换走侧栏工作区入口）。
+    expect(source).not.toContain('zs-tb-project');
+    expect(source).not.toContain('ProjectMenu');
+    expect(source).not.toContain('data-zs-project-menu-btn');
     expect(source).not.toContain('<TitleBarStatButton />');
     expect(source).not.toContain('浏览器宿主（窗口控制由桌面客户端提供）');
   });
@@ -63,7 +65,7 @@ describe('R90 titlebar and shared control contract', () => {
 
     expect(titlebar).toContain('#zs-titlebar.zs-titlebar');
     expect(titlebar).toContain('--titlebar-height');
-    expect(titlebar).toContain(':is(.zs-tb-project, .zs-tb-status, .zs-winbtn):focus-visible');
+    expect(titlebar).toContain(':is(.zs-tb-status, .zs-winbtn):focus-visible');
     expect(titlebar).toContain('--titlebar-close-bg');
 
     expect(ui).toContain('function OverlayCloseButton');

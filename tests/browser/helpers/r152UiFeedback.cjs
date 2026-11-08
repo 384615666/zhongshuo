@@ -78,7 +78,7 @@ window.r152 = {
     pageScroll:document.querySelector('.page').scrollTop}),
   title:()=>({theme:document.documentElement.dataset.theme,root:getComputedStyle(document.getElementById('zs-titlebar')).backgroundColor,
     content:getComputedStyle(document.querySelector('[data-zs-titlebar-rendered]')).backgroundColor,
-    text:getComputedStyle(document.querySelector('.zs-tb-project-name')).color,
+    text:getComputedStyle(document.querySelector('.zs-tb-name')).color,
     window:getComputedStyle(document.getElementById('hifi-root')).backgroundColor,
     controls:[...document.querySelectorAll('.zs-winbtn')].map(el=>({color:getComputedStyle(el).color,rect:rect(el),drag:getComputedStyle(el).webkitAppRegion})),controlsCalled:controls.slice(),
     drag:getComputedStyle(document.querySelector('[data-zs-titlebar-rendered] .zs-tb-drag')).webkitAppRegion}),
@@ -137,7 +137,7 @@ app.whenReady().then(async()=>{
     const paintedTitle=[bitmap[at+2],bitmap[at+1],bitmap[at]];
     check(prefix+'/native-white-undercoat-covered',paintedTitle.every((value,i)=>Math.abs(value-rgb(t.content)[i])<=1),{nativeBackground:win.getBackgroundColor(),paintedTitle,css:t.content});
     check(prefix+'/both-titlebar-layers-themed',t.root===t.content&&((luminance(t.content)<.1)===(theme==='dark')),t);
-    check(prefix+'/readable-project-and-controls',contrast(t.content,t.text)>=4.5&&t.controls.every(c=>contrast(t.content,c.color)>=4.5),t);
+    check(prefix+'/readable-titlebar-and-controls',contrast(t.content,t.text)>=4.5&&t.controls.every(c=>contrast(t.content,c.color)>=4.5),t);
     check(prefix+'/window-surface-themed',(luminance(t.window)<.1)===(theme==='dark'),t.window);
     check(prefix+'/drag-and-controls',t.drag==='drag'&&t.controls.every(c=>c.drag==='no-drag'&&c.rect.height>=30&&c.rect.width>=30));
     if(!nativeFrame&&theme==='light')await capture('frameless-renderer-light');

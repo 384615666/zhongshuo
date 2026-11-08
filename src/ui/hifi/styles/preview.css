@@ -681,6 +681,24 @@ body.zs-frameless .preview-pane.maximized {
 [data-md-heading] { scroll-margin-top: 8px; }
 .md-link { color: var(--accent-text); }
 .md-link-mark { font-size: 0.8em; opacity: 0.7; }
+/* R201 第 6 项：file:/// 本地文件只显示文件名，点击/右键做本机文件操作（不加载图片）。 */
+.md-file-link { display: inline-flex; max-width: 100%; vertical-align: baseline; }
+.md-file-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xs);
+  background: var(--bg-surface);
+  color: var(--accent-text);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.5;
+}
+.md-file-link-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+.md-file-link-name { max-width: 260px; }
 .md-diagram-wrap {
   max-width: 100%;
   overflow-x: auto;

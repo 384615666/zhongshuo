@@ -9,7 +9,6 @@ import { userFacingSystemText } from '../../../contracts/userFacingText';
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { Tag } from './ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { navigate } from '../lib/router';
@@ -121,7 +120,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             ref={inputRef}
             className="input"
             style={{ border: 'none', padding: 0, minHeight: 24, fontSize: 14, boxShadow: 'none' }}
-            placeholder="搜索页面、房间、私信、成员、任务、消息…上下键选择，回车打开，退出键关闭"
+            placeholder="搜索页面、房间、私信、成员、任务、消息…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onCompositionStart={() => { composingRef.current = true; }}
@@ -135,7 +134,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               if (e.key === 'Enter') { e.preventDefault(); const it = items[sel] ?? items[0]; if (it != null) open(it); }
             }}
           />
-          <span className="kbd">退出键</span>
         </div>
         <div className="overlay-body" style={{ padding: 8, overflow: 'auto', minHeight: 120 }}>
           {tasksErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>任务读取失败：{userFacingSystemText(tasksErr ?? '')}；仍可查找房间、私信、成员和操作</div> : null}
@@ -153,7 +151,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               <Icon name={it.icon} size={14} />
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{it.label}</span>
               {it.hint != null ? <span className="hint">{it.hint}</span> : null}
-              {i === sel ? <Tag plain icon="corner-down-left">回车键</Tag> : null}
             </button>
           ))}
         </div>

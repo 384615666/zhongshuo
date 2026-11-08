@@ -754,13 +754,17 @@ code, pre, .mono {
   place-items: center;
   width: 20px;
   height: 20px;
+  /* R201 第 1 项：此前继承通用 button 的 6px/12px 内边距——20px 宽的按钮里图标被挤到
+     右下角，hover 底色（按钮盒子）与图标错位。显式清零并让它不参与 flex 收缩。 */
+  padding: 0;
+  flex: none;
   border-radius: var(--r-xs);
 }
 .side-heading button:hover {
   background: var(--bg-active);
   color: var(--text);
 }
-/* 打开/切换工作区时按钮短暂禁用：图标保留、只降低不透明度，避免行高变化。 */
+/* 打开新的工作区时按钮短暂禁用：图标保留、只降低不透明度，避免行高变化。 */
 .side-heading button:disabled {
   opacity: var(--control-disabled-opacity);
   cursor: default;

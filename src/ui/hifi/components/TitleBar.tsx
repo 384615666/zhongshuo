@@ -7,24 +7,16 @@
  * 窗口控制：window.zsWindow 窄桥（枚举动作经 main 侧 senderFrame 校验，只作用于可信主窗口）；
  * close=win.close() → window-all-closed → shutdownDaemon() 既有优雅收口链（不为无边框绕过）。
  * 浏览器宿主（探针 http 环境）无 zsWindow：保留同样的控件布局，按钮 tooltip 说明能力边界。
- * R90 起正常态只显示品名与当前项目；daemon 在线本身不证明 AI 可回复，
+ * R90 起正常态只显示品名；daemon 在线本身不证明 AI 可回复，
  * 因此不再常驻“已连接/真实任务”。仅启动中或断线等需要处理的事实才出现状态入口。
  *
- * R66 P1（反例=冻结 v3 点「项目」卸载整个 React root）：
- *  - ProjectMenu 的 selector 必须返回**稳定引用**（先取 s.projects 再 useMemo filter——
- *    useSyncExternalStore 合同）；全量扫描同类「内联 .filter selector」仅此一处。
- *  - portal 内容整体包在 TitleBarBoundary 内：标题栏任何渲染错误只降级为**最小控制条**
- *    （名称+拖动+三枚窗口按钮，零 store 订阅），主界面与窗口控制不再被连带卸载；
- *    ProjectMenu 另有一层内边界——菜单异常只关菜单，标题栏其余功能保留。
- *  - 项目入口保留单个“当前项目名 ▾”按钮，菜单内仍可搜索、切换、显隐与打开文件夹。
+ * R201 第 3 项（用户要求）：去掉品名右侧的「当前项目 ▾ / 切换工作区」组件——项目/工作区
+ * 切换统一走侧栏「工作区」按钮与项目列表；标题栏只剩品名、异常连接状态与窗口按钮。
  */
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Component, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
-import { Menu } from './ui';
 import { useStore } from '../data/store';
-import { openSidebarProject } from '../loader';
-import { toggleProjectVisible } from '../data/actions-nav';
 import { navigate } from '../lib/router';
 
 interface ZsWindowState { maximized: boolean; fullScreen: boolean; focused: boolean }
@@ -67,24 +59,13 @@ class TitleBarBoundary extends Component<{ children: ReactNode }, { failed: bool
   }
 }
 
-/** 菜单级内边界：ProjectMenu 自身异常只关菜单并提示，标题栏其余部分不动。 */
-class MenuBoundary extends Component<{ children: ReactNode; name: string }, { failed: boolean }> {
-  constructor(props: { children: ReactNode; name: string }) { super(props); this.state = { failed: false }; }
-  static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch(e: unknown) { console.error(`[hifi] ${this.props.name} 渲染错误（已关闭菜单，界面其余部分不受影响）：`, e); }
-  render() { return this.state.failed ? null : this.props.children; }
-}
-
 export function TitleBar() {
   const mount = typeof document !== 'undefined' ? document.getElementById('zs-titlebar') : null;
-  const project = useStore((s) => s.projects.find((p) => p.id === s.activeProjectId) ?? null);
   const boot = useStore((s) => s.boot);
   // 实时连接态（r55）：注册 zs:disconnect/zs:reconnected（main 在管道关闭/重连时推送）——
   // 首启 ready 不再永久等同在线；浏览器宿主收不到事件时保持 online 缺省（按 boot 呈现）。
   const conn = useStore((s) => s.conn);
   const connInfo = useStore((s) => s.connInfo);
-  const [pmAt, setPmAt] = useState<{ x: number; y: number } | null>(null);
-  const projectTrigger=useRef<HTMLButtonElement>(null);
   const [state, setState] = useState<ZsWindowState>({ maximized: false, fullScreen: false, focused: true });
   const d = bridge();
 
@@ -152,29 +133,6 @@ export function TitleBar() {
           </button>
         ) : null}
 
-        {/* 正常顶栏只保留当前项目入口；搜索、显示/隐藏与打开文件夹仍在同一菜单。 */}
-        <button
-          type="button"
-          className="zs-tb-project zs-tb-no-drag"
-          data-zs-project-menu-btn="1"
-          data-project-status={project?.status ?? 'none'}
-          ref={projectTrigger}
-          title={project != null
-            ? `切换项目、显示项目或打开文件夹\n当前项目：${project.displayName}\n项目路径：${project.rootPath}`
-            : '打开文件夹添加项目'}
-          aria-label={project != null ? `项目管理，当前项目：${project.displayName}` : '项目管理，尚未选择项目'}
-          aria-haspopup="menu"
-          aria-expanded={pmAt != null}
-          onClick={(e) => {
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            setPmAt((prev) => (prev == null ? { x: Math.max(8, r.left), y: r.bottom + 6 } : null));
-          }}
-        >
-          <Icon name={project?.status === 'missing' ? 'alert-triangle' : 'folder'} size={12} className={project?.status === 'missing' ? 'warn-icon' : 'faint'} />
-          <span className="zs-tb-project-name">{project?.displayName ?? '选择项目'}</span>
-          <Icon name="chevron-down" size={11} className="faint" />
-        </button>
-
         <div
           className="zs-tb-drag"
           title="拖动窗口；双击最大化/还原"
@@ -189,90 +147,8 @@ export function TitleBar() {
         <button type="button" className="zs-winbtn close" title="关闭众说" aria-label="关闭窗口" onClick={() => { void d?.close(); }}>
           <Icon name="x" size={12} />
         </button>
-        {pmAt != null ? (
-          <MenuBoundary name="项目管理菜单">
-            <ProjectMenu anchor={pmAt} trigger={projectTrigger.current} onClose={() => setPmAt(null)} />
-          </MenuBoundary>
-        ) : null}
       </div>
     </TitleBarBoundary>,
     mount,
   );
-}
-
-/** 项目管理下拉（原型 projectMenu：勾选=显示在侧栏；点名=切换当前项目并进入其房间/主页；
- *  +打开文件夹；目录失效时给「重新定位」入口）。 */
-function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: number }; onClose: () => void;trigger:HTMLElement|null }) {
-  // useSyncExternalStore 合同：selector 必须返回稳定引用——先取 s.projects（数组引用随
-  // store 版本变化），再用 useMemo 派生过滤结果（R66 P1 根因修复；内联 .filter 每次快照
-  // 产生新数组 → getSnapshot 不缓存 → Maximum update depth → 整树卸载）。
-  const projectsAll = useStore((s) => s.projects);
-  const activeId = useStore((s) => s.activeProjectId);
-  const visible = useStore((s) => s.visibleProjectIds);
-  const [filter, setFilter] = useState('');
-  const projects = useMemo(() => projectsAll.filter((p) => p.removedAt == null && p.archivedAt == null), [projectsAll]);
-  const list = useMemo(
-    () => projects.filter((p) => filter.length === 0 || p.displayName.toLowerCase().includes(filter.toLowerCase())),
-    [projects, filter],
-  );
-  return (
-    <Menu anchor={anchor} onClose={onClose} trigger={trigger}>
-      <div className="menu-label">项目管理 · 显示在侧栏 / 切换当前项目</div>
-      <div className="menu-search">
-        <Icon name="search" size={12} className="faint" />
-        <input className="menu-search-input" placeholder="搜索项目…" value={filter} onChange={(e) => setFilter(e.target.value)} autoFocus />
-      </div>
-      <div className="menu-head row">
-        <span className="small faint">显示在侧栏</span>
-        <div className="spacer" />
-        <span className="small faint">项目</span>
-      </div>
-      {list.map((p) => {
-        const isVisible = visible.includes(p.id);
-        const isCurrent = p.id === activeId;
-        return (
-          <div key={p.id} className="menu-project-row">
-            <button
-              className={`menu-check${isVisible ? ' on' : ''}${isCurrent ? ' locked' : ''}`}
-              aria-pressed={isVisible}
-              title={isCurrent ? '当前项目不能隐藏，切换到其他项目后可隐藏' : isVisible ? '从侧栏隐藏，只影响显示' : '显示在侧栏'}
-              onClick={(e) => { e.stopPropagation(); toggleProjectVisible(p.id); }}
-            >
-              <Icon name={isVisible ? 'check-square' : 'square'} size={13} />
-            </button>
-            <button
-              className="menu-project-name"
-              title={p.rootPath}
-              onClick={() => {
-                openSidebarProject(p.id);
-                onClose();
-              }}
-            >
-              <Icon name={p.status === 'missing' ? 'alert-triangle' : 'folder'} size={13} />
-              <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                <span className="truncate" style={{ display: 'block' }}>{p.displayName}</span>
-                <span className="small faint" style={{ display: 'block', overflowWrap: 'anywhere' }}>{p.rootPath}</span>
-              </span>
-              {isCurrent ? <span className="tag accent">当前</span> : null}
-              {p.status === 'missing' ? <span className="tag danger">目录失效</span> : null}
-            </button>
-          </div>
-        );
-      })}
-      {list.length === 0 ? (
-        <div className="side-empty" style={{ padding: '6px 10px' }}>{s_emptyText(filter)}</div>
-      ) : null}
-      <div className="menu-sep" />
-      <button className="menu-item" onClick={() => { onClose(); navigate('/welcome'); }}>
-        <Icon name="plus" size={13} /> 打开本地文件夹…
-      </button>
-      <button className="menu-item" onClick={() => { onClose(); if (activeId !== '') navigate(`/project/${activeId}`); }}>
-        <Icon name="refresh" size={13} /> 项目主页，目录失效时重新定位
-      </button>
-    </Menu>
-  );
-}
-
-function s_emptyText(filter: string): string {
-  return filter.length > 0 ? '没有匹配的项目' : '还没有注册项目——用下面的「打开本地文件夹…」添加';
 }

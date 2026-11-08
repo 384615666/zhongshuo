@@ -13,8 +13,20 @@
  * 施工说明 §3 要求"必要依赖应最小化"。渲染需求很窄，自实现可控且可测。
  */
 
-import { Fragment, useId, useMemo, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useState } from 'react';
+import { userFacingSystemText } from '../../../contracts/userFacingText';
 import { Icon } from '../components/Icon';
+import { Menu, MenuItem } from '../components/ui';
+import { toast } from '../data/store';
+import { fileNameFromLocalPath, localPathFromFileHref } from '../lib/localFileHref';
+import {
+  copyTextToClipboard,
+  localFileOpeners,
+  openLocalFileDefault,
+  openLocalFileWith,
+  revealLocalFile,
+  type LocalFileOpener,
+} from '../lib/localOpen';
 
 /** 「**标签**：内容」字段；list 是紧跟在标签行后面的列表（如「**验收**：」下面的要点）。 */
 export interface SpecField {
@@ -228,6 +240,68 @@ export function outlineOf(text: string): OutlineItem[] {
  * 顺序很重要：先切代码段，避免代码里的 `**` 被当成粗体
  * （这正是原型里曾经出现过的"字面星号被渲染"那类缺陷）。
  */
+/**
+ * R201 第 6 项：本地文件条目只显示文件名；左键默认程序打开，右键给复制地址 /
+ * 其他程序打开 / 文件管理器中显示。路径来自 `localPathFromFileHref`（仅 file: 绝对路径）。
+ */
+function LocalFileLink({ path, name }: { path: string; name: string }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [openers, setOpeners] = useState<LocalFileOpener[] | null>(null);
+  useEffect(() => {
+    if (menu == null) return;
+    let alive = true;
+    setOpeners(null);
+    void localFileOpeners(path).then((items) => { if (alive) setOpeners(items); });
+    return () => { alive = false; };
+  }, [menu, path]);
+  const close = () => setMenu(null);
+  const copy = () => {
+    close();
+    void copyTextToClipboard(path).then((ok) => toast(ok ? `已复制文件地址：${path}` : '复制失败：剪贴板不可用', ok ? 'success' : 'error'));
+  };
+  const openDefault = () => {
+    close();
+    void openLocalFileDefault(path).then((result) => { if (!result.ok) toast(`打开失败：${userFacingSystemText(result.error ?? '')}`, 'error'); });
+  };
+  const reveal = () => {
+    close();
+    void revealLocalFile(path).then((result) => { if (!result.ok) toast(`打开文件夹失败：${userFacingSystemText(result.error ?? '')}`, 'error'); });
+  };
+  const run = (opener: LocalFileOpener) => {
+    close();
+    void openLocalFileWith(opener.id, path).then((result) => { if (!result.ok) toast(`打开失败：${userFacingSystemText(result.error ?? '')}`, 'error'); });
+  };
+  return (
+    <span className="md-file-link" data-zs-local-file-link={path}>
+      <button
+        type="button"
+        className="md-file-link-btn"
+        title={`${path}\n左键用默认程序打开；右键复制地址或选择打开方式`}
+        onClick={openDefault}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+          setMenu({ x: Math.round(rect.left), y: Math.round(rect.bottom + 4) });
+        }}
+      >
+        <Icon name="file-text" size={12} />
+        <span className="md-file-link-name truncate">{name}</span>
+      </button>
+      {menu != null ? (
+        <Menu anchor={menu} onClose={close}>
+          <MenuItem icon="copy" title="只复制这个文件在本机的完整路径" onClick={copy}>复制文件地址</MenuItem>
+          <MenuItem icon="external-link" title="用系统默认程序打开这个文件" onClick={openDefault}>用默认程序打开</MenuItem>
+          <MenuItem icon="folder" title="在系统文件管理器中选中这个文件" onClick={reveal}>在文件管理器中显示</MenuItem>
+          {(openers ?? []).filter((opener) => opener.kind !== 'default' && opener.kind !== 'explorer').map((opener) => (
+            <MenuItem key={opener.id} icon="file-text" title={`用 ${opener.label} 打开这个文件`} onClick={() => run(opener)}>用 {opener.label} 打开</MenuItem>
+          ))}
+        </Menu>
+      ) : null}
+    </span>
+  );
+}
+
 function renderInline(text: string, tableCell = false): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   // 用捕获组切分，奇数下标是代码内容
@@ -244,14 +318,20 @@ function renderInline(text: string, tableCell = false): React.ReactNode[] {
         out.push(<strong key={`b${pi}-${si}`}>{tableCell ? renderInline(seg.slice(2, -2), true) : seg.slice(2, -2)}</strong>);
         return;
       }
-      // 链接：只显示文本 + 外链标记，不自动打开
-      const linkSplit = seg.split(/(\[[^\]]+\]\([^)]+\))/g);
+      // 链接：只显示文本 + 外链标记，不自动打开；file:/// 本地文件改为「文件名 + 右键操作」。
+      const linkSplit = seg.split(/(!?\[[^\]]*\]\([^)]+\))/g);
       linkSplit.forEach((piece, li) => {
-        const m = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(piece);
+        const m = /^(!?)\[([^\]]*)\]\(([^)]+)\)$/.exec(piece);
         if (m) {
+          const localPath = localPathFromFileHref(m[3]);
+          if (localPath != null) {
+            const named = m[2].trim() !== '' ? m[2].trim() : fileNameFromLocalPath(localPath);
+            out.push(<LocalFileLink key={`f${pi}-${si}-${li}`} path={localPath} name={named} />);
+            return;
+          }
           out.push(
-            <span className="md-link" key={`l${pi}-${si}-${li}`} title={`外部链接：${m[2]}`}>
-              {tableCell ? renderInline(m[1], true) : m[1]}<span className="md-link-mark">↗</span>
+            <span className="md-link" key={`l${pi}-${si}-${li}`} title={`外部链接：${m[3]}`}>
+              {tableCell ? renderInline(m[2], true) : m[2]}<span className="md-link-mark">↗</span>
             </span>,
           );
         } else if (piece) {

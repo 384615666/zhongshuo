@@ -80,8 +80,8 @@ export function LiveProgressCard({
       </div>
       <div className="small live-progress-activity" data-zs-live-activity={latest?.status ?? 'none'}>
         {latest != null
-          ? <><Icon name={latest.status === 'failure' ? 'alert-triangle' : latest.status === 'started' ? 'activity' : 'check-circle'} size={12} /> {activityCopy(latest)} <span className="faint">· {agoText(latest.completedAt ?? latest.startedAt, now)}</span></>
-          : <><Icon name="clock" size={12} /> {agoText(progress.lastActivityAt, now)}</>}
+          ? <><Icon name={latest.status === 'failure' ? 'alert-triangle' : latest.status === 'started' ? 'activity' : 'check-circle'} size={12} /> <span className="live-progress-activity-text truncate" title={activityCopy(latest)}>{activityCopy(latest)}</span> <span className="faint live-progress-ago">· {agoText(latest.completedAt ?? latest.startedAt, now)}</span></>
+          : <><Icon name="clock" size={12} /> <span className="live-progress-activity-text">{agoText(progress.lastActivityAt, now)}</span></>}
       </div>
       {text.length > 0 ? <div className="live-progress-text">{text}</div> : null}
       {activityDetail.length > 0 ? (

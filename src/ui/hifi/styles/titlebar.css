@@ -249,50 +249,6 @@ body.hifi-on #hifi-root {
   letter-spacing: 0;
 }
 
-#zs-titlebar .zs-tb-project {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  max-width: min(420px, 42vw);
-  height: var(--control-icon-size);
-  min-width: 0;
-  padding: 0 var(--sp-2);
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  text-align: left;
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-  -webkit-app-region: no-drag;
-}
-
-#zs-titlebar .zs-tb-project:hover,
-#zs-titlebar .zs-tb-project[aria-expanded='true'] {
-  border-color: var(--border);
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-#zs-titlebar .zs-tb-project[aria-expanded='true'] {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-
-#zs-titlebar .zs-tb-project-name {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#zs-titlebar .zs-tb-project > .icon {
-  flex: none;
-}
-
 #zs-titlebar .zs-tb-status {
   display: inline-flex;
   align-items: center;
@@ -377,24 +333,19 @@ body.hifi-on #hifi-root {
   pointer-events: none;
 }
 
-#zs-titlebar :is(.zs-tb-project, .zs-tb-status, .zs-winbtn):focus-visible {
+#zs-titlebar :is(.zs-tb-status, .zs-winbtn):focus-visible {
   outline: var(--control-focus-width) solid var(--accent);
   outline-offset: var(--control-focus-offset-inset);
   box-shadow: none;
 }
 
 @media (max-width: 1040px) {
-  #zs-titlebar .zs-tb-project {
-    max-width: min(220px, 34vw);
-  }
-
   #zs-titlebar .zs-tb-note {
     display: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #zs-titlebar .zs-tb-project,
   #zs-titlebar .zs-tb-status {
     transition: none;
   }
