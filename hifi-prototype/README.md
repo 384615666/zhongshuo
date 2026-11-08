@@ -6,7 +6,7 @@
 
 依据 `../docs/zhongshuo-development-design-v1.md`（v1.13）与 `../docs/pre-development-checklist.md` 从零绘制的**可点击高保真原型**，覆盖 §17 页面与交互规格、§4 路由规则、§6 研讨阶段、§10 状态机与预算、§14 改动与撤销、§16 权限与恢复、§25 注意力管理，以及待办清单 E 节已拍板的交互口径。
 
-> 本原型**不参考**目录中此前其他 AI 产出的原型（`../prototype/`、`../docs/zhongshuo-hifi-prototype-v1.html`、`../docs/zhongshuo-ui-prototype.html`）。
+> 本原型**不参考**目录中此前其他 AI 产出的原型（相关旧原型文件已于 2026-11-08 从仓库移除）。
 
 ## 这是桌面客户端，不是网页
 
