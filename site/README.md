@@ -14,7 +14,8 @@
 | --- | --- |
 | `index.html` | 页面结构与文案 |
 | `styles.css` | 全部样式；品牌色沿用桌面应用的蓝绿渐变与中性面 |
-| `app.js` | 顶栏状态、移动端导航、滚动出现、大图查看、复制构建命令 |
+| `app.js` | 顶栏状态、移动端导航、滚动出现、大图查看、复制构建命令，以及按 GitHub 最新 Release 校准版本号与下载链接 |
+| `download/index.html` | 稳定的「下载最新版」入口；版本号与下载按钮同样在打开时校准 |
 | `assets/logo.png` | 仓库根目录正式 logo 的原样副本，供页面资源与分享引用 |
 | `assets/logo-mark.png` | 从正式 logo 裁去多余白边得到的网页横版标记（页头、页脚、首屏） |
 | `assets/favicon.png` | 从正式 logo 生成的方形站点图标 |
@@ -62,13 +63,25 @@ node scripts/capture-homepage-discussion.cjs
 
 脚本每次在 `dist/homepage-shots/run-<id>/` 下建立独立数据根与项目目录，并写入 `site/assets/shots/`。运行记录、失败截图和日志都留在 `dist/homepage-shots/`，不会进入版本库。
 
+## 最新版本与下载入口
+
+- 页面上的版本号（`data-release-version`）、下载按钮（`data-release-download`）与 Release 链接（`data-release-page`）在打开时由 `app.js` 请求 GitHub Releases API 的 `releases/latest` 校准；发新版后无需重新部署页面，首页与 `download/` 自动指向最新安装包。
+- 请求结果在 `sessionStorage` 中缓存 10 分钟；离线、限流或接口不可用时保留静态回退值，当前为 `1.0.2`。静态回退值随站点部署一起更新。
+- `download/` 是稳定的分享入口（`https://zhongshuo.lsjx.xyz/download/`），始终展示最新版本与下载按钮。
+- 页面只读取公开的 Release 元数据，不上报访客信息；Release 仍是版本与 SHA256 的唯一事实来源。
+
+## 部署（gh-pages）
+
+线上 `https://zhongshuo.lsjx.xyz/` 由仓库 `gh-pages` 分支发布（`CNAME=zhongshuo.lsjx.xyz`，DNS CNAME 指向 `384615666.github.io`）。发布时把 `site/` 下的 `index.html`、`styles.css`、`app.js`、`download/`、`assets/` 与 `docs/user-guide/` 同步到 gh-pages 根目录，保留 gh-pages 自带的 `CNAME` 与 `README.md`，提交并推送；GitHub Pages 构建完成后线上生效。版本号由页面运行时自动校准，日常发版不需要为版本号改页面。
+
 ## 文案边界
 
-页面事实以根目录 README 与 `docs/user-guide/README.md` 为准。1.0 发版时已同步：
+页面事实以根目录 README 与 `docs/user-guide/README.md` 为准。1.0.2 发版时已同步：
 
-- 下载按钮指向 GitHub Release `v1.0.1` 的 `Zhongshuo-Setup-1.0.1-x64.exe`；后续发版需要同步页面上的版本号与下载链接。
+- 下载按钮的静态回退指向 `v1.0.2` 的 `Zhongshuo-Setup-1.0.2-x64.exe`，运行时自动校准到最新 Release；后续发版不再需要手工改链接。
+- README 的下载入口指向 `https://zhongshuo.lsjx.xyz/download/`（始终最新版），不再写死安装包版本。
 - 「数据不出本机」仍不写：聊天与文件保存在本机，但 AI 请求会经 Claude/Codex 等渠道发出。
 - 「主题偏好会保存」仍不写：深色主题可切换，但已知重启后会回浅色。
-- 页面已标注「1.0 正式版」；不再写「项目仍在持续开发中」。安装包未配置代码签名，页面已注明。
+- 页面标注当前版本号；不再写「项目仍在持续开发中」。安装包未配置代码签名，页面已注明。
 
 如果后续能力变化（例如修复深色主题持久化或调整发行方式），再同步更新对应文案。

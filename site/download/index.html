@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下载众说最新版</title>
+<meta name="description" content="下载众说 Windows 最新版安装包。版本号与下载地址始终指向 GitHub 最新 Release。">
+<meta name="robots" content="noindex, follow">
+<meta name="theme-color" content="#f6f9fb">
+<link rel="icon" type="image/png" href="../assets/favicon.png">
+<link rel="apple-touch-icon" href="../assets/favicon.png">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  .download-page {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background:
+      radial-gradient(900px 420px at 82% -8%, rgba(37, 99, 235, 0.10), transparent 62%),
+      radial-gradient(720px 380px at 8% 108%, rgba(15, 118, 110, 0.10), transparent 62%),
+      var(--paper);
+  }
+  .download-head { padding-block: 26px; }
+  .download-head .brand { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; }
+  .download-head .brand-mark { width: 96px; height: auto; }
+  .download-head .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+  .download-head .brand-name { font-size: 1.15rem; font-weight: 700; letter-spacing: 0.02em; }
+  .download-head .brand-sub { color: var(--muted); font-size: 0.82rem; }
+  .download-main { flex: 1; display: flex; align-items: center; padding-block: 24px 64px; }
+  .download-card {
+    width: 100%;
+    max-width: 680px;
+    margin-inline: auto;
+    padding: clamp(28px, 5vw, 48px);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-lg);
+  }
+  .download-card h1 { font-size: clamp(1.9rem, 4.4vw, 2.7rem); line-height: 1.2; letter-spacing: -0.01em; }
+  .download-card .lede { margin-top: 14px; color: var(--ink-2); }
+  .download-version {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 22px;
+    padding: 6px 14px;
+    border: 1px solid var(--accent-border);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-hover);
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+  .download-version b { font-size: 1rem; }
+  .download-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
+  .download-actions .btn { text-decoration: none; }
+  .download-facts {
+    display: grid;
+    gap: 8px;
+    margin-top: 26px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .download-facts b { color: var(--ink-2); font-weight: 600; }
+  .download-facts a { color: var(--accent-hover); }
+  .download-foot { padding-block: 0 32px; color: var(--faint); font-size: 0.82rem; text-align: center; }
+</style>
+</head>
+<body class="download-page">
+<header class="download-head">
+  <div class="wrap">
+    <a class="brand" href="../index.html" aria-label="返回众说产品主页">
+      <img class="brand-mark" src="../assets/logo-mark.png" alt="" width="1151" height="679">
+      <span class="brand-text">
+        <span class="brand-name">众说</span>
+        <span class="brand-sub">本地多 AI 协作工作台</span>
+      </span>
+    </a>
+  </div>
+</header>
+
+<main class="download-main">
+  <div class="wrap">
+    <section class="download-card" aria-labelledby="download-title">
+      <h1 id="download-title">下载众说</h1>
+      <p class="lede">Windows 桌面版安装包。版本号与下载地址在页面打开时自动校准到 GitHub 最新发布，不需要记住版本号。</p>
+      <p class="download-version">当前最新版本 <b data-release-version>1.0.2</b></p>
+      <div class="download-actions">
+        <a class="btn btn-dark btn-lg" data-release-download href="https://github.com/384615666/zhongshuo/releases/download/v1.0.2/Zhongshuo-Setup-1.0.2-x64.exe" target="_blank" rel="noreferrer">
+          下载 Windows 安装包
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 15.5h12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="btn btn-line btn-lg" data-release-page href="https://github.com/384615666/zhongshuo/releases/latest" target="_blank" rel="noreferrer">版本与 SHA256</a>
+      </div>
+      <div class="download-facts">
+        <span><b>适用系统</b>：Windows 10/11 x64；安装版仅支持当前用户，无需管理员权限。</span>
+        <span><b>安装包</b>：未配置代码签名，Windows SmartScreen 可能提示「未知发布者」。</span>
+        <span><b>升级</b>：先从系统托盘正常退出众说，再运行新版安装包；已有项目、聊天与草稿保留。</span>
+        <span><b>下载地址</b>：指向 GitHub Release 资产；版本与 SHA256 以 <a data-release-page href="https://github.com/384615666/zhongshuo/releases/latest" target="_blank" rel="noreferrer">Release 页面</a>为准。</span>
+      </div>
+      <noscript><p class="download-facts">当前浏览器未启用 JavaScript，下面的按钮指向最近一次发布的版本；也可以直接前往 <a href="https://github.com/384615666/zhongshuo/releases/latest">GitHub Release</a> 获取最新版。</p></noscript>
+    </section>
+  </div>
+</main>
+
+<footer class="download-foot">
+  <div class="wrap">返回 <a href="../index.html">产品主页</a> · 数据保存在本机 · © 2026 众说</div>
+</footer>
+
+<script src="../app.js"></script>
+</body>
+</html>
