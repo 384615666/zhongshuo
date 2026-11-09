@@ -1,5 +1,9 @@
 # 续工记录（continuation）
 
+## 2026-11-09：R213 产品主页 1.0.2 + 自动指向最新 Release
+
+用户反馈 1.0.2 已发布但线上首页仍为 1.0.1，要求更新并让以后发版自动最新。处理：`site/index.html` 3 个下载按钮的静态回退改 v1.0.2、4 处版本号挂到 `data-release-version`、新增 `data-release-page` 的 Release 链接；新增稳定入口 `site/download/index.html`；`site/app.js` 请求 GitHub `releases/latest` 校准版本号/下载地址/Release 链接，按 10 分钟缓存 `sessionStorage`，离线/限流保留静态回退，安装包按 `Zhongshuo-Setup-*-x64.exe` 匹配；README 下载入口改为 `https://zhongshuo.lsjx.xyz/download/`、版本与 SHA256 指向 `releases/latest`；`site/README.md` 记录机制与 gh-pages 发布步骤。验证：`node --check`/eslint 通过；假 DOM 执行 app.js 的成功/失败/缓存三路径通过（`dist/r213-site/check-site.cjs`）；Electron 本地渲染两种页面无横向溢出；`main` `ee86fef` 与 `gh-pages` `22da7b9` 推送后 Pages build `built`，线上首页 4 处版本号与 3 个下载链接均为 1.0.2、`/download/` 200、手册版本行 1.0.2、线上真实浏览器执行 app.js 成功缓存 `v1.0.2`（自动校准已生效）。以后发新 Release 最多 10 分钟自动生效，无需重部署站点。未改应用代码/未打包/未安装升级/未调用真实模型/未操作用户数据。见 [R213](../reviews/r213-homepage-latest-1.0.2-20261109.md)。
+
 ## 2026-11-09：R212 1.0.2 安装包发布完成
 
 用户明确要求将本轮修复打包发版。合并 R210 Harness 安装入口与 R211 Claude 代理/原生程序占位检测，版本升 1.0.2（1.0.2.65535），手册版本行同步；首页与 README 不动。代码提交 `f2f76da`、测试夹具隔离 `3344950`、原生依赖复制修复 `ceccd48`；tag `v1.0.2` 指向 `ceccd48ca88cf0f4123d1870c92047cf1f1184af`。完整首轮覆盖 388 文件/3488 项，12 条失败涉及的 7 文件补跑 49/49 收口，不冒称单次全量全绿；根/hifi 类型、本轮 lint、Inno 模板编译通过。干净同盘 worktree `dist/r212-source`、Node 24.22.1 构建，内部装配 `bld_f7484fd5f358c59e`（633 文件），安装器 `bld_45eb936fc249956a`（670 文件，隐私扫描/禁用 Node fuse/无用户数据通过），包内隔离 21/21、退出 0、真实调用 0。安装包 `dist/installers/Zhongshuo-Setup-1.0.2-x64.exe` **160,976,533 字节**，SHA256 `662d4e4b5f3fe32df9b319d522b2353239b59fe5602709c53b60fe8665a90a0a`，未签名；源码与 tag 已推送，GitHub Release「众说 1.0.2」已发布并为 Latest，exe/sha256/release.json 三项服务端 digest/长度与本机一致，公开下载 302→200/长度一致。用户自行安装；未运行安装器、升级/卸载程序、修复真实 Claude CLI、修改系统代理或用户数据。详见 [R212](../reviews/r212-runtime-fixes-release-1.0.2-20261109.md)。
