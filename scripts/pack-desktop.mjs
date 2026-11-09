@@ -73,7 +73,7 @@ cpSync(process.execPath, join(daemonDir, 'node', process.platform === 'win32' ? 
 const nm = join(daemonDir, 'node_modules');
 mkdirSync(nm, { recursive: true });
 const koffiVersion = JSON.parse(readFileSync(join(repo, 'node_modules', 'koffi', 'package.json'), 'utf8')).version;
-for (const dep of ['koffi', 'better-sqlite3', '@koromix']) {
+for (const dep of ['koffi', 'better-sqlite3']) {
   const src = join(repo, 'node_modules', dep);
   if (!existsSync(src)) continue;
   cpSync(realpathSync(src), join(nm, dep), { recursive: true, dereference: true });
@@ -84,7 +84,10 @@ if (!existsSync(koffiPlatform)) {
   process.exit(1);
 }
 mkdirSync(join(nm, '@koromix'), { recursive: true });
-cpSync(koffiPlatform, join(nm, '@koromix'), { recursive: true, dereference: true });
+// Resolve platform roots explicitly: Windows cp can retain nested junctions.
+for (const name of readdirSync(koffiPlatform)) {
+  cpSync(realpathSync(join(koffiPlatform, name)), join(nm, '@koromix', name), { recursive: true, dereference: true });
+}
 
 // The Windows installer configures this connector when Harness is present.
 // DSH itself and its credentials remain user-owned; setup.cmd retries failures.
