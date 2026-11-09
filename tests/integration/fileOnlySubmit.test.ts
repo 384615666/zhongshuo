@@ -12,8 +12,8 @@
  *     绑定后 source='binding'。
  * fake runtime 零真实调用。
  */
-import { describe, expect, it, afterAll, beforeAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { describe, expect, it, afterAll, beforeAll, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -29,8 +29,17 @@ const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-fileonly-'));
 afterAll(() => { for (let i = 0; i < 5; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* Windows 句柄释放重试 */ } } });
 
 let savedRuntime: string | undefined;
-beforeAll(() => { savedRuntime = process.env.ZS_RUNTIME; process.env.ZS_RUNTIME = 'claude'; });
-afterAll(() => { if (savedRuntime == null) delete process.env.ZS_RUNTIME; else process.env.ZS_RUNTIME = savedRuntime; });
+beforeAll(() => {
+  savedRuntime = process.env.ZS_RUNTIME; process.env.ZS_RUNTIME = 'claude';
+  const appdata = join(tmpRoot, 'appdata');
+  const bin = join(appdata, 'npm/node_modules/@anthropic-ai/claude-code/bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'claude.exe'), 'MZ local reference fixture, never executed');
+  vi.stubEnv('APPDATA', appdata);
+  vi.stubEnv('CLAUDE_CONFIG_DIR', join(tmpRoot, 'claude-config'));
+  vi.stubEnv('ZS_CLAUDE_MODEL', 'fixture-model');
+});
+afterAll(() => { vi.unstubAllEnvs(); if (savedRuntime == null) delete process.env.ZS_RUNTIME; else process.env.ZS_RUNTIME = savedRuntime; });
 
 const deps = { db: openDatabase(':memory:'), localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: tmpRoot } as never extends never ? { db: ZhongshuoDatabase; localUserId: string; interruptTurn: () => Promise<void>; appDataDir: string } : never;
 const cmd = async <T,>(method: string, params: unknown, commandId?: string): Promise<T> => {

@@ -12,8 +12,10 @@ import * as cliEnvironment from '../../src/daemon/cliEnvironment.ts';
 beforeEach(() => {
   vi.spyOn(cliEnvironment, 'refreshCliSearchPath').mockReturnValue(null);
   const original = memberManagement.memberExecutableStatus;
+  // Program discovery is covered by R145/R211; these persistence cases never run a CLI.
   vi.spyOn(memberManagement, 'memberExecutableStatus').mockImplementation((kind, executable) =>
-    kind === 'pi' || kind === 'deepseek-harness' ? {status: 'missing', reason: 'R88 fixture only installs Claude and Codex'} : original(kind, executable));
+    kind === 'pi' || kind === 'deepseek-harness' ? {status: 'missing', reason: 'R88 fixture only installs Claude and Codex'}
+      : kind === 'claude' || kind === 'codex' ? {status: 'found', reason: 'R88 synthetic installed program reference'} : original(kind, executable));
 });
 
 const roots: string[] = [];

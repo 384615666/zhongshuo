@@ -14,8 +14,8 @@
  * ③ resolveClaudeExecutable：显式 .js→node 前缀执行；显式任意路径按字面（无效=spawn 层
  *   ENOENT→RUNTIME_NOT_FOUND），不再静默换默认。
  */
-import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, expect, it, afterAll, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../../src/persistence/db.ts';
@@ -155,7 +155,16 @@ describe('第二十三轮四：runtime 可执行路径穿透（本地协议 shim
     const arbitrary = resolveClaudeExecutable('C:/definitely/not/installed/claude-xyz');
     expect(arbitrary.command).toBe('C:/definitely/not/installed/claude-xyz'); // 字面——无效由 spawn ENOENT→RUNTIME_NOT_FOUND
     expect(arbitrary.prefixArgs).toEqual([]);
-    const fallback = resolveClaudeExecutable(undefined);
-    expect(fallback.command.length).toBeGreaterThan(0); // 未显式=渠道默认（合法回落场景）
+    try {
+      if (process.platform === 'win32') {
+        const appdata = join(tmpRoot, 'default-appdata');
+        const bin = join(appdata, 'npm/node_modules/@anthropic-ai/claude-code/bin');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'claude.exe'), 'MZ local reference fixture, never executed');
+        vi.stubEnv('APPDATA', appdata);
+      }
+      const fallback = resolveClaudeExecutable(undefined);
+      expect(fallback.command.length).toBeGreaterThan(0); // 未显式=隔离夹具中的渠道默认。
+    } finally { vi.unstubAllEnvs(); }
   });
 });

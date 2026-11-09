@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -48,6 +48,8 @@ describe('R99 formal mixed 2 DELIBERATE + 1 AUTO long execution', () => {
     const dir = join(root, 'fixture');
     const projectRoot = join(dir, 'project');
     mkdirSync(projectRoot, { recursive: true });
+    const executable = join(dir, 'runtime-reference.cjs');
+    writeFileSync(executable, '// Local reference only; adapterFor supplies FakeRuntimeAdapter.');
     const db = openDatabase(join(dir, 'state.sqlite'));
     let codex: FakeRuntimeAdapter | null = null;
     let claude: FakeRuntimeAdapter | null = null;
@@ -86,9 +88,9 @@ describe('R99 formal mixed 2 DELIBERATE + 1 AUTO long execution', () => {
       adapterByMember.set(codexMember, adapters.codex);
       adapterByMember.set(claudeMember, adapters.claude);
       adapterByMember.set(autoMember, adapters.auto);
-      await cmd('member.setRuntime', { memberId: codexMember, kind: 'codex', model: 'gpt-6.1-sol', permissionMode: 'bypassPermissions' });
-      await cmd('member.setRuntime', { memberId: claudeMember, kind: 'claude', model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions' });
-      await cmd('member.setRuntime', { memberId: autoMember, kind: 'codex', model: 'gpt-6-sol', permissionMode: 'bypassPermissions' });
+      await cmd('member.setRuntime', { memberId: codexMember, kind: 'codex', executable, model: 'gpt-6.1-sol', permissionMode: 'bypassPermissions' });
+      await cmd('member.setRuntime', { memberId: claudeMember, kind: 'claude', executable, model: 'claude-sonnet-4-5', permissionMode: 'bypassPermissions' });
+      await cmd('member.setRuntime', { memberId: autoMember, kind: 'codex', executable, model: 'gpt-6-sol', permissionMode: 'bypassPermissions' });
       const roomRevision = (db.prepare('SELECT revision FROM rooms WHERE id=?').get(room.id) as { revision: number }).revision;
       await cmd('room.update', { roomId: room.id, expectedRevision: roomRevision, coordinatorMemberId: autoMember });
       const target = { kind: 'room_root', projectId, roomId: room.id, conversationId: room.conversationId };
