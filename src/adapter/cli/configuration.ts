@@ -42,7 +42,7 @@ export function externalRuntimeLaunchIdentity(kind: ExternalRuntimeKind, options
       // Keep the prior identity for installations with no MCP files at all.
       ...[join(piHome,'mcp.json'),join(cwd,'.pi','mcp.json')].filter(existsSync)];
   const script=entry.prefixArgs.find(arg=>/\.(?:mjs|cjs|js)$/i.test(arg));
-  if(script&&!entry.integrityFiles)paths.push(join(dirname(script), 'package.json'), join(dirname(dirname(script)), 'package.json'));
+  if(script&&!entry.integrityFiles?.some(path=>/[\\/]app\.asar$/i.test(path)))paths.push(join(dirname(script), 'package.json'), join(dirname(dirname(script)), 'package.json'));
   if(kind==='pi'&&script&&/[\\/]pi-launcher\.js$/i.test(script))paths.push(join(dirname(dirname(script)),'install','current-version'));
   launchEvidence['渠道配置'] = digest(JSON.stringify(paths.map(path => [path, fileDigest(path)])));
   const names = kind === 'deepseek-harness'

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { resolveCodexInvocation } from '../adapter/codex/appServerAdapter.ts';
+import { AdapterCallError } from '../contracts/runtime.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities, resolveClaudeExecutable } from '../adapter/claude/cliAdapter.ts';
 const name = z.string().trim().min(1).max(60);
@@ -72,7 +73,11 @@ export function memberExecutableStatus(kind: string | null, executable: string |
       if(!found)return{status:'missing' as const,reason:'当前正式 adapter 的程序或脚本引用不存在或不可读取，请配置后再派工'};
       if(present==null||scripts.some(p=>locate(p)==null))return{status:'unknown' as const,reason:'相对程序路径依赖执行上下文；请保存明确的程序引用'};
       return{status:'found' as const,reason:'已找到正式 adapter 使用的程序引用；未执行或认证模型'};
-    }catch{return{status:'missing' as const,reason:'当前正式 adapter 无法解析保存的程序引用；请配置后再派工'};}
+    }catch(error){
+      if(kind==='claude'&&error instanceof AdapterCallError&&error.code==='RUNTIME_NOT_FOUND')
+        return{status:'missing' as const,reason:error.message};
+      return{status:'missing' as const,reason:'当前正式 adapter 无法解析保存的程序引用；请配置后再派工'};
+    }
 
 }
 export function assertMemberProject(db: ZhongshuoDatabase, projectId: string, fail: Fail) {

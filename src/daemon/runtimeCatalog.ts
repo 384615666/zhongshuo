@@ -23,6 +23,10 @@ export async function claudeModelCatalog(cwd:string):Promise<Omit<RuntimeCatalog
   if(config.reason)return fallback('有效渠道尚不能确定，未向候选渠道请求模型列表；可保留已有配置。');
   const token=env.ANTHROPIC_AUTH_TOKEN,key=env.ANTHROPIC_API_KEY;
   if(!token&&!key)return fallback('当前凭据由 CLI 登录管理，未读取登录凭据；渠道未提供可查询的模型列表。');
+  // This fetch path does not reproduce the CLI's proxy/trust precedence. Never
+  // turn proxy acceptance into an unintended direct credentialed request.
+  if(Object.entries(env).some(([name,value])=>/^(?:HTTPS?_PROXY|ALL_PROXY)$/i.test(name)&&Boolean(value)))
+    return fallback('已检测到网络代理；模型连接由 Claude CLI 按原配置处理，众说不绕过代理直连查询。当前显示本机已配置的模型，也可手动填写模型。');
   const url=new URL(config.channel);url.pathname=url.pathname.replace(/\/$/,'').replace(/\/v1$/,'')+'/v1/models';
   try{
     const response=await fetch(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(8000),headers:{'anthropic-version':'2023-06-01',...(token?{Authorization:`Bearer ${token}`}:{'x-api-key':key!})}});

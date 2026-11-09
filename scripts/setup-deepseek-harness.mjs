@@ -45,13 +45,23 @@ export async function setupDeepseekHarness(args) {
   let launch;
   try { launch = script ? { command: process.execPath, prefixArgs: [script] } : resolveCliExecutable('deepseek-harness', executable); }
   catch (error) {
-    if (!installer || executable || script || error.code !== 'RUNTIME_NOT_FOUND') throw error;
-    // Explorer's PATH can predate the Harness installation. Resolve its normal
-    // Windows entry points without installing or downloading the runtime.
+    const canDiscover = failure => ['RUNTIME_NOT_FOUND', 'CAPABILITY_UNSUPPORTED'].includes(failure.code);
+    if (executable || script || !canDiscover(error)) throw error;
+    // Explorer's PATH can be stale or contain an unfamiliar forwarding shim.
+    // Only implicit selection may fall back; an explicit choice stays binding.
     const candidates = [process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs/DeepSeek Harness/DeepSeek Harness.exe'),
       process.env.APPDATA && join(process.env.APPDATA, 'npm/dsh.cmd')].filter(Boolean);
-    for (const candidate of candidates) if (await exists(candidate)) { launch = resolveCliExecutable('deepseek-harness', candidate); break; }
-    if (!launch) return { status: 'skipped', reason: 'harness-not-installed', modifiesProfile: false };
+    let candidateError;
+    for (const candidate of candidates) {
+      if (!await exists(candidate)) continue;
+      try { launch = resolveCliExecutable('deepseek-harness', candidate); break; }
+      catch (failure) { if (!canDiscover(failure)) throw failure; candidateError = failure; }
+    }
+    if (!launch) {
+      if (candidateError) throw candidateError;
+      if (error.code !== 'RUNTIME_NOT_FOUND' || !installer) throw error;
+      return { status: 'skipped', reason: 'harness-not-installed', modifiesProfile: false };
+    }
   }
   const version = await run(launch, ['--version'], true);
   if (!supportedVersions.includes(version.trim())) throw new Error(`This plugin supports DSH ${supportedVersions.join(' or ')}; install a supported official version separately before setup.`);

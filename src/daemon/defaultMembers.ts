@@ -45,7 +45,7 @@ export function discoverLocalMemberDefaults(cwd: string): { candidates: DefaultM
     claude.restrictedEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL,
   ].map(modelId).find((value): value is string => value != null) ?? null;
   const claudeProgram = memberExecutableStatus('claude', 'claude');
-  if (claudeProgram.status !== 'found') notes.push('没有找到可用的 Claude CLI 程序入口');
+  if (claudeProgram.status !== 'found') notes.push(`Claude：${claudeProgram.reason}`);
   else if (claudeModel == null) notes.push('已找到 Claude CLI，但未能确定默认模型；请在「添加 AI」中选择模型');
   else candidates.push({
     kind: 'claude',

@@ -175,7 +175,7 @@ export function resolveClaudeExecutable(explicit?: string): ClaudeExecutableEntr
   if (explicit != null && explicit.length > 0 && !/^(claude|claude\.cmd)$/i.test(explicit)) {
     if (/\.(cmd|bat)$/i.test(explicit)) return parseWindowsShim(explicit);
     if (process.platform === 'win32') {
-      if (/\.exe$/i.test(explicit)) return { command: explicit, prefixArgs: [] };
+      if (/\.exe$/i.test(explicit)) return nativeClaudeEntry(explicit);
       if (/\.(js|cjs|mjs)$/i.test(explicit)) return { command: process.execPath, prefixArgs: [explicit] };
       return { command: explicit, prefixArgs: [] }; // 无扩展等：字面 spawn——失败即 RUNTIME_NOT_FOUND
     }
@@ -184,12 +184,23 @@ export function resolveClaudeExecutable(explicit?: string): ClaudeExecutableEntr
   return resolveDefaultClaudeEntry();
 }
 
+function nativeClaudeEntry(command: string): ClaudeExecutableEntry {
+  let placeholder = false;
+  try {
+    // The npm package ships this text stub until its native postinstall succeeds.
+    if (statSync(command).size <= 4096)
+      placeholder = /^echo\s+"Error: claude native binary not installed\."/m.test(readFileSync(command, 'utf8'));
+  } catch { /* Missing/unreadable references retain the existing lookup/spawn error path. */ }
+  if (placeholder) throw new AdapterCallError('RUNTIME_NOT_FOUND', 'Claude CLI 安装不完整：缺少原生执行程序，请修复官方 Claude Code 安装后重新扫描；众说不会自动安装或替换它。', true);
+  return { command, prefixArgs: [] };
+}
+
 function resolveDefaultClaudeEntry(): ClaudeExecutableEntry {
   if (process.platform === 'win32') {
     const appdata = process.env.APPDATA;
     if (appdata != null) {
       const exe = join(appdata, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
-      if (existsSync(exe)) return { command: exe, prefixArgs: [] };
+      if (existsSync(exe)) return nativeClaudeEntry(exe);
       const shim = join(appdata, 'npm', 'claude.cmd');
       if (existsSync(shim)) return parseWindowsShim(shim);
     }
@@ -214,7 +225,7 @@ function parseWindowsShim(shimPath: string): ClaudeExecutableEntry {
   const target = matches[matches.length - 1]?.[1];
   if (target == null) return { command: shimPath, prefixArgs: [] };
   const resolved = target.replaceAll(/%dp0%|%~dp0/gi, dir);
-  if (/\.exe$/i.test(resolved)) return { command: resolved, prefixArgs: [] };
+  if (/\.exe$/i.test(resolved)) return nativeClaudeEntry(resolved);
   return { command: process.execPath, prefixArgs: [resolved] };
 }
 
@@ -309,12 +320,15 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     return new Promise((resolve) => {
       let out = '';
       let settled = false;
+      let executable = this.options.executable ?? 'claude';
+      try { executable = this.options.executable ?? resolveClaudeExecutable().command; }
+      catch { /* Production spawn reports lookup failures; event callbacks must not throw. */ }
       const settle = (version: string) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         resolve({
-          executable: this.options.executable ?? resolveClaudeExecutable().command,
+          executable,
           version,
           capabilities: { ...CAPABILITIES },
         });

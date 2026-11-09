@@ -5,9 +5,9 @@
  * 启动路径安全（用户文本只走 stdin，argv 仅固定 CLI 参数；入口解析无 shell）。
  * 不调用真实模型；不修改全局配置。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeCliAdapter, CLAUDE_ADAPTER_VERSION, resolveClaudeExecutable } from '../../src/adapter/claude/cliAdapter.ts';
@@ -303,15 +303,19 @@ describe('启动路径安全（用户令 2026-09-28：用户文本不经 shell/a
     expect(proc._stdinText()).toBe(nasty); // 字节级原样：不转义、不二次解释
   }, 10_000);
 
-  it('resolveClaudeExecutable：默认解析原生 exe（本机 npm 全局，不经 .cmd/shell）；显式 .cmd 解析真实目标', () => {
-    const def = resolveClaudeExecutable();
-    expect(def.prefixArgs).toEqual([]);
-    if (process.platform === 'win32') {
-      expect(def.command.toLowerCase().endsWith('claude.exe')).toBe(true); // 本机已装 @anthropic-ai/claude-code（原生二进制）
-    }
+  it('resolveClaudeExecutable：默认解析原生 exe（隔离 npm 全局布局，不经 .cmd/shell）；显式 .cmd 解析真实目标', () => {
     // 伪造 shim：目标 .exe 直用；目标 .js 走 node 前缀。
     const dir = mkdtempSync(join(tmpdir(), 'zs-claudeshim-'));
     try {
+      if (process.platform === 'win32') {
+        const bin = join(dir, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'claude.exe'), 'MZ fixture reference, never executed');
+        vi.stubEnv('APPDATA', dir);
+      }
+      const def = resolveClaudeExecutable();
+      expect(def.prefixArgs).toEqual([]);
+      if (process.platform === 'win32') expect(def.command).toBe(join(dir, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'));
       const exeShim = join(dir, 'claude.cmd');
       writeFileSync(exeShim, '@ECHO off\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"  %*\r\n', 'utf8');
       const r1 = resolveClaudeExecutable(exeShim);
@@ -323,6 +327,7 @@ describe('启动路径安全（用户令 2026-09-28：用户文本不经 shell/a
       expect(r2.prefixArgs.length).toBe(1);
       expect(r2.prefixArgs[0]!.replaceAll('\\', '/').endsWith('x/cli.js')).toBe(true);
     } finally {
+      vi.unstubAllEnvs();
       rmSync(dir, { recursive: true, force: true });
     }
   });

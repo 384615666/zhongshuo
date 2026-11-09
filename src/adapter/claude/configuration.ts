@@ -137,7 +137,15 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   if (extraArgs.some(arg => /^--(?:settings|setting-sources|model|permission-mode|betas|restricted|safe-mode)(?:=|$)/.test(arg))) reasons.push('额外启动参数覆盖配置、模型或权限，尚未认证');
   for (const [key, value] of Object.entries(env)) {
     if (!value || value === '0' || value === 'false') continue;
-    if (/^CLAUDE_CODE_(USE_|HOST_|PROVIDER_|PROCESS_WRAPPER)|^(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)$/i.test(key)) reasons.push(`${key}改变渠道或宿主执行，尚未核实`);
+    if (/^CLAUDE_CODE_(USE_|HOST_|PROVIDER_|PROCESS_WRAPPER)/i.test(key)) reasons.push(`${key}改变渠道或宿主执行，尚未核实`);
+    // HTTP(S) proxy transport does not select a different model provider.
+    // ALL_PROXY stays inherited/fingerprinted, without certifying CLI support.
+    if (/^HTTPS?_PROXY$/i.test(key)) {
+      try {
+        const proxy = new URL(value);
+        if (!['http:', 'https:'].includes(proxy.protocol) || !proxy.hostname || proxy.search || proxy.hash || proxy.pathname !== '/') throw new Error('invalid proxy');
+      } catch { reasons.push(`${key}的 HTTP(S) 代理地址无效或协议不受支持，请检查代理配置`); }
+    }
   }
   if (env.CLAUDE_CODE_PROJECT_DIR_NAME) reasons.push('自定义项目配置目录未核实');
   if (env.CLAUDE_CONFIG_DIR !== inherited.CLAUDE_CONFIG_DIR) reasons.push('settings.env 重定向配置目录，最终来源未核实');

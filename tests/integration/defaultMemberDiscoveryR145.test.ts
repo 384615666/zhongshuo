@@ -68,6 +68,16 @@ function fixture() {
 }
 
 describe('R145 installed CLI discovery', () => {
+  it.skipIf(process.platform !== 'win32')('R211 reports an incomplete Claude native installation instead of creating a runnable default member', () => {
+    const f = fixture();
+    f.install('claude');
+    const executable = join(f.root, 'appdata/npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe');
+    writeFileSync(executable, 'echo "Error: claude native binary not installed." >&2\nexit 1\n');
+    const result = discoverLocalMemberDefaults(f.project);
+    expect(result.candidates.some(candidate => candidate.kind === 'claude')).toBe(false);
+    expect(result.notes).toContainEqual(expect.stringContaining('Claude CLI 安装不完整'));
+  });
+
   it('R146 discovers a CLI installed into a newly added Windows PATH while the daemon keeps running', async () => {
     const f = fixture();
     const first = await f.command('project.ensureDefault', {});

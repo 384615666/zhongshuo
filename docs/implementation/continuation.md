@@ -1,5 +1,17 @@
 # 续工记录（continuation）
 
+## 2026-11-09：R212 1.0.2 安装包发布准备
+
+用户明确要求将本轮修复打包发版。合并 R210 Harness 安装入口与 R211 Claude 代理/原生程序占位检测，版本升 1.0.2（1.0.2.65535），手册版本行同步；首页与 README 不动。定向 208 项和版本测试 3 项、根/hifi 类型检查、Inno 模板编译已通过；已恢复精确锁定依赖，正在做完整回归与干净源码安装器构建。只交付安装包、SHA256 与版本元数据，不执行用户程序安装/升级/卸载或第三方 CLI 修复。最终构建及 Release 身份见 [R212](../reviews/r212-runtime-fixes-release-1.0.2-20261109.md) 后续回填。
+
+## 2026-11-09：R211 Claude 代理误报与原生程序占位检测（源码修复，未打包）
+
+用户报告 ALL/HTTPS/HTTP_PROXY「改变渠道或宿主执行」。确认该提示为众说将普通代理误当 provider/host 接管；本机默认 npm Claude 2.1.318 的 claude.exe 同时为 500 字节“原生程序未安装”占位文本。现合法 HTTP(S) 代理不再阻塞，原样保留及继续按原 v3 算法纳入指纹；provider/host/动态凭据/项目托管覆盖仍拒绝。ALL_PROXY 仅保留透传，不宣称官方支持；代理场景模型清单保留本机配置，不带凭据绕过代理直连。识别默认/显式/shim 的已知占位文本并显示安装不完整，不代装 CLI；修复 probe close 回调重复解析造成的异常风险，将旧回放的本机依赖改隔离夹具。最终 **18 文件/208 项通过**（本轮新增 29 项，含 R210 回归）、本轮 lint/定向 TypeScript/diff check 通过。本机只读新代码 reason=null、代理未变、默认 CLI missing；未真实模型联网、未修复用户 CLI、未修改系统代理或用户数据。版本仍 1.0.1，未打包/提交/推送/Release；保留 R210 改动。见 [R211](../reviews/r211-claude-proxy-native-installation-20261109.md)。
+
+## 2026-11-09：R210 Harness 安装时转发入口识别（源码修复，未打包）
+
+用户安装 1.0.1 收到 Harness 自动配置失败，要求在产品安装时解决。现场 PATH 命中 ProgramData 下 `dsh.cmd`，再 `call` 官方桌面 shim；旧解析器拒绝且 setup 仅在找不到入口时回退。共享解析器新增纯转发的静态解析（绝对/dp0、最多八层、循环/额外命令/未知环境变量拒绝、不执行 shell），整条链和最终脚本/ASAR 纳入指纹，普通 JS 的 package 元数据仍参与。setup 在默认入口缺失或无法识别时查常规桌面/npm 入口，安装器与手动重试共用；显式入口不替换、真实错误不伪装未安装、版本/归档/probe/原配置保留规则不变。定向九文件 **86/86**（新增 22 项）、本轮 lint/定向 TypeScript/diff check 通过；新打包解析模块成功识别本机实际转发链，官方仅 `--version` 在隔离 home 返回 0.2.2-rc.1/退出 0，`--plan` 校验通过。未改用户程序/profile/运行数据，零真实模型；未打包新版安装器、未提交/推送/Release，版本仍 1.0.1。全量依赖恢复受 SheetJS CDN 超时限制，未做全量回归或全仓类型检查。详见 [R210](../reviews/r210-harness-installer-entry-20261109.md)。
+
 ## 2026-11-08：R209 操作手册更新 + 产品主页上线（1.0.1）
 
 用户反馈操作手册还是旧版、README 产品主页应指向 `https://zhongshuo.lsjx.xyz/`、线上首页没更新。处理：重新运行 `capture-user-guide.cjs` 采集当前 1.0 界面 24 张场景截图（安装向导/完成保留）；修复截图脚本两处过期定位（文件预览下载入口已并入「更多文件操作」菜单；深色设置页原 `general` 分区改为 `appearance`）。手册正文更新：版本行 1.0.1；设置章节分区改为「外观→通知→AI 设置→数据与存储→帮助与关于」并注明无说明性小字/草稿设置/状态文字；文件预览保存步骤改为「更多文件操作→下载原文件/另存为…」；删除「对话串通知」；重新生成 `docs/user-guide/index.html`。README 两处产品主页链接改为 https://zhongshuo.lsjx.xyz/ 。发现线上主页托管在本仓库 gh-pages 分支（GitHub Pages + 自定义域），此前只更新 main 的 `site/`，gh-pages 仍为 2026-11-01 旧版；本版将 `site/` 与 `docs/user-guide/` 同步到 gh-pages（保留 CNAME），部署后线上应显示 1.0 与下载按钮。版本升 `1.0.1`（`1.0.1.65535`），安装包 `Zhongshuo-Setup-1.0.1-x64.exe`；README/首页下载链接指向 v1.0.1。验证：手册采集 26 场景全部通过；`build:ui`/`pack-daemon` 通过；设置页/界面回归与全量见交付；线上抓取断言 1.0 下载与手册 200。交付：程序提交 `9c69bd5`；干净 worktree `dist/r209-source` 构建便携镜像 `bld_4fc20640e91bbb56`（clean、633 文件 MANIFEST）、安装器 `bld_0707cfc0cf2954c9`（670 文件 MANIFEST；payload-audit `runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）；安装包 `dist/installers/Zhongshuo-Setup-1.0.1-x64.exe` **160,479,283 字节** SHA256 `90224507bdede1a399ff047f316a6d7ab859c1e85ae583b9329e0043228d9f4c`，未签名；本记录提交后推送 `main`（`9c69bd5` + 记录提交）、创建 tag `v1.0.1` 与 GitHub Release「众说 1.0.1」（assets：exe + `.sha256` + `.release.json`，正文取 `docs/releases/1.0.1.md`）；用户自行安装。未安装/升级/卸载、未操作用户数据、未调用真实模型。见 [R209](../reviews/r209-manual-homepage-1.0.1-20261108.md)。
