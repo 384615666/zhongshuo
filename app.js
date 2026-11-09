@@ -1,5 +1,5 @@
 /* eslint-disable no-undef */
-/* 众说产品主页的少量交互：顶栏状态、移动端导航、滚动出现、大图查看、复制命令。 */
+/* 众说产品主页的少量交互：顶栏状态、移动端导航、滚动出现、大图查看、复制命令、最新版本校准。 */
 (() => {
   'use strict';
 
@@ -103,4 +103,92 @@
       copyButton.textContent = '复制';
     }, 1600);
   });
+
+  /* ---------- 最新版本：以 GitHub 最新 Release 为准 ---------- */
+  /* 页面里的版本号与下载按钮先按最近一次发布的静态值渲染；访问时再用 GitHub
+     Releases API 校准，发新版后无需重新部署页面即可自动指向最新安装包。 */
+  const RELEASE_API = 'https://api.github.com/repos/384615666/zhongshuo/releases/latest';
+  const RELEASE_CACHE_KEY = 'zhongshuo.latestRelease.v1';
+  const RELEASE_CACHE_TTL = 10 * 60 * 1000;
+  const INSTALLER_ASSET = /^Zhongshuo-Setup-(.+)-x64\.exe$/i;
+
+  const applyLatestRelease = (release) => {
+    if (!release || typeof release.tag_name !== 'string') return;
+    const version = release.tag_name.replace(/^v/i, '').trim();
+    if (!version) return;
+
+    const assets = Array.isArray(release.assets) ? release.assets : [];
+    const installer = assets.find(
+      (asset) =>
+        asset &&
+        typeof asset.name === 'string' &&
+        INSTALLER_ASSET.test(asset.name) &&
+        typeof asset.browser_download_url === 'string',
+    );
+
+    document.querySelectorAll('[data-release-version]').forEach((node) => {
+      node.textContent = version;
+    });
+    if (installer) {
+      document.querySelectorAll('[data-release-download]').forEach((link) => {
+        link.setAttribute('href', installer.browser_download_url);
+      });
+    }
+    if (typeof release.html_url === 'string' && release.html_url) {
+      document.querySelectorAll('[data-release-page]').forEach((link) => {
+        link.setAttribute('href', release.html_url);
+      });
+    }
+  };
+
+  const readCachedRelease = () => {
+    try {
+      const raw = window.sessionStorage.getItem(RELEASE_CACHE_KEY);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached || typeof cached.at !== 'number' || Date.now() - cached.at > RELEASE_CACHE_TTL) {
+        return null;
+      }
+      return cached.release ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const rememberRelease = (release) => {
+    try {
+      window.sessionStorage.setItem(RELEASE_CACHE_KEY, JSON.stringify({ at: Date.now(), release }));
+    } catch {
+      /* 隐私模式或存储已满时忽略；下次访问重新请求即可。 */
+    }
+  };
+
+  const loadLatestRelease = async () => {
+    if (typeof window.fetch !== 'function') return;
+    const cached = readCachedRelease();
+    if (cached) {
+      applyLatestRelease(cached);
+      return;
+    }
+    try {
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = controller
+        ? window.setTimeout(() => controller.abort(), 8000)
+        : 0;
+      const response = await window.fetch(RELEASE_API, {
+        headers: { Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined,
+      });
+      if (timer) window.clearTimeout(timer);
+      if (!response.ok) return;
+      const release = await response.json();
+      applyLatestRelease(release);
+      rememberRelease(release);
+    } catch {
+      /* 离线、接口限流或网络受阻时保留页面上的静态回退版本。 */
+    }
+  };
+
+  loadLatestRelease();
 })();
