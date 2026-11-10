@@ -614,7 +614,15 @@ export function Select({
 
   const listId = useSelectListId();
   return (
-    <div className={`select-wrap${size === 'sm' ? ' sm' : ''}`} ref={rootRef} data-zs-select={loading === true ? 'loading' : 'ready'} data-zs-select-open={open ? '1' : undefined}>
+    <div className={`select-wrap${size === 'sm' ? ' sm' : ''}`} ref={rootRef} data-zs-select={loading === true ? 'loading' : 'ready'} data-zs-select-open={open ? '1' : undefined}
+      /* R214：设置行普遍写成 `<label className="field">` 包住这个自绘下拉。选项 (div) 不是
+         可交互内容，点击它冒泡到 label 时，浏览器的 label 激活行为会向内部 combobox 按钮
+         补发一次 click——把刚关闭的列表立刻重新打开，用户看到「选了渠道下拉不收起来」。
+         在这里用捕获阶段取消该 click 的默认动作（React 合成事件在根容器的捕获监听里派发，
+         早于原生事件到达 label），即可阻止补发；选择本身仍走 onClick。
+         不能改成冒泡阶段的 onClick：那时 label 已经把 click 补发给按钮了。 */
+      onClickCapture={(e) => { e.preventDefault(); }}
+    >
       <button
         type="button"
         className={`select${size === 'sm' ? ' sm' : ''}${open ? ' open' : ''}`}
