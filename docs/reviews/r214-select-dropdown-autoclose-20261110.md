@@ -41,4 +41,6 @@
 
 构建使用仓库内 ignored 开发工具目录的 Node.js `24.22.1`（`dist/r212/tools/node2422`）与 Inno Setup 6（`dist/r212/tools/inno`）。内部便携装配 BUILD `bld_98fc90aad82d8fef`（clean）；安装器 BUILD `bld_d882507eae9bbd8f`（clean、670 文件、`runAsNode=false`、`privacyScanPassed=true`、`dataFilesIncluded=false`）。安装包 `dist/installers/Zhongshuo-Setup-1.0.3-x64.exe` **160,960,921 字节**，SHA256 `e0039942b2236bd3494d87508c13664f6c2a3f63c5cbfadef11354a33905ffe4`，未签名，附 `.sha256`/`.release.json`；文件资源版本 1.0.3。
 
-安装镜像隔离检查 **21/21** 通过：干净源码构建、670 文件逐项 SHA256、禁用 Node fuse、随包 setup 只读计划、daemon 正常退出、零真实模型调用；未运行安装器、未安装/升级/卸载用户程序、未操作用户数据。tag `v1.0.3`、GitHub Release 与公开下载核对结果记录在 `docs/implementation/continuation.md`。
+安装镜像隔离检查 **21/21** 通过：干净源码构建、670 文件逐项 SHA256、禁用 Node fuse、随包 setup 只读计划、daemon 正常退出、零真实模型调用；未运行安装器、未安装/升级/卸载用户程序、未操作用户数据。
+
+发布：tag `v1.0.3` 指向 `1507b41`（已推送 main 与 tag）；GitHub Release「众说 1.0.3」draft=false、prerelease=false、Latest=true：https://github.com/384615666/zhongshuo/releases/tag/v1.0.3 。exe、`.exe.sha256`、`.release.json` 三项上传后服务端 digest/size 与本机一致，公开下载 302→200、Content-Length=160960921。发布证据为 ignored 的 `dist/r214/published-release.json`、`uploaded-assets.json`、`public-download-headers.txt`。未运行安装器、未安装/升级/卸载用户程序、未操作用户数据。
